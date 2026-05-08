@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.turbo/
+.DS_Store
+*.log
+*.tsbuildinfo
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+apps/server/data/
+apps/ios/FrickDemo.xcodeproj/
+apps/android/.gradle/
+apps/android/build/
+apps/android/app/build/
+.tiltbuild/
+.worktrees/

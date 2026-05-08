@@ -1,0 +1,23 @@
+{
+  "name": "frick",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "packageManager": "pnpm@10.0.0",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -b packages/protocol packages/core packages/react apps/server apps/web",
+    "server": "pnpm --filter @frick/server dev",
+    "web": "pnpm --filter @frick/web dev",
+    "tilt": "tilt up",
+    "ios:generate": "cd apps/ios && xcodegen generate",
+    "ios:build": "cd apps/ios && xcodebuild -project FrickDemo.xcodeproj -scheme FrickDemo -destination 'platform=iOS Simulator,name=iPhone 17' build",
+    "android:build": "cd apps/android && JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=/opt/homebrew/share/android-commandlinetools ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:/opt/homebrew/share/android-commandlinetools/platform-tools:/opt/homebrew/share/android-commandlinetools/emulator:$PATH gradle :app:assembleDebug",
+    "android:install": "JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=/opt/homebrew/share/android-commandlinetools ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:/opt/homebrew/share/android-commandlinetools/platform-tools:/opt/homebrew/share/android-commandlinetools/emulator:$PATH adb install -r apps/android/app/build/outputs/apk/debug/app-debug.apk && adb shell am start -n dev.frick.demo/.MainActivity"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.8"
+  }
+}

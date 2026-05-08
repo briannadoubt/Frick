@@ -1,0 +1,21 @@
+name: FrickDemo
+options:
+  bundleIdPrefix: dev.frick
+  deploymentTarget:
+    iOS: "18.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+targets:
+  FrickDemo:
+    type: application
+    platform: iOS
+    sources:
+      - FrickDemo
+    info:
+      path: FrickDemo/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.frick.demo
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
