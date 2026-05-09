@@ -1,34 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { foundationSchema } from "./foundation.js";
 import type { FieldDef, FrickSchema } from "./schema.js";
-
-export interface NativeArtifactOptions {
-  rootDir?: string;
-  schema?: FrickSchema;
-  swiftPath?: string;
-  kotlinPath?: string;
-}
-
-export interface NativeArtifactWriteResult {
-  swiftPath: string;
-  kotlinPath: string;
-}
-
-const DEFAULT_SWIFT_PATH = "packages/swift/Sources/FrickSwift/Generated/FrickGenerated.swift";
-const DEFAULT_KOTLIN_PATH = "apps/android/frick/src/main/java/dev/frick/client/FrickGenerated.kt";
-
-export function writeNativeArtifacts(options: NativeArtifactOptions = {}): NativeArtifactWriteResult {
-  const schema = options.schema ?? foundationSchema;
-  const rootDir = options.rootDir ?? process.cwd();
-  const swiftPath = join(rootDir, options.swiftPath ?? DEFAULT_SWIFT_PATH);
-  const kotlinPath = join(rootDir, options.kotlinPath ?? DEFAULT_KOTLIN_PATH);
-
-  writeFile(swiftPath, `${generateSwiftArtifact(schema)}\n`);
-  writeFile(kotlinPath, `${generateKotlinArtifact(schema)}\n`);
-
-  return { swiftPath, kotlinPath };
-}
 
 export function generateSwiftArtifact(schema: FrickSchema): string {
   const declarations = [
@@ -140,9 +110,4 @@ function swiftIdentifier(name: string): string {
 
 function kotlinTypeName(name: string): string {
   return name.replaceAll("RTC", "Rtc");
-}
-
-function writeFile(path: string, content: string): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, content);
 }

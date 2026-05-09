@@ -8,26 +8,31 @@ import {
   type ReactNode,
 } from "react";
 import { FrickClient, type SyncStatus } from "@frick/core";
-import { demoManifest, type FrickManifest, type PlainObject, type QuerySpec } from "@frick/protocol";
+import {
+  foundationSchema,
+  type FrickSchema,
+  type PlainObject,
+  type StreamEventInput,
+} from "@frick/protocol";
 
 const FrickContext = createContext<FrickClient | null>(null);
 
 export interface FrickProviderProps {
   children: ReactNode;
   endpoint?: string;
-  manifest?: FrickManifest;
+  schema?: FrickSchema;
   client?: FrickClient;
 }
 
 export function FrickProvider({
   children,
   endpoint = "ws://127.0.0.1:4099/_frick/sync",
-  manifest = demoManifest,
+  schema = foundationSchema,
   client,
 }: FrickProviderProps) {
   const frick = useMemo(
-    () => client ?? new FrickClient({ endpoint, manifest }),
-    [client, endpoint, manifest],
+    () => client ?? new FrickClient({ endpoint, schema }),
+    [client, endpoint, schema],
   );
 
   useEffect(() => {
@@ -46,32 +51,71 @@ export function useFrick(): FrickClient {
   return client;
 }
 
-export function useQuery<T extends object = PlainObject>(spec: QuerySpec): T[] {
-  const client = useFrick();
-  const signal = useMemo(() => client.query(spec), [client, stableSpecKey(spec)]);
-  const [value, setValue] = useState<T[]>(signal.value as T[]);
-
-  useEffect(() => signal.subscribe((next) => setValue(next as T[])), [signal]);
-
-  return value;
+export function useObject<T extends PlainObject = PlainObject>(type: string, id: string): T | undefined {
+  return useObjects<T>(type).find((object) => object.id === id);
 }
 
-export function useMutation<TInput extends Record<string, unknown>>(
-  name: string,
-): (input: TInput) => Promise<void> {
+export function useObjects<T extends PlainObject = PlainObject>(type: string): T[] {
   const client = useFrick();
-  return useCallback((input: TInput) => client.mutate(name, input), [client, name]);
+  const signal = useMemo(() => client.objects(type), [client, type]);
+  return useSignalValue(signal) as T[];
+}
+
+export function useStream<T extends StreamEventInput = StreamEventInput>(stream: string, key: string): T[] {
+  const client = useFrick();
+  const signal = useMemo(() => client.stream(stream, key), [client, stream, key]);
+  return useSignalValue(signal) as T[];
+}
+
+export function useAppend(
+  stream: string,
+  key: string,
+): (event: string, payload: PlainObject) => Promise<void> {
+  const client = useFrick();
+  return useCallback(
+    (event: string, payload: PlainObject) => client.append(stream, key, event, payload),
+    [client, stream, key],
+  );
+}
+
+export function usePresence<T extends PlainObject = PlainObject>(
+  name: string,
+  key: string,
+): T | undefined {
+  const client = useFrick();
+  const signal = useMemo(() => client.presence(name, key), [client, name, key]);
+  return useSignalValue(signal) as T | undefined;
+}
+
+export function useSetPresence(
+  name: string,
+  key: string,
+): (value: PlainObject) => Promise<void> {
+  const client = useFrick();
+  return useCallback((value: PlainObject) => client.setPresence(name, key, value), [client, name, key]);
+}
+
+export function useSignalChannel<T extends PlainObject = PlainObject>(name: string, key: string): T[] {
+  const client = useFrick();
+  const signal = useMemo(() => client.signalChannel(name, key), [client, name, key]);
+  return useSignalValue(signal) as T[];
+}
+
+export function useSendSignal(
+  name: string,
+  key: string,
+): (value: PlainObject) => Promise<void> {
+  const client = useFrick();
+  return useCallback((value: PlainObject) => client.sendSignal(name, key, value), [client, name, key]);
 }
 
 export function useSyncStatus(): SyncStatus {
   const client = useFrick();
-  const [value, setValue] = useState(client.syncStatus.value);
-
-  useEffect(() => client.syncStatus.subscribe(setValue), [client]);
-
-  return value;
+  return useSignalValue(client.syncStatus);
 }
 
-function stableSpecKey(spec: QuerySpec): string {
-  return `${spec.entity}:${spec.index}:${JSON.stringify(spec.args, Object.keys(spec.args).sort())}`;
+function useSignalValue<T>(signal: { value: T; subscribe(listener: (value: T) => void): () => void }): T {
+  const [value, setValue] = useState(signal.value);
+  useEffect(() => signal.subscribe(setValue), [signal]);
+  return value;
 }
