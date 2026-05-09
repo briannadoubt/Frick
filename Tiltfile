@@ -13,15 +13,27 @@ local_resource(
 )
 
 local_resource(
+  "schema-generate",
+  cmd="pnpm schema:generate",
+  deps=[
+    "packages/protocol/src/schema.ts",
+    "packages/protocol/src/foundation.ts",
+    "packages/protocol/src/artifacts.ts",
+    "packages/protocol/scripts/generate-native-artifacts.ts",
+  ],
+  resource_deps=["install"],
+)
+
+local_resource(
   "frick-server",
   serve_cmd="pnpm run server",
-  resource_deps=["install"],
+  resource_deps=["schema-generate"],
   readiness_probe=probe(
     http_get=http_get_action(port=4099, path="/health"),
     initial_delay_secs=2,
     period_secs=2,
   ),
-  links=["http://127.0.0.1:4099/health", "http://127.0.0.1:4099/manifest"],
+  links=["http://127.0.0.1:4099/health", "http://127.0.0.1:4099/schema"],
 )
 
 local_resource(
