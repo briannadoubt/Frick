@@ -1,0 +1,58 @@
+import type { WebSocket } from "ws";
+import type { Principal } from "../authz.js";
+import type { SubscribePayload } from "@frick/protocol";
+
+export interface SyncClient {
+  socket: WebSocket;
+  subscriptions: Map<string, SubscribePayload>;
+  principal?: Principal;
+}
+
+export class SubscriptionRegistry {
+  readonly #clients = new Set<SyncClient>();
+
+  addClient(client: SyncClient): void {
+    this.#clients.add(client);
+  }
+
+  removeClient(client: SyncClient): void {
+    this.#clients.delete(client);
+  }
+
+  addSubscription(client: SyncClient, payload: SubscribePayload): void {
+    client.subscriptions.set(payload.subscriptionId, payload);
+  }
+
+  streamSubscribers(stream: string, key: string): Array<{ client: SyncClient; subscription: SubscribePayload }> {
+    return this.matching((subscription) => subscription.kind === "stream" && subscription.name === stream && subscription.key === key);
+  }
+
+  presenceSubscribers(name: string, key: string): Array<{ client: SyncClient; subscription: SubscribePayload }> {
+    return this.matching((subscription) => subscription.kind === "presence" && subscription.name === name && subscription.key === key);
+  }
+
+  signalSubscribers(name: string, key: string): Array<{ client: SyncClient; subscription: SubscribePayload }> {
+    return this.matching((subscription) => subscription.kind === "signal" && subscription.name === name && subscription.key === key);
+  }
+
+  closeAll(): void {
+    for (const client of this.#clients) {
+      client.socket.terminate();
+    }
+    this.#clients.clear();
+  }
+
+  private matching(
+    predicate: (subscription: SubscribePayload) => boolean,
+  ): Array<{ client: SyncClient; subscription: SubscribePayload }> {
+    const matches: Array<{ client: SyncClient; subscription: SubscribePayload }> = [];
+    for (const client of this.#clients) {
+      for (const subscription of client.subscriptions.values()) {
+        if (predicate(subscription)) {
+          matches.push({ client, subscription });
+        }
+      }
+    }
+    return matches;
+  }
+}
