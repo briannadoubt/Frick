@@ -10,7 +10,7 @@ import {
   Users,
   Video,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   useAppend,
   useObjects,
@@ -67,6 +67,7 @@ export function App() {
   const signals = useSignalChannel("WebRTCSignal", callKey);
   const sendSignal = useSendSignal("WebRTCSignal", callKey);
   const status = useSyncStatus();
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   const conversation = conversations.find((item) => item.id === conversationId);
   const sortedMessages = useMemo(
@@ -79,6 +80,10 @@ export function App() {
     document.documentElement.dataset.theme = theme;
     window.localStorage.setItem("frick-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ block: "end" });
+  }, [sortedMessages.length, sortedMessages.at(-1)?.eventId]);
 
   async function submitMessage() {
     const body = draft.trim();
@@ -170,6 +175,7 @@ export function App() {
                 </article>
               ))}
               {sortedMessages.length === 0 ? <p className="empty">No messages yet</p> : null}
+              <div aria-hidden="true" ref={messagesEndRef} />
             </div>
 
             <form

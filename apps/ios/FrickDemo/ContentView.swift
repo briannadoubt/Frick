@@ -69,35 +69,51 @@ final class FoundationModel: ObservableObject {
 
 struct ContentView: View {
     @StateObject private var model = FoundationModel()
+    private let bottomMessageAnchor = "bottom-message-anchor"
 
     var body: some View {
         NavigationStack {
-            List {
-                Section("Users") {
-                    ForEach(model.users, id: \.id) { user in
-                        HStack {
-                            Text(initials(user.displayName))
-                                .font(.caption.weight(.black))
-                                .foregroundStyle(.blue)
-                                .frame(width: 34, height: 34)
-                                .background(.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-                            Text(user.displayName)
-                                .font(.headline)
+            ScrollViewReader { proxy in
+                List {
+                    Section("Users") {
+                        ForEach(model.users, id: \.id) { user in
+                            HStack {
+                                Text(initials(user.displayName))
+                                    .font(.caption.weight(.black))
+                                    .foregroundStyle(.blue)
+                                    .frame(width: 34, height: 34)
+                                    .background(.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                                Text(user.displayName)
+                                    .font(.headline)
+                            }
                         }
+                    }
+
+                    Section("Messages") {
+                        ForEach(model.messages, id: \.eventId) { message in
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(model.displayName(for: message.payload["senderId"] ?? ""))
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                Text(message.payload["body"] ?? "")
+                                    .font(.body)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        Color.clear
+                            .frame(height: 1)
+                            .id(bottomMessageAnchor)
                     }
                 }
-
-                Section("Messages") {
-                    ForEach(model.messages, id: \.eventId) { message in
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(model.displayName(for: message.payload["senderId"] ?? ""))
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            Text(message.payload["body"] ?? "")
-                                .font(.body)
-                        }
-                        .padding(.vertical, 4)
-                    }
+                .onChange(of: model.messages.last?.eventId) { _, _ in
+                    scrollToBottom(proxy)
+                }
+                .onChange(of: model.messages.count) { _, _ in
+                    scrollToBottom(proxy)
+                }
+                .task {
+                    await model.start()
+                    scrollToBottom(proxy)
                 }
             }
             .navigationTitle(model.title)
@@ -130,8 +146,14 @@ struct ContentView: View {
                     .accessibilityLabel("Reload")
                 }
             }
-            .task {
-                await model.start()
+        }
+    }
+
+    private func scrollToBottom(_ proxy: ScrollViewProxy) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(50))
+            withAnimation(.snappy(duration: 0.22)) {
+                proxy.scrollTo(bottomMessageAnchor, anchor: .bottom)
             }
         }
     }

@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
@@ -226,8 +227,17 @@ private fun MessagesList(
     messages: List<FrickStreamEvent>,
     modifier: Modifier = Modifier,
 ) {
+    val listState = rememberLazyListState()
+
+    LaunchedEffect(messages.lastOrNull()?.eventId, messages.size) {
+        if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.lastIndex)
+        }
+    }
+
     LazyColumn(
         modifier = modifier.fillMaxWidth(),
+        state = listState,
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         items(messages, key = { message -> message.eventId }) { message ->
