@@ -424,7 +424,7 @@ private func makeFrickStreamingSession() -> URLSession {
     let configuration = URLSessionConfiguration.default
     configuration.timeoutIntervalForRequest = 7 * 24 * 60 * 60
     configuration.timeoutIntervalForResource = 7 * 24 * 60 * 60
-    configuration.waitsForConnectivity = true
+    configuration.waitsForConnectivity = false
     return URLSession(configuration: configuration)
 }
 
@@ -432,6 +432,7 @@ public final class FrickClient: Sendable {
     private let baseURL: URL
     private let session: URLSession
     private let streamingSession: URLSession
+    private let streamReconnectDelayNanoseconds: UInt64
     private let replicaId: String
     private let storage: FrickStorage
     private let requestIdFactory: @Sendable () -> String
@@ -442,6 +443,7 @@ public final class FrickClient: Sendable {
         baseURL: URL = URL(string: "http://127.0.0.1:4099")!,
         session: URLSession = .shared,
         streamingSession: URLSession? = nil,
+        streamReconnectDelayNanoseconds: UInt64 = 250_000_000,
         replicaId: String = "ios-demo",
         storage: FrickStorage = FrickSQLiteStorage.appStorage,
         requestIdFactory: @escaping @Sendable () -> String = { UUID().uuidString }
@@ -449,6 +451,7 @@ public final class FrickClient: Sendable {
         self.baseURL = baseURL
         self.session = session
         self.streamingSession = streamingSession ?? makeFrickStreamingSession()
+        self.streamReconnectDelayNanoseconds = streamReconnectDelayNanoseconds
         self.replicaId = replicaId
         self.storage = storage
         self.requestIdFactory = requestIdFactory
@@ -511,27 +514,51 @@ public final class FrickClient: Sendable {
                     if !current.isEmpty {
                         continuation.yield(current)
                     }
-                    try? await flushPendingAppends()
 
-                    let after = current.map(\.sequence).max() ?? 0
-                    let (bytes, response) = try await streamingSession.bytes(from: streamEventsURL(
-                        stream: "MessageStream",
-                        key: conversationId,
-                        after: after
-                    ))
-                    try validate(response)
+                    while !Task.isCancelled {
+                        do {
+                            try? await flushPendingAppends()
+                            let after = current.map(\.sequence).max() ?? 0
+                            let (bytes, response) = try await streamingSession.bytes(from: streamEventsURL(
+                                stream: "MessageStream",
+                                key: conversationId,
+                                after: after
+                            ))
+                            try validate(response)
 
-                    var parser = FrickEventStreamParser()
-                    for try await line in bytes.lines {
-                        for event in parser.push(line + "\n") where event.event == "stream-page" || event.event == "delta" {
-                            let decoded = try decoder.decode(StreamEventsResponse.self, from: Data(event.data.utf8))
-                            try decoded.requireCompatibleSchema()
-                            for streamEvent in decoded.data {
-                                try storage.saveStreamEvent(streamEvent)
+                            var parser = FrickEventStreamParser()
+                            var lineBuffer = Data()
+                            for try await byte in bytes {
+                                lineBuffer.append(byte)
+                                guard byte == 10 else {
+                                    continue
+                                }
+                                try processStreamLine(
+                                    lineBuffer,
+                                    parser: &parser,
+                                    current: &current,
+                                    continuation: continuation
+                                )
+                                lineBuffer.removeAll(keepingCapacity: true)
                             }
-                            current = mergeStreamEvents(current, decoded.data)
-                            continuation.yield(current)
+                            if !lineBuffer.isEmpty {
+                                try processStreamLine(
+                                    lineBuffer,
+                                    parser: &parser,
+                                    current: &current,
+                                    continuation: continuation
+                                )
+                            }
+                        } catch is CancellationError {
+                            if Task.isCancelled {
+                                throw CancellationError()
+                            }
+                        } catch {
+                            if isTerminalStreamError(error) {
+                                throw error
+                            }
                         }
+                        try await Task.sleep(nanoseconds: streamReconnectDelayNanoseconds)
                     }
                     continuation.finish()
                 } catch is CancellationError {
@@ -543,6 +570,26 @@ public final class FrickClient: Sendable {
             continuation.onTermination = { _ in
                 task.cancel()
             }
+        }
+    }
+
+    private func processStreamLine(
+        _ lineBuffer: Data,
+        parser: inout FrickEventStreamParser,
+        current: inout [FrickStreamEvent],
+        continuation: AsyncThrowingStream<[FrickStreamEvent], Error>.Continuation
+    ) throws {
+        guard let line = String(data: lineBuffer, encoding: .utf8) else {
+            return
+        }
+        for event in parser.push(line) where event.event == "stream-page" || event.event == "delta" {
+            let decoded = try decoder.decode(StreamEventsResponse.self, from: Data(event.data.utf8))
+            try decoded.requireCompatibleSchema()
+            for streamEvent in decoded.data {
+                try storage.saveStreamEvent(streamEvent)
+            }
+            current = mergeStreamEvents(current, decoded.data)
+            continuation.yield(current)
         }
     }
 
@@ -614,6 +661,16 @@ public final class FrickClient: Sendable {
             return false
         }
         return true
+    }
+
+    private func isTerminalStreamError(_ error: Error) -> Bool {
+        if error is FrickSchemaMismatchError {
+            return true
+        }
+        if let urlError = error as? URLError, urlError.code == .badServerResponse {
+            return true
+        }
+        return false
     }
 
     private func queryURL(path: String, args: [String: String]) -> URL {
