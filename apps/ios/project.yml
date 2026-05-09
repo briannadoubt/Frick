@@ -6,16 +6,42 @@ options:
 settings:
   base:
     SWIFT_VERSION: "6.0"
+packages:
+  FrickSwift:
+    path: ../../packages/swift
 targets:
   FrickDemo:
     type: application
     platform: iOS
+    supportedDestinations:
+      - iOS
     sources:
       - FrickDemo
+    dependencies:
+      - package: FrickSwift
+      - sdk: AppIntents.framework
     info:
       path: FrickDemo/Info.plist
+      properties:
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        UILaunchStoryboardName: LaunchScreen
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.frick.demo
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
+        ENABLE_APP_INTENTS_METADATA_GENERATION: "NO"
+schemes:
+  FrickDemo:
+    build:
+      targets:
+        FrickDemo: all
+    run:
+      config: Debug
+    archive:
+      config: Release
