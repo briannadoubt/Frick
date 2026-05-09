@@ -42,7 +42,7 @@ export class ObjectStore {
   list(type: string): PlainObject[] {
     const rows = this.db
       .prepare("SELECT packed FROM objects WHERE object_type = ? ORDER BY object_id ASC")
-      .all(type) as ObjectRow[];
+      .all(type) as unknown as ObjectRow[];
     return rows.map((row) => unpackObjectRecord(this.schema, decode(row.packed) as PackedRecord).value);
   }
 }

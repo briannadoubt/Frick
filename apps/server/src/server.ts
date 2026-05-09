@@ -1,4 +1,6 @@
 import http from "node:http";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { foundationSchema } from "@frick/protocol";
 import { SyncGateway } from "./sync/gateway.js";
@@ -12,7 +14,7 @@ export interface ServerOptions {
 export function createFrickServer(options: ServerOptions = {}) {
   const port = options.port ?? Number(process.env.PORT ?? 4099);
   const store = new FrickStore({
-    path: options.dbPath ?? process.env.FRICK_DB_PATH ?? "apps/server/data/frick.sqlite",
+    path: options.dbPath ?? process.env.FRICK_DB_PATH ?? defaultDatabasePath(),
     schema: foundationSchema,
   });
 
@@ -119,6 +121,10 @@ export function createFrickServer(options: ServerOptions = {}) {
   }
 
   return { port, server, store, listen, close };
+}
+
+export function defaultDatabasePath(): string {
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../data/frick.sqlite");
 }
 
 function setCors(response: http.ServerResponse): void {

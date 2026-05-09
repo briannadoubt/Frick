@@ -57,8 +57,8 @@ export class BlobStore {
       contentHash: row.content_hash,
       byteLength: Number(row.byte_length),
       mimeType: row.mime_type,
-      storageKey: row.storage_key ?? undefined,
       createdAt: row.created_at,
+      ...(row.storage_key ? { storageKey: row.storage_key } : {}),
     };
   }
 }

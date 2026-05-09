@@ -36,7 +36,7 @@ export class SignalStore {
           WHERE signal_type = ? AND signal_key = ? AND expires_at > ?
           ORDER BY id ASC`,
       )
-      .all(type, key, Date.now()) as SignalRow[];
+      .all(type, key, Date.now()) as unknown as SignalRow[];
     if (rows.length === 0) {
       return [];
     }

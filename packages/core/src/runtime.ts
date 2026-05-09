@@ -105,7 +105,7 @@ export class FrickClient {
     });
 
     addSocketListener(socket, "message", (event) => {
-      const data = "data" in event ? event.data : event;
+      const data = event && typeof event === "object" && "data" in event ? event.data : event;
       void this.#receive(data);
     });
 
@@ -357,16 +357,14 @@ export class FrickClient {
 
   #sendSubscribe(input: { kind: "object" | "stream" | "presence" | "signal"; name: string; key?: string }): void {
     const subscriptionId = input.key ? streamKey(input.name, input.key) : input.name;
-    this.#send([
-      FrameKind.Subscribe,
-      {
-        subscriptionId,
-        kind: input.kind,
-        name: input.name,
-        key: input.key,
-        cursor: this.syncStatus.value.cursors[subscriptionId] ?? 0,
-      },
-    ]);
+    const payload = {
+      subscriptionId,
+      kind: input.kind,
+      name: input.name,
+      cursor: this.syncStatus.value.cursors[subscriptionId] ?? 0,
+      ...(input.key ? { key: input.key } : {}),
+    };
+    this.#send([FrameKind.Subscribe, payload]);
   }
 
   #send(frame: FrickFrame): void {
@@ -409,12 +407,12 @@ export class FrickClient {
   }
 }
 
-function addSocketListener(socket: WebSocket, event: string, listener: (event: never) => void): void {
+function addSocketListener(socket: WebSocket, event: string, listener: (event: any) => void): void {
   if ("addEventListener" in socket) {
     socket.addEventListener(event, listener as EventListener);
     return;
   }
-  (socket as never as { on(name: string, listener: (event: never) => void): void }).on(event, listener);
+  (socket as never as { on(name: string, listener: (event: any) => void): void }).on(event, listener);
 }
 
 function splitSubscriptionKey(id: string): [name: string, key: string] {

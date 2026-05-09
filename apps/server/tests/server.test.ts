@@ -1,4 +1,5 @@
 import { WebSocket } from "ws";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   FrameKind,
@@ -7,7 +8,7 @@ import {
   foundationSchema,
   type FrickFrame,
 } from "@frick/protocol";
-import { createFrickServer } from "../src/server.js";
+import { createFrickServer, defaultDatabasePath } from "../src/server.js";
 
 let app: Awaited<ReturnType<typeof startServer>> | undefined;
 
@@ -17,6 +18,14 @@ afterEach(async () => {
 });
 
 describe("foundation sync gateway", () => {
+  it("resolves the default database path from the server package", () => {
+    const dbPath = defaultDatabasePath();
+
+    expect(path.isAbsolute(dbPath)).toBe(true);
+    expect(dbPath.endsWith(path.join("apps", "server", "data", "frick.sqlite"))).toBe(true);
+    expect(dbPath).not.toContain(path.join("apps", "server", "apps", "server"));
+  });
+
   it("hard rejects schema hash mismatch", async () => {
     app = await startServer();
     const socket = await connect(app.url);

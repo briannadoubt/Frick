@@ -90,7 +90,7 @@ export class StreamStore {
           WHERE stream_type = ? AND stream_id = ? AND sequence > ?
           ORDER BY sequence ASC`,
       )
-      .all(stream, streamId, after) as EventRow[];
+      .all(stream, streamId, after) as unknown as EventRow[];
     return rows.map((row) => unpackStreamEvent(this.schema, decode(row.packed) as PackedStreamEvent));
   }
 
