@@ -1,3 +1,4 @@
+export * from "./codec.js";
 export * from "./frame.js";
 export * from "./foundation.js";
 export * from "./manifest.js";
