@@ -1,277 +1,427 @@
 import {
   FrameKind,
-  applyPackedFields,
   decodeFrame,
-  demoManifest,
   encodeFrame,
-  entityByName,
-  packObject,
+  foundationSchema,
+  unpackObjectRecord,
+  unpackPresenceRecord,
+  unpackSignalEnvelope,
+  unpackStreamEvent,
   type FrickFrame,
-  type FrickManifest,
-  type ObjectDelta,
-  type PackedObject,
+  type FrickSchema,
   type PlainObject,
-  type QuerySpec,
+  type StreamEventInput,
 } from "@frick/protocol";
+import {
+  MemoryFrickCache,
+  type FrickLocalCache,
+  type PendingAppend,
+} from "./cache.js";
+import { Signal, objectKey, streamKey } from "./subscriptions.js";
 
 const SOCKET_OPEN = 1;
 
-export type Listener<T> = (value: T) => void;
-export type Unsubscribe = () => void;
-
-export class Signal<T> {
-  #value: T;
-  #listeners = new Set<Listener<T>>();
-
-  constructor(initial: T) {
-    this.#value = initial;
-  }
-
-  get value(): T {
-    return this.#value;
-  }
-
-  set(value: T): void {
-    this.#value = value;
-    for (const listener of this.#listeners) {
-      listener(value);
-    }
-  }
-
-  subscribe(listener: Listener<T>): Unsubscribe {
-    this.#listeners.add(listener);
-    listener(this.#value);
-    return () => {
-      this.#listeners.delete(listener);
-    };
-  }
-}
-
 export interface SyncStatus {
   connected: boolean;
-  lastSeq: number;
+  cursors: Record<string, number>;
   pendingMutations: number;
 }
 
 export interface FrickClientOptions {
   endpoint: string;
-  manifest?: FrickManifest;
+  schema?: FrickSchema;
+  cache?: FrickLocalCache;
+  reconnectDelayMs?: number;
   replicaId?: string;
+  deviceId?: string;
   WebSocketImpl?: typeof WebSocket;
 }
 
-interface QuerySubscription {
-  id: string;
-  spec: QuerySpec;
-  signal: Signal<PlainObject[]>;
-}
-
 export class FrickClient {
-  readonly manifest: FrickManifest;
+  readonly schema: FrickSchema;
   readonly syncStatus = new Signal<SyncStatus>({
     connected: false,
-    lastSeq: 0,
+    cursors: {},
     pendingMutations: 0,
   });
 
-  #endpoint: string;
-  #replicaId: string;
-  #WebSocketImpl: typeof WebSocket | undefined;
+  readonly #endpoint: string;
+  readonly #cache: FrickLocalCache;
+  readonly #replicaId: string;
+  readonly #deviceId: string;
+  readonly #reconnectDelayMs: number;
+  readonly #WebSocketImpl: typeof WebSocket | undefined;
+
   #socket: WebSocket | undefined;
-  #objects = new Map<number, Map<string, PlainObject>>();
-  #queries = new Map<string, QuerySubscription>();
-  #pending = new Set<string>();
+  #manualDisconnect = false;
+  #reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  #objects = new Map<string, PlainObject>();
+  #streams = new Map<string, StreamEventInput[]>();
+  #pendingAppends = new Map<string, PendingAppend>();
+  #objectListSignals = new Map<string, Signal<PlainObject[]>>();
+  #streamSignals = new Map<string, Signal<StreamEventInput[]>>();
+  #presenceSignals = new Map<string, Signal<PlainObject | undefined>>();
+  #signalSignals = new Map<string, Signal<PlainObject[]>>();
 
   constructor(options: FrickClientOptions) {
     this.#endpoint = options.endpoint;
-    this.manifest = options.manifest ?? demoManifest;
-    this.#replicaId = options.replicaId ?? `replica-${crypto.randomUUID()}`;
+    this.schema = options.schema ?? foundationSchema;
+    this.#cache = options.cache ?? new MemoryFrickCache();
+    this.#replicaId = options.replicaId ?? `replica-${randomId()}`;
+    this.#deviceId = options.deviceId ?? `device-${randomId()}`;
+    this.#reconnectDelayMs = options.reconnectDelayMs ?? 1_000;
     this.#WebSocketImpl = options.WebSocketImpl;
+    this.#hydrateFromCache();
   }
 
   connect(): void {
+    this.#manualDisconnect = false;
+    this.#clearReconnectTimer();
     if (this.#socket) {
       return;
     }
+
     const WebSocketCtor = this.#WebSocketImpl ?? WebSocket;
     const socket = new WebSocketCtor(this.#endpoint);
     socket.binaryType = "arraybuffer";
     this.#socket = socket;
 
-    socket.addEventListener("open", () => {
+    addSocketListener(socket, "open", () => {
       if (this.#socket !== socket) {
         return;
       }
-      sendToSocket(socket, [
+      this.#send([
         FrameKind.Hello,
         {
           replicaId: this.#replicaId,
-          schemaVersion: this.manifest.schemaVersion,
-          knownSeq: this.syncStatus.value.lastSeq,
+          deviceId: this.#deviceId,
+          schemaHash: this.schema.hash,
+          knownCursors: this.syncStatus.value.cursors,
         },
       ]);
       this.#setStatus({ connected: true });
-      for (const query of this.#queries.values()) {
-        sendToSocket(socket, [FrameKind.Subscribe, query.id, query.spec]);
-      }
+      this.#resubscribe();
+      this.#flushPendingAppends();
     });
 
-    socket.addEventListener("close", () => {
+    addSocketListener(socket, "message", (event) => {
+      const data = "data" in event ? event.data : event;
+      void this.#receive(data);
+    });
+
+    addSocketListener(socket, "close", () => {
       if (this.#socket !== socket) {
         return;
       }
       this.#socket = undefined;
       this.#setStatus({ connected: false });
-    });
-
-    socket.addEventListener("message", (event) => {
-      void this.#receive(event.data);
+      if (!this.#manualDisconnect) {
+        this.#scheduleReconnect();
+      }
     });
   }
 
   disconnect(): void {
+    this.#manualDisconnect = true;
+    this.#clearReconnectTimer();
     this.#socket?.close();
     this.#socket = undefined;
     this.#setStatus({ connected: false });
   }
 
-  query(spec: QuerySpec): Signal<PlainObject[]> {
-    const id = stableQueryId(spec);
-    const existing = this.#queries.get(id);
-    if (existing) {
-      return existing.signal;
-    }
+  object(type: string, id: string): PlainObject | undefined {
+    return this.#objects.get(objectKey(type, id));
+  }
 
-    const signal = new Signal<PlainObject[]>(this.#select(spec));
-    this.#queries.set(id, { id, spec, signal });
+  objects(type: string): Signal<PlainObject[]> {
+    const existing = this.#objectListSignals.get(type);
+    if (existing) {
+      return existing;
+    }
+    const signal = new Signal(this.#selectObjects(type));
+    this.#objectListSignals.set(type, signal);
     if (this.syncStatus.value.connected) {
-      this.#send([FrameKind.Subscribe, id, spec]);
+      this.#sendSubscribe({ kind: "object", name: type });
     }
     return signal;
   }
 
-  object(entityName: string, objectId: string): PlainObject | undefined {
-    const entity = entityByName(this.manifest, entityName);
-    return this.#objects.get(entity.id)?.get(objectId);
-  }
-
-  async mutate(name: string, input: Record<string, unknown>): Promise<void> {
-    const requestId = crypto.randomUUID();
-    this.#pending.add(requestId);
-    this.#setStatus({ pendingMutations: this.#pending.size });
-    this.#send([FrameKind.Mutate, { requestId, name, input }]);
-  }
-
-  applySnapshot(queryId: string, packedObjects: PackedObject[]): void {
-    for (const packed of packedObjects) {
-      this.#storePackedObject(packed);
+  stream(stream: string, key: string): Signal<StreamEventInput[]> {
+    const id = streamKey(stream, key);
+    const existing = this.#streamSignals.get(id);
+    if (existing) {
+      return existing;
     }
-    const subscription = this.#queries.get(queryId);
-    if (subscription) {
-      subscription.signal.set(this.#select(subscription.spec));
+    const signal = new Signal([...(this.#streams.get(id) ?? [])]);
+    this.#streamSignals.set(id, signal);
+    if (this.syncStatus.value.connected) {
+      this.#sendSubscribe({ kind: "stream", name: stream, key });
     }
+    return signal;
   }
 
-  applyDelta(delta: ObjectDelta): void {
-    const entityObjects = this.#objects.get(delta.entityId) ?? new Map<string, PlainObject>();
-    const base = entityObjects.get(delta.objectId) ?? { id: delta.objectId };
-    entityObjects.set(
-      delta.objectId,
-      applyPackedFields(this.manifest, delta.entityId, base, delta.fields),
-    );
-    this.#objects.set(delta.entityId, entityObjects);
-    this.#setStatus({ lastSeq: Math.max(this.syncStatus.value.lastSeq, delta.seq) });
-    this.#refreshQueries();
-  }
-
-  #storePackedObject(packed: PackedObject): void {
-    const [entityId, objectId] = packed;
-    const entityObjects = this.#objects.get(entityId) ?? new Map<string, PlainObject>();
-    const object = applyPackedFields(this.manifest, entityId, { id: objectId }, packed[2]);
-    entityObjects.set(objectId, object);
-    this.#objects.set(entityId, entityObjects);
-  }
-
-  #select(spec: QuerySpec): PlainObject[] {
-    const entity = entityByName(this.manifest, spec.entity);
-    const objects = Array.from(this.#objects.get(entity.id)?.values() ?? []);
-    if (spec.entity === "Task" && spec.index === "byProject") {
-      return objects
-        .filter((object) => object.projectId === spec.args.projectId)
-        .sort((left, right) => String(left.updatedAt).localeCompare(String(right.updatedAt)));
+  presence(name: string, key: string): Signal<PlainObject | undefined> {
+    const id = streamKey(name, key);
+    const existing = this.#presenceSignals.get(id);
+    if (existing) {
+      return existing;
     }
-    if (spec.entity === "Project" && spec.index === "all") {
-      return objects.sort((left, right) => String(left.name).localeCompare(String(right.name)));
+    const signal = new Signal<PlainObject | undefined>(undefined);
+    this.#presenceSignals.set(id, signal);
+    if (this.syncStatus.value.connected) {
+      this.#sendSubscribe({ kind: "presence", name, key });
     }
-    return objects;
+    return signal;
   }
 
-  #refreshQueries(): void {
-    for (const query of this.#queries.values()) {
-      query.signal.set(this.#select(query.spec));
+  signalChannel(name: string, key: string): Signal<PlainObject[]> {
+    const id = streamKey(name, key);
+    const existing = this.#signalSignals.get(id);
+    if (existing) {
+      return existing;
     }
+    const signal = new Signal<PlainObject[]>([]);
+    this.#signalSignals.set(id, signal);
+    if (this.syncStatus.value.connected) {
+      this.#sendSubscribe({ kind: "signal", name, key });
+    }
+    return signal;
   }
 
-  async #receive(payload: unknown): Promise<void> {
-    const data = payload instanceof Blob ? await payload.arrayBuffer() : payload;
-    const frame = decodeFrame(data as ArrayBuffer | Uint8Array | Buffer);
-    this.#handleFrame(frame);
+  async append(stream: string, key: string, event: string, payload: PlainObject): Promise<void> {
+    const append: PendingAppend = {
+      requestId: randomId(),
+      stream,
+      key,
+      event,
+      payload: { ...payload },
+    };
+    this.#trackPendingAppend(append);
+    this.#sendAppend(append);
+  }
+
+  async setPresence(name: string, key: string, value: PlainObject): Promise<void> {
+    this.#send([FrameKind.PresenceSet, { requestId: randomId(), name, key, value }]);
+  }
+
+  async clearPresence(name: string, key: string): Promise<void> {
+    this.#send([FrameKind.PresenceClear, { requestId: randomId(), name, key }]);
+  }
+
+  async sendSignal(name: string, key: string, value: PlainObject): Promise<void> {
+    this.#send([FrameKind.SignalSend, { requestId: randomId(), name, key, value }]);
+  }
+
+  #hydrateFromCache(): void {
+    const cached = this.#cache.load(this.schema);
+    for (const object of cached.objects) {
+      this.#objects.set(objectKey(object.type, object.id), { ...object.value });
+    }
+    for (const event of cached.streamEvents) {
+      this.#storeStreamEvent(event);
+    }
+    for (const append of cached.pendingAppends) {
+      this.#pendingAppends.set(append.requestId, append);
+    }
+    this.#setStatus({
+      cursors: cached.cursors,
+      pendingMutations: this.#pendingAppends.size,
+    });
   }
 
   #handleFrame(frame: FrickFrame): void {
     switch (frame[0]) {
-      case FrameKind.Manifest:
+      case FrameKind.Schema:
         return;
       case FrameKind.Snapshot:
-        this.applySnapshot(frame[1], frame[2]);
+        for (const packed of frame[1].objects) {
+          const unpacked = unpackObjectRecord(this.schema, packed);
+          this.#storeObject(unpacked.type, unpacked.id, unpacked.value, frame[1].cursor);
+        }
+        this.#saveCursor(frame[1].subscriptionId, frame[1].cursor);
+        return;
+      case FrameKind.StreamPage:
+        for (const packed of frame[1].events) {
+          this.#storeStreamEvent(unpackStreamEvent(this.schema, packed));
+        }
+        this.#saveCursor(frame[1].subscriptionId, frame[1].cursor);
         return;
       case FrameKind.Delta:
-        this.applyDelta(frame[1]);
+        for (const packed of frame[1].objects) {
+          const unpacked = unpackObjectRecord(this.schema, packed);
+          this.#storeObject(unpacked.type, unpacked.id, unpacked.value, frame[1].cursor);
+        }
+        for (const packed of frame[1].events) {
+          this.#storeStreamEvent(unpackStreamEvent(this.schema, packed));
+        }
         return;
+      case FrameKind.PresenceDelta:
+        for (const packed of frame[1].records) {
+          const presence = unpackPresenceRecord(this.schema, packed);
+          this.#presenceSignals.get(streamKey(presence.type, presence.key))?.set(presence.value);
+        }
+        for (const key of frame[1].cleared) {
+          this.#presenceSignals.get(key)?.set(undefined);
+        }
+        return;
+      case FrameKind.SignalDeliver: {
+        const signal = unpackSignalEnvelope(this.schema, frame[1].envelope);
+        const id = streamKey(signal.type, signal.key);
+        const channel = this.#signalSignals.get(id);
+        channel?.set([...(channel.value ?? []), signal.value]);
+        return;
+      }
       case FrameKind.Ack:
-        this.#pending.delete(frame[1]);
-        this.applyDelta(frame[2]);
-        this.#setStatus({ pendingMutations: this.#pending.size });
+        this.#pendingAppends.delete(frame[1].requestId);
+        this.#cache.removePendingAppend(this.schema, frame[1].requestId);
+        this.#setStatus({ pendingMutations: this.#pendingAppends.size });
         return;
-      case FrameKind.Reject:
-        this.#pending.delete(frame[1]);
-        this.#setStatus({ pendingMutations: this.#pending.size });
-        throw new Error(frame[2]);
-      case FrameKind.SyncStatus:
-        this.#setStatus({
-          connected: frame[1].connected,
-          lastSeq: frame[1].lastSeq,
-        });
+      case FrameKind.Nack:
+        this.#pendingAppends.delete(frame[1].requestId);
+        this.#cache.removePendingAppend(this.schema, frame[1].requestId);
+        this.#setStatus({ pendingMutations: this.#pendingAppends.size });
         return;
       default:
         return;
     }
   }
 
-  #send(frame: FrickFrame): void {
-    if (!this.#socket) {
-      return;
+  async #receive(payload: unknown): Promise<void> {
+    const data = payload instanceof Blob ? await payload.arrayBuffer() : payload;
+    this.#handleFrame(decodeFrame(data as ArrayBuffer | Uint8Array));
+  }
+
+  #storeObject(type: string, id: string, value: PlainObject, version: number): void {
+    this.#objects.set(objectKey(type, id), { ...value });
+    this.#cache.saveObject(this.schema, type, id, value, version);
+    this.#objectListSignals.get(type)?.set(this.#selectObjects(type));
+  }
+
+  #storeStreamEvent(event: StreamEventInput): void {
+    const id = streamKey(event.stream, event.streamId);
+    const events = this.#streams.get(id) ?? [];
+    const existing = events.findIndex((candidate) => candidate.eventId === event.eventId);
+    if (existing === -1) {
+      events.push(event);
+    } else {
+      events[existing] = event;
     }
-    sendToSocket(this.#socket, frame);
+    events.sort((left, right) => left.sequence - right.sequence);
+    this.#streams.set(id, events);
+    this.#cache.saveStreamEvent(this.schema, event);
+    this.#streamSignals.get(id)?.set([...events]);
+  }
+
+  #trackPendingAppend(append: PendingAppend): void {
+    this.#pendingAppends.set(append.requestId, append);
+    this.#cache.savePendingAppend(this.schema, append);
+    this.#setStatus({ pendingMutations: this.#pendingAppends.size });
+  }
+
+  #sendAppend(append: PendingAppend): void {
+    this.#send([
+      FrameKind.Append,
+      {
+        requestId: append.requestId,
+        stream: append.stream,
+        key: append.key,
+        event: append.event,
+        payload: append.payload,
+      },
+    ]);
+  }
+
+  #flushPendingAppends(): void {
+    for (const append of this.#pendingAppends.values()) {
+      this.#sendAppend(append);
+    }
+  }
+
+  #resubscribe(): void {
+    for (const type of this.#objectListSignals.keys()) {
+      this.#sendSubscribe({ kind: "object", name: type });
+    }
+    for (const id of this.#streamSignals.keys()) {
+      const [name, key] = splitSubscriptionKey(id);
+      this.#sendSubscribe({ kind: "stream", name, key });
+    }
+    for (const id of this.#presenceSignals.keys()) {
+      const [name, key] = splitSubscriptionKey(id);
+      this.#sendSubscribe({ kind: "presence", name, key });
+    }
+    for (const id of this.#signalSignals.keys()) {
+      const [name, key] = splitSubscriptionKey(id);
+      this.#sendSubscribe({ kind: "signal", name, key });
+    }
+  }
+
+  #sendSubscribe(input: { kind: "object" | "stream" | "presence" | "signal"; name: string; key?: string }): void {
+    const subscriptionId = input.key ? streamKey(input.name, input.key) : input.name;
+    this.#send([
+      FrameKind.Subscribe,
+      {
+        subscriptionId,
+        kind: input.kind,
+        name: input.name,
+        key: input.key,
+        cursor: this.syncStatus.value.cursors[subscriptionId] ?? 0,
+      },
+    ]);
+  }
+
+  #send(frame: FrickFrame): void {
+    if (this.#socket?.readyState === SOCKET_OPEN) {
+      this.#socket.send(encodeFrame(frame));
+    }
+  }
+
+  #selectObjects(type: string): PlainObject[] {
+    return Array.from(this.#objects.entries())
+      .filter(([key]) => key.startsWith(`${type}:`))
+      .map(([, value]) => value)
+      .sort((left, right) => String(left.id).localeCompare(String(right.id)));
+  }
+
+  #saveCursor(key: string, cursor: number): void {
+    this.#cache.saveCursor(this.schema, key, cursor);
+    this.#setStatus({
+      cursors: {
+        ...this.syncStatus.value.cursors,
+        [key]: Math.max(this.syncStatus.value.cursors[key] ?? 0, cursor),
+      },
+    });
   }
 
   #setStatus(patch: Partial<SyncStatus>): void {
     this.syncStatus.set({ ...this.syncStatus.value, ...patch });
   }
-}
 
-function sendToSocket(socket: WebSocket, frame: FrickFrame): void {
-  if (Number(socket.readyState) === SOCKET_OPEN) {
-    socket.send(encodeFrame(frame));
+  #scheduleReconnect(): void {
+    this.#clearReconnectTimer();
+    this.#reconnectTimer = setTimeout(() => this.connect(), this.#reconnectDelayMs);
+  }
+
+  #clearReconnectTimer(): void {
+    if (this.#reconnectTimer) {
+      clearTimeout(this.#reconnectTimer);
+      this.#reconnectTimer = undefined;
+    }
   }
 }
 
-export function hydrateClient(client: FrickClient, entityName: string, objects: PlainObject[]): void {
-  for (const object of objects) {
-    client.applySnapshot(`hydrate:${entityName}`, [packObject(client.manifest, entityName, object)]);
+function addSocketListener(socket: WebSocket, event: string, listener: (event: never) => void): void {
+  if ("addEventListener" in socket) {
+    socket.addEventListener(event, listener as EventListener);
+    return;
   }
+  (socket as never as { on(name: string, listener: (event: never) => void): void }).on(event, listener);
 }
 
-export function stableQueryId(spec: QuerySpec): string {
-  return `${spec.entity}:${spec.index}:${JSON.stringify(spec.args, Object.keys(spec.args).sort())}`;
+function splitSubscriptionKey(id: string): [name: string, key: string] {
+  const separator = id.indexOf(":");
+  return [id.slice(0, separator), id.slice(separator + 1)];
+}
+
+function randomId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2);
 }
