@@ -1,38 +1,87 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { FrickStore } from "../src/store.js";
 
-describe("FrickStore", () => {
-  test("seeds demo objects and returns query results", () => {
-    const store = new FrickStore({ path: ":memory:" });
+let store: FrickStore | undefined;
 
-    const tasks = store.query({
-      entity: "Task",
-      index: "byProject",
-      args: { projectId: "demo-project" },
+afterEach(() => {
+  store?.close();
+  store = undefined;
+});
+
+describe("FrickStore foundation storage", () => {
+  it("stores objects and appends ordered stream events", () => {
+    store = new FrickStore({ path: ":memory:", seed: true });
+
+    const user = store.readObject("User", "user-ada");
+    expect(user?.displayName).toBe("Ada Lovelace");
+
+    const event = store.appendEvent({
+      requestId: "request-1",
+      replicaId: "replica-1",
+      stream: "MessageStream",
+      streamId: "conversation-general",
+      event: "MessageSent",
+      payload: {
+        messageId: "message-1",
+        senderId: "user-ada",
+        body: "Foundation online",
+        createdAt: "2026-05-09T00:00:00.000Z",
+      },
     });
 
-    expect(tasks).toHaveLength(3);
-    expect(tasks[0]).toMatchObject({ id: "task-schema", done: true });
-    store.close();
+    expect(event.sequence).toBe(1);
+    expect(store.readEvents("MessageStream", "conversation-general", 0)).toHaveLength(1);
   });
 
-  test("persists mutations as object deltas", () => {
-    const store = new FrickStore({ path: ":memory:" });
+  it("deduplicates appends by replica and request id", () => {
+    store = new FrickStore({ path: ":memory:", seed: true });
 
-    const delta = store.applyMutation("task.toggle", {
-      taskId: "task-transport",
-      done: true,
+    const input = {
+      requestId: "request-1",
+      replicaId: "replica-1",
+      stream: "MessageStream",
+      streamId: "conversation-general",
+      event: "MessageSent",
+      payload: {
+        messageId: "message-1",
+        senderId: "user-ada",
+        body: "once",
+        createdAt: "2026-05-09T00:00:00.000Z",
+      },
+    };
+
+    const first = store.appendEvent(input);
+    const second = store.appendEvent(input);
+
+    expect(second.eventId).toBe(first.eventId);
+    expect(store.readEvents("MessageStream", "conversation-general", 0)).toHaveLength(1);
+  });
+
+  it("stores presence leases, signal envelopes, blob metadata, and jobs", () => {
+    store = new FrickStore({ path: ":memory:", seed: true });
+
+    store.setPresence("TypingState", "conversation-general:user-ada:device-1", { isTyping: true }, 5000);
+    store.enqueueSignal("WebRTCSignal", "call-1", {
+      senderDeviceId: "device-1",
+      kind: "offer",
+      payload: new Uint8Array([1]),
+    });
+    store.createBlobMetadata({
+      blobId: "blob-1",
+      ownerId: "user-ada",
+      contentHash: "sha256-demo",
+      byteLength: 10,
+      mimeType: "text/plain",
+    });
+    store.enqueueJob("PushNotificationJob", {
+      recipientUserId: "user-grace",
+      kind: "message",
+      payload: "{}",
     });
 
-    expect(delta).toMatchObject({
-      mutation: "task.toggle",
-      entityId: 2,
-      entityName: "Task",
-      objectId: "task-transport",
-    });
-    expect(delta.seq).toBeGreaterThan(0);
-    expect(delta.fields).toContainEqual([5, true]);
-    expect(store.readObject("Task", "task-transport")).toMatchObject({ done: true });
-    store.close();
+    expect(store.readPresence("TypingState", "conversation-general:user-ada:device-1")?.isTyping).toBe(true);
+    expect(store.drainSignals("WebRTCSignal", "call-1")).toHaveLength(1);
+    expect(store.readBlobMetadata("blob-1")?.mimeType).toBe("text/plain");
+    expect(store.nextJob("PushNotificationJob")?.name).toBe("PushNotificationJob");
   });
 });
