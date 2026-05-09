@@ -9,7 +9,7 @@ import { ObjectStore } from "./storage/object-store.js";
 import { PresenceStore } from "./storage/presence-store.js";
 import { initializeStorage } from "./storage/schema.js";
 import { SignalStore } from "./storage/signal-store.js";
-import { StreamStore, type AppendInput, type StoredEvent } from "./storage/stream-store.js";
+import { StreamStore, type AppendInput, type AppendResult, type StoredEvent } from "./storage/stream-store.js";
 
 export interface StoreOptions {
   path: string;
@@ -93,7 +93,7 @@ export class FrickStore {
     return this.objects.list(type);
   }
 
-  appendEvent(input: AppendInput): StoredEvent {
+  appendEvent(input: AppendInput): AppendResult {
     return this.streams.append(input);
   }
 

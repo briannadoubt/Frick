@@ -1,6 +1,10 @@
 package dev.frick.client
 
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -166,14 +170,35 @@ class FrickEventStreamParserTest {
         assertEquals(2, transport.postAttempts.size)
         assertEquals(1, transport.posts.size)
     }
+
+    @Test
+    fun streamsMessageSnapshotsAndDeltasFromSseTransport() = runBlocking {
+        val transport = FakeFrickTransport(
+            streamChunks = listOf(
+                "event: stream-page\n" +
+                    "data: {\"schemaHash\":\"$FRICK_SCHEMA_HASH\",\"stream\":\"MessageStream\",\"key\":\"conversation-general\",\"data\":[]}\n\n",
+                "event: delta\n" +
+                    "data: {\"schemaHash\":\"$FRICK_SCHEMA_HASH\",\"stream\":\"MessageStream\",\"key\":\"conversation-general\",\"data\":[{\"stream\":\"MessageStream\",\"streamId\":\"conversation-general\",\"sequence\":2,\"eventId\":\"event-2\",\"event\":\"MessageSent\",\"payload\":{\"body\":\"Live\"}}]}\n\n",
+            ),
+        )
+        val client = FrickClient(transport = transport)
+
+        val snapshots = client.streamMessages().take(2).toList()
+
+        assertEquals(listOf(0, 1), snapshots.map { events -> events.size })
+        assertEquals("Live", snapshots.last().single().payload["body"])
+        assertEquals(listOf("/streams/MessageStream/conversation-general/events?after=0"), transport.streamedPaths)
+    }
 }
 
 private class FakeFrickTransport(
     private val responseBody: String = messageStreamResponse(),
+    private val streamChunks: List<String> = emptyList(),
     private val failGets: Boolean = false,
     private var failingPosts: Int = 0,
 ) : FrickTransport {
     val requestedPaths = mutableListOf<String>()
+    val streamedPaths = mutableListOf<String>()
     val postAttempts = mutableListOf<Post>()
     val posts = mutableListOf<Post>()
 
@@ -183,6 +208,14 @@ private class FakeFrickTransport(
         }
         requestedPaths += path
         return responseBody
+    }
+
+    override fun stream(path: String): Flow<String> {
+        if (failGets) {
+            throw IllegalStateException("offline")
+        }
+        streamedPaths += path
+        return streamChunks.asFlow()
     }
 
     override suspend fun post(path: String, body: String) {

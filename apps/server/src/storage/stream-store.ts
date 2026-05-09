@@ -21,6 +21,11 @@ export interface AppendInput {
 
 export interface StoredEvent extends StreamEventInput {}
 
+export interface AppendResult {
+  event: StoredEvent;
+  created: boolean;
+}
+
 interface IdempotencyRow {
   result_event_id: string;
 }
@@ -35,10 +40,10 @@ export class StreamStore {
     private readonly schema: FrickSchema,
   ) {}
 
-  append(input: AppendInput): StoredEvent {
+  append(input: AppendInput): AppendResult {
     const existing = this.readIdempotentEvent(input.replicaId, input.requestId);
     if (existing) {
-      return existing;
+      return { event: existing, created: false };
     }
 
     const sequence = this.nextSequence(input.stream, input.streamId);
@@ -80,7 +85,7 @@ export class StreamStore {
       )
       .run(input.replicaId, input.requestId, eventId, createdAt);
 
-    return event;
+    return { event, created: true };
   }
 
   read(stream: string, streamId: string, after: number): StoredEvent[] {

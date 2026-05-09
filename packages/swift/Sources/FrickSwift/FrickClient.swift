@@ -420,9 +420,18 @@ public struct FrickEventStreamParser: Sendable {
     }
 }
 
+private func makeFrickStreamingSession() -> URLSession {
+    let configuration = URLSessionConfiguration.default
+    configuration.timeoutIntervalForRequest = 7 * 24 * 60 * 60
+    configuration.timeoutIntervalForResource = 7 * 24 * 60 * 60
+    configuration.waitsForConnectivity = true
+    return URLSession(configuration: configuration)
+}
+
 public final class FrickClient: Sendable {
     private let baseURL: URL
     private let session: URLSession
+    private let streamingSession: URLSession
     private let replicaId: String
     private let storage: FrickStorage
     private let requestIdFactory: @Sendable () -> String
@@ -432,12 +441,14 @@ public final class FrickClient: Sendable {
     public init(
         baseURL: URL = URL(string: "http://127.0.0.1:4099")!,
         session: URLSession = .shared,
+        streamingSession: URLSession? = nil,
         replicaId: String = "ios-demo",
         storage: FrickStorage = FrickSQLiteStorage.appStorage,
         requestIdFactory: @escaping @Sendable () -> String = { UUID().uuidString }
     ) {
         self.baseURL = baseURL
         self.session = session
+        self.streamingSession = streamingSession ?? makeFrickStreamingSession()
         self.replicaId = replicaId
         self.storage = storage
         self.requestIdFactory = requestIdFactory
@@ -487,6 +498,51 @@ public final class FrickClient: Sendable {
                 throw error
             }
             return cached
+        }
+    }
+
+    public func streamMessages(
+        conversationId: String = "conversation-general"
+    ) -> AsyncThrowingStream<[FrickStreamEvent], Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    var current = try storage.loadStreamEvents(stream: "MessageStream", key: conversationId)
+                    if !current.isEmpty {
+                        continuation.yield(current)
+                    }
+                    try? await flushPendingAppends()
+
+                    let after = current.map(\.sequence).max() ?? 0
+                    let (bytes, response) = try await streamingSession.bytes(from: streamEventsURL(
+                        stream: "MessageStream",
+                        key: conversationId,
+                        after: after
+                    ))
+                    try validate(response)
+
+                    var parser = FrickEventStreamParser()
+                    for try await line in bytes.lines {
+                        for event in parser.push(line + "\n") where event.event == "stream-page" || event.event == "delta" {
+                            let decoded = try decoder.decode(StreamEventsResponse.self, from: Data(event.data.utf8))
+                            try decoded.requireCompatibleSchema()
+                            for streamEvent in decoded.data {
+                                try storage.saveStreamEvent(streamEvent)
+                            }
+                            current = mergeStreamEvents(current, decoded.data)
+                            continuation.yield(current)
+                        }
+                    }
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
         }
     }
 
@@ -568,6 +624,19 @@ public final class FrickClient: Sendable {
         return components.url!
     }
 
+    private func streamEventsURL(stream: String, key: String, after: Int) -> URL {
+        var components = URLComponents(
+            url: baseURL
+                .appending(path: "streams")
+                .appending(path: stream)
+                .appending(path: key)
+                .appending(path: "events"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [URLQueryItem(name: "after", value: String(after))]
+        return components.url!
+    }
+
     private func validate(_ response: URLResponse) throws {
         guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
             throw URLError(.badServerResponse)
@@ -588,4 +657,14 @@ private func extractId<Object: Encodable>(from object: Object) -> String? {
         return nil
     }
     return json["id"] as? String
+}
+
+private func mergeStreamEvents(_ current: [FrickStreamEvent], _ next: [FrickStreamEvent]) -> [FrickStreamEvent] {
+    var eventsById = Dictionary(uniqueKeysWithValues: current.map { ($0.eventId, $0) })
+    for event in next {
+        eventsById[event.eventId] = event
+    }
+    return eventsById.values.sorted { left, right in
+        left.sequence < right.sequence
+    }
 }

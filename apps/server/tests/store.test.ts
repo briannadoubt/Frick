@@ -15,7 +15,7 @@ describe("FrickStore foundation storage", () => {
     const user = store.readObject("User", "user-ada");
     expect(user?.displayName).toBe("Ada Lovelace");
 
-    const event = store.appendEvent({
+    const result = store.appendEvent({
       requestId: "request-1",
       replicaId: "replica-1",
       stream: "MessageStream",
@@ -29,7 +29,8 @@ describe("FrickStore foundation storage", () => {
       },
     });
 
-    expect(event.sequence).toBe(1);
+    expect(result.created).toBe(true);
+    expect(result.event.sequence).toBe(1);
     expect(store.readEvents("MessageStream", "conversation-general", 0)).toHaveLength(1);
   });
 
@@ -53,7 +54,9 @@ describe("FrickStore foundation storage", () => {
     const first = store.appendEvent(input);
     const second = store.appendEvent(input);
 
-    expect(second.eventId).toBe(first.eventId);
+    expect(first.created).toBe(true);
+    expect(second.created).toBe(false);
+    expect(second.event.eventId).toBe(first.event.eventId);
     expect(store.readEvents("MessageStream", "conversation-general", 0)).toHaveLength(1);
   });
 

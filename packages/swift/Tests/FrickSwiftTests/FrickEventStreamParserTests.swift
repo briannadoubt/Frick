@@ -15,6 +15,15 @@ final class FrickEventStreamParserTests: XCTestCase {
         XCTAssertEqual(events[0].data, "{\"data\":[{\"id\":\"message-1\",\"body\":\"Streamed\"}]}")
     }
 
+    func testClientExposesMessageSSEStream() throws {
+        let client = FrickClient(
+            baseURL: URL(string: "http://127.0.0.1:4099")!,
+            storage: try FrickSQLiteStorage(path: ":memory:")
+        )
+
+        _ = client.streamMessages(conversationId: "conversation-general")
+    }
+
     func testGeneratedFoundationDTOsCarrySchemaContract() throws {
         XCTAssertEqual(FrickSchema.schemaHash, "frick-foundation-2026-05-09")
 

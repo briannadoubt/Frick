@@ -15,6 +15,23 @@ final class FoundationModel: ObservableObject {
         conversations.first(where: { $0.id == "conversation-general" })?.title ?? "Foundation General"
     }
 
+    func start() async {
+        status = "Connecting"
+        do {
+            async let nextUsers = client.fetchUsers()
+            async let nextConversations = client.fetchConversations()
+            users = try await nextUsers
+            conversations = try await nextConversations
+
+            for try await nextMessages in client.streamMessages() {
+                messages = nextMessages
+                status = "Live"
+            }
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
     func load() async {
         status = "Loading"
         do {
@@ -39,8 +56,7 @@ final class FoundationModel: ObservableObject {
         status = "Sending"
         do {
             try await client.sendMessage(body: body)
-            messages = try await client.fetchMessages()
-            status = "Synced"
+            status = "Sent"
         } catch {
             status = error.localizedDescription
         }
@@ -115,7 +131,7 @@ struct ContentView: View {
                 }
             }
             .task {
-                await model.load()
+                await model.start()
             }
         }
     }

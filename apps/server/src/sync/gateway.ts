@@ -21,6 +21,7 @@ import {
   principalFromHello,
 } from "../authz.js";
 import type { FrickStore } from "../store.js";
+import type { StoredEvent } from "../storage/stream-store.js";
 import { routeSignal } from "./signal-router.js";
 import { SubscriptionRegistry, type SyncClient } from "./subscriptions.js";
 import { sendFrame } from "./wire.js";
@@ -49,6 +50,13 @@ export class SyncGateway {
 
   close(): void {
     this.#subscriptions.closeAll();
+  }
+
+  publishStreamEvent(event: StoredEvent): void {
+    const packed = packStreamEvent(this.store.schema, event);
+    for (const { client: subscriber } of this.#subscriptions.streamSubscribers(event.stream, event.streamId)) {
+      sendFrame(subscriber.socket, [FrameKind.Delta, { objects: [], events: [packed], cursor: event.sequence }]);
+    }
   }
 
   #handleRawFrame(client: SyncClient, socket: WebSocket, payload: Buffer): void {
@@ -150,7 +158,7 @@ export class SyncGateway {
   #handleAppend(client: SyncClient, payload: AppendPayload): void {
     const principal = requirePrincipal(client);
     assertCanAppend(principal, payload.stream, payload.key);
-    const event = this.store.appendEvent({
+    const result = this.store.appendEvent({
       requestId: payload.requestId,
       replicaId: principal.replicaId,
       stream: payload.stream,
@@ -158,11 +166,10 @@ export class SyncGateway {
       event: payload.event,
       payload: payload.payload,
     });
-    sendFrame(client.socket, [FrameKind.Ack, { requestId: payload.requestId, cursor: event.sequence }]);
+    sendFrame(client.socket, [FrameKind.Ack, { requestId: payload.requestId, cursor: result.event.sequence }]);
 
-    const packed = packStreamEvent(this.store.schema, event);
-    for (const { client: subscriber } of this.#subscriptions.streamSubscribers(payload.stream, payload.key)) {
-      sendFrame(subscriber.socket, [FrameKind.Delta, { objects: [], events: [packed], cursor: event.sequence }]);
+    if (result.created) {
+      this.publishStreamEvent(result.event);
     }
   }
 

@@ -4,11 +4,13 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { foundationSchema } from "@frick/protocol";
 import { SyncGateway } from "./sync/gateway.js";
+import { SseRegistry } from "./sync/sse.js";
 import { FrickStore } from "./store.js";
 
 export interface ServerOptions {
   port?: number;
   dbPath?: string;
+  sseHeartbeatMs?: number;
 }
 
 export function createFrickServer(options: ServerOptions = {}) {
@@ -23,6 +25,10 @@ export function createFrickServer(options: ServerOptions = {}) {
   });
   const wss = new WebSocketServer({ server, path: "/_frick/sync" });
   const gateway = new SyncGateway(wss, store);
+  const sse = new SseRegistry(
+    store.schema,
+    options.sseHeartbeatMs === undefined ? {} : { heartbeatMs: options.sseHeartbeatMs },
+  );
   gateway.attach();
 
   async function handleHttp(request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
@@ -64,11 +70,21 @@ export function createFrickServer(options: ServerOptions = {}) {
         return;
       }
       const after = Number(url.searchParams.get("after") ?? "0");
+      const events = store.readEvents(stream, key, Number.isFinite(after) ? after : 0);
+      if (parts[4] === "events") {
+        sse.open(response, {
+          stream,
+          key,
+          events,
+          cursor: Number.isFinite(after) ? after : 0,
+        });
+        return;
+      }
       sendJson(response, 200, {
         schemaHash: store.schema.hash,
         stream,
         key,
-        data: store.readEvents(stream, key, Number.isFinite(after) ? after : 0),
+        data: events,
       });
       return;
     }
@@ -76,7 +92,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     if (request.method === "POST" && url.pathname === "/append") {
       try {
         const body = await readJsonBody(request);
-        const event = store.appendEvent({
+        const result = store.appendEvent({
           requestId: requireString(body.requestId, "requestId"),
           replicaId: requireString(body.replicaId, "replicaId"),
           stream: requireString(body.stream, "stream"),
@@ -84,7 +100,11 @@ export function createFrickServer(options: ServerOptions = {}) {
           event: requireString(body.event, "event"),
           payload: requireRecord(body.payload, "payload"),
         });
-        sendJson(response, 200, { ok: true, event });
+        if (result.created) {
+          gateway.publishStreamEvent(result.event);
+          sse.publishStreamEvent(result.event);
+        }
+        sendJson(response, 200, { ok: true, event: result.event });
       } catch (error) {
         sendJson(response, 400, {
           error: "append_rejected",
@@ -104,6 +124,7 @@ export function createFrickServer(options: ServerOptions = {}) {
   }
 
   function close(): Promise<void> {
+    sse.closeAll();
     gateway.close();
     return new Promise((resolve, reject) => {
       wss.close((wsError) => {

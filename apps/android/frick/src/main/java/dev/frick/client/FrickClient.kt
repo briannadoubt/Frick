@@ -7,16 +7,25 @@ import android.database.sqlite.SQLiteOpenHelper
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.request.get
+import io.ktor.client.request.prepareGet
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
+import io.ktor.utils.io.readLine
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
@@ -76,6 +85,7 @@ class FrickHttpException(
 
 interface FrickTransport {
     suspend fun get(path: String): String
+    fun stream(path: String): Flow<String>
     suspend fun post(path: String, body: String)
 }
 
@@ -302,6 +312,17 @@ class KtorFrickTransport(
         return response.bodyAsText()
     }
 
+    override fun stream(path: String): Flow<String> = flow {
+        httpClient.prepareGet(resolve(path)).execute { response ->
+            requireSuccess(response)
+            val channel = response.bodyAsChannel()
+            while (currentCoroutineContext().isActive) {
+                val line = channel.readLine() ?: break
+                emit("$line\n")
+            }
+        }
+    }.flowOn(Dispatchers.IO)
+
     override suspend fun post(path: String, body: String) {
         val response = httpClient.post(resolve(path)) {
             contentType(ContentType.Application.Json)
@@ -356,6 +377,24 @@ class FrickClient(
                 }
             }
         }
+
+    fun streamMessages(conversationId: String = "conversation-general"): Flow<List<FrickStreamEvent>> = flow {
+        var current = storage.loadStreamEvents(stream = "MessageStream", key = conversationId)
+        val after = current.maxOfOrNull { event -> event.sequence } ?: 0
+        val parser = FrickEventStreamParser()
+
+        runCatching { flushPendingAppends() }
+        transport.stream("/streams/MessageStream/$conversationId/events?after=$after").collect { chunk ->
+            parser.push(chunk)
+                .filter { event -> event.event == "stream-page" || event.event == "delta" }
+                .forEach { event ->
+                    val nextEvents = parseStreamEvents(event.data)
+                    nextEvents.forEach(storage::saveStreamEvent)
+                    current = mergeStreamEvents(current, nextEvents)
+                    emit(current)
+                }
+        }
+    }.flowOn(Dispatchers.IO)
 
     suspend fun sendMessage(
         conversationId: String = "conversation-general",
@@ -530,7 +569,7 @@ private fun defaultHttpClient(): HttpClient = HttpClient(OkHttp) {
     engine {
         config {
             connectTimeout(2_000, TimeUnit.MILLISECONDS)
-            readTimeout(2_000, TimeUnit.MILLISECONDS)
+            readTimeout(0, TimeUnit.MILLISECONDS)
             writeTimeout(2_000, TimeUnit.MILLISECONDS)
         }
     }
@@ -538,6 +577,14 @@ private fun defaultHttpClient(): HttpClient = HttpClient(OkHttp) {
 
 private fun shouldQueueAppend(error: Exception): Boolean =
     error !is FrickSchemaMismatchException && error !is FrickHttpException
+
+private fun mergeStreamEvents(
+    current: List<FrickStreamEvent>,
+    next: List<FrickStreamEvent>,
+): List<FrickStreamEvent> =
+    (current + next)
+        .distinctBy { event -> event.eventId }
+        .sortedBy { event -> event.sequence }
 
 private fun parseResponseObject(responseJson: String): JsonObject =
     frickJson.parseToJsonElement(responseJson)

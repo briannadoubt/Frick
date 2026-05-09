@@ -43,6 +43,7 @@ import dev.frick.client.FrickClient
 import dev.frick.client.FrickStreamEvent
 import dev.frick.client.SQLiteFrickStorage
 import dev.frick.client.UserDto
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -110,15 +111,24 @@ fun FrickDemo() {
         status = "Sending"
         try {
             frick.sendMessage(body = body)
-            messages = frick.fetchMessages()
-            status = "Synced"
+            status = "Sent"
         } catch (error: Exception) {
             status = error.localizedMessage ?: "Send failed"
         }
     }
 
     LaunchedEffect(Unit) {
-        reload()
+        status = "Connecting"
+        try {
+            users = frick.fetchUsers()
+            conversations = frick.fetchConversations()
+            frick.streamMessages().collect { nextMessages ->
+                messages = nextMessages
+                status = "Live"
+            }
+        } catch (error: Exception) {
+            status = error.localizedMessage ?: "Sync failed"
+        }
     }
 
     Column(
