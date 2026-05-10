@@ -61,7 +61,14 @@ public class FrickDesignTest {
     @Test
     public fun workspaceDefaultsUseExpandedPanesOnlyForWideLayouts() {
         assertEquals(false, FrickWorkspaceDefaults.usesExpandedPanes(600.dp))
-        assertEquals(true, FrickWorkspaceDefaults.usesExpandedPanes(840.dp))
+        assertEquals(false, FrickWorkspaceDefaults.usesExpandedPanes(840.dp))
+        assertEquals(true, FrickWorkspaceDefaults.usesExpandedPanes(1040.dp))
         assertEquals(true, FrickWorkspaceDefaults.usesExpandedPanes(1200.dp))
+    }
+
+    @Test
+    public fun workspaceDefaultsReserveReadablePaneWidths() {
+        assertEquals(300.dp, FrickWorkspaceDefaults.collectionPaneWidth)
+        assertEquals(300.dp, FrickWorkspaceDefaults.inspectorPaneWidth)
     }
 }

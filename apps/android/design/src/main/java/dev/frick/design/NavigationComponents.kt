@@ -2,10 +2,16 @@ package dev.frick.design
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteItem
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
@@ -24,12 +30,16 @@ public data class FrickWorkspaceDestination(
 )
 
 public object FrickWorkspaceDefaults {
-    public val expandedPaneBreakpoint: Dp = 840.dp
+    public val expandedPaneBreakpoint: Dp = 1040.dp
+    public val collectionPaneWidth: Dp = 300.dp
+    public val inspectorPaneWidth: Dp = 300.dp
+    public val compactCollectionMaxHeight: Dp = 260.dp
 
     public fun usesExpandedPanes(width: Dp): Boolean =
         width >= expandedPaneBreakpoint
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 public fun FrickWorkspaceShell(
     destinations: List<FrickWorkspaceDestination>,
@@ -38,6 +48,7 @@ public fun FrickWorkspaceShell(
     modifier: Modifier = Modifier,
     collection: (@Composable () -> Unit)? = null,
     inspectorVisible: Boolean = false,
+    onInspectorVisibleChange: (Boolean) -> Unit = {},
     inspector: @Composable () -> Unit = {},
     content: @Composable () -> Unit,
 ) {
@@ -61,7 +72,12 @@ public fun FrickWorkspaceShell(
             if (usesExpandedPanes) {
                 Row(modifier = Modifier.fillMaxSize().fillMaxWidth()) {
                     if (collection != null) {
-                        Box(modifier = Modifier.weight(0.28f).fillMaxSize().padding(16.dp)) {
+                        Box(
+                            modifier = Modifier
+                                .width(FrickWorkspaceDefaults.collectionPaneWidth)
+                                .fillMaxHeight()
+                                .padding(16.dp),
+                        ) {
                             collection()
                         }
                     }
@@ -69,14 +85,38 @@ public fun FrickWorkspaceShell(
                         content()
                     }
                     if (inspectorVisible) {
-                        Box(modifier = Modifier.weight(0.36f).fillMaxSize().padding(16.dp)) {
+                        Box(
+                            modifier = Modifier
+                                .width(FrickWorkspaceDefaults.inspectorPaneWidth)
+                                .fillMaxHeight()
+                                .padding(16.dp),
+                        ) {
                             inspector()
                         }
                     }
                 }
             } else {
-                Box(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-                    content()
+                Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+                    if (collection != null) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = FrickWorkspaceDefaults.compactCollectionMaxHeight)
+                                .padding(bottom = 16.dp),
+                        ) {
+                            collection()
+                        }
+                    }
+                    Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                        content()
+                    }
+                }
+                if (inspectorVisible) {
+                    ModalBottomSheet(onDismissRequest = { onInspectorVisibleChange(false) }) {
+                        Box(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                            inspector()
+                        }
+                    }
                 }
             }
         }
