@@ -14,6 +14,7 @@ import {
   Text,
   TextField,
   WorkspaceShell,
+  WorkspaceListItem,
   useFrickDesign,
 } from "./index.js";
 
@@ -96,6 +97,9 @@ describe("Frick design web components", () => {
         footer={<div>Composer area</div>}
         inspector={<div>Inspector area</div>}
         inspectorOpen
+        navigationLabel={<strong>Frick</strong>}
+        navigationActions={<button type="button">Account</button>}
+        compactCollectionVisible
       >
         <div>Primary chat content</div>
       </WorkspaceShell>,
@@ -108,7 +112,31 @@ describe("Frick design web components", () => {
     expect(html).toContain("Primary chat content");
     expect(html).toContain("Inspector area");
     expect(html).toContain("Composer area");
+    expect(html).toContain("frick-workspace-shell__brand");
+    expect(html).toContain("frick-workspace-shell__navigation-actions");
+    expect(html).toContain('data-compact-collection-visible="true"');
+    expect(html).toContain("Frick");
+    expect(html).toContain("Account");
     expect(html).toContain("Soon");
+  });
+
+  test("renders workspace list items from the component library", () => {
+    const html = renderToStaticMarkup(
+      <WorkspaceListItem
+        title="Foundation General"
+        subtitle="Latest synced message"
+        meta="Read #4 / Last #5"
+        badge="1"
+        selected
+      />,
+    );
+
+    expect(html).toContain("frick-workspace-list-item");
+    expect(html).toContain('data-selected="true"');
+    expect(html).toContain("Foundation General");
+    expect(html).toContain("Latest synced message");
+    expect(html).toContain("Read #4 / Last #5");
+    expect(html).toContain("1");
   });
 
   test("renders workspace shell content-only layout without optional slots", () => {
@@ -148,9 +176,20 @@ describe("Frick design web components", () => {
     expect(html).toContain("Primary chat content");
   });
 
-  test("uses compact workspace navigation before side panes become cramped", () => {
+  test("keeps the web collection sidebar until genuinely compact widths", () => {
     const css = readFileSync(new URL("./components.css", import.meta.url), "utf8");
 
-    expect(css).toContain("@media (max-width: 1040px)");
+    expect(css).toContain("grid-template-rows: auto minmax(0, 1fr)");
+    expect(css).toContain("block-size: 100dvh");
+    expect(css).toContain("frick-workspace-shell__destination-list");
+    expect(css).toContain("frick-workspace-shell__navigation-actions");
+    expect(css).toContain("@media (min-width: 641px)");
+    expect(css).toContain("@media (max-width: 640px)");
+    expect(css).toContain('data-compact-collection-visible="false"');
+    expect(css).toContain('data-compact-collection-visible="true"');
+    expect(css).toContain("grid-template-columns: minmax(0, 1fr)");
+    expect(css).toContain("grid-template-columns: minmax(14rem, 18rem) minmax(0, 1fr)");
+    expect(css).not.toContain("grid-row: 2");
+    expect(css).not.toContain("position: fixed");
   });
 });

@@ -7,6 +7,8 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
 packages:
+  FrickDesign:
+    path: ../../packages/design-swift
   FrickSwift:
     path: ../../packages/swift
 targets:
@@ -18,6 +20,7 @@ targets:
     sources:
       - FrickDemo
     dependencies:
+      - package: FrickDesign
       - package: FrickSwift
       - sdk: AppIntents.framework
     info:

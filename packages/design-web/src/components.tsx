@@ -129,6 +129,9 @@ export interface WorkspaceShellProps extends HTMLAttributes<HTMLDivElement> {
   footer?: ReactNode;
   inspector?: ReactNode;
   inspectorOpen?: boolean;
+  navigationLabel?: ReactNode;
+  navigationActions?: ReactNode;
+  compactCollectionVisible?: boolean;
   onInspectorOpenChange?: (open: boolean) => void;
 }
 
@@ -141,6 +144,9 @@ export function WorkspaceShell({
   footer,
   inspector,
   inspectorOpen = Boolean(inspector),
+  navigationLabel,
+  navigationActions,
+  compactCollectionVisible = false,
   onInspectorOpenChange,
   children,
   className,
@@ -152,28 +158,33 @@ export function WorkspaceShell({
   return (
     <div className={cx("frick-workspace-shell", className)} {...props}>
       <nav className="frick-workspace-shell__destinations" aria-label="Workspace destinations">
-        {destinations.map((destination) => {
-          const selected = destination.id === selectedDestination;
-          return (
-            <button
-              aria-current={selected ? "page" : undefined}
-              className="frick-workspace-shell__destination"
-              data-selected={selected}
-              disabled={destination.disabled}
-              key={destination.id}
-              onClick={() => onDestinationChange?.(destination.id)}
-              type="button"
-            >
-              {destination.icon ? <FrickIconGlyph name={destination.icon} /> : null}
-              <span>{destination.label}</span>
-              {destination.badge ? <b>{destination.badge}</b> : null}
-            </button>
-          );
-        })}
+        {navigationLabel ? <div className="frick-workspace-shell__brand">{navigationLabel}</div> : null}
+        <div className="frick-workspace-shell__destination-list">
+          {destinations.map((destination) => {
+            const selected = destination.id === selectedDestination;
+            return (
+              <button
+                aria-current={selected ? "page" : undefined}
+                className="frick-workspace-shell__destination"
+                data-selected={selected}
+                disabled={destination.disabled}
+                key={destination.id}
+                onClick={() => onDestinationChange?.(destination.id)}
+                type="button"
+              >
+                {destination.icon ? <FrickIconGlyph name={destination.icon} /> : null}
+                <span>{destination.label}</span>
+                {destination.badge ? <b>{destination.badge}</b> : null}
+              </button>
+            );
+          })}
+        </div>
+        {navigationActions ? <div className="frick-workspace-shell__navigation-actions">{navigationActions}</div> : null}
       </nav>
 
       <div
         className="frick-workspace-shell__body"
+        data-compact-collection-visible={compactCollectionVisible}
         data-has-collection={hasCollection}
         data-has-inspector={hasInspector}
       >
@@ -195,6 +206,36 @@ export function WorkspaceShell({
         ) : null}
       </div>
     </div>
+  );
+}
+
+export interface WorkspaceListItemProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "title"> {
+  title: ReactNode;
+  subtitle?: ReactNode;
+  meta?: ReactNode;
+  selected?: boolean;
+  badge?: ReactNode;
+}
+
+export function WorkspaceListItem({
+  title,
+  subtitle,
+  meta,
+  selected = false,
+  badge,
+  className,
+  type = "button",
+  ...props
+}: WorkspaceListItemProps) {
+  return (
+    <button className={cx("frick-workspace-list-item", className)} data-selected={selected} type={type} {...props}>
+      <span className="frick-workspace-list-item__body">
+        <strong>{title}</strong>
+        {subtitle ? <small>{subtitle}</small> : null}
+        {meta ? <small className="frick-workspace-list-item__meta">{meta}</small> : null}
+      </span>
+      {badge ? <b>{badge}</b> : null}
+    </button>
   );
 }
 

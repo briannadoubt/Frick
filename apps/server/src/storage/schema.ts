@@ -67,11 +67,58 @@ export function initializeStorage(db: DatabaseSync): void {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS blob_content (
+      blob_id TEXT PRIMARY KEY,
+      content BLOB NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (blob_id) REFERENCES blob_metadata(blob_id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS conversation_inbox (
+      conversation_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      title TEXT,
+      kind TEXT NOT NULL,
+      last_sequence INTEGER NOT NULL,
+      last_message_body TEXT,
+      last_message_at TEXT,
+      last_message_sender_id TEXT,
+      read_sequence INTEGER NOT NULL,
+      unread_count INTEGER NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (conversation_id, user_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS conversation_inbox_by_user
+      ON conversation_inbox (user_id, updated_at DESC);
+
     CREATE TABLE IF NOT EXISTS jobs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       job_type TEXT NOT NULL,
       packed BLOB NOT NULL,
       status TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS auth_sessions (
+      session_token TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      device_id TEXT NOT NULL,
+      replica_id TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS auth_sessions_by_user
+      ON auth_sessions (user_id, expires_at DESC);
+
+    CREATE TABLE IF NOT EXISTS auth_accounts (
+      user_id TEXT PRIMARY KEY,
+      handle TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      display_name TEXT NOT NULL,
+      password_salt TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
   `);

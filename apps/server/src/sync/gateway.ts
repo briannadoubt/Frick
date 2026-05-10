@@ -1,3 +1,4 @@
+import type { IncomingMessage } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   FrameKind,
@@ -11,6 +12,7 @@ import {
   type FrickFrame,
   type PresenceClearPayload,
   type PresenceSetPayload,
+  type PlainObject,
   type SignalPayload,
   type SubscribePayload,
 } from "@frick/protocol";
@@ -18,7 +20,7 @@ import {
   assertCanAppend,
   assertCanSignal,
   assertCanSubscribe,
-  principalFromHello,
+  type Principal,
 } from "../authz.js";
 import type { FrickStore } from "../store.js";
 import type { StoredEvent } from "../storage/stream-store.js";
@@ -32,11 +34,13 @@ export class SyncGateway {
   constructor(
     private readonly wss: WebSocketServer,
     private readonly store: FrickStore,
+    private readonly options: { onStreamEvent?: (event: StoredEvent) => void } = {},
   ) {}
 
   attach(): void {
-    this.wss.on("connection", (socket) => {
-      const client: SyncClient = { socket, subscriptions: new Map() };
+    this.wss.on("connection", (socket, request) => {
+      const principal = this.#principalFromRequest(request);
+      const client: SyncClient = { socket, subscriptions: new Map(), ...(principal ? { principal } : {}) };
       this.#subscriptions.addClient(client);
 
       socket.on("message", (payload) => {
@@ -57,6 +61,25 @@ export class SyncGateway {
     for (const { client: subscriber } of this.#subscriptions.streamSubscribers(event.stream, event.streamId)) {
       sendFrame(subscriber.socket, [FrameKind.Delta, { objects: [], events: [packed], cursor: event.sequence }]);
     }
+  }
+
+  publishObjects(type: string, objects: PlainObject[]): void {
+    const cursor = Date.now();
+    for (const { client: subscriber } of this.#subscriptions.objectSubscribers(type)) {
+      const principal = requirePrincipal(subscriber);
+      const visibleObjects = objects.filter((object) => this.store.isObjectVisibleToUser(type, object, principal.userId));
+      if (visibleObjects.length === 0) {
+        continue;
+      }
+      sendFrame(subscriber.socket, [
+        FrameKind.Delta,
+        { objects: packObjects(this.store, type, visibleObjects), events: [], cursor },
+      ]);
+    }
+  }
+
+  publishSignal(name: string, key: string, value: PlainObject, requestId = "http"): void {
+    routeSignal(this.store, this.#subscriptions, { requestId, name, key, value });
   }
 
   #handleRawFrame(client: SyncClient, socket: WebSocket, payload: Buffer): void {
@@ -90,7 +113,6 @@ export class SyncGateway {
           ]);
           return;
         }
-        client.principal = principalFromHello(frame[1].replicaId, frame[1].deviceId);
         sendFrame(client.socket, [FrameKind.Schema, this.store.schema]);
         return;
       case FrameKind.Subscribe:
@@ -121,7 +143,7 @@ export class SyncGateway {
 
   #handleSubscribe(client: SyncClient, payload: SubscribePayload): void {
     const principal = requirePrincipal(client);
-    assertCanSubscribe(principal, payload.kind, payload.name, payload.key);
+    assertCanSubscribe(principal, payload.kind, payload.name, payload.key, this.store);
     this.#subscriptions.addSubscription(client, payload);
 
     if (payload.kind === "stream") {
@@ -143,21 +165,14 @@ export class SyncGateway {
     }
 
     if (payload.kind === "object") {
-      const objects = this.store.listObjects(payload.name).map((object) => {
-        const id = object.id;
-        if (typeof id !== "string") {
-          throw new Error(`Object ${payload.name} is missing string id`);
-        }
-        const { id: _id, ...value } = object;
-        return packObjectRecord(this.store.schema, payload.name, id, value);
-      });
+      const objects = packObjects(this.store, payload.name, this.store.listObjectsForUser(payload.name, principal.userId));
       sendFrame(client.socket, [FrameKind.Snapshot, { subscriptionId: payload.subscriptionId, objects, cursor: 0 }]);
     }
   }
 
   #handleAppend(client: SyncClient, payload: AppendPayload): void {
     const principal = requirePrincipal(client);
-    assertCanAppend(principal, payload.stream, payload.key);
+    assertCanAppend(principal, payload.stream, payload.key, this.store, payload.event, payload.payload);
     const result = this.store.appendEvent({
       requestId: payload.requestId,
       replicaId: principal.replicaId,
@@ -170,6 +185,7 @@ export class SyncGateway {
 
     if (result.created) {
       this.publishStreamEvent(result.event);
+      this.options.onStreamEvent?.(result.event);
     }
   }
 
@@ -206,6 +222,22 @@ export class SyncGateway {
     routeSignal(this.store, this.#subscriptions, payload);
     sendFrame(client.socket, [FrameKind.Ack, { requestId: payload.requestId }]);
   }
+
+  #principalFromRequest(request: IncomingMessage): Principal | undefined {
+    const url = new URL(request.url ?? "/", "ws://127.0.0.1");
+    const token = url.searchParams.get("sessionToken");
+    if (!token) {
+      return undefined;
+    }
+    const session = this.store.readActiveSession(token);
+    return session
+      ? {
+          userId: session.userId,
+          deviceId: session.deviceId,
+          replicaId: session.replicaId,
+        }
+      : undefined;
+  }
 }
 
 function requirePrincipal(client: SyncClient) {
@@ -220,4 +252,15 @@ function requireKey(payload: SubscribePayload): string {
     throw new Error(`${payload.kind} subscription ${payload.name} requires key`);
   }
   return payload.key;
+}
+
+function packObjects(store: FrickStore, type: string, objects: PlainObject[]) {
+  return objects.map((object) => {
+    const id = object.id;
+    if (typeof id !== "string") {
+      throw new Error(`Object ${type} is missing string id`);
+    }
+    const { id: _id, ...value } = object;
+    return packObjectRecord(store.schema, type, id, value);
+  });
 }

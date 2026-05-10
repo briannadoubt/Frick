@@ -3,10 +3,64 @@ import Foundation
 
 public enum FrickSchema {
   public static let protocolVersion = 1
-  public static let schemaHash = "frick-foundation-2026-05-09"
+  public static let schemaHash = "frick-foundation-2026-05-09-dev-auth"
 }
 
-public let frickSchemaHash = "frick-foundation-2026-05-09"
+public let frickSchemaHash = "frick-foundation-2026-05-09-dev-auth"
+
+public indirect enum FrickJSONValue: Codable, Equatable, Sendable {
+  case string(String)
+  case int(Int)
+  case double(Double)
+  case bool(Bool)
+  case array([FrickJSONValue])
+  case object([String: FrickJSONValue])
+  case null
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.singleValueContainer()
+    if container.decodeNil() {
+      self = .null
+    } else if let value = try? container.decode(String.self) {
+      self = .string(value)
+    } else if let value = try? container.decode(Int.self) {
+      self = .int(value)
+    } else if let value = try? container.decode(Double.self) {
+      self = .double(value)
+    } else if let value = try? container.decode(Bool.self) {
+      self = .bool(value)
+    } else if let value = try? container.decode([FrickJSONValue].self) {
+      self = .array(value)
+    } else if let value = try? container.decode([String: FrickJSONValue].self) {
+      self = .object(value)
+    } else {
+      throw DecodingError.typeMismatch(
+        FrickJSONValue.self,
+        DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Unsupported JSON value")
+      )
+    }
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.singleValueContainer()
+    switch self {
+    case .string(let value):
+      try container.encode(value)
+    case .int(let value):
+      try container.encode(value)
+    case .double(let value):
+      try container.encode(value)
+    case .bool(let value):
+      try container.encode(value)
+    case .array(let value):
+      try container.encode(value)
+    case .object(let value):
+      try container.encode(value)
+    case .null:
+      try container.encodeNil()
+    }
+  }
+}
 
 public struct UserDTO: Codable, Equatable, Sendable {
   public let id: String
@@ -16,7 +70,7 @@ public struct UserDTO: Codable, Equatable, Sendable {
   public init(
     id: String,
     displayName: String,
-    avatarBlobId: String?
+    avatarBlobId: String? = nil
   ) {
     self.id = id
     self.displayName = displayName
@@ -34,9 +88,9 @@ public struct ConversationDTO: Codable, Equatable, Sendable {
   public init(
     id: String,
     kind: String,
-    title: String?,
+    title: String? = nil,
     createdBy: String,
-    lastMessageEventId: String?
+    lastMessageEventId: String? = nil
   ) {
     self.id = id
     self.kind = kind
@@ -84,22 +138,69 @@ public struct CallRoomDTO: Codable, Equatable, Sendable {
   }
 }
 
+public struct UserDeviceDTO: Codable, Equatable, Sendable {
+  public let id: String
+  public let userId: String
+  public let label: String?
+  public let platform: String
+  public let lastSeenAt: String?
+
+  public init(
+    id: String,
+    userId: String,
+    label: String? = nil,
+    platform: String,
+    lastSeenAt: String? = nil
+  ) {
+    self.id = id
+    self.userId = userId
+    self.label = label
+    self.platform = platform
+    self.lastSeenAt = lastSeenAt
+  }
+}
+
+public struct UserSessionDTO: Codable, Equatable, Sendable {
+  public let id: String
+  public let userId: String
+  public let deviceId: String
+  public let replicaId: String
+  public let expiresAt: String
+
+  public init(
+    id: String,
+    userId: String,
+    deviceId: String,
+    replicaId: String,
+    expiresAt: String
+  ) {
+    self.id = id
+    self.userId = userId
+    self.deviceId = deviceId
+    self.replicaId = replicaId
+    self.expiresAt = expiresAt
+  }
+}
+
 public struct MessageSentDTO: Codable, Equatable, Sendable {
   public let messageId: String
   public let senderId: String
   public let body: String
   public let createdAt: String
+  public let attachmentBlobIds: FrickJSONValue?
 
   public init(
     messageId: String,
     senderId: String,
     body: String,
-    createdAt: String
+    createdAt: String,
+    attachmentBlobIds: FrickJSONValue? = nil
   ) {
     self.messageId = messageId
     self.senderId = senderId
     self.body = body
     self.createdAt = createdAt
+    self.attachmentBlobIds = attachmentBlobIds
   }
 }
 
@@ -228,7 +329,7 @@ public struct WebRTCSignalDTO: Codable, Equatable, Sendable {
 
   public init(
     senderDeviceId: String,
-    recipientDeviceId: String?,
+    recipientDeviceId: String? = nil,
     kind: String,
     payload: Data
   ) {

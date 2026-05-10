@@ -17,3 +17,4 @@ dependencyResolutionManagement {
 rootProject.name = "FrickAndroidDemo"
 include(":app")
 include(":frick")
+include(":design")

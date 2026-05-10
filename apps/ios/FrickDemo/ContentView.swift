@@ -1,10 +1,32 @@
 import FrickDesign
 import FrickSwift
+import Observation
 import SwiftUI
 
 enum AuthMode: String, CaseIterable {
     case login
     case signUp
+}
+
+enum NewThreadKind: String, CaseIterable, Identifiable {
+    case direct
+    case group
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .direct: "Direct"
+        case .group: "Group"
+        }
+    }
+
+    var wireKind: String {
+        switch self {
+        case .direct: "dm"
+        case .group: "group"
+        }
+    }
 }
 
 private let defaultConversationId = "conversation-general"
@@ -16,36 +38,69 @@ private let workspaceDestinations = [
 ]
 
 @MainActor
-final class FoundationModel: ObservableObject {
-    @Published var users: [UserDTO] = []
-    @Published var conversations: [ConversationDTO] = []
-    @Published var messages: [FrickStreamEvent] = []
-    @Published var selectedConversationId = defaultConversationId
-    @Published var selectedDestination = "chat"
-    @Published var isInspectorPresented = false
-    @Published var newThreadTitle = ""
-    @Published var threadError: String?
-    @Published var isCreatingThread = false
-    @Published var draft = ""
-    @Published var status = "Signed out"
-    @Published var currentSession: FrickSession?
-    @Published var authMode: AuthMode = .login
-    @Published var displayName = ""
-    @Published var handle = ""
-    @Published var password = ""
-    @Published var authError: String?
-    @Published var isAuthenticating = false
+@Observable
+final class FoundationModel {
+    var users: [UserDTO] = []
+    var conversations: [ConversationDTO] = []
+    var roomMembers: [RoomMemberDTO] = []
+    var messages: [FrickStreamEvent] = []
+    var selectedConversationId = defaultConversationId
+    var selectedDestination = "chat"
+    var isInspectorPresented = false
+    var newThreadTitle = ""
+    var newThreadKind: NewThreadKind = .direct
+    var newThreadParticipantIds: [String] = []
+    var threadError: String?
+    var isCreatingThread = false
+    var draft = ""
+    var status = "Signed out"
+    var currentSession: FrickSession?
+    var authMode: AuthMode = .login
+    var displayName = ""
+    var handle = ""
+    var password = ""
+    var authError: String?
+    var isAuthenticating = false
 
+    @ObservationIgnored
     private let client = FrickClient()
+    @ObservationIgnored
     private let deviceId = "ios-demo-device"
+    @ObservationIgnored
     private let replicaId = "ios-demo"
 
     var title: String {
-        selectedConversation?.title ?? "Foundation General"
+        guard let selectedConversation else {
+            return "Foundation General"
+        }
+        return title(for: selectedConversation)
     }
 
     var selectedConversation: ConversationDTO? {
         conversations.first(where: { $0.id == selectedConversationId })
+    }
+
+    var selectedMembers: [RoomMemberDTO] {
+        members(for: selectedConversationId)
+    }
+
+    var availableThreadParticipants: [UserDTO] {
+        users
+            .filter { $0.id != currentSession?.userId }
+            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    }
+
+    var isCreateThreadDisabled: Bool {
+        if isCreatingThread {
+            return true
+        }
+        switch newThreadKind {
+        case .direct:
+            return newThreadParticipantIds.count != 1
+        case .group:
+            return newThreadTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                newThreadParticipantIds.isEmpty
+        }
     }
 
     var streamIdentity: String {
@@ -95,13 +150,16 @@ final class FoundationModel: ObservableObject {
         do {
             async let nextUsers = client.fetchUsers()
             async let nextConversations = client.fetchConversations()
+            async let nextRoomMembers = client.fetchRoomMembers()
             let loadedUsers = try await nextUsers
             let loadedConversations = try await nextConversations
+            let loadedRoomMembers = try await nextRoomMembers
             guard currentSession?.sessionToken == sessionToken, selectedConversationId == requestedConversationId else {
                 return
             }
             users = loadedUsers
             conversations = loadedConversations
+            roomMembers = loadedRoomMembers
             ensureSelectedConversationExists()
             guard selectedConversationId == requestedConversationId else {
                 return
@@ -135,13 +193,16 @@ final class FoundationModel: ObservableObject {
         do {
             async let nextUsers = client.fetchUsers()
             async let nextConversations = client.fetchConversations()
+            async let nextRoomMembers = client.fetchRoomMembers()
             let loadedUsers = try await nextUsers
             let loadedConversations = try await nextConversations
+            let loadedRoomMembers = try await nextRoomMembers
             guard currentSession?.sessionToken == sessionToken else {
                 return
             }
             users = loadedUsers
             conversations = loadedConversations
+            roomMembers = loadedRoomMembers
             ensureSelectedConversationExists()
             let resolvedConversationId = selectedConversationId
             statusConversationId = resolvedConversationId
@@ -195,14 +256,16 @@ final class FoundationModel: ObservableObject {
         }
     }
 
-    func createThread() async {
+    @discardableResult
+    func createThread() async -> String? {
         let title = newThreadTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty else {
-            return
+        guard !isCreateThreadDisabled else {
+            threadError = newThreadKind == .direct ? "Choose one person." : "Choose people and a title."
+            return nil
         }
         guard currentSession != nil else {
             status = "Sign in"
-            return
+            return nil
         }
 
         isCreatingThread = true
@@ -211,16 +274,24 @@ final class FoundationModel: ObservableObject {
         defer { isCreatingThread = false }
 
         do {
-            let created = try await client.createConversation(title: title)
+            let created = try await client.createConversation(
+                title: newThreadKind == .group ? title : nil,
+                kind: newThreadKind.wireKind,
+                participantUserIds: newThreadParticipantIds
+            )
             conversations = mergedConversations(conversations, adding: created.conversation)
+            roomMembers = mergedRoomMembers(roomMembers, adding: created.members)
             selectedConversationId = created.conversation.id
             newThreadTitle = ""
+            newThreadParticipantIds = []
             messages = []
             draft = ""
             status = "Thread created"
+            return created.conversation.id
         } catch {
             threadError = "Could not create thread."
             status = error.localizedDescription
+            return nil
         }
     }
 
@@ -287,11 +358,14 @@ final class FoundationModel: ObservableObject {
         currentSession = nil
         users = []
         conversations = []
+        roomMembers = []
         messages = []
         selectedConversationId = defaultConversationId
         selectedDestination = "chat"
         isInspectorPresented = false
         newThreadTitle = ""
+        newThreadKind = .direct
+        newThreadParticipantIds = []
         threadError = nil
         isCreatingThread = false
         draft = ""
@@ -327,6 +401,54 @@ final class FoundationModel: ObservableObject {
         users.first(where: { $0.id == userId })?.displayName ?? userId
     }
 
+    func title(for conversation: ConversationDTO) -> String {
+        if let title = conversation.title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return title
+        }
+        let threadMembers = members(for: conversation.id)
+        if conversation.kind == "dm" {
+            let peer = threadMembers.first(where: { $0.userId != currentSession?.userId }) ?? threadMembers.first
+            return peer.map { displayName(for: $0.userId) } ?? "Direct message"
+        }
+        let participantNames = threadMembers
+            .filter { $0.userId != currentSession?.userId }
+            .prefix(3)
+            .map { displayName(for: $0.userId) }
+        return participantNames.isEmpty ? titleFromConversationId(conversation.id) : participantNames.joined(separator: ", ")
+    }
+
+    func members(for conversationId: String) -> [RoomMemberDTO] {
+        roomMembers
+            .filter { $0.conversationId == conversationId }
+            .sorted { lhs, rhs in
+                if lhs.role != rhs.role {
+                    return lhs.role == "owner"
+                }
+                return displayName(for: lhs.userId).localizedCaseInsensitiveCompare(displayName(for: rhs.userId)) == .orderedAscending
+            }
+    }
+
+    func toggleNewThreadParticipant(_ userId: String) {
+        threadError = nil
+        switch newThreadKind {
+        case .direct:
+            newThreadParticipantIds = newThreadParticipantIds.first == userId ? [] : [userId]
+        case .group:
+            if newThreadParticipantIds.contains(userId) {
+                newThreadParticipantIds.removeAll { $0 == userId }
+            } else {
+                newThreadParticipantIds.append(userId)
+            }
+        }
+    }
+
+    func normalizeNewThreadSelection() {
+        threadError = nil
+        if newThreadKind == .direct, newThreadParticipantIds.count > 1 {
+            newThreadParticipantIds = Array(newThreadParticipantIds.prefix(1))
+        }
+    }
+
     func isCurrentUser(_ userId: String?) -> Bool {
         userId == currentSession?.userId
     }
@@ -344,14 +466,18 @@ final class FoundationModel: ObservableObject {
 }
 
 struct ContentView: View {
-    @StateObject private var model = FoundationModel()
+    @State private var model = FoundationModel()
     private let bottomMessageAnchor = "bottom-message-anchor"
 
     var body: some View {
-        NavigationStack {
+        @Bindable var model = model
+
+        Group {
             if model.currentSession == nil {
-                AuthGate(model: model)
-                    .navigationTitle(model.title)
+                NavigationStack {
+                    AuthGate(model: model)
+                        .navigationTitle(model.title)
+                }
             } else {
                 FrickWorkspaceShell(
                     destinations: workspaceDestinations,
@@ -361,13 +487,14 @@ struct ContentView: View {
                     if destination.id == "chat" {
                         ChatScene(model: model, bottomMessageAnchor: bottomMessageAnchor)
                     } else {
-                        PlaceholderDestination(destination: destination)
+                        NavigationStack {
+                            PlaceholderDestination(destination: destination)
+                                .navigationTitle(destination.title)
+                        }
                     }
                 } inspector: {
                     ChatInspector(model: model)
                 }
-                .navigationTitle(model.title)
-                .navigationBarTitleDisplayMode(.inline)
             }
         }
         .frickDesignContext(FrickDesignContext(density: .comfortable, brand: .frickenChat))
@@ -375,7 +502,7 @@ struct ContentView: View {
 }
 
 private struct AuthGate: View {
-    @ObservedObject var model: FoundationModel
+    @Bindable var model: FoundationModel
 
     var body: some View {
         FrickStack(spacing: .lg) {
@@ -384,11 +511,10 @@ private struct AuthGate: View {
                 FrickHeading("Foundation General")
             }
 
-            Picker("Authentication mode", selection: $model.authMode) {
+            FrickSegmentedPicker("Authentication mode", selection: $model.authMode) {
                 Text("Log in").tag(AuthMode.login)
                 Text("Sign up").tag(AuthMode.signUp)
             }
-            .pickerStyle(.segmented)
             .onChange(of: model.authMode) { _, _ in
                 model.authError = nil
             }
@@ -422,15 +548,13 @@ private struct AuthGate: View {
                     }
                     .disabled(model.isAuthSubmitDisabled)
 
-                    Button(model.authToggleTitle) {
+                    FrickButton(model.authToggleTitle, variant: .ghost) {
                         if model.authMode == .signUp {
                             model.useLoginMode()
                         } else {
                             model.useSignUpMode()
                         }
                     }
-                    .buttonStyle(.plain)
-                    .font(.caption.weight(.semibold))
 
                     FrickButton("Make demo person", variant: .secondary) {
                         Task { await model.createDemoAccount() }
@@ -444,52 +568,51 @@ private struct AuthGate: View {
 }
 
 private struct ChatScene: View {
-    @ObservedObject var model: FoundationModel
+    let model: FoundationModel
+    let bottomMessageAnchor: String
+    @State private var preferredCompactColumn: NavigationSplitViewColumn = .sidebar
+
+    var body: some View {
+        FrickListDetailShell(
+            preferredCompactColumn: $preferredCompactColumn,
+            sidebarTitle: "Threads"
+        ) {
+            ThreadListView(
+                model: model,
+                onCreateThread: createThread,
+                onSelectConversation: selectConversation
+            )
+            .toolbar {
+                ThreadListToolbar(model: model)
+            }
+        } detail: {
+            ChatDetailScene(model: model, bottomMessageAnchor: bottomMessageAnchor)
+                .navigationTitle(model.title)
+                .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
+    private func createThread() {
+        Task {
+            if await model.createThread() != nil {
+                preferredCompactColumn = .detail
+            }
+        }
+    }
+
+    private func selectConversation(_ conversationId: String) {
+        model.selectConversation(conversationId)
+        preferredCompactColumn = .detail
+    }
+}
+
+private struct ChatDetailScene: View {
+    @Bindable var model: FoundationModel
     let bottomMessageAnchor: String
 
     var body: some View {
         ScrollViewReader { proxy in
             List {
-                Section("Threads") {
-                    FrickInline {
-                        FrickTextField("New thread", text: $model.newThreadTitle)
-                            .submitLabel(.done)
-                            .onSubmit {
-                                Task { await model.createThread() }
-                            }
-                        FrickButton("Create", variant: .secondary, size: .sm) {
-                            Task { await model.createThread() }
-                        }
-                        .disabled(model.isCreatingThread || model.newThreadTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-
-                    if let threadError = model.threadError {
-                        FrickLabel(LocalizedStringKey(threadError))
-                    }
-
-                    ForEach(model.conversations, id: \.id) { conversation in
-                        Button {
-                            model.selectConversation(conversation.id)
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(conversation.title ?? titleFromConversationId(conversation.id))
-                                        .font(.body.weight(.semibold))
-                                    Text(conversation.kind.capitalized)
-                                        .font(.caption.weight(.medium))
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                if conversation.id == model.selectedConversationId {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(.tint)
-                                }
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-
                 Section("Messages") {
                     ForEach(model.visibleMessages, id: \.eventId) { message in
                         FrickChatBubble(
@@ -497,11 +620,16 @@ private struct ChatScene: View {
                                 id: message.eventId,
                                 author: model.displayName(for: message.payload["senderId"] ?? ""),
                                 body: message.payload["body"] ?? "",
-                                timestamp: timestamp(for: message),
+                                timestamp: messageTimestamp(for: message),
                                 isCurrentUser: model.isCurrentUser(message.payload["senderId"])
                             )
                         )
                         .listRowSeparator(.hidden)
+                    }
+                    if model.visibleMessages.isEmpty {
+                        FrickLabel("No messages yet")
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .listRowSeparator(.hidden)
                     }
                     Color.clear
                         .frame(height: 1)
@@ -530,33 +658,7 @@ private struct ChatScene: View {
             .background(.thinMaterial)
         }
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    model.isInspectorPresented.toggle()
-                } label: {
-                    Image(systemName: "sidebar.right")
-                }
-                .accessibilityLabel("Thread details")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    Task { await model.load() }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .accessibilityLabel("Reload")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Text(model.authenticatedUserLabel)
-                    Button("Sign out", role: .destructive) {
-                        model.logout()
-                    }
-                } label: {
-                    Image(systemName: "person.crop.circle")
-                }
-                .accessibilityLabel("Account")
-            }
+            ChatDetailToolbar(model: model)
         }
     }
 
@@ -568,20 +670,140 @@ private struct ChatScene: View {
             }
         }
     }
+}
 
-    private func timestamp(for message: FrickStreamEvent) -> String {
-        guard
-            let createdAt = message.payload["createdAt"],
-            let date = ISO8601DateFormatter().date(from: createdAt)
-        else {
-            return ""
+private struct ThreadListView: View {
+    @Bindable var model: FoundationModel
+    let onCreateThread: () -> Void
+    let onSelectConversation: (String) -> Void
+
+    var body: some View {
+        List {
+            threadSections
         }
-        return date.formatted(date: .omitted, time: .shortened)
+    }
+
+    @ViewBuilder
+    private var threadSections: some View {
+        Section("Create") {
+            Picker("Thread type", selection: $model.newThreadKind) {
+                ForEach(NewThreadKind.allCases) { kind in
+                    Text(kind.title).tag(kind)
+                }
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: model.newThreadKind) { _, _ in
+                model.normalizeNewThreadSelection()
+            }
+
+            if model.newThreadKind == .group {
+                FrickTextField("New thread", text: $model.newThreadTitle)
+                    .submitLabel(.done)
+                    .onSubmit(onCreateThread)
+            }
+
+            ForEach(model.availableThreadParticipants, id: \.id) { user in
+                Button {
+                    model.toggleNewThreadParticipant(user.id)
+                } label: {
+                    HStack(spacing: 12) {
+                        FrickAvatar(name: user.displayName, size: 28)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(user.displayName)
+                                .font(.body.weight(.semibold))
+                            Text(user.id)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if model.newThreadParticipantIds.contains(user.id) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.tint)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+
+            FrickButton(model.newThreadKind == .direct ? "Start direct" : "Create group", variant: .secondary, size: .sm, action: onCreateThread)
+                .disabled(model.isCreateThreadDisabled)
+
+            if let threadError = model.threadError {
+                FrickLabel(LocalizedStringKey(threadError))
+            }
+        }
+
+        Section("Threads") {
+            ForEach(model.conversations, id: \.id) { conversation in
+                Button {
+                    onSelectConversation(conversation.id)
+                } label: {
+                    FrickWorkspaceListItem(
+                        title: model.title(for: conversation),
+                        subtitle: conversation.kind.capitalized,
+                        isSelected: conversation.id == model.selectedConversationId
+                    )
+                }
+                .buttonStyle(.plain)
+                .tag(conversation.id)
+            }
+        }
+    }
+}
+
+private struct ThreadListToolbar: ToolbarContent {
+    let model: FoundationModel
+
+    var body: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            FrickIconButton(.actionReload, label: "Reload") {
+                Task { await model.load() }
+            }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            AccountMenu(model: model)
+        }
+    }
+}
+
+private struct ChatDetailToolbar: ToolbarContent {
+    let model: FoundationModel
+
+    var body: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            FrickIconButton(.actionDetails, label: "Thread details") {
+                model.isInspectorPresented.toggle()
+            }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            FrickIconButton(.actionReload, label: "Reload") {
+                Task { await model.load() }
+            }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            AccountMenu(model: model)
+        }
+    }
+}
+
+private struct AccountMenu: View {
+    let model: FoundationModel
+
+    var body: some View {
+        Menu {
+            Text(model.authenticatedUserLabel)
+            Button("Sign out", role: .destructive) {
+                model.logout()
+            }
+        } label: {
+            Image(systemName: "person.crop.circle")
+        }
+        .accessibilityLabel("Account")
     }
 }
 
 private struct ChatInspector: View {
-    @ObservedObject var model: FoundationModel
+    let model: FoundationModel
 
     var body: some View {
         FrickStack(spacing: .lg) {
@@ -595,8 +817,15 @@ private struct ChatInspector: View {
 
             FrickStack(spacing: .sm) {
                 FrickLabel("Members")
-                ForEach(model.users, id: \.id) { user in
-                    FrickUserRow(name: user.displayName, subtitle: "Synced user", isOnline: true)
+                ForEach(model.selectedMembers, id: \.id) { member in
+                    FrickUserRow(
+                        name: model.displayName(for: member.userId),
+                        subtitle: member.role.capitalized,
+                        isOnline: true
+                    )
+                }
+                if model.selectedMembers.isEmpty {
+                    FrickLabel("No members yet")
                 }
             }
         }
@@ -618,11 +847,37 @@ private struct PlaceholderDestination: View {
     }
 }
 
+private func messageTimestamp(for message: FrickStreamEvent) -> String {
+    guard
+        let createdAt = message.payload["createdAt"],
+        let date = ISO8601DateFormatter().date(from: createdAt)
+    else {
+        return ""
+    }
+    return date.formatted(date: .omitted, time: .shortened)
+}
+
 private func mergedConversations(_ conversations: [ConversationDTO], adding conversation: ConversationDTO) -> [ConversationDTO] {
     var byId = Dictionary(uniqueKeysWithValues: conversations.map { ($0.id, $0) })
     byId[conversation.id] = conversation
     return byId.values.sorted { lhs, rhs in
         (lhs.title ?? lhs.id).localizedCaseInsensitiveCompare(rhs.title ?? rhs.id) == .orderedAscending
+    }
+}
+
+private func mergedRoomMembers(_ members: [RoomMemberDTO], adding newMembers: [RoomMemberDTO]) -> [RoomMemberDTO] {
+    var byId = Dictionary(uniqueKeysWithValues: members.map { ($0.id, $0) })
+    for member in newMembers {
+        byId[member.id] = member
+    }
+    return byId.values.sorted { lhs, rhs in
+        if lhs.conversationId != rhs.conversationId {
+            return lhs.conversationId.localizedCaseInsensitiveCompare(rhs.conversationId) == .orderedAscending
+        }
+        if lhs.role != rhs.role {
+            return lhs.role == "owner"
+        }
+        return lhs.userId.localizedCaseInsensitiveCompare(rhs.userId) == .orderedAscending
     }
 }
 

@@ -27,6 +27,10 @@ export class SubscriptionRegistry {
     return this.matching((subscription) => subscription.kind === "stream" && subscription.name === stream && subscription.key === key);
   }
 
+  objectSubscribers(type: string): Array<{ client: SyncClient; subscription: SubscribePayload }> {
+    return this.matching((subscription) => subscription.kind === "object" && subscription.name === type);
+  }
+
   presenceSubscribers(name: string, key: string): Array<{ client: SyncClient; subscription: SubscribePayload }> {
     return this.matching((subscription) => subscription.kind === "presence" && subscription.name === name && subscription.key === key);
   }

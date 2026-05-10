@@ -80,11 +80,13 @@ input {
     linear-gradient(120deg, var(--wash-a), transparent 35%),
     linear-gradient(300deg, var(--wash-b), transparent 42%),
     var(--page);
+  block-size: 100vh;
+  block-size: 100dvh;
   min-height: 100vh;
+  overflow: hidden;
 }
 
 .chat-workspace-shell .frick-workspace-shell__body {
-  block-size: 100%;
   min-block-size: 0;
 }
 
@@ -105,7 +107,6 @@ input {
 }
 
 .chat-workspace-shell .frick-workspace-shell__content-shell {
-  block-size: 100%;
   min-block-size: 0;
 }
 
@@ -118,6 +119,14 @@ input {
   display: none;
 }
 
+.workspace-brand {
+  align-items: center;
+  display: inline-flex;
+  font-size: 0.86rem;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
 .topbar {
   align-items: flex-start;
   display: flex;
@@ -125,6 +134,20 @@ input {
   justify-content: space-between;
   min-width: 0;
   padding: 18px;
+}
+
+.compact-nav-action {
+  align-items: center;
+  background: var(--field);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  display: none;
+  font-weight: 900;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 12px;
 }
 
 .top-actions {
@@ -335,6 +358,12 @@ h1 {
   color: var(--accent-strong);
 }
 
+.auth-mode .frick-segmented__options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  inline-size: 100%;
+}
+
 .auth-form {
   display: grid;
   gap: 14px;
@@ -421,7 +450,8 @@ h1 {
 }
 
 .side-panel {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 18px;
   height: 100%;
   min-height: 0;
@@ -466,14 +496,22 @@ h1 {
   display: grid;
 }
 
+.inbox-list {
+  align-content: start;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
 .user-list {
   margin-top: 16px;
 }
 
 .thread-create {
   display: grid;
-  gap: 8px;
-  grid-template-columns: minmax(0, 1fr) 42px;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .thread-create input {
@@ -486,20 +524,55 @@ h1 {
   padding: 0 12px;
 }
 
-.thread-create button {
-  align-items: center;
-  background: var(--accent-strong);
-  border: 0;
-  border-radius: 8px;
-  color: var(--page);
-  cursor: pointer;
-  display: inline-flex;
-  height: 42px;
-  justify-content: center;
-  width: 42px;
+.thread-title-field,
+.composer-field {
+  min-width: 0;
 }
 
-.thread-create button:disabled {
+.thread-kind-control {
+  min-width: 0;
+}
+
+.participant-picker {
+  align-content: start;
+  display: grid;
+  gap: 8px;
+  max-height: 164px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.participant-chip {
+  justify-content: flex-start;
+  min-width: 0;
+  width: 100%;
+}
+
+.participant-chip > span {
+  align-items: center;
+  display: inline-flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.participant-chip[data-selected="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.participant-chip .frick-avatar {
+  flex: 0 0 auto;
+}
+
+.thread-submit-action {
+  justify-content: center;
+  min-height: 42px;
+  width: 100%;
+}
+
+.thread-submit-action:disabled {
   cursor: not-allowed;
   opacity: 0.52;
 }
@@ -520,8 +593,8 @@ h1 {
   display: grid;
   gap: 10px;
   grid-template-columns: minmax(0, 1fr) auto;
-  min-height: 78px;
-  padding: 10px;
+  min-height: 0;
+  padding: 12px;
   text-align: left;
 }
 
@@ -805,11 +878,11 @@ h1 {
   }
 
   .top-actions {
-    justify-content: space-between;
+    justify-content: flex-start;
   }
 
   h1 {
-    font-size: 2.7rem;
+    font-size: 2rem;
   }
 }
 
@@ -827,5 +900,27 @@ h1 {
     align-items: flex-start;
     flex-direction: column;
     gap: 2px;
+  }
+
+  h1 {
+    font-size: 1.7rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .chat-workspace-shell .frick-workspace-shell__collection {
+    padding: 16px;
+  }
+
+  .compact-nav-action {
+    display: inline-flex;
+  }
+
+  .topbar {
+    gap: 14px;
+  }
+
+  .side-panel {
+    block-size: 100%;
   }
 }

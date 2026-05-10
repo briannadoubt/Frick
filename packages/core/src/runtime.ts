@@ -25,6 +25,18 @@ export interface SyncStatus {
   connected: boolean;
   cursors: Record<string, number>;
   pendingMutations: number;
+  authenticated: boolean;
+  userId?: string | undefined;
+  deviceId?: string | undefined;
+}
+
+export interface FrickSession {
+  schemaHash: string;
+  sessionToken: string;
+  userId: string;
+  deviceId: string;
+  replicaId: string;
+  expiresAt: string;
 }
 
 export interface FrickClientOptions {
@@ -34,6 +46,8 @@ export interface FrickClientOptions {
   reconnectDelayMs?: number;
   replicaId?: string;
   deviceId?: string;
+  session?: FrickSession | null | undefined;
+  sessionToken?: string | undefined;
   WebSocketImpl?: typeof WebSocket;
 }
 
@@ -43,12 +57,15 @@ export class FrickClient {
     connected: false,
     cursors: {},
     pendingMutations: 0,
+    authenticated: false,
   });
 
   readonly #endpoint: string;
   readonly #cache: FrickLocalCache;
-  readonly #replicaId: string;
-  readonly #deviceId: string;
+  #replicaId: string;
+  #deviceId: string;
+  #session: FrickSession | undefined;
+  #sessionToken: string | undefined;
   readonly #reconnectDelayMs: number;
   readonly #WebSocketImpl: typeof WebSocket | undefined;
 
@@ -67,11 +84,39 @@ export class FrickClient {
     this.#endpoint = options.endpoint;
     this.schema = options.schema ?? foundationSchema;
     this.#cache = options.cache ?? new MemoryFrickCache();
-    this.#replicaId = options.replicaId ?? `replica-${randomId()}`;
-    this.#deviceId = options.deviceId ?? `device-${randomId()}`;
+    this.#session = options.session ?? undefined;
+    this.#sessionToken = options.session?.sessionToken ?? options.sessionToken;
+    this.#replicaId = options.session?.replicaId ?? options.replicaId ?? `replica-${randomId()}`;
+    this.#deviceId = options.session?.deviceId ?? options.deviceId ?? `device-${randomId()}`;
     this.#reconnectDelayMs = options.reconnectDelayMs ?? 1_000;
     this.#WebSocketImpl = options.WebSocketImpl;
+    this.#setSessionStatus();
     this.#hydrateFromCache();
+  }
+
+  get session(): FrickSession | undefined {
+    return this.#session;
+  }
+
+  get sessionToken(): string | undefined {
+    return this.#sessionToken;
+  }
+
+  setSession(session: FrickSession | null | undefined): void {
+    const shouldReconnect = Boolean(this.#socket);
+    if (shouldReconnect) {
+      this.disconnect();
+    }
+    this.#session = session ?? undefined;
+    this.#sessionToken = session?.sessionToken;
+    if (session) {
+      this.#replicaId = session.replicaId;
+      this.#deviceId = session.deviceId;
+    }
+    this.#setSessionStatus();
+    if (shouldReconnect) {
+      this.connect();
+    }
   }
 
   connect(): void {
@@ -82,7 +127,7 @@ export class FrickClient {
     }
 
     const WebSocketCtor = this.#WebSocketImpl ?? WebSocket;
-    const socket = new WebSocketCtor(this.#endpoint);
+    const socket = new WebSocketCtor(this.#webSocketEndpoint());
     socket.binaryType = "arraybuffer";
     this.#socket = socket;
 
@@ -250,9 +295,12 @@ export class FrickClient {
         for (const packed of frame[1].objects) {
           const unpacked = unpackObjectRecord(this.schema, packed);
           this.#storeObject(unpacked.type, unpacked.id, unpacked.value, frame[1].cursor);
+          this.#saveCursor(unpacked.type, frame[1].cursor);
         }
         for (const packed of frame[1].events) {
-          this.#storeStreamEvent(unpackStreamEvent(this.schema, packed));
+          const event = unpackStreamEvent(this.schema, packed);
+          this.#storeStreamEvent(event);
+          this.#saveCursor(streamKey(event.stream, event.streamId), Math.max(event.sequence, frame[1].cursor));
         }
         return;
       case FrameKind.PresenceDelta:
@@ -392,6 +440,23 @@ export class FrickClient {
 
   #setStatus(patch: Partial<SyncStatus>): void {
     this.syncStatus.set({ ...this.syncStatus.value, ...patch });
+  }
+
+  #setSessionStatus(): void {
+    this.#setStatus({
+      authenticated: Boolean(this.#sessionToken),
+      userId: this.#session?.userId,
+      deviceId: this.#session?.deviceId ?? this.#deviceId,
+    });
+  }
+
+  #webSocketEndpoint(): string {
+    if (!this.#sessionToken) {
+      return this.#endpoint;
+    }
+    const url = new URL(this.#endpoint);
+    url.searchParams.set("sessionToken", this.#sessionToken);
+    return url.toString();
   }
 
   #scheduleReconnect(): void {

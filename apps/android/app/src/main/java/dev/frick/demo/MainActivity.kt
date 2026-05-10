@@ -6,6 +6,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,26 +23,20 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.frick.client.ConversationDto
-import dev.frick.client.FrickClient
 import dev.frick.client.FrickSession
 import dev.frick.client.FrickStreamEvent
-import dev.frick.client.SQLiteFrickStorage
+import dev.frick.client.RoomMemberDto
 import dev.frick.client.UserDto
 import dev.frick.client.isVisibleChatMessage
-import dev.frick.design.FrickAvatarGroup
 import dev.frick.design.FrickButton
 import dev.frick.design.FrickChatBubble
 import dev.frick.design.FrickComposer
@@ -50,28 +45,44 @@ import dev.frick.design.FrickDivider
 import dev.frick.design.FrickHeading
 import dev.frick.design.FrickInline
 import dev.frick.design.FrickLabel
+import dev.frick.design.FrickSegmentedControl
 import dev.frick.design.FrickStack
 import dev.frick.design.FrickSurface
 import dev.frick.design.FrickText
 import dev.frick.design.FrickTextButton
 import dev.frick.design.FrickTextInput
+import dev.frick.design.FrickTopBar
+import dev.frick.design.FrickTopBarAction
+import dev.frick.design.FrickUserRow
 import dev.frick.design.FrickWorkspaceDestination
+import dev.frick.design.FrickWorkspaceListItem
 import dev.frick.design.FrickWorkspaceShell
 import dev.frick.design.generated.FrickIconName
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.launch
 
-private const val DemoDeviceId = "android-demo-device"
-private const val DemoReplicaId = "android-demo"
-private const val DemoPlatform = "android"
-private const val DefaultConversationId = "conversation-general"
-private const val ChatDestinationId = "chat"
-
-private enum class AuthMode {
-    Login,
-    SignUp,
-}
+private val WorkspaceDestinations = listOf(
+    FrickWorkspaceDestination(id = ChatDestinationId, label = "Chat", icon = FrickIconName.ChatMessage),
+    FrickWorkspaceDestination(
+        id = "files",
+        label = "Files",
+        icon = FrickIconName.ChatAttachment,
+        enabled = false,
+        badge = "Soon",
+    ),
+    FrickWorkspaceDestination(
+        id = "calls",
+        label = "Calls",
+        icon = FrickIconName.CallVideo,
+        enabled = false,
+        badge = "Soon",
+    ),
+    FrickWorkspaceDestination(
+        id = "admin",
+        label = "Admin",
+        icon = FrickIconName.WorkspaceSettings,
+        enabled = false,
+        badge = "Soon",
+    ),
+)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -92,316 +103,105 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun FrickDemo() {
-    val scope = rememberCoroutineScope()
-    val context = LocalContext.current.applicationContext
-    val storage = remember(context) { SQLiteFrickStorage(context) }
-    val initialSession = remember(storage) { storage.loadSession() }
-    val frick = remember(storage) { FrickClient(storage = storage) }
-    var users by remember { mutableStateOf<List<UserDto>>(emptyList()) }
-    var conversations by remember { mutableStateOf<List<ConversationDto>>(emptyList()) }
-    var messages by remember { mutableStateOf<List<FrickStreamEvent>>(emptyList()) }
-    var selectedConversationId by remember { mutableStateOf(DefaultConversationId) }
-    var newThreadTitle by remember { mutableStateOf("") }
-    var threadError by remember { mutableStateOf<String?>(null) }
-    var isCreatingThread by remember { mutableStateOf(false) }
-    var session by remember { mutableStateOf(initialSession) }
-    var draft by remember { mutableStateOf("") }
-    var status by remember { mutableStateOf(if (initialSession == null) "Signed out" else "Signed in") }
-    var authMode by remember { mutableStateOf(AuthMode.Login) }
-    var displayName by remember { mutableStateOf("") }
-    var handle by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var authError by remember { mutableStateOf<String?>(null) }
-    var isAuthenticating by remember { mutableStateOf(false) }
-    var selectedDestination by rememberSaveable { mutableStateOf(ChatDestinationId) }
-    var inspectorVisible by rememberSaveable { mutableStateOf(false) }
-    val workspaceDestinations = remember {
-        listOf(
-            FrickWorkspaceDestination(id = ChatDestinationId, label = "Chat", icon = FrickIconName.ChatMessage),
-            FrickWorkspaceDestination(
-                id = "files",
-                label = "Files",
-                icon = FrickIconName.ChatMessage,
-                enabled = false,
-                badge = "Soon",
-            ),
-            FrickWorkspaceDestination(
-                id = "calls",
-                label = "Calls",
-                icon = FrickIconName.CallVideo,
-                enabled = false,
-                badge = "Soon",
-            ),
-            FrickWorkspaceDestination(
-                id = "admin",
-                label = "Admin",
-                icon = FrickIconName.ActionReload,
-                enabled = false,
-                badge = "Soon",
-            ),
-        )
-    }
-    val title = conversations.firstOrNull { conversation -> conversation.id == selectedConversationId }?.title
-        ?: "Foundation General"
-    val activeSession = session
+    val viewModel: FoundationViewModel = viewModel()
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val activeSession = state.activeSession
 
-    fun ensureSelectedConversation(nextConversations: List<ConversationDto>) {
-        if (nextConversations.isEmpty()) {
-            selectedConversationId = DefaultConversationId
-            return
-        }
-        if (nextConversations.none { conversation -> conversation.id == selectedConversationId }) {
-            selectedConversationId =
-                nextConversations.firstOrNull { conversation -> conversation.id == DefaultConversationId }?.id
-                    ?: nextConversations.first().id
-        }
-    }
-
-    suspend fun authenticate(
-        requestedMode: AuthMode = authMode,
-        requestedDisplayName: String = displayName,
-        requestedHandle: String = handle,
-        requestedPassword: String = password,
-    ) {
-        val normalizedHandle = requestedHandle.trim()
-        val normalizedDisplayName = requestedDisplayName.trim()
-        if (normalizedHandle.isEmpty() || requestedPassword.isEmpty()) {
-            authError = "Enter a handle and password."
-            return
-        }
-        if (requestedMode == AuthMode.SignUp && normalizedDisplayName.isEmpty()) {
-            authError = "Enter a display name."
-            return
-        }
-
-        isAuthenticating = true
-        status = if (requestedMode == AuthMode.SignUp) "Creating account" else "Signing in"
-        authError = null
-        try {
-            session = when (requestedMode) {
-                AuthMode.Login -> frick.login(
-                    identity = normalizedHandle,
-                    password = requestedPassword,
-                    deviceId = DemoDeviceId,
-                    replicaId = DemoReplicaId,
-                    platform = DemoPlatform,
-                )
-                AuthMode.SignUp -> frick.signUp(
-                    displayName = normalizedDisplayName,
-                    handle = normalizedHandle,
-                    password = requestedPassword,
-                    deviceId = DemoDeviceId,
-                    replicaId = DemoReplicaId,
-                    platform = DemoPlatform,
-                )
-            }
-            password = ""
-            status = "Signed in"
-        } catch (error: Exception) {
-            authError = "Could not sign in. Check your handle and password."
-            status = error.localizedMessage ?: "Authentication failed"
-        } finally {
-            isAuthenticating = false
-        }
-    }
-
-    suspend fun reload(active: FrickSession) {
-        status = "Loading"
-        try {
-            users = frick.fetchUsers()
-            conversations = frick.fetchConversations()
-            ensureSelectedConversation(conversations)
-            messages = frick.fetchMessages(conversationId = selectedConversationId, readUserId = active.userId)
-            status = "Loaded"
-        } catch (error: Exception) {
-            status = error.localizedMessage ?: "Load failed"
-        }
-    }
-
-    suspend fun send() {
-        val body = draft.trim()
-        if (body.isEmpty()) {
-            return
-        }
-        draft = ""
-        status = "Sending"
-        try {
-            frick.sendMessage(conversationId = selectedConversationId, body = body)
-            status = "Sent"
-        } catch (error: Exception) {
-            status = error.localizedMessage ?: "Send failed"
-        }
-    }
-
-    suspend fun createThread() {
-        val title = newThreadTitle.trim()
-        if (title.isEmpty() || isCreatingThread) {
-            return
-        }
-        newThreadTitle = ""
-        isCreatingThread = true
-        threadError = null
-        status = "Creating thread"
-        try {
-            val created = frick.createConversation(title = title)
-            conversations = mergeConversations(conversations, created.conversation)
-            selectedConversationId = created.conversation.id
-            messages = emptyList()
-            draft = ""
-            status = "Thread created"
-        } catch (error: Exception) {
-            newThreadTitle = title
-            threadError = "Could not create thread."
-            status = error.localizedMessage ?: "Thread create failed"
-        } finally {
-            isCreatingThread = false
-        }
-    }
-
-    LaunchedEffect(activeSession?.sessionToken, selectedConversationId) {
-        val connectedSession = activeSession ?: return@LaunchedEffect
-        status = "Connecting"
-        try {
-            users = frick.fetchUsers()
-            conversations = frick.fetchConversations()
-            ensureSelectedConversation(conversations)
-            frick.streamMessages(conversationId = selectedConversationId, readUserId = connectedSession.userId).collect { nextMessages ->
-                messages = nextMessages
-                status = "Live"
-            }
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Exception) {
-            status = error.localizedMessage ?: "Sync failed"
-        }
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .safeDrawingPadding()
-            .imePadding()
-            .padding(horizontal = 20.dp, vertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        if (activeSession == null) {
+    if (activeSession == null) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .safeDrawingPadding()
+                .imePadding()
+                .padding(horizontal = 20.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
             AuthPanel(
-                mode = authMode,
-                displayName = displayName,
-                handle = handle,
-                password = password,
-                status = authError ?: status,
-                isAuthenticating = isAuthenticating,
-                onModeChange = { nextMode ->
-                    authMode = nextMode
-                    authError = null
-                },
-                onDisplayNameChange = { displayName = it },
-                onHandleChange = { handle = it },
-                onPasswordChange = { password = it },
-                onSubmit = { scope.launch { authenticate() } },
-                onCreateDemo = {
-                    val suffix = (System.currentTimeMillis() % 1_000_000).toString()
-                    val demoName = "New Frick Person"
-                    val demoHandle = "person$suffix"
-                    val demoPassword = "foundation$suffix"
-                    authMode = AuthMode.SignUp
-                    displayName = demoName
-                    handle = demoHandle
-                    password = demoPassword
-                    scope.launch {
-                        authenticate(
-                            requestedMode = AuthMode.SignUp,
-                            requestedDisplayName = demoName,
-                            requestedHandle = demoHandle,
-                            requestedPassword = demoPassword,
-                        )
-                    }
-                },
+                mode = state.authMode,
+                displayName = state.displayName,
+                handle = state.handle,
+                password = state.password,
+                status = state.authError ?: state.status,
+                isAuthenticating = state.isAuthenticating,
+                onModeChange = viewModel::setAuthMode,
+                onDisplayNameChange = viewModel::setDisplayName,
+                onHandleChange = viewModel::setHandle,
+                onPasswordChange = viewModel::setPassword,
+                onSubmit = viewModel::authenticate,
+                onCreateDemo = viewModel::createDemoAccount,
             )
-        } else {
-            Header(
-                title = title,
-                inspectorVisible = inspectorVisible,
-                onReload = { scope.launch { reload(activeSession) } },
-                onToggleInspector = { inspectorVisible = !inspectorVisible },
-                onLogout = {
-                    frick.signOut()
-                    session = null
-                    users = emptyList()
-                    conversations = emptyList()
-                    messages = emptyList()
-                    selectedConversationId = DefaultConversationId
-                    newThreadTitle = ""
-                    threadError = null
-                    isCreatingThread = false
-                    draft = ""
-                    authMode = AuthMode.Login
-                    displayName = ""
-                    handle = ""
-                    password = ""
-                    authError = null
-                    isAuthenticating = false
-                    selectedDestination = ChatDestinationId
-                    inspectorVisible = false
-                    status = "Signed out"
-                },
-            )
-            FrickWorkspaceShell(
-                destinations = workspaceDestinations,
-                selectedDestination = selectedDestination,
-                onDestinationSelected = { destination ->
-                    val selected = workspaceDestinations.firstOrNull { item -> item.id == destination }
-                    if (selected?.enabled == true) {
-                        selectedDestination = destination
-                    }
-                },
-                modifier = Modifier.weight(1f),
-                collection = {
-                    ThreadsPanel(
-                        conversations = conversations,
-                        selectedConversationId = selectedConversationId,
-                        newThreadTitle = newThreadTitle,
-                        threadError = threadError,
-                        isCreatingThread = isCreatingThread,
-                        onNewThreadTitleChange = {
-                            newThreadTitle = it
-                            threadError = null
-                        },
-                        onCreateThread = { scope.launch { createThread() } },
-                        onSelectConversation = { conversationId ->
-                            if (selectedConversationId != conversationId) {
-                                selectedConversationId = conversationId
-                                messages = emptyList()
-                                draft = ""
-                                threadError = null
-                                status = "Loading"
-                            }
-                        },
-                    )
-                },
-                inspectorVisible = inspectorVisible,
-                onInspectorVisibleChange = { visible -> inspectorVisible = visible },
-                inspector = {
-                    ChatInspector(status = status, session = activeSession, users = users)
-                },
-            ) {
-                if (selectedDestination == ChatDestinationId) {
-                    ChatContent(
-                        users = users,
-                        messages = messages,
-                        localUserId = activeSession.userId,
-                        draft = draft,
-                        onDraftChange = { nextDraft -> draft = nextDraft },
-                        onSend = { scope.launch { send() } },
-                    )
-                } else {
-                    val destinationLabel = workspaceDestinations
-                        .firstOrNull { destination -> destination.id == selectedDestination }
-                        ?.label
-                        ?: selectedDestination
-                    PlaceholderDestination(label = destinationLabel)
+        }
+    } else {
+        FrickWorkspaceShell(
+            destinations = WorkspaceDestinations,
+            selectedDestination = state.selectedDestination,
+            onDestinationSelected = { destination ->
+                val selected = WorkspaceDestinations.firstOrNull { item -> item.id == destination }
+                if (selected?.enabled == true) {
+                    viewModel.selectDestination(destination)
                 }
+            },
+            modifier = Modifier
+                .fillMaxSize()
+                .safeDrawingPadding()
+                .imePadding(),
+            collection = {
+                ThreadListScreen(
+                    conversations = state.conversations,
+                    users = state.users,
+                    roomMembers = state.roomMembers,
+                    activeUserId = activeSession.userId,
+                    selectedConversationId = state.selectedConversationId,
+                    newThreadTitle = state.newThreadTitle,
+                    newThreadKind = state.newThreadKind,
+                    selectedParticipantIds = state.newThreadParticipantIds,
+                    availableParticipants = state.availableThreadParticipants,
+                    threadError = state.threadError,
+                    isCreatingThread = state.isCreatingThread,
+                    isCreateThreadDisabled = state.isCreateThreadDisabled,
+                    onNewThreadTitleChange = viewModel::setNewThreadTitle,
+                    onNewThreadKindChange = viewModel::setNewThreadKind,
+                    onToggleParticipant = viewModel::toggleNewThreadParticipant,
+                    onCreateThread = viewModel::createThread,
+                    onSelectConversation = viewModel::selectConversation,
+                    onReload = viewModel::reload,
+                    onLogout = viewModel::logout,
+                )
+            },
+            collectionVisible = state.threadListVisible,
+            onCollectionVisibleChange = viewModel::setThreadListVisible,
+            inspectorVisible = state.inspectorVisible,
+            onInspectorVisibleChange = viewModel::setInspectorVisible,
+            inspector = {
+                ChatInspector(
+                    status = state.status,
+                    session = activeSession,
+                    users = state.users,
+                    members = state.selectedMembers,
+                )
+            },
+        ) {
+            if (state.selectedDestination == ChatDestinationId) {
+                ChatDetailScreen(
+                    title = state.title,
+                    inspectorVisible = state.inspectorVisible,
+                    users = state.users,
+                    messages = state.messages,
+                    localUserId = activeSession.userId,
+                    draft = state.draft,
+                    onDraftChange = viewModel::setDraft,
+                    onSend = viewModel::send,
+                    onBackToThreads = viewModel::backToThreads,
+                    onReload = viewModel::reload,
+                    onToggleInspector = viewModel::toggleInspector,
+                    onLogout = viewModel::logout,
+                )
+            } else {
+                val destinationLabel = WorkspaceDestinations
+                    .firstOrNull { destination -> destination.id == state.selectedDestination }
+                    ?.label
+                    ?: state.selectedDestination
+                PlaceholderDestination(label = destinationLabel)
             }
         }
     }
@@ -493,50 +293,116 @@ private fun AuthPanel(
 }
 
 @Composable
-private fun Header(
-    title: String,
-    inspectorVisible: Boolean,
+private fun ThreadListScreen(
+    conversations: List<ConversationDto>,
+    users: List<UserDto>,
+    roomMembers: List<RoomMemberDto>,
+    activeUserId: String,
+    selectedConversationId: String,
+    newThreadTitle: String,
+    newThreadKind: NewThreadKind,
+    selectedParticipantIds: List<String>,
+    availableParticipants: List<UserDto>,
+    threadError: String?,
+    isCreatingThread: Boolean,
+    isCreateThreadDisabled: Boolean,
+    onNewThreadTitleChange: (String) -> Unit,
+    onNewThreadKindChange: (NewThreadKind) -> Unit,
+    onToggleParticipant: (String) -> Unit,
+    onCreateThread: () -> Unit,
+    onSelectConversation: (String) -> Unit,
     onReload: () -> Unit,
-    onToggleInspector: () -> Unit,
     onLogout: () -> Unit,
 ) {
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        FrickHeading(text = title)
-        FrickInline(modifier = Modifier.fillMaxWidth()) {
-            FrickButton(
-                text = "Reload",
-                onClick = onReload,
-                modifier = Modifier.weight(1f),
-            )
-            FrickTextButton(
-                text = if (inspectorVisible) "Hide details" else "Details",
-                onClick = onToggleInspector,
-                modifier = Modifier.weight(1f),
-            )
-            FrickTextButton(
-                text = "Sign out",
-                onClick = onLogout,
-                modifier = Modifier.weight(1f),
-            )
-        }
+    Column(modifier = Modifier.fillMaxSize()) {
+        FrickTopBar(
+            title = "Threads",
+            actions = listOf(
+                FrickTopBarAction(
+                    icon = FrickIconName.ActionReload,
+                    contentDescription = "Reload",
+                    onClick = onReload,
+                ),
+            ),
+            trailingContent = {
+                FrickTextButton(text = "Sign out", onClick = onLogout)
+            },
+        )
+        ThreadsPanel(
+            conversations = conversations,
+            users = users,
+            roomMembers = roomMembers,
+            activeUserId = activeUserId,
+            selectedConversationId = selectedConversationId,
+            newThreadTitle = newThreadTitle,
+            newThreadKind = newThreadKind,
+            selectedParticipantIds = selectedParticipantIds,
+            availableParticipants = availableParticipants,
+            threadError = threadError,
+            isCreatingThread = isCreatingThread,
+            isCreateThreadDisabled = isCreateThreadDisabled,
+            onNewThreadTitleChange = onNewThreadTitleChange,
+            onNewThreadKindChange = onNewThreadKindChange,
+            onToggleParticipant = onToggleParticipant,
+            onCreateThread = onCreateThread,
+            onSelectConversation = onSelectConversation,
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+        )
     }
 }
 
 @Composable
-private fun UsersRow(users: List<UserDto>) {
-    if (users.isEmpty()) {
-        return
-    }
-
-    FrickInline(modifier = Modifier.fillMaxWidth()) {
-        FrickAvatarGroup(initials = users.map { user -> initials(user.displayName) })
-        Column(modifier = Modifier.weight(1f)) {
-            FrickText(text = users.joinToString { user -> user.displayName }, maxLines = 1)
-            FrickLabel(text = "${users.size} synced users")
-        }
+private fun ChatDetailScreen(
+    title: String,
+    inspectorVisible: Boolean,
+    users: List<UserDto>,
+    messages: List<FrickStreamEvent>,
+    localUserId: String,
+    draft: String,
+    onDraftChange: (String) -> Unit,
+    onSend: () -> Unit,
+    onBackToThreads: () -> Unit,
+    onReload: () -> Unit,
+    onToggleInspector: () -> Unit,
+    onLogout: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        FrickTopBar(
+            title = title,
+            navigationAction = FrickTopBarAction(
+                icon = FrickIconName.NavigationBack,
+                contentDescription = "Threads",
+                onClick = onBackToThreads,
+            ),
+            actions = listOf(
+                FrickTopBarAction(
+                    icon = FrickIconName.ActionDetails,
+                    contentDescription = if (inspectorVisible) "Hide details" else "Details",
+                    onClick = onToggleInspector,
+                ),
+                FrickTopBarAction(
+                    icon = FrickIconName.ActionReload,
+                    contentDescription = "Reload",
+                    onClick = onReload,
+                ),
+            ),
+            trailingContent = {
+                FrickTextButton(text = "Sign out", onClick = onLogout)
+            },
+        )
+        ChatContent(
+            users = users,
+            messages = messages,
+            localUserId = localUserId,
+            draft = draft,
+            onDraftChange = onDraftChange,
+            onSend = onSend,
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+        )
     }
 }
 
@@ -548,9 +414,10 @@ private fun ChatContent(
     draft: String,
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier = Modifier.fillMaxSize(),
+        modifier = modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         MessagesList(
@@ -568,6 +435,7 @@ private fun ChatInspector(
     status: String,
     session: FrickSession,
     users: List<UserDto>,
+    members: List<RoomMemberDto>,
 ) {
     FrickSurface(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -578,10 +446,15 @@ private fun ChatInspector(
             FrickText(text = status)
             FrickDivider()
             FrickLabel(text = sessionLabel(session, users))
-            if (users.isEmpty()) {
-                FrickLabel(text = "No synced users yet")
+            if (members.isEmpty()) {
+                FrickLabel(text = "No members yet")
             } else {
-                UsersRow(users = users)
+                members.forEach { member ->
+                    FrickUserRow(
+                        name = displayName(users, member.userId),
+                        subtitle = member.role.replaceFirstChar { char -> char.uppercaseChar() },
+                    )
+                }
             }
         }
     }
@@ -600,49 +473,101 @@ private fun PlaceholderDestination(label: String) {
 @Composable
 private fun ThreadsPanel(
     conversations: List<ConversationDto>,
+    users: List<UserDto>,
+    roomMembers: List<RoomMemberDto>,
+    activeUserId: String,
     selectedConversationId: String,
     newThreadTitle: String,
+    newThreadKind: NewThreadKind,
+    selectedParticipantIds: List<String>,
+    availableParticipants: List<UserDto>,
     threadError: String?,
     isCreatingThread: Boolean,
+    isCreateThreadDisabled: Boolean,
     onNewThreadTitleChange: (String) -> Unit,
+    onNewThreadKindChange: (NewThreadKind) -> Unit,
+    onToggleParticipant: (String) -> Unit,
     onCreateThread: () -> Unit,
     onSelectConversation: (String) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    FrickSurface(modifier = Modifier.fillMaxWidth()) {
-        Column(
+    FrickSurface(modifier = modifier.fillMaxSize()) {
+        LazyColumn(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxSize()
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            FrickLabel(text = "Threads")
-            FrickInline(modifier = Modifier.fillMaxWidth()) {
-                FrickTextInput(
-                    value = newThreadTitle,
-                    onValueChange = onNewThreadTitleChange,
-                    label = "New thread",
-                    modifier = Modifier.weight(1f),
-                    enabled = !isCreatingThread,
-                    imeAction = ImeAction.Done,
-                    keyboardActions = KeyboardActions(onDone = { onCreateThread() }),
-                )
-                FrickButton(
-                    text = "Create",
-                    onClick = onCreateThread,
-                    enabled = !isCreatingThread && newThreadTitle.isNotBlank(),
-                )
+            item {
+                FrickLabel(text = "Threads")
             }
-            if (threadError != null) {
-                FrickLabel(text = threadError)
-            }
-            conversations.forEachIndexed { index, conversation ->
-                if (index > 0) {
-                    FrickDivider()
-                }
-                FrickTextButton(
-                    text = threadTitle(conversation) + if (conversation.id == selectedConversationId) " • Selected" else "",
-                    onClick = { onSelectConversation(conversation.id) },
+            item {
+                FrickSegmentedControl(
+                    options = NewThreadKind.entries.map { kind -> kind.label },
+                    selectedIndex = NewThreadKind.entries.indexOf(newThreadKind),
+                    onSelectedIndexChange = { index -> onNewThreadKindChange(NewThreadKind.entries[index]) },
                     modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            if (newThreadKind == NewThreadKind.Group) {
+                item {
+                    FrickTextInput(
+                        value = newThreadTitle,
+                        onValueChange = onNewThreadTitleChange,
+                        label = "New thread",
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isCreatingThread,
+                        imeAction = ImeAction.Done,
+                        keyboardActions = KeyboardActions(onDone = { onCreateThread() }),
+                    )
+                }
+            }
+
+            items(availableParticipants, key = { user -> user.id }) { user ->
+                val selected = selectedParticipantIds.contains(user.id)
+                FrickUserRow(
+                    name = user.displayName,
+                    subtitle = user.id,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = !isCreatingThread) { onToggleParticipant(user.id) }
+                        .padding(vertical = 6.dp),
+                    trailing = {
+                        if (selected) {
+                            FrickText(text = "✓")
+                        }
+                    },
+                )
+            }
+
+            item {
+                FrickButton(
+                    text = if (newThreadKind == NewThreadKind.Direct) "Start direct" else "Create group",
+                    onClick = onCreateThread,
+                    enabled = !isCreateThreadDisabled,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            if (threadError != null) {
+                item {
+                    FrickLabel(text = threadError)
+                }
+            }
+
+            items(conversations, key = { conversation -> conversation.id }) { conversation ->
+                val members = roomMembers.filter { member -> member.conversationId == conversation.id }
+                FrickWorkspaceListItem(
+                    title = threadTitle(
+                        conversation = conversation,
+                        users = users,
+                        members = members,
+                        activeUserId = activeUserId,
+                    ),
+                    subtitle = conversation.kind.replaceFirstChar { char -> char.uppercaseChar() },
+                    selected = conversation.id == selectedConversationId,
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = { onSelectConversation(conversation.id) },
                 )
             }
         }
@@ -702,25 +627,6 @@ private fun sessionLabel(session: FrickSession, users: List<UserDto>): String {
 
 private fun displayName(users: List<UserDto>, userId: String): String =
     users.firstOrNull { user -> user.id == userId }?.displayName ?: userId
-
-private fun mergeConversations(conversations: List<ConversationDto>, conversation: ConversationDto): List<ConversationDto> =
-    (conversations.filterNot { item -> item.id == conversation.id } + conversation)
-        .sortedBy { item -> threadTitle(item).lowercase() }
-
-private fun threadTitle(conversation: ConversationDto): String =
-    conversation.title?.takeIf { title -> title.isNotBlank() } ?: conversation.id
-        .removePrefix("conversation-")
-        .split("-", "_", " ")
-        .filter { part -> part.isNotBlank() }
-        .joinToString(" ") { part -> part.replaceFirstChar { char -> char.uppercaseChar() } }
-
-private fun initials(name: String): String =
-    name
-        .split(" ")
-        .filter { part -> part.isNotBlank() }
-        .take(2)
-        .joinToString("") { part -> part.first().uppercaseChar().toString() }
-        .ifBlank { "?" }
 
 private fun messageMetadata(users: List<UserDto>, message: FrickStreamEvent): String =
     listOfNotNull(

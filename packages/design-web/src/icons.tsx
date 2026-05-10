@@ -1,14 +1,48 @@
 import type { ComponentType, SVGProps } from "react";
-import { LoaderCircle, MessageCircle, Paperclip, Radio, RefreshCw, Send, Settings, Video } from "lucide-react";
+import {
+  ArrowLeft,
+  Inbox,
+  Info,
+  LoaderCircle,
+  MessageCircle,
+  Moon,
+  Paperclip,
+  Plus,
+  Radio,
+  RefreshCw,
+  Send,
+  Settings,
+  Sun,
+  Video,
+} from "lucide-react";
 
 export type FrickIcon = ComponentType<SVGProps<SVGSVGElement>>;
-export type FrickIconName = "send" | "reload" | "live" | "message" | "paperclip" | "video" | "settings";
+export type FrickIconName =
+  | "send"
+  | "reload"
+  | "add"
+  | "details"
+  | "back"
+  | "threads"
+  | "live"
+  | "message"
+  | "paperclip"
+  | "video"
+  | "settings"
+  | "themeLight"
+  | "themeDark";
 
 export const icons = {
   action: {
     send: Send,
     reload: RefreshCw,
+    add: Plus,
+    details: Info,
     settings: Settings,
+  },
+  navigation: {
+    back: ArrowLeft,
+    threads: Inbox,
   },
   status: {
     live: Radio,
@@ -26,11 +60,17 @@ export const icons = {
 export const semanticIcons: Record<FrickIconName, FrickIcon> = {
   send: icons.action.send,
   reload: icons.action.reload,
+  add: icons.action.add,
+  details: icons.action.details,
+  back: icons.navigation.back,
+  threads: icons.navigation.threads,
   live: icons.status.live,
   message: icons.chat.message,
   paperclip: icons.chat.attachment,
   video: icons.call.video,
   settings: icons.action.settings,
+  themeLight: Sun,
+  themeDark: Moon,
 };
 
 export function FrickIconGlyph({ name, ...props }: SVGProps<SVGSVGElement> & { name: FrickIconName }) {

@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-types/
 .turbo/
 .DS_Store
 *.log
@@ -13,8 +14,11 @@ apps/android/.gradle/
 apps/android/build/
 apps/android/app/build/
 apps/android/frick/build/
+apps/android/design/build/
 packages/swift/.build/
 packages/swift/.swiftpm/
+packages/design-swift/.build/
+packages/design-swift/.swiftpm/
 .tiltbuild/
 .worktrees/
 .superpowers/

@@ -1,16 +1,35 @@
 package dev.frick.client
 
+import com.sun.net.httpserver.HttpExchange
+import com.sun.net.httpserver.HttpServer
+import java.net.InetAddress
+import java.net.InetSocketAddress
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 
 class FrickEventStreamParserTest {
+    private val servers = mutableListOf<HttpServer>()
+
+    @After
+    fun stopServers() {
+        servers.forEach { server -> server.stop(0) }
+    }
+
     @Test
     fun parsesEventsSplitAcrossChunks() {
         val parser = FrickEventStreamParser()
@@ -30,10 +49,14 @@ class FrickEventStreamParserTest {
 
     @Test
     fun exposesGeneratedFoundationDtos() {
-        assertEquals("frick-foundation-2026-05-09", FRICK_SCHEMA_HASH)
+        assertEquals("frick-foundation-2026-05-09-dev-auth", FRICK_SCHEMA_HASH)
         assertEquals(
             UserDto(id = "user-ada", displayName = "Ada", avatarBlobId = null),
             UserDto(id = "user-ada", displayName = "Ada", avatarBlobId = null),
+        )
+        assertEquals(
+            "user-ada",
+            UserDeviceDto(id = "device-web", userId = "user-ada", platform = "web").userId,
         )
         assertEquals(
             "Hello from Android",
@@ -82,6 +105,526 @@ class FrickEventStreamParserTest {
         assertEquals(listOf("General"), conversations.map { conversation -> conversation.title })
         assertEquals(listOf("Hello from Android"), events.map { event -> event.payload["body"] })
         assertEquals(1, events.single().sequence)
+    }
+
+    @Test
+    fun onlyMessageSentEventsWithBodyAreVisibleChatMessages() {
+        val message = streamEvent(sequence = 1, eventId = "event-message", body = "Hello")
+        val emptyMessage = streamEvent(sequence = 2, eventId = "event-empty", body = "")
+        val receipt = FrickStreamEvent(
+            stream = "MessageStream",
+            streamId = "conversation-general",
+            sequence = 3,
+            eventId = "event-receipt",
+            event = "ReceiptAdvanced",
+            payload = mapOf(
+                "userId" to "user-ada",
+                "sequence" to "2",
+            ),
+        )
+
+        assertTrue(message.isVisibleChatMessage())
+        assertEquals(false, emptyMessage.isVisibleChatMessage())
+        assertEquals(false, receipt.isVisibleChatMessage())
+    }
+
+    @Test
+    fun devLoginPostsExpectedJsonAndStoresReturnedSession() = runBlocking {
+        val storage = MemoryFrickStorage()
+        val transport = FakeFrickTransport(
+            postResponses = mapOf(
+                "/auth/dev-login" to """
+                    {
+                      "schemaHash": "$FRICK_SCHEMA_HASH",
+                      "sessionToken": "session-token-ada",
+                      "userId": "user-ada",
+                      "deviceId": "android-device",
+                      "replicaId": "android-replica",
+                      "expiresAt": "2026-05-09T22:00:00.000Z"
+                    }
+                """.trimIndent(),
+            ),
+        )
+        val client = FrickClient(transport = transport, storage = storage)
+
+        val session = client.devLogin(
+            userId = "user-ada",
+            deviceId = "android-device",
+            replicaId = "android-replica",
+            platform = "android",
+        )
+
+        assertEquals(
+            FrickSession(
+                schemaHash = FRICK_SCHEMA_HASH,
+                sessionToken = "session-token-ada",
+                userId = "user-ada",
+                deviceId = "android-device",
+                replicaId = "android-replica",
+                expiresAt = "2026-05-09T22:00:00.000Z",
+            ),
+            session,
+        )
+        assertEquals(session, storage.loadSession())
+        assertEquals("/auth/dev-login", transport.posts.single().path)
+        val body = Json.parseToJsonElement(transport.posts.single().body).jsonObject
+        assertEquals("user-ada", body.getValue("userId").jsonPrimitive.content)
+        assertEquals("android-device", body.getValue("deviceId").jsonPrimitive.content)
+        assertEquals("android-replica", body.getValue("replicaId").jsonPrimitive.content)
+        assertEquals("android", body.getValue("platform").jsonPrimitive.content)
+    }
+
+    @Test
+    fun signUpPostsAccountDetailsAndStoresReturnedSession() = runBlocking {
+        val storage = MemoryFrickStorage()
+        val transport = FakeFrickTransport(
+            postResponses = mapOf(
+                "/auth/signup" to """
+                    {
+                      "schemaHash": "$FRICK_SCHEMA_HASH",
+                      "sessionToken": "session-token-dorothy",
+                      "userId": "user-dorothy",
+                      "displayName": "Dorothy Vaughan",
+                      "handle": "dorothy",
+                      "deviceId": "android-device",
+                      "replicaId": "android-replica",
+                      "expiresAt": "2026-05-09T22:00:00.000Z"
+                    }
+                """.trimIndent(),
+            ),
+        )
+        val client = FrickClient(transport = transport, storage = storage)
+
+        val session = client.signUp(
+            displayName = "Dorothy Vaughan",
+            handle = "dorothy",
+            password = "foundation-secret",
+            deviceId = "android-device",
+            replicaId = "android-replica",
+            platform = "android",
+        )
+
+        assertEquals("session-token-dorothy", session.sessionToken)
+        assertEquals("user-dorothy", session.userId)
+        assertEquals("Dorothy Vaughan", session.displayName)
+        assertEquals("dorothy", session.handle)
+        assertEquals(session, storage.loadSession())
+        assertEquals("/auth/signup", transport.posts.single().path)
+        val body = Json.parseToJsonElement(transport.posts.single().body).jsonObject
+        assertEquals("Dorothy Vaughan", body.getValue("displayName").jsonPrimitive.content)
+        assertEquals("dorothy", body.getValue("handle").jsonPrimitive.content)
+        assertEquals("foundation-secret", body.getValue("password").jsonPrimitive.content)
+        assertEquals("android-device", body.getValue("deviceId").jsonPrimitive.content)
+        assertEquals("android-replica", body.getValue("replicaId").jsonPrimitive.content)
+        assertEquals("android", body.getValue("platform").jsonPrimitive.content)
+    }
+
+    @Test
+    fun loginPostsIdentityAndStoresReturnedSession() = runBlocking {
+        val storage = MemoryFrickStorage()
+        val transport = FakeFrickTransport(
+            postResponses = mapOf(
+                "/auth/login" to """
+                    {
+                      "schemaHash": "$FRICK_SCHEMA_HASH",
+                      "sessionToken": "session-token-dorothy",
+                      "userId": "user-dorothy",
+                      "displayName": "Dorothy Vaughan",
+                      "handle": "dorothy",
+                      "deviceId": "android-device",
+                      "replicaId": "android-replica",
+                      "expiresAt": "2026-05-09T22:00:00.000Z"
+                    }
+                """.trimIndent(),
+            ),
+        )
+        val client = FrickClient(transport = transport, storage = storage)
+
+        val session = client.login(
+            identity = "dorothy",
+            password = "foundation-secret",
+            deviceId = "android-device",
+            replicaId = "android-replica",
+            platform = "android",
+        )
+
+        assertEquals("session-token-dorothy", session.sessionToken)
+        assertEquals("Dorothy Vaughan", session.displayName)
+        assertEquals("dorothy", session.handle)
+        assertEquals(session, storage.loadSession())
+        assertEquals("/auth/login", transport.posts.single().path)
+        val body = Json.parseToJsonElement(transport.posts.single().body).jsonObject
+        assertEquals("dorothy", body.getValue("identity").jsonPrimitive.content)
+        assertEquals("foundation-secret", body.getValue("password").jsonPrimitive.content)
+        assertEquals("android-device", body.getValue("deviceId").jsonPrimitive.content)
+        assertEquals("android-replica", body.getValue("replicaId").jsonPrimitive.content)
+        assertEquals("android", body.getValue("platform").jsonPrimitive.content)
+    }
+
+    @Test
+    fun createConversationPostsParticipantsWithStoredSession() = runBlocking {
+        val storage = MemoryFrickStorage(
+            session = FrickSession(
+                schemaHash = FRICK_SCHEMA_HASH,
+                sessionToken = "session-token-ada",
+                userId = "user-ada",
+                deviceId = "android-device",
+                replicaId = "android-replica",
+                expiresAt = "2026-05-09T22:00:00.000Z",
+            ),
+        )
+        val transport = FakeFrickTransport(
+            postResponses = mapOf(
+                "/conversations" to """
+                    {
+                      "schemaHash": "$FRICK_SCHEMA_HASH",
+                      "conversation": {
+                        "id": "conversation-launch-room-a1b2c3",
+                        "kind": "group",
+                        "title": "Launch Room",
+                        "createdBy": "user-ada",
+                        "lastMessageEventId": null
+                      },
+                      "member": {
+                        "id": "member-launch-room-a1b2c3-ada",
+                        "conversationId": "conversation-launch-room-a1b2c3",
+                        "userId": "user-ada",
+                        "role": "owner"
+                      },
+                      "members": [
+                        {
+                          "id": "member-launch-room-a1b2c3-ada",
+                          "conversationId": "conversation-launch-room-a1b2c3",
+                          "userId": "user-ada",
+                          "role": "owner"
+                        },
+                        {
+                          "id": "member-launch-room-a1b2c3-grace",
+                          "conversationId": "conversation-launch-room-a1b2c3",
+                          "userId": "user-grace",
+                          "role": "member"
+                        }
+                      ]
+                    }
+                """.trimIndent(),
+            ),
+        )
+        val client = FrickClient(transport = transport, storage = storage)
+
+        val created = client.createConversation(
+            title = "Launch Room",
+            kind = "group",
+            participantUserIds = listOf("user-grace"),
+        )
+
+        assertEquals("conversation-launch-room-a1b2c3", created.conversation.id)
+        assertEquals("Launch Room", created.conversation.title)
+        assertEquals(created.conversation.id, created.member.conversationId)
+        assertEquals("user-ada", created.member.userId)
+        assertEquals(listOf("user-ada", "user-grace"), created.members.map { member -> member.userId })
+        assertEquals("/conversations", transport.posts.single().path)
+        val body = Json.parseToJsonElement(transport.posts.single().body).jsonObject
+        assertEquals("Launch Room", body.getValue("title").jsonPrimitive.content)
+        assertEquals("group", body.getValue("kind").jsonPrimitive.content)
+        assertEquals("user-grace", body.getValue("participantUserIds").jsonArray.first().jsonPrimitive.content)
+    }
+
+    @Test
+    fun signOutClearsStoredSession() {
+        val session = FrickSession(
+            schemaHash = FRICK_SCHEMA_HASH,
+            sessionToken = "session-token-dorothy",
+            userId = "user-dorothy",
+            displayName = "Dorothy Vaughan",
+            handle = "dorothy",
+            deviceId = "android-device",
+            replicaId = "android-replica",
+            expiresAt = "2026-05-09T22:00:00.000Z",
+        )
+        val storage = MemoryFrickStorage(session = session)
+        val client = FrickClient(storage = storage, transport = FakeFrickTransport())
+
+        client.signOut()
+
+        assertEquals(null, storage.loadSession())
+    }
+
+    @Test
+    fun ktorTransportAddsAuthorizationHeaderToAuthenticatedRequests() = runBlocking {
+        val observed = mutableListOf<Pair<String, String?>>()
+        val server = startHeaderCaptureServer(observed)
+        servers += server
+        val transport = KtorFrickTransport(
+            baseUrl = "http://127.0.0.1:${server.address.port}",
+            sessionTokenProvider = { "session-token-ada" },
+        )
+
+        try {
+            transport.get("/objects?type=User")
+            transport.post("/append", """{"ok":true}""")
+            transport.putBytes("/blobs/blob-1/content", "text/plain", "hello".encodeToByteArray())
+            transport.stream("/streams/MessageStream/conversation-general/events?after=0").take(1).toList()
+        } finally {
+            transport.close()
+        }
+
+        assertEquals(
+            listOf(
+                "GET /objects?type=User" to "Bearer session-token-ada",
+                "POST /append" to "Bearer session-token-ada",
+                "PUT /blobs/blob-1/content" to "Bearer session-token-ada",
+                "GET /streams/MessageStream/conversation-general/events?after=0" to "Bearer session-token-ada",
+            ),
+            observed,
+        )
+    }
+
+    @Test
+    fun authenticatedSessionProvidesDefaultInboxUserAndMessageSender() = runBlocking {
+        val session = FrickSession(
+            schemaHash = FRICK_SCHEMA_HASH,
+            sessionToken = "session-token-grace",
+            userId = "user-grace",
+            deviceId = "android-device",
+            replicaId = "android-replica",
+            expiresAt = "2026-05-09T22:00:00.000Z",
+        )
+        val transport = FakeFrickTransport(
+            responses = mapOf(
+                "/inbox?userId=user-grace" to """
+                    {
+                      "schemaHash": "$FRICK_SCHEMA_HASH",
+                      "data": []
+                    }
+                """.trimIndent(),
+            ),
+        )
+        val client = FrickClient(
+            transport = transport,
+            storage = MemoryFrickStorage(session = session),
+            requestIdFactory = { "request-1" },
+        )
+
+        client.fetchInbox()
+        client.sendMessage(body = "Authenticated hello")
+
+        assertEquals(listOf("/inbox?userId=user-grace"), transport.requestedPaths)
+        val append = Json.parseToJsonElement(transport.posts.single().body).jsonObject
+        val payload = append.getValue("payload").jsonObject
+        assertEquals("user-grace", payload.getValue("senderId").jsonPrimitive.content)
+    }
+
+    @Test
+    fun storagePersistsSessionAcrossFakeInstances() {
+        val sharedSession = arrayOf<FrickSession?>(null)
+        val first = MemoryFrickStorage(sessionBacking = sharedSession)
+        val second = MemoryFrickStorage(sessionBacking = sharedSession)
+        val session = FrickSession(
+            schemaHash = FRICK_SCHEMA_HASH,
+            sessionToken = "session-token-ada",
+            userId = "user-ada",
+            deviceId = "android-device",
+            replicaId = "android-replica",
+            expiresAt = "2026-05-09T22:00:00.000Z",
+        )
+
+        first.saveSession(session)
+
+        assertEquals(session, second.loadSession())
+    }
+
+    @Test
+    fun decodesInboxItemsAndBlobMetadata() = runBlocking {
+        val transport = FakeFrickTransport(
+            responses = mapOf(
+                "/inbox?userId=user-ada" to """
+                    {
+                      "schemaHash": "$FRICK_SCHEMA_HASH",
+                      "data": [
+                        {
+                          "conversationId": "conversation-general",
+                          "userId": "user-ada",
+                          "title": "Foundation General",
+                          "kind": "channel",
+                          "lastSequence": 7,
+                          "lastMessageBody": "Inbox preview",
+                          "lastMessageSenderId": "user-grace",
+                          "readSequence": 4,
+                          "unreadCount": 3
+                        }
+                      ]
+                    }
+                """.trimIndent(),
+                "/blobs/blob-1" to """
+                    {
+                      "blobId": "blob-1",
+                      "ownerId": "user-ada",
+                      "contentHash": "sha256-1",
+                      "byteLength": 42,
+                      "mimeType": "text/plain",
+                      "createdAt": "2026-05-09T00:00:00.000Z"
+                    }
+                """.trimIndent(),
+            ),
+        )
+        val client = FrickClient(transport = transport)
+
+        val inbox = client.fetchInbox(userId = "user-ada")
+        val blob = client.fetchBlobMetadata(blobId = "blob-1")
+
+        assertEquals(
+            listOf(
+                FrickInboxItem(
+                    conversationId = "conversation-general",
+                    userId = "user-ada",
+                    title = "Foundation General",
+                    kind = "channel",
+                    lastSequence = 7,
+                    lastMessageBody = "Inbox preview",
+                    lastMessageSenderId = "user-grace",
+                    readSequence = 4,
+                    unreadCount = 3,
+                ),
+            ),
+            inbox,
+        )
+        assertEquals("blob-1", blob?.blobId)
+        assertEquals(42, blob?.byteLength)
+        assertEquals(listOf("/inbox?userId=user-ada", "/blobs/blob-1"), transport.requestedPaths)
+    }
+
+    @Test
+    fun uploadsBlobContentThroughFoundationContentEndpoint() = runBlocking {
+        val transport = FakeFrickTransport(
+            putResponses = mapOf(
+                "/blobs/blob%201/content?ownerId=user+ada" to """
+                    {
+                      "blobId": "blob 1",
+                      "ownerId": "user ada",
+                      "contentHash": "sha256-uploaded",
+                      "byteLength": 5,
+                      "mimeType": "text/plain",
+                      "storageKey": "objects/blob-1",
+                      "createdAt": "2026-05-09T00:00:00.000Z"
+                    }
+                """.trimIndent(),
+            ),
+        )
+        val client = FrickClient(transport = transport)
+
+        val metadata = client.uploadBlobContent(
+            blobId = "blob 1",
+            ownerId = "user ada",
+            mimeType = "text/plain",
+            bytes = "hello".encodeToByteArray(),
+        )
+
+        assertEquals("blob 1", metadata.blobId)
+        assertEquals("sha256-uploaded", metadata.contentHash)
+        assertEquals(
+            listOf(
+                FakeFrickTransport.BytePut(
+                    path = "/blobs/blob%201/content?ownerId=user+ada",
+                    mimeType = "text/plain",
+                    bytes = "hello".encodeToByteArray(),
+                ),
+            ),
+            transport.bytePuts,
+        )
+    }
+
+    @Test
+    fun downloadsBlobContentThroughFoundationContentEndpoint() = runBlocking {
+        val expected = byteArrayOf(1, 2, 3, 4)
+        val transport = FakeFrickTransport(
+            byteResponses = mapOf("/blobs/blob-1/content" to expected),
+        )
+        val client = FrickClient(transport = transport)
+
+        val bytes = client.downloadBlobContent(blobId = "blob-1")
+
+        assertArrayEquals(expected, bytes)
+        assertEquals(listOf("/blobs/blob-1/content"), transport.byteRequestedPaths)
+    }
+
+    @Test
+    fun sendsSignalJsonPayloadThroughFoundationEndpoint() = runBlocking {
+        val transport = FakeFrickTransport()
+        val client = FrickClient(transport = transport)
+
+        client.sendSignal(
+            name = "typing",
+            key = "conversation general",
+            value = mapOf(
+                "userId" to JsonPrimitive("user-ada"),
+                "typing" to JsonPrimitive(true),
+            ),
+        )
+
+        assertEquals(1, transport.posts.size)
+        assertEquals("/signals/typing/conversation%20general", transport.posts.single().path)
+        val body = Json.parseToJsonElement(transport.posts.single().body).jsonObject
+        assertEquals("user-ada", body.getValue("userId").jsonPrimitive.content)
+        assertEquals(true, body.getValue("typing").jsonPrimitive.content.toBoolean())
+    }
+
+    @Test
+    fun drainsSignalPayloadsAsStringMaps() = runBlocking {
+        val transport = FakeFrickTransport(
+            responses = mapOf(
+                "/signals/typing/conversation%20general" to """
+                    {
+                      "schemaHash": "$FRICK_SCHEMA_HASH",
+                      "name": "typing",
+                      "key": "conversation general",
+                      "data": [
+                        {
+                          "userId": "user-ada",
+                          "typing": true,
+                          "meta": {"source":"android"}
+                        }
+                      ]
+                    }
+                """.trimIndent(),
+            ),
+        )
+        val client = FrickClient(transport = transport)
+
+        val signals = client.drainSignals(name = "typing", key = "conversation general")
+
+        assertEquals(
+            listOf(
+                mapOf(
+                    "userId" to "user-ada",
+                    "typing" to "true",
+                    "meta" to """{"source":"android"}""",
+                ),
+            ),
+            signals,
+        )
+        assertEquals(listOf("/signals/typing/conversation%20general"), transport.requestedPaths)
+    }
+
+    @Test
+    fun advancesReadReceiptOncePerLoadedSequence() = runBlocking {
+        val transport = FakeFrickTransport()
+        val client = FrickClient(
+            transport = transport,
+            replicaId = "android-test",
+            requestIdFactory = { "request-${transport.posts.size + 1}" },
+        )
+
+        client.fetchMessages(readUserId = "user-ada")
+        client.fetchMessages(readUserId = "user-ada")
+
+        assertEquals(1, transport.posts.size)
+        val post = transport.posts.single()
+        assertEquals("/append", post.path)
+        val append = Json.parseToJsonElement(post.body).jsonObject
+        val payload = append.getValue("payload").jsonObject
+        assertEquals("ReceiptAdvanced", append.getValue("event").jsonPrimitive.content)
+        assertEquals("user-ada", payload.getValue("userId").jsonPrimitive.content)
+        assertEquals(1, payload.getValue("sequence").jsonPrimitive.int)
     }
 
     @Test
@@ -193,21 +736,35 @@ class FrickEventStreamParserTest {
 
 private class FakeFrickTransport(
     private val responseBody: String = messageStreamResponse(),
+    private val responses: Map<String, String> = emptyMap(),
+    private val postResponses: Map<String, String> = emptyMap(),
+    private val byteResponses: Map<String, ByteArray> = emptyMap(),
+    private val putResponses: Map<String, String> = emptyMap(),
     private val streamChunks: List<String> = emptyList(),
     private val failGets: Boolean = false,
     private var failingPosts: Int = 0,
 ) : FrickTransport {
     val requestedPaths = mutableListOf<String>()
+    val byteRequestedPaths = mutableListOf<String>()
     val streamedPaths = mutableListOf<String>()
     val postAttempts = mutableListOf<Post>()
     val posts = mutableListOf<Post>()
+    val bytePuts = mutableListOf<BytePut>()
 
     override suspend fun get(path: String): String {
         if (failGets) {
             throw IllegalStateException("offline")
         }
         requestedPaths += path
-        return responseBody
+        return responses[path] ?: responseBody
+    }
+
+    override suspend fun getBytes(path: String): ByteArray {
+        if (failGets) {
+            throw IllegalStateException("offline")
+        }
+        byteRequestedPaths += path
+        return byteResponses[path] ?: throw IllegalArgumentException("No byte response for $path")
     }
 
     override fun stream(path: String): Flow<String> {
@@ -218,7 +775,7 @@ private class FakeFrickTransport(
         return streamChunks.asFlow()
     }
 
-    override suspend fun post(path: String, body: String) {
+    override suspend fun post(path: String, body: String): String {
         val post = Post(path = path, body = body)
         postAttempts += post
         if (failingPosts > 0) {
@@ -226,19 +783,53 @@ private class FakeFrickTransport(
             throw IllegalStateException("offline")
         }
         posts += post
+        return postResponses[path].orEmpty()
+    }
+
+    override suspend fun putBytes(path: String, mimeType: String, bytes: ByteArray): String {
+        val put = BytePut(path = path, mimeType = mimeType, bytes = bytes)
+        bytePuts += put
+        return putResponses[path] ?: responseBody
     }
 
     data class Post(
         val path: String,
         val body: String,
     )
+
+    data class BytePut(
+        val path: String,
+        val mimeType: String,
+        val bytes: ByteArray,
+    ) {
+        override fun equals(other: Any?): Boolean =
+            other is BytePut &&
+                path == other.path &&
+                mimeType == other.mimeType &&
+                bytes.contentEquals(other.bytes)
+
+        override fun hashCode(): Int {
+            var result = path.hashCode()
+            result = 31 * result + mimeType.hashCode()
+            result = 31 * result + bytes.contentHashCode()
+            return result
+        }
+    }
 }
 
 private class MemoryFrickStorage(
     private val objectJson: MutableMap<Pair<String, String>, String> = mutableMapOf(),
     private var streamEvents: List<FrickStreamEvent> = emptyList(),
     var pendingAppends: List<PendingAppend> = emptyList(),
+    private val sessionBacking: Array<FrickSession?> = arrayOf(null),
+    session: FrickSession? = null,
 ) : FrickStorage {
+    init {
+        if (session != null) {
+            sessionBacking[0] = session
+        }
+    }
+
     override fun loadObjectJson(type: String, id: String): String? = objectJson[type to id]
 
     override fun saveObjectJson(type: String, id: String, json: String, version: Int) {
@@ -260,7 +851,65 @@ private class MemoryFrickStorage(
     override fun removePendingAppend(requestId: String) {
         pendingAppends = pendingAppends.filterNot { append -> append.requestId == requestId }
     }
+
+    override fun loadSession(): FrickSession? = sessionBacking[0]
+
+    override fun saveSession(session: FrickSession) {
+        sessionBacking[0] = session
+    }
+
+    override fun clearSession() {
+        sessionBacking[0] = null
+    }
 }
+
+private fun startHeaderCaptureServer(observed: MutableList<Pair<String, String?>>): HttpServer {
+    val server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
+    server.createContext("/") { exchange ->
+        val request = "${exchange.requestMethod} ${exchange.requestURI}"
+        observed += request to exchange.requestHeaders.getFirst("Authorization")
+        when (exchange.requestMethod) {
+            "GET" -> {
+                if (exchange.requestURI.path.endsWith("/events")) {
+                    exchange.sendText("event: stream-page\ndata: {\"schemaHash\":\"$FRICK_SCHEMA_HASH\",\"data\":[]}\n\n")
+                } else {
+                    exchange.sendJson("""{"schemaHash":"$FRICK_SCHEMA_HASH","data":[]}""")
+                }
+            }
+            "POST" -> exchange.sendJson("""{"ok":true}""")
+            "PUT" -> exchange.sendJson("""{"ok":true}""")
+            else -> exchange.sendResponseHeaders(405, -1)
+        }
+    }
+    server.start()
+    return server
+}
+
+private fun HttpExchange.sendJson(body: String) {
+    responseHeaders.add("Content-Type", "application/json")
+    sendText(body)
+}
+
+private fun HttpExchange.sendText(body: String) {
+    val bytes = body.encodeToByteArray()
+    sendResponseHeaders(200, bytes.size.toLong())
+    responseBody.use { output -> output.write(bytes) }
+}
+
+private fun streamEvent(sequence: Int, eventId: String, body: String): FrickStreamEvent =
+    FrickStreamEvent(
+        stream = "MessageStream",
+        streamId = "conversation-general",
+        sequence = sequence,
+        eventId = eventId,
+        event = "MessageSent",
+        payload = mapOf(
+            "messageId" to "message-$sequence",
+            "senderId" to "user-ada",
+            "body" to body,
+            "createdAt" to "2026-05-09T12:00:00.000Z",
+        ),
+    )
 
 private fun messageStreamResponse(): String =
     """

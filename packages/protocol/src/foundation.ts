@@ -5,7 +5,7 @@ export const foundationSchema: FrickSchema = {
   protocol: "frick.realtime",
   protocolVersion: 1,
   compatibility: "greenfield-cutover",
-  hash: "frick-foundation-2026-05-09",
+  hash: "frick-foundation-2026-05-09-dev-auth",
   objects: [
     {
       id: 1,
@@ -47,6 +47,28 @@ export const foundationSchema: FrickSchema = {
       ],
       indexes: [{ id: 1, name: "byConversation", fields: ["conversationId", "state"] }],
     },
+    {
+      id: 5,
+      name: "UserDevice",
+      fields: [
+        { id: 1, name: "userId", kind: "ref", ref: "User", required: true },
+        { id: 2, name: "label", kind: "string", required: false },
+        { id: 3, name: "platform", kind: "enum", enumValues: ["web", "ios", "android", "server"], required: true },
+        { id: 4, name: "lastSeenAt", kind: "timestamp", required: false },
+      ],
+      indexes: [{ id: 1, name: "byUser", fields: ["userId"] }],
+    },
+    {
+      id: 6,
+      name: "UserSession",
+      fields: [
+        { id: 1, name: "userId", kind: "ref", ref: "User", required: true },
+        { id: 2, name: "deviceId", kind: "string", required: true },
+        { id: 3, name: "replicaId", kind: "string", required: true },
+        { id: 4, name: "expiresAt", kind: "timestamp", required: true },
+      ],
+      indexes: [{ id: 1, name: "byUser", fields: ["userId"] }],
+    },
   ],
   streams: [
     {
@@ -71,6 +93,7 @@ export const foundationSchema: FrickSchema = {
         { id: 2, name: "senderId", kind: "ref", ref: "User", required: true },
         { id: 3, name: "body", kind: "string", required: true },
         { id: 4, name: "createdAt", kind: "timestamp", required: true },
+        { id: 5, name: "attachmentBlobIds", kind: "json", required: false },
       ],
     },
     {
@@ -199,10 +222,21 @@ export const foundationSchema: FrickSchema = {
       source: "MessageStream",
       fields: [
         { id: 1, name: "conversationId", kind: "ref", ref: "Conversation", required: true },
-        { id: 2, name: "lastSequence", kind: "int", required: true },
-        { id: 3, name: "unreadCount", kind: "int", required: true },
+        { id: 2, name: "userId", kind: "ref", ref: "User", required: true },
+        { id: 3, name: "title", kind: "string", required: false },
+        { id: 4, name: "kind", kind: "string", required: true },
+        { id: 5, name: "lastSequence", kind: "int", required: true },
+        { id: 6, name: "lastMessageBody", kind: "string", required: false },
+        { id: 7, name: "lastMessageAt", kind: "timestamp", required: false },
+        { id: 8, name: "lastMessageSenderId", kind: "ref", ref: "User", required: false },
+        { id: 9, name: "readSequence", kind: "int", required: true },
+        { id: 10, name: "unreadCount", kind: "int", required: true },
+        { id: 11, name: "updatedAt", kind: "timestamp", required: true },
       ],
-      indexes: [{ id: 1, name: "byConversation", fields: ["conversationId"] }],
+      indexes: [
+        { id: 1, name: "byConversation", fields: ["conversationId"] },
+        { id: 2, name: "byUser", fields: ["userId"] },
+      ],
     },
   ],
 };

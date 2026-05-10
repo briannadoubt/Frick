@@ -1,4 +1,5 @@
 import { WebSocket } from "ws";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -6,6 +7,7 @@ import {
   decodeFrame,
   encodeFrame,
   foundationSchema,
+  unpackSignalEnvelope,
   type FrickFrame,
 } from "@frick/protocol";
 import { createFrickServer, defaultDatabasePath } from "../src/server.js";
@@ -26,9 +28,467 @@ describe("foundation sync gateway", () => {
     expect(dbPath).not.toContain(path.join("apps", "server", "apps", "server"));
   });
 
+  it("returns 401 for missing auth on objects", async () => {
+    app = await startServer();
+
+    const response = await fetch(`${app.httpUrl}/objects`);
+
+    expect(response.status).toBe(401);
+  });
+
+  it("creates a dev session for Ada and accepts authenticated object reads", async () => {
+    app = await startServer();
+
+    const login = await devLogin(app.httpUrl, {
+      userId: "user-ada",
+      deviceId: "device-ada-web",
+      replicaId: "replica-ada-web",
+      platform: "web",
+    });
+
+    expect(login.sessionToken).toEqual(expect.any(String));
+    expect(login.sessionToken.length).toBeGreaterThan(30);
+    expect(login).toMatchObject({
+      schemaHash: foundationSchema.hash,
+      userId: "user-ada",
+      deviceId: "device-ada-web",
+      replicaId: "replica-ada-web",
+    });
+    expect(Date.parse(login.expiresAt)).not.toBeNaN();
+
+    const response = await fetch(`${app.httpUrl}/objects`, {
+      headers: authHeaders(login.sessionToken),
+    });
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).schemaHash).toBe(foundationSchema.hash);
+  });
+
+  it("signs up a chat account, creates room membership, and accepts messages from that user", async () => {
+    app = await startServer();
+
+    const signup = await signUp(app.httpUrl, {
+      displayName: "Dorothy Vaughan",
+      handle: "dorothy",
+      password: "correct horse battery staple",
+      deviceId: "device-dorothy-web",
+      replicaId: "replica-dorothy-web",
+      platform: "web",
+    });
+
+    expect(signup).toMatchObject({
+      schemaHash: foundationSchema.hash,
+      userId: "user-dorothy",
+      displayName: "Dorothy Vaughan",
+      handle: "dorothy",
+      deviceId: "device-dorothy-web",
+      replicaId: "replica-dorothy-web",
+    });
+    expect(signup.sessionToken.length).toBeGreaterThan(30);
+
+    const usersResponse = await fetch(`${app.httpUrl}/objects?type=User`, {
+      headers: authHeaders(signup.sessionToken),
+    });
+    expect(usersResponse.status).toBe(200);
+    expect((await usersResponse.json()).data).toContainEqual(
+      expect.objectContaining({
+        id: "user-dorothy",
+        displayName: "Dorothy Vaughan",
+      }),
+    );
+
+    const membersResponse = await fetch(`${app.httpUrl}/objects?type=RoomMember`, {
+      headers: authHeaders(signup.sessionToken),
+    });
+    expect(membersResponse.status).toBe(200);
+    expect((await membersResponse.json()).data).toContainEqual(
+      expect.objectContaining({
+        conversationId: "conversation-general",
+        userId: "user-dorothy",
+        role: "member",
+      }),
+    );
+
+    const appendResponse = await fetch(`${app.httpUrl}/append`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders(signup.sessionToken) },
+      body: JSON.stringify({
+        requestId: "request-dorothy-message",
+        replicaId: signup.replicaId,
+        stream: "MessageStream",
+        key: "conversation-general",
+        event: "MessageSent",
+        payload: {
+          messageId: "message-dorothy",
+          senderId: signup.userId,
+          body: "Hello from Dorothy",
+          createdAt: "2026-05-09T00:00:00.000Z",
+        },
+      }),
+    });
+
+    expect(appendResponse.status).toBe(200);
+  });
+
+  it("creates authenticated chat threads with owner membership and accepts messages in that thread", async () => {
+    app = await startServer();
+    const signup = await signUp(app.httpUrl, {
+      displayName: "Mary Jackson",
+      handle: "mary",
+      password: "supersonic wind tunnel",
+      deviceId: "device-mary-web",
+      replicaId: "replica-mary-web",
+      platform: "web",
+    });
+
+    const createResponse = await fetch(`${app.httpUrl}/conversations`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders(signup.sessionToken) },
+      body: JSON.stringify({ title: "Launch Room" }),
+    });
+
+    expect(createResponse.status).toBe(201);
+    const created = (await createResponse.json()) as {
+      schemaHash: string;
+      conversation: { id: string; kind: string; title: string; createdBy: string };
+      member: { id: string; conversationId: string; userId: string; role: string };
+    };
+    expect(created.schemaHash).toBe(foundationSchema.hash);
+    expect(created.conversation).toEqual(
+      expect.objectContaining({
+        id: expect.stringMatching(/^conversation-launch-room-/),
+        kind: "group",
+        title: "Launch Room",
+        createdBy: signup.userId,
+      }),
+    );
+    expect(created.member).toEqual(
+      expect.objectContaining({
+        conversationId: created.conversation.id,
+        userId: signup.userId,
+        role: "owner",
+      }),
+    );
+
+    const conversationsResponse = await fetch(`${app.httpUrl}/objects?type=Conversation`, {
+      headers: authHeaders(signup.sessionToken),
+    });
+    expect(conversationsResponse.status).toBe(200);
+    expect((await conversationsResponse.json()).data).toContainEqual(expect.objectContaining(created.conversation));
+
+    const membersResponse = await fetch(`${app.httpUrl}/objects?type=RoomMember`, {
+      headers: authHeaders(signup.sessionToken),
+    });
+    expect(membersResponse.status).toBe(200);
+    expect((await membersResponse.json()).data).toContainEqual(expect.objectContaining(created.member));
+
+    const emptyReceiptResponse = await fetch(`${app.httpUrl}/append`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders(signup.sessionToken) },
+      body: JSON.stringify({
+        requestId: "request-mary-empty-receipt",
+        replicaId: signup.replicaId,
+        stream: "MessageStream",
+        key: created.conversation.id,
+        event: "ReceiptAdvanced",
+        payload: {
+          userId: signup.userId,
+          sequence: 142,
+        },
+      }),
+    });
+    expect(emptyReceiptResponse.status).toBe(200);
+    const inboxAfterEmptyReceipt = await getInbox(app.httpUrl, signup.sessionToken, signup.userId);
+    const createdInboxRow = inboxAfterEmptyReceipt.body.data.find(
+      (row: { conversationId: string }) => row.conversationId === created.conversation.id,
+    );
+    expect(createdInboxRow?.readSequence ?? 0).toBe(0);
+
+    const appendResponse = await fetch(`${app.httpUrl}/append`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders(signup.sessionToken) },
+      body: JSON.stringify({
+        requestId: "request-mary-launch-room",
+        replicaId: signup.replicaId,
+        stream: "MessageStream",
+        key: created.conversation.id,
+        event: "MessageSent",
+        payload: {
+          messageId: "message-mary-launch-room",
+          senderId: signup.userId,
+          body: "This one belongs in Launch Room",
+          createdAt: "2026-05-09T00:00:00.000Z",
+        },
+      }),
+    });
+    expect(appendResponse.status).toBe(200);
+
+    const streamResponse = await fetch(
+      `${app.httpUrl}/streams/MessageStream/${encodeURIComponent(created.conversation.id)}`,
+      { headers: authHeaders(signup.sessionToken) },
+    );
+    expect(streamResponse.status).toBe(200);
+    expect((await streamResponse.json()).data).toContainEqual(
+      expect.objectContaining({
+        streamId: created.conversation.id,
+        event: "MessageSent",
+        payload: expect.objectContaining({
+          body: "This one belongs in Launch Room",
+          senderId: signup.userId,
+        }),
+      }),
+    );
+  });
+
+  it("creates participant-specific threads and only exposes them to members", async () => {
+    app = await startServer();
+    const adaLogin = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const graceLogin = await devLogin(app.httpUrl, { userId: "user-grace" });
+    app.store.upsertObject("User", "user-mallory", {
+      displayName: "Mallory",
+      avatarBlobId: undefined,
+    });
+    const malloryLogin = await devLogin(app.httpUrl, { userId: "user-mallory" });
+
+    const createResponse = await fetch(`${app.httpUrl}/conversations`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders(adaLogin.sessionToken) },
+      body: JSON.stringify({
+        kind: "dm",
+        participantUserIds: ["user-grace"],
+      }),
+    });
+
+    expect(createResponse.status).toBe(201);
+    const created = (await createResponse.json()) as {
+      conversation: { id: string; kind: string; title?: string; createdBy: string };
+      members: Array<{ conversationId: string; userId: string; role: string }>;
+    };
+    expect(created.conversation).toEqual(
+      expect.objectContaining({
+        id: expect.stringMatching(/^conversation-dm-/),
+        kind: "dm",
+        createdBy: "user-ada",
+      }),
+    );
+    expect(created.members).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ conversationId: created.conversation.id, userId: "user-ada", role: "owner" }),
+        expect.objectContaining({ conversationId: created.conversation.id, userId: "user-grace", role: "member" }),
+      ]),
+    );
+
+    const graceConversations = await fetch(`${app.httpUrl}/objects?type=Conversation`, {
+      headers: authHeaders(graceLogin.sessionToken),
+    });
+    expect(graceConversations.status).toBe(200);
+    expect((await graceConversations.json()).data).toContainEqual(expect.objectContaining(created.conversation));
+
+    const malloryConversations = await fetch(`${app.httpUrl}/objects?type=Conversation`, {
+      headers: authHeaders(malloryLogin.sessionToken),
+    });
+    expect(malloryConversations.status).toBe(200);
+    expect((await malloryConversations.json()).data).not.toContainEqual(expect.objectContaining(created.conversation));
+
+    const graceMembers = await fetch(`${app.httpUrl}/objects?type=RoomMember`, {
+      headers: authHeaders(graceLogin.sessionToken),
+    });
+    expect(graceMembers.status).toBe(200);
+    const graceMembersBody = await graceMembers.json();
+    expect(graceMembersBody.data).toEqual(expect.arrayContaining(created.members.map((member) => expect.objectContaining(member))));
+
+    const malloryMembers = await fetch(`${app.httpUrl}/objects?type=RoomMember`, {
+      headers: authHeaders(malloryLogin.sessionToken),
+    });
+    expect(malloryMembers.status).toBe(200);
+    expect((await malloryMembers.json()).data).not.toEqual(
+      expect.arrayContaining(created.members.map((member) => expect.objectContaining(member))),
+    );
+
+    const graceAppend = await fetch(`${app.httpUrl}/append`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders(graceLogin.sessionToken) },
+      body: JSON.stringify({
+        requestId: "request-grace-dm",
+        replicaId: graceLogin.replicaId,
+        stream: "MessageStream",
+        key: created.conversation.id,
+        event: "MessageSent",
+        payload: {
+          messageId: "message-grace-dm",
+          senderId: "user-grace",
+          body: "private hello",
+          createdAt: "2026-05-09T00:00:00.000Z",
+        },
+      }),
+    });
+    expect(graceAppend.status).toBe(200);
+
+    const malloryRead = await fetch(`${app.httpUrl}/streams/MessageStream/${encodeURIComponent(created.conversation.id)}`, {
+      headers: authHeaders(malloryLogin.sessionToken),
+    });
+    expect(malloryRead.status).toBe(403);
+  });
+
+  it("rejects participant-specific threads with invalid memberships", async () => {
+    app = await startServer();
+    const adaLogin = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    const unknownUser = await fetch(`${app.httpUrl}/conversations`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders(adaLogin.sessionToken) },
+      body: JSON.stringify({
+        title: "Mystery",
+        participantUserIds: ["user-unknown"],
+      }),
+    });
+    expect(unknownUser.status).toBe(400);
+
+    const oversizedDm = await fetch(`${app.httpUrl}/conversations`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders(adaLogin.sessionToken) },
+      body: JSON.stringify({
+        kind: "dm",
+        participantUserIds: ["user-grace", "user-ada", "user-grace"],
+      }),
+    });
+    expect(oversizedDm.status).toBe(201);
+
+    const invalidDm = await fetch(`${app.httpUrl}/conversations`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders(adaLogin.sessionToken) },
+      body: JSON.stringify({
+        kind: "dm",
+        participantUserIds: [],
+      }),
+    });
+    expect(invalidDm.status).toBe(400);
+  });
+
+  it("logs in an existing chat account and rejects wrong passwords", async () => {
+    app = await startServer();
+    await signUp(app.httpUrl, {
+      displayName: "Katherine Johnson",
+      handle: "katherine",
+      password: "launch window math",
+    });
+
+    const rejected = await fetch(`${app.httpUrl}/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        identity: "katherine",
+        password: "wrong password",
+        platform: "web",
+      }),
+    });
+    expect(rejected.status).toBe(401);
+
+    const login = await loginAccount(app.httpUrl, {
+      identity: "katherine",
+      password: "launch window math",
+      deviceId: "device-katherine-web",
+      replicaId: "replica-katherine-web",
+      platform: "web",
+    });
+
+    expect(login).toMatchObject({
+      schemaHash: foundationSchema.hash,
+      userId: "user-katherine",
+      displayName: "Katherine Johnson",
+      handle: "katherine",
+      deviceId: "device-katherine-web",
+      replicaId: "replica-katherine-web",
+    });
+  });
+
+  it("rejects authenticated appends that spoof a MessageSent sender", async () => {
+    app = await startServer();
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    const response = await fetch(`${app.httpUrl}/append`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders(login.sessionToken) },
+      body: JSON.stringify({
+        requestId: "request-spoof-sender",
+        replicaId: login.replicaId,
+        stream: "MessageStream",
+        key: "conversation-general",
+        event: "MessageSent",
+        payload: {
+          messageId: "message-spoof-sender",
+          senderId: "user-grace",
+          body: "pretending",
+          createdAt: "2026-05-09T00:00:00.000Z",
+        },
+      }),
+    });
+
+    expect(response.status).toBe(403);
+  });
+
+  it("authenticates WebSocket appends from sessionToken without replicaId naming", async () => {
+    app = await startServer();
+    const login = await devLogin(app.httpUrl, {
+      userId: "user-ada",
+      deviceId: "device-ada-session",
+      replicaId: "replica-ada-session",
+    });
+    const socket = await connect(`${app.url}?sessionToken=${encodeURIComponent(login.sessionToken)}`);
+
+    socket.send(
+      encodeFrame([
+        FrameKind.Hello,
+        {
+          replicaId: "replica-mallory-should-not-matter",
+          deviceId: "device-mallory-should-not-matter",
+          schemaHash: foundationSchema.hash,
+          knownCursors: {},
+        },
+      ]),
+    );
+    await nextFrame(socket);
+
+    socket.send(
+      encodeFrame([
+        FrameKind.Append,
+        {
+          requestId: "request-ws-session-ada",
+          stream: "MessageStream",
+          key: "conversation-general",
+          event: "MessageSent",
+          payload: {
+            messageId: "message-ws-session-ada",
+            senderId: "user-ada",
+            body: "hello from a session",
+            createdAt: "2026-05-09T00:00:00.000Z",
+          },
+        },
+      ]),
+    );
+
+    const frame = await nextFrame(socket);
+    expect(frame[0]).toBe(FrameKind.Ack);
+    socket.close();
+  });
+
+  it("rejects blob uploads whose ownerId does not match the session user", async () => {
+    app = await startServer();
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    const response = await fetch(`${app.httpUrl}/blobs/blob-owner-spoof/content?ownerId=user-grace`, {
+      method: "PUT",
+      headers: { "content-type": "text/plain", ...authHeaders(login.sessionToken) },
+      body: Buffer.from("not ada's blob"),
+    });
+
+    expect(response.status).toBe(403);
+  });
+
   it("hard rejects schema hash mismatch", async () => {
     app = await startServer();
-    const socket = await connect(app.url);
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const socket = await connectWithSession(app.url, login.sessionToken);
 
     socket.send(
       encodeFrame([
@@ -50,7 +510,8 @@ describe("foundation sync gateway", () => {
 
   it("subscribes to message stream and receives appended events", async () => {
     app = await startServer();
-    const socket = await connect(app.url);
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const socket = await connectWithSession(app.url, login.sessionToken);
 
     socket.send(
       encodeFrame([
@@ -107,7 +568,8 @@ describe("foundation sync gateway", () => {
 
   it("fans out HTTP appends to WebSocket stream subscribers", async () => {
     app = await startServer();
-    const socket = await connect(app.url);
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const socket = await connectWithSession(app.url, login.sessionToken);
 
     socket.send(
       encodeFrame([
@@ -137,7 +599,7 @@ describe("foundation sync gateway", () => {
     await nextFrame(socket);
 
     const deltaFrame = nextFrame(socket);
-    await postAppend(app.httpUrl, "request-http-ws", "hello from http");
+    await postAppend(app.httpUrl, login.sessionToken, "request-http-ws", "hello from http");
 
     const frame = await withTimeout(deltaFrame, "expected websocket delta from HTTP append");
     expect(frame[0]).toBe(FrameKind.Delta);
@@ -146,7 +608,8 @@ describe("foundation sync gateway", () => {
 
   it("does not fan out idempotent HTTP append retries", async () => {
     app = await startServer();
-    const socket = await connect(app.url);
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const socket = await connectWithSession(app.url, login.sessionToken);
 
     socket.send(
       encodeFrame([
@@ -175,19 +638,21 @@ describe("foundation sync gateway", () => {
     await nextFrame(socket);
 
     const firstDelta = nextFrame(socket);
-    await postAppend(app.httpUrl, "request-http-retry", "first delivery");
+    await postAppend(app.httpUrl, login.sessionToken, "request-http-retry", "first delivery");
     expect((await withTimeout(firstDelta, "expected first HTTP append delta"))[0]).toBe(FrameKind.Delta);
 
     const retryDelta = nextFrame(socket);
-    await postAppend(app.httpUrl, "request-http-retry", "first delivery");
+    await postAppend(app.httpUrl, login.sessionToken, "request-http-retry", "first delivery");
     await expect(withTimeout(retryDelta, "unexpected retry delta")).rejects.toThrow("unexpected retry delta");
     socket.close();
   });
 
   it("streams HTTP appends over SSE", async () => {
     app = await startServer();
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
     const abort = new AbortController();
     const response = await fetch(`${app.httpUrl}/streams/MessageStream/conversation-general/events?after=0`, {
+      headers: authHeaders(login.sessionToken),
       signal: abort.signal,
     });
     expect(response.status).toBe(200);
@@ -205,7 +670,7 @@ describe("foundation sync gateway", () => {
     });
 
     const deltaEvent = readSseEvent(reader);
-    await postAppend(app.httpUrl, "request-http-sse", "hello over sse");
+    await postAppend(app.httpUrl, login.sessionToken, "request-http-sse", "hello over sse");
 
     const delta = await withTimeout(deltaEvent, "expected SSE delta from HTTP append");
     expect(delta.event).toBe("delta");
@@ -213,10 +678,67 @@ describe("foundation sync gateway", () => {
     abort.abort();
   });
 
+  it("streams WebSocket appends over SSE", async () => {
+    app = await startServer();
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const abort = new AbortController();
+    const response = await fetch(`${app.httpUrl}/streams/MessageStream/conversation-general/events?after=0`, {
+      headers: authHeaders(login.sessionToken),
+      signal: abort.signal,
+    });
+    expect(response.status).toBe(200);
+    expect(response.body).toBeTruthy();
+
+    const reader = response.body!.getReader();
+    expect((await readSseEvent(reader)).event).toBe("stream-page");
+
+    const socket = await connectWithSession(app.url, login.sessionToken);
+    socket.send(
+      encodeFrame([
+        FrameKind.Hello,
+        {
+          replicaId: "replica-web",
+          deviceId: "device-web",
+          schemaHash: foundationSchema.hash,
+          knownCursors: {},
+        },
+      ]),
+    );
+    await nextFrame(socket);
+
+    const deltaEvent = readSseEvent(reader);
+    socket.send(
+      encodeFrame([
+        FrameKind.Append,
+        {
+          requestId: "request-ws-sse",
+          stream: "MessageStream",
+          key: "conversation-general",
+          event: "MessageSent",
+          payload: {
+            messageId: "message-request-ws-sse",
+            senderId: "user-ada",
+            body: "hello from websocket",
+            createdAt: "2026-05-09T00:00:00.000Z",
+          },
+        },
+      ]),
+    );
+    await nextFrame(socket);
+
+    const delta = await withTimeout(deltaEvent, "expected SSE delta from WebSocket append");
+    expect(delta.event).toBe("delta");
+    expect(JSON.parse(delta.data).data[0].payload.body).toBe("hello from websocket");
+    socket.close();
+    abort.abort();
+  });
+
   it("keeps quiet SSE connections alive with comments", async () => {
     app = await startServer({ sseHeartbeatMs: 10 });
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
     const abort = new AbortController();
     const response = await fetch(`${app.httpUrl}/streams/MessageStream/conversation-general/events?after=999999`, {
+      headers: authHeaders(login.sessionToken),
       signal: abort.signal,
     });
     expect(response.body).toBeTruthy();
@@ -227,6 +749,359 @@ describe("foundation sync gateway", () => {
     const keepAlive = await withTimeout(readRawSseBlock(reader), "expected SSE keep-alive");
     expect(keepAlive).toContain(": keep-alive");
     abort.abort();
+  });
+
+  it("projects message appends and read receipts into per-user inbox rows", async () => {
+    app = await startServer();
+    const adaLogin = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const graceLogin = await devLogin(app.httpUrl, { userId: "user-grace" });
+
+    await postAppend(app.httpUrl, adaLogin.sessionToken, "request-inbox-message", "inbox hello");
+
+    const graceInbox = await getInbox(app.httpUrl, graceLogin.sessionToken, "user-grace");
+    expect(graceInbox.status).toBe(200);
+    expect(graceInbox.body.data).toHaveLength(1);
+    expect(graceInbox.body.data[0]).toMatchObject({
+      conversationId: "conversation-general",
+      userId: "user-grace",
+      title: "Foundation General",
+      kind: "channel",
+      lastSequence: 1,
+      lastMessageBody: "inbox hello",
+      lastMessageSenderId: "user-ada",
+      readSequence: 0,
+      unreadCount: 1,
+    });
+
+    const receiptResponse = await fetch(`${app.httpUrl}/append`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders(graceLogin.sessionToken) },
+      body: JSON.stringify({
+        requestId: "request-inbox-read",
+        replicaId: "replica-grace",
+        stream: "MessageStream",
+        key: "conversation-general",
+        event: "ReceiptAdvanced",
+        payload: {
+          userId: "user-grace",
+          sequence: 1,
+        },
+      }),
+    });
+    expect(receiptResponse.status).toBe(200);
+
+    const readInbox = await getInbox(app.httpUrl, graceLogin.sessionToken, "user-grace");
+    expect(readInbox.body.data[0]).toMatchObject({
+      conversationId: "conversation-general",
+      userId: "user-grace",
+      lastSequence: 1,
+      readSequence: 1,
+      unreadCount: 0,
+    });
+  });
+
+  it("rejects non-members reading and appending message streams", async () => {
+    app = await startServer();
+    app.store.upsertObject("User", "user-mallory", {
+      displayName: "Mallory",
+      avatarBlobId: undefined,
+    });
+    const malloryLogin = await devLogin(app.httpUrl, { userId: "user-mallory" });
+
+    const readResponse = await fetch(`${app.httpUrl}/streams/MessageStream/conversation-general`, {
+      headers: authHeaders(malloryLogin.sessionToken),
+    });
+    expect(readResponse.status).toBe(403);
+
+    const appendResponse = await fetch(`${app.httpUrl}/append`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders(malloryLogin.sessionToken) },
+      body: JSON.stringify({
+        requestId: "request-mallory",
+        replicaId: "replica-mallory",
+        stream: "MessageStream",
+        key: "conversation-general",
+        event: "MessageSent",
+        payload: {
+          messageId: "message-mallory",
+          senderId: "user-mallory",
+          body: "nope",
+          createdAt: "2026-05-09T00:00:00.000Z",
+        },
+      }),
+    });
+    expect(appendResponse.status).toBe(403);
+  });
+
+  it("creates, lists, and reads blob metadata over HTTP", async () => {
+    app = await startServer();
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    const createResponse = await fetch(`${app.httpUrl}/blobs`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders(login.sessionToken) },
+      body: JSON.stringify({
+        blobId: "blob-http-1",
+        contentHash: "sha256-http-1",
+        byteLength: 42,
+        mimeType: "text/plain",
+        ownerId: "user-ada",
+      }),
+    });
+    expect(createResponse.status).toBe(201);
+
+    const readResponse = await fetch(`${app.httpUrl}/blobs/blob-http-1`, {
+      headers: authHeaders(login.sessionToken),
+    });
+    expect(readResponse.status).toBe(200);
+    expect(await readResponse.json()).toMatchObject({
+      blobId: "blob-http-1",
+      contentHash: "sha256-http-1",
+      byteLength: 42,
+      mimeType: "text/plain",
+      ownerId: "user-ada",
+    });
+
+    const listResponse = await fetch(`${app.httpUrl}/blobs?ownerId=user-ada`, {
+      headers: authHeaders(login.sessionToken),
+    });
+    expect(listResponse.status).toBe(200);
+    const listBody = await listResponse.json();
+    expect(listBody.data).toEqual([
+      expect.objectContaining({
+        blobId: "blob-http-1",
+        ownerId: "user-ada",
+      }),
+    ]);
+  });
+
+  it("stores raw blob bytes and creates metadata when missing", async () => {
+    app = await startServer();
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const bytes = Buffer.from("hello attachment bytes");
+    const expectedHash = `sha256-${createHash("sha256").update(bytes).digest("hex")}`;
+
+    const putResponse = await fetch(`${app.httpUrl}/blobs/blob-content-1/content?ownerId=user-ada`, {
+      method: "PUT",
+      headers: { "content-type": "text/plain", ...authHeaders(login.sessionToken) },
+      body: bytes,
+    });
+    expect(putResponse.status).toBe(201);
+    expect(await putResponse.json()).toMatchObject({
+      ok: true,
+      blobId: "blob-content-1",
+      byteLength: bytes.byteLength,
+      contentHash: expectedHash,
+    });
+
+    const metadataResponse = await fetch(`${app.httpUrl}/blobs/blob-content-1`, {
+      headers: authHeaders(login.sessionToken),
+    });
+    expect(metadataResponse.status).toBe(200);
+    expect(await metadataResponse.json()).toMatchObject({
+      blobId: "blob-content-1",
+      ownerId: "user-ada",
+      byteLength: bytes.byteLength,
+      contentHash: expectedHash,
+      mimeType: "text/plain",
+    });
+
+    const contentResponse = await fetch(`${app.httpUrl}/blobs/blob-content-1/content`, {
+      headers: authHeaders(login.sessionToken),
+    });
+    expect(contentResponse.status).toBe(200);
+    expect(contentResponse.headers.get("content-type")).toContain("text/plain");
+    expect(contentResponse.headers.get("x-frick-blob-id")).toBe("blob-content-1");
+    expect(contentResponse.headers.get("x-frick-content-hash")).toBe(expectedHash);
+    expect(Buffer.from(await contentResponse.arrayBuffer())).toEqual(bytes);
+  });
+
+  it("requires an owner before creating blob metadata from raw bytes", async () => {
+    app = await startServer();
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    const response = await fetch(`${app.httpUrl}/blobs/blob-content-no-owner/content`, {
+      method: "PUT",
+      headers: { "content-type": "application/octet-stream", ...authHeaders(login.sessionToken) },
+      body: Buffer.from([1, 2, 3]),
+    });
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).message).toContain("ownerId");
+  });
+
+  it("rejects raw blob bytes when existing metadata byte length differs", async () => {
+    app = await startServer();
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    const createResponse = await fetch(`${app.httpUrl}/blobs`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders(login.sessionToken) },
+      body: JSON.stringify({
+        blobId: "blob-content-length",
+        contentHash: "external-hash",
+        byteLength: 99,
+        mimeType: "application/octet-stream",
+        ownerId: "user-ada",
+      }),
+    });
+    expect(createResponse.status).toBe(201);
+
+    const response = await fetch(`${app.httpUrl}/blobs/blob-content-length/content`, {
+      method: "PUT",
+      headers: authHeaders(login.sessionToken),
+      body: Buffer.from([1, 2, 3]),
+    });
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).message).toContain("byteLength");
+  });
+
+  it("rejects raw blob bytes when existing sha256 metadata hash differs", async () => {
+    app = await startServer();
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    const createResponse = await fetch(`${app.httpUrl}/blobs`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders(login.sessionToken) },
+      body: JSON.stringify({
+        blobId: "blob-content-hash",
+        contentHash: "sha256-deadbeef",
+        byteLength: 3,
+        mimeType: "application/octet-stream",
+        ownerId: "user-ada",
+      }),
+    });
+    expect(createResponse.status).toBe(201);
+
+    const response = await fetch(`${app.httpUrl}/blobs/blob-content-hash/content`, {
+      method: "PUT",
+      headers: authHeaders(login.sessionToken),
+      body: Buffer.from([1, 2, 3]),
+    });
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).message).toContain("contentHash");
+  });
+
+  it("returns 404 for blob content that has metadata but no stored bytes", async () => {
+    app = await startServer();
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    const createResponse = await fetch(`${app.httpUrl}/blobs`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders(login.sessionToken) },
+      body: JSON.stringify({
+        blobId: "blob-content-missing",
+        contentHash: "sha256-missing",
+        byteLength: 3,
+        mimeType: "text/plain",
+        ownerId: "user-ada",
+      }),
+    });
+    expect(createResponse.status).toBe(201);
+
+    const response = await fetch(`${app.httpUrl}/blobs/blob-content-missing/content`, {
+      headers: authHeaders(login.sessionToken),
+    });
+
+    expect(response.status).toBe(404);
+  });
+
+  it("enqueues and drains HTTP signals", async () => {
+    app = await startServer();
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    const postResponse = await fetch(`${app.httpUrl}/signals/WebRTCSignal/call-http`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders(login.sessionToken) },
+      body: JSON.stringify({
+        senderDeviceId: "device-http",
+        kind: "offer",
+        payload: "sdp-offer",
+      }),
+    });
+    expect(postResponse.status).toBe(200);
+    expect(await postResponse.json()).toEqual({ ok: true });
+
+    const firstRead = await fetch(`${app.httpUrl}/signals/WebRTCSignal/call-http`, {
+      headers: authHeaders(login.sessionToken),
+    });
+    expect(firstRead.status).toBe(200);
+    expect(await firstRead.json()).toMatchObject({
+      schemaHash: foundationSchema.hash,
+      name: "WebRTCSignal",
+      key: "call-http",
+      data: [
+        {
+          senderDeviceId: "device-http",
+          kind: "offer",
+          payload: "sdp-offer",
+        },
+      ],
+    });
+
+    const secondRead = await fetch(`${app.httpUrl}/signals/WebRTCSignal/call-http`, {
+      headers: authHeaders(login.sessionToken),
+    });
+    expect((await secondRead.json()).data).toEqual([]);
+  });
+
+  it("fans out HTTP signals to WebSocket signal subscribers", async () => {
+    app = await startServer();
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const socket = await connectWithSession(app.url, login.sessionToken);
+
+    socket.send(
+      encodeFrame([
+        FrameKind.Hello,
+        {
+          replicaId: "replica-signal",
+          deviceId: "device-signal",
+          schemaHash: foundationSchema.hash,
+          knownCursors: {},
+        },
+      ]),
+    );
+    await nextFrame(socket);
+
+    socket.send(
+      encodeFrame([
+        FrameKind.Subscribe,
+        {
+          subscriptionId: "sub-signal",
+          kind: "signal",
+          name: "WebRTCSignal",
+          key: "call-http-ws",
+        },
+      ]),
+    );
+
+    const signalFrame = nextFrame(socket);
+    const postResponse = await fetch(`${app.httpUrl}/signals/WebRTCSignal/call-http-ws`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders(login.sessionToken) },
+      body: JSON.stringify({
+        senderDeviceId: "device-http",
+        kind: "answer",
+        payload: "sdp-answer",
+      }),
+    });
+    expect(postResponse.status).toBe(200);
+
+    const frame = await withTimeout(signalFrame, "expected websocket signal from HTTP POST");
+    expect(frame[0]).toBe(FrameKind.SignalDeliver);
+    const envelope = unpackSignalEnvelope(foundationSchema, frame[1].envelope);
+    expect(envelope).toEqual({
+      type: "WebRTCSignal",
+      key: "call-http-ws",
+      value: {
+        senderDeviceId: "device-http",
+        kind: "answer",
+        payload: "sdp-answer",
+      },
+    });
+    socket.close();
   });
 });
 
@@ -240,6 +1115,7 @@ async function startServer(options: { sseHeartbeatMs?: number } = {}) {
   return {
     url: `ws://127.0.0.1:${address.port}/_frick/sync`,
     httpUrl: `http://127.0.0.1:${address.port}`,
+    store: server.store,
     close: server.close,
   };
 }
@@ -248,6 +1124,10 @@ async function connect(url: string): Promise<WebSocket> {
   const socket = new WebSocket(url);
   await new Promise<void>((resolve) => socket.once("open", resolve));
   return socket;
+}
+
+async function connectWithSession(url: string, sessionToken: string): Promise<WebSocket> {
+  return connect(`${url}?sessionToken=${encodeURIComponent(sessionToken)}`);
 }
 
 async function nextFrame(socket: WebSocket): Promise<FrickFrame> {
@@ -272,10 +1152,10 @@ async function collectFrames(socket: WebSocket, count: number): Promise<FrickFra
   });
 }
 
-async function postAppend(httpUrl: string, requestId: string, body: string): Promise<void> {
+async function postAppend(httpUrl: string, sessionToken: string, requestId: string, body: string): Promise<void> {
   const response = await fetch(`${httpUrl}/append`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...authHeaders(sessionToken) },
     body: JSON.stringify({
       requestId,
       replicaId: "http-test",
@@ -291,6 +1171,122 @@ async function postAppend(httpUrl: string, requestId: string, body: string): Pro
     }),
   });
   expect(response.status).toBe(200);
+}
+
+async function getInbox(httpUrl: string, sessionToken: string, userId: string): Promise<{ status: number; body: any }> {
+  const response = await fetch(`${httpUrl}/inbox?userId=${encodeURIComponent(userId)}`, {
+    headers: authHeaders(sessionToken),
+  });
+  return {
+    status: response.status,
+    body: await response.json(),
+  };
+}
+
+async function devLogin(
+  httpUrl: string,
+  body: { userId: string; deviceId?: string; replicaId?: string; platform?: string },
+): Promise<{
+  schemaHash: string;
+  sessionToken: string;
+  userId: string;
+  deviceId: string;
+  replicaId: string;
+  expiresAt: string;
+}> {
+  const response = await fetch(`${httpUrl}/auth/dev-login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  expect(response.status).toBe(200);
+  return (await response.json()) as {
+    schemaHash: string;
+    sessionToken: string;
+    userId: string;
+    deviceId: string;
+    replicaId: string;
+    expiresAt: string;
+  };
+}
+
+async function signUp(
+  httpUrl: string,
+  body: {
+    displayName: string;
+    handle: string;
+    password: string;
+    deviceId?: string;
+    replicaId?: string;
+    platform?: string;
+  },
+): Promise<{
+  schemaHash: string;
+  sessionToken: string;
+  userId: string;
+  displayName: string;
+  handle: string;
+  deviceId: string;
+  replicaId: string;
+  expiresAt: string;
+}> {
+  const response = await fetch(`${httpUrl}/auth/signup`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  expect(response.status).toBe(201);
+  return (await response.json()) as {
+    schemaHash: string;
+    sessionToken: string;
+    userId: string;
+    displayName: string;
+    handle: string;
+    deviceId: string;
+    replicaId: string;
+    expiresAt: string;
+  };
+}
+
+async function loginAccount(
+  httpUrl: string,
+  body: {
+    identity: string;
+    password: string;
+    deviceId?: string;
+    replicaId?: string;
+    platform?: string;
+  },
+): Promise<{
+  schemaHash: string;
+  sessionToken: string;
+  userId: string;
+  displayName: string;
+  handle: string;
+  deviceId: string;
+  replicaId: string;
+  expiresAt: string;
+}> {
+  const response = await fetch(`${httpUrl}/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  expect(response.status).toBe(200);
+  return (await response.json()) as {
+    schemaHash: string;
+    sessionToken: string;
+    userId: string;
+    displayName: string;
+    handle: string;
+    deviceId: string;
+    replicaId: string;
+    expiresAt: string;
+  };
+}
+
+function authHeaders(sessionToken: string): Record<string, string> {
+  return { authorization: `Bearer ${sessionToken}` };
 }
 
 interface SseEvent {

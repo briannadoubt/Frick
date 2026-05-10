@@ -56,6 +56,36 @@ final class FrickDesignTests: XCTestCase {
         XCTAssertTrue(shell.inspectorPresented.wrappedValue)
     }
 
+    func testListDetailShellStoresNativeNavigationBindings() {
+        let shell = FrickListDetailShell(
+            preferredCompactColumn: .constant(.detail),
+            columnVisibility: .constant(.all),
+            sidebarTitle: "Threads"
+        ) {
+            Text("List")
+        } detail: {
+            Text("Detail")
+        }
+
+        XCTAssertEqual(shell.preferredCompactColumn.wrappedValue, .detail)
+        XCTAssertEqual(shell.columnVisibility.wrappedValue, .all)
+        XCTAssertEqual(shell.sidebarIdealWidth, 320)
+    }
+
+    func testWorkspaceListItemStoresSidebarRowContract() {
+        let item = FrickWorkspaceListItem(
+            title: "Foundation General",
+            subtitle: "Latest synced message",
+            meta: "Read #4 / Last #5",
+            isSelected: true
+        )
+
+        XCTAssertEqual(item.title, "Foundation General")
+        XCTAssertEqual(item.subtitle, "Latest synced message")
+        XCTAssertEqual(item.meta, "Read #4 / Last #5")
+        XCTAssertTrue(item.isSelected)
+    }
+
     func testButtonStoresVariantAndSize() {
         let button = FrickButton("Send", icon: .send, variant: .primary, size: .sm) {}
 

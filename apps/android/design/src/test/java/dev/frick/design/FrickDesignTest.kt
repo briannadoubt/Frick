@@ -67,8 +67,34 @@ public class FrickDesignTest {
     }
 
     @Test
+    public fun workspaceDefaultsUseCompactListDetailForNarrowLayouts() {
+        assertEquals(true, FrickWorkspaceDefaults.usesCompactListDetail(600.dp))
+        assertEquals(true, FrickWorkspaceDefaults.usesCompactListDetail(839.dp))
+        assertEquals(false, FrickWorkspaceDefaults.usesCompactListDetail(1040.dp))
+    }
+
+    @Test
     public fun workspaceDefaultsReserveReadablePaneWidths() {
         assertEquals(300.dp, FrickWorkspaceDefaults.collectionPaneWidth)
         assertEquals(300.dp, FrickWorkspaceDefaults.inspectorPaneWidth)
+    }
+
+    @Test
+    public fun workspaceDefaultsUseCanonicalAdaptivePanesWhenACollectionExists() {
+        assertEquals(true, FrickWorkspaceDefaults.usesCanonicalAdaptivePanes(hasCollection = true))
+        assertEquals(false, FrickWorkspaceDefaults.usesCanonicalAdaptivePanes(hasCollection = false))
+    }
+
+    @Test
+    public fun workspaceTopBarActionStoresNativeChromeContract() {
+        val action = FrickTopBarAction(
+            icon = FrickIconName.ActionReload,
+            contentDescription = "Reload",
+            onClick = {},
+        )
+
+        assertEquals(FrickIconName.ActionReload, action.icon)
+        assertEquals("Reload", action.contentDescription)
+        assertEquals(true, action.enabled)
     }
 }

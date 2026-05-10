@@ -27,26 +27,26 @@ public struct FrickIcon: View, Sendable {
 }
 
 public extension FrickIconName {
-    static var add: FrickIconName { .actionReload }
-    static var alert: FrickIconName { .actionReload }
-    static var arrowDown: FrickIconName { .actionReload }
-    static var arrowLeft: FrickIconName { .actionReload }
-    static var arrowRight: FrickIconName { .actionReload }
-    static var arrowUp: FrickIconName { .actionReload }
+    static var add: FrickIconName { .actionAdd }
+    static var alert: FrickIconName { .actionDetails }
+    static var arrowDown: FrickIconName { .navigationBack }
+    static var arrowLeft: FrickIconName { .navigationBack }
+    static var arrowRight: FrickIconName { .navigationBack }
+    static var arrowUp: FrickIconName { .navigationBack }
     static var call: FrickIconName { .callVideo }
     static var check: FrickIconName { .chatMessage }
-    static var chevronDown: FrickIconName { .actionReload }
-    static var close: FrickIconName { .actionReload }
+    static var chevronDown: FrickIconName { .navigationBack }
+    static var close: FrickIconName { .actionDetails }
     static var edit: FrickIconName { .chatMessage }
-    static var menu: FrickIconName { .chatMessage }
+    static var menu: FrickIconName { .navigationThreads }
     static var microphone: FrickIconName { .callVideo }
-    static var more: FrickIconName { .chatMessage }
-    static var paperclip: FrickIconName { .chatMessage }
+    static var more: FrickIconName { .actionDetails }
+    static var paperclip: FrickIconName { .chatAttachment }
     static var pause: FrickIconName { .callVideo }
     static var play: FrickIconName { .callVideo }
-    static var search: FrickIconName { .chatMessage }
+    static var search: FrickIconName { .navigationThreads }
     static var send: FrickIconName { .actionSend }
-    static var settings: FrickIconName { .actionReload }
+    static var settings: FrickIconName { .workspaceSettings }
     static var signal: FrickIconName { .statusLive }
     static var video: FrickIconName { .callVideo }
 }
@@ -229,6 +229,99 @@ public struct FrickWorkspaceShell<Content: View, Inspector: View>: View {
     }
 }
 
+public struct FrickListDetailShell<Sidebar: View, Detail: View>: View {
+    public let preferredCompactColumn: Binding<NavigationSplitViewColumn>
+    public let columnVisibility: Binding<NavigationSplitViewVisibility>
+    public let sidebarTitle: LocalizedStringKey
+    public let sidebarIdealWidth: CGFloat
+    public let sidebarMinWidth: CGFloat
+    public let sidebarMaxWidth: CGFloat
+    private let sidebar: () -> Sidebar
+    private let detail: () -> Detail
+
+    public init(
+        preferredCompactColumn: Binding<NavigationSplitViewColumn>,
+        columnVisibility: Binding<NavigationSplitViewVisibility> = .constant(.automatic),
+        sidebarTitle: LocalizedStringKey,
+        sidebarMinWidth: CGFloat = 280,
+        sidebarIdealWidth: CGFloat = 320,
+        sidebarMaxWidth: CGFloat = 420,
+        @ViewBuilder sidebar: @escaping () -> Sidebar,
+        @ViewBuilder detail: @escaping () -> Detail
+    ) {
+        self.preferredCompactColumn = preferredCompactColumn
+        self.columnVisibility = columnVisibility
+        self.sidebarTitle = sidebarTitle
+        self.sidebarMinWidth = sidebarMinWidth
+        self.sidebarIdealWidth = sidebarIdealWidth
+        self.sidebarMaxWidth = sidebarMaxWidth
+        self.sidebar = sidebar
+        self.detail = detail
+    }
+
+    public var body: some View {
+        NavigationSplitView(
+            columnVisibility: columnVisibility,
+            preferredCompactColumn: preferredCompactColumn
+        ) {
+            sidebar()
+                .navigationTitle(sidebarTitle)
+                .navigationSplitViewColumnWidth(
+                    min: sidebarMinWidth,
+                    ideal: sidebarIdealWidth,
+                    max: sidebarMaxWidth
+                )
+        } detail: {
+            detail()
+        }
+        .navigationSplitViewStyle(.balanced)
+        .background(FrickPalette.background)
+    }
+}
+
+public struct FrickWorkspaceListItem: View, Sendable {
+    public let title: String
+    public let subtitle: String?
+    public let meta: String?
+    public let isSelected: Bool
+
+    public init(title: String, subtitle: String? = nil, meta: String? = nil, isSelected: Bool = false) {
+        self.title = title
+        self.subtitle = subtitle
+        self.meta = meta
+        self.isSelected = isSelected
+    }
+
+    public var body: some View {
+        HStack(spacing: FrickTokens.Spacing.medium) {
+            VStack(alignment: .leading, spacing: FrickTokens.Spacing.extraSmall) {
+                Text(title)
+                    .font(FrickTypography.body.weight(.semibold))
+                    .foregroundStyle(FrickPalette.text)
+                    .lineLimit(1)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(FrickTypography.label)
+                        .foregroundStyle(FrickPalette.textMuted)
+                        .lineLimit(1)
+                }
+                if let meta {
+                    Text(meta)
+                        .font(FrickTypography.label)
+                        .foregroundStyle(FrickPalette.accent)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: FrickTokens.Spacing.small)
+            if isSelected {
+                FrickIcon(.check)
+                    .foregroundStyle(FrickPalette.accent)
+            }
+        }
+        .contentShape(Rectangle())
+    }
+}
+
 private struct FrickWorkspaceBadgeModifier: ViewModifier {
     let badge: String?
 
@@ -382,7 +475,9 @@ public struct FrickIconButton: View, Sendable {
 
     public var body: some View {
         Button(action: action) {
-            FrickIcon(icon)
+            Label(label, systemImage: icon.rawValue)
+                .labelStyle(.iconOnly)
+                .font(.system(size: 18, weight: .medium))
                 .padding(FrickTokens.Spacing.sm)
         }
         .buttonStyle(.plain)

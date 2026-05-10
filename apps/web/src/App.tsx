@@ -3,13 +3,7 @@ import {
   Database,
   Inbox,
   MessageCircle,
-  Moon,
-  Paperclip,
-  Plus,
-  RadioTower,
-  Send,
   Signal,
-  Sun,
   Users,
   Video,
 } from "lucide-react";
@@ -27,7 +21,22 @@ import {
   useStream,
   useSyncStatus,
 } from "@frick/react";
-import { Avatar, ChatBubble, FrickDesignProvider, MessageList, WorkspaceShell } from "@frick/design-web";
+import {
+  Avatar,
+  Button,
+  ChatBubble,
+  ErrorMessage,
+  FrickDesignProvider,
+  Heading,
+  IconButton,
+  MessageList,
+  SegmentedControl,
+  StatusChip,
+  Surface,
+  TextField,
+  WorkspaceListItem,
+  WorkspaceShell,
+} from "@frick/design-web";
 import { resolveInitialTheme, type ThemePreference } from "./theme.js";
 import {
   appendAttachmentMarker,
@@ -166,75 +175,68 @@ function AuthWorkspace({
 
   return (
     <main className="shell auth-shell">
-      <section className="auth-card">
+      <Surface className="auth-card">
         <header className="auth-header">
           <div>
             <p className="eyebrow">Frick foundation</p>
-            <h1>Foundation General</h1>
+            <Heading level={1} size="xl">
+              Foundation General
+            </Heading>
           </div>
-          <button
+          <IconButton
             className="icon-button"
-            type="button"
-            aria-label={theme === "dark" ? "Use light theme" : "Use dark theme"}
-            title={theme === "dark" ? "Use light theme" : "Use dark theme"}
+            icon={theme === "dark" ? "themeLight" : "themeDark"}
+            label={theme === "dark" ? "Use light theme" : "Use dark theme"}
             onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
-          >
-            {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
-          </button>
+          />
         </header>
 
-        <div className="auth-tabs" role="tablist" aria-label="Authentication mode">
-          <button type="button" data-selected={mode === "login"} onClick={() => switchMode("login")}>
-            Log in
-          </button>
-          <button type="button" data-selected={mode === "signup"} onClick={() => switchMode("signup")}>
-            Sign up
-          </button>
-        </div>
+        <SegmentedControl
+          aria-label="Authentication mode"
+          className="auth-mode"
+          options={[
+            { value: "login", label: "Log in" },
+            { value: "signup", label: "Sign up" },
+          ]}
+          value={mode}
+          onValueChange={(value) => switchMode(value === "signup" ? "signup" : "login")}
+        />
 
         <form className="auth-form" onSubmit={submitAuth}>
           {mode === "signup" ? (
-            <label>
-              Display name
-              <input
-                autoComplete="name"
-                placeholder="Ada Lovelace"
-                value={displayName}
-                onChange={(event) => setDisplayName(event.target.value)}
-              />
-            </label>
+            <TextField
+              autoComplete="name"
+              label="Display name"
+              placeholder="Ada Lovelace"
+              value={displayName}
+              onChange={(event) => setDisplayName(event.target.value)}
+            />
           ) : null}
-          <label>
-            {mode === "signup" ? "Handle" : "Handle"}
-            <input
-              autoComplete="username"
-              placeholder="ada"
-              value={mode === "signup" ? handle : identity}
-              onChange={(event) =>
-                mode === "signup" ? setHandle(event.target.value) : setIdentity(event.target.value)
-              }
-            />
-          </label>
-          <label>
-            Password
-            <input
-              autoComplete={mode === "signup" ? "new-password" : "current-password"}
-              placeholder="At least 8 characters"
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-            />
-          </label>
+          <TextField
+            autoComplete="username"
+            label="Handle"
+            placeholder="ada"
+            value={mode === "signup" ? handle : identity}
+            onChange={(event) => (mode === "signup" ? setHandle(event.target.value) : setIdentity(event.target.value))}
+          />
+          <TextField
+            autoComplete={mode === "signup" ? "new-password" : "current-password"}
+            label="Password"
+            placeholder="At least 8 characters"
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+          />
           {error ? (
-            <p className="auth-note" role="alert">
+            <ErrorMessage className="auth-note" title="Authentication failed">
               {error}
-            </p>
+            </ErrorMessage>
           ) : null}
-          <button className="primary-action" type="submit" disabled={isSubmitting}>
+          <Button className="primary-action" tone="primary" type="submit" disabled={isSubmitting}>
             {isSubmitting ? "Working..." : mode === "signup" ? "Create person" : "Log in"}
-          </button>
+          </Button>
         </form>
-      </section>
+      </Surface>
     </main>
   );
 }
@@ -257,12 +259,15 @@ function ChatWorkspace({
   const [attachmentError, setAttachmentError] = useState<string | undefined>();
   const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
   const [threadTitle, setThreadTitle] = useState("");
+  const [threadKind, setThreadKind] = useState<"dm" | "group">("dm");
+  const [selectedParticipantIds, setSelectedParticipantIds] = useState<string[]>([]);
   const [threadError, setThreadError] = useState<string | undefined>();
   const [isCreatingThread, setIsCreatingThread] = useState(false);
   const [createdConversations, setCreatedConversations] = useState<Conversation[]>([]);
   const [createdMembers, setCreatedMembers] = useState<RoomMember[]>([]);
   const [readSequences, setReadSequences] = useState<Record<string, number>>({});
   const [selectedDestination, setSelectedDestination] = useState("chat");
+  const [compactThreadsOpen, setCompactThreadsOpen] = useState(() => window.matchMedia("(max-width: 640px)").matches);
   const [inspectorOpen, setInspectorOpen] = useState(() => window.matchMedia("(min-width: 1041px)").matches);
   const activeUserId = session.userId;
   const activeDeviceId = session.deviceId;
@@ -317,6 +322,22 @@ function ChatWorkspace({
     () => visibleMembers.filter((member) => member.conversationId === selectedConversationId),
     [visibleMembers, selectedConversationId],
   );
+  const participantOptions = useMemo(
+    () => users.filter((user) => user.id !== activeUserId).sort((left, right) => left.displayName.localeCompare(right.displayName)),
+    [activeUserId, users],
+  );
+  const conversationTitle = conversationDisplayTitle({
+    activeUserId,
+    conversation,
+    conversationId: selectedConversationId,
+    members: selectedMembers,
+    users,
+  });
+  const canCreateThread =
+    !isCreatingThread &&
+    (threadKind === "dm"
+      ? selectedParticipantIds.length === 1
+      : threadTitle.trim().length > 0 && selectedParticipantIds.length > 0);
   const latestMessageSequence = selectedMessages.at(-1)?.sequence ?? 0;
   const lastCursor = Math.max(0, ...Object.values(status.cursors));
   const workspaceDestinations = useMemo(
@@ -373,7 +394,8 @@ function ChatWorkspace({
   async function createThread(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const title = threadTitle.trim();
-    if (!title || isCreatingThread) {
+    if (!canCreateThread) {
+      setThreadError(threadKind === "dm" ? "Choose one person" : "Choose people and a title");
       return;
     }
 
@@ -382,13 +404,17 @@ function ChatWorkspace({
     try {
       const created = await createConversation({
         httpEndpoint,
-        title,
+        ...(threadKind === "group" ? { title } : {}),
+        kind: threadKind,
+        participantUserIds: selectedParticipantIds,
         sessionToken: session.sessionToken,
       });
       setCreatedConversations((current) => mergeById(current, [created.conversation]));
-      setCreatedMembers((current) => mergeById(current, [created.member]));
+      setCreatedMembers((current) => mergeById(current, created.members ?? [created.member]));
       setSelectedConversationId(created.conversation.id);
+      setCompactThreadsOpen(false);
       setThreadTitle("");
+      setSelectedParticipantIds([]);
       setDraft("");
       setDraftAttachments([]);
       setAttachmentStatus(undefined);
@@ -398,6 +424,23 @@ function ChatWorkspace({
     } finally {
       setIsCreatingThread(false);
     }
+  }
+
+  function changeThreadKind(value: string) {
+    const nextKind = value === "group" ? "group" : "dm";
+    setThreadKind(nextKind);
+    setThreadError(undefined);
+    setSelectedParticipantIds((current) => (nextKind === "dm" ? current.slice(0, 1) : current));
+  }
+
+  function toggleThreadParticipant(userId: string) {
+    setThreadError(undefined);
+    setSelectedParticipantIds((current) => {
+      if (threadKind === "dm") {
+        return current[0] === userId ? [] : [userId];
+      }
+      return current.includes(userId) ? current.filter((candidate) => candidate !== userId) : [...current, userId];
+    });
   }
 
   async function addDemoAttachment() {
@@ -438,6 +481,7 @@ function ChatWorkspace({
 
   function selectConversation(nextConversationId: string) {
     setSelectedConversationId(nextConversationId);
+    setCompactThreadsOpen(false);
     setDraft("");
     setDraftAttachments([]);
     setAttachmentStatus(undefined);
@@ -472,70 +516,97 @@ function ChatWorkspace({
   function renderChatHeader() {
     return (
       <header className="topbar">
+        <Button className="compact-nav-action" icon="threads" onClick={() => setCompactThreadsOpen(true)}>
+          Threads
+        </Button>
         <div>
           <p className="eyebrow">Frick foundation</p>
-          <h1>{conversation?.title ?? "Foundation General"}</h1>
-        </div>
-        <div className="top-actions">
-          <div className="account-chip" aria-label="Signed in user">
-            <Avatar name={session.displayName ?? displayName(users, activeUserId)} size="sm" />
-            <span>
-              <strong>{session.displayName ?? displayName(users, activeUserId)}</strong>
-              <small>{session.handle ? `@${session.handle}` : activeUserId}</small>
-            </span>
-          </div>
-          <div className="status" data-connected={status.connected}>
-            <RadioTower size={18} />
-            <span>{status.connected ? "Live" : "Offline"}</span>
-          </div>
-          <button
-            className="icon-button"
-            type="button"
-            aria-label={inspectorOpen ? "Hide details" : "Show details"}
-            title={inspectorOpen ? "Hide details" : "Show details"}
-            onClick={() => setInspectorOpen((current) => !current)}
-          >
-            <Signal size={18} />
-          </button>
-          <button className="text-action" type="button" onClick={onLogout}>
-            Log out
-          </button>
-          <button
-            className="icon-button"
-            type="button"
-            aria-label={theme === "dark" ? "Use light theme" : "Use dark theme"}
-            title={theme === "dark" ? "Use light theme" : "Use dark theme"}
-            onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
-          >
-            {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
-          </button>
+          <h1>{conversationTitle}</h1>
         </div>
       </header>
     );
   }
 
+  function renderWorkspaceActions() {
+    return (
+      <div className="top-actions">
+        <div className="account-chip" aria-label="Signed in user">
+          <Avatar name={session.displayName ?? displayName(users, activeUserId)} size="sm" />
+          <span>
+            <strong>{session.displayName ?? displayName(users, activeUserId)}</strong>
+            <small>{session.handle ? `@${session.handle}` : activeUserId}</small>
+          </span>
+        </div>
+        <StatusChip className="status" data-connected={status.connected} icon="live" tone={status.connected ? "success" : "muted"}>
+          {status.connected ? "Live" : "Offline"}
+        </StatusChip>
+        <IconButton
+          className="icon-button"
+          icon="details"
+          label={inspectorOpen ? "Hide details" : "Show details"}
+          onClick={() => setInspectorOpen((current) => !current)}
+        />
+        <Button className="text-action" onClick={onLogout}>
+          Log out
+        </Button>
+        <IconButton
+          className="icon-button"
+          icon={theme === "dark" ? "themeLight" : "themeDark"}
+          label={theme === "dark" ? "Use light theme" : "Use dark theme"}
+          onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
+        />
+      </div>
+    );
+  }
+
   function renderThreadsPanel() {
     return (
-      <aside className="panel side-panel">
+      <Surface className="panel side-panel">
         <PanelTitle icon={<Inbox size={18} />} title="Threads" />
         <form className="thread-create" onSubmit={(event) => void createThread(event)}>
-          <input
-            aria-label="New thread title"
-            placeholder="New thread"
-            value={threadTitle}
-            onChange={(event) => {
-              setThreadTitle(event.target.value);
-              setThreadError(undefined);
-            }}
+          <SegmentedControl
+            aria-label="Thread type"
+            className="thread-kind-control"
+            options={[
+              { value: "dm", label: "Direct" },
+              { value: "group", label: "Group" },
+            ]}
+            value={threadKind}
+            onValueChange={changeThreadKind}
           />
-          <button
-            type="submit"
-            aria-label="Create thread"
-            title="Create thread"
-            disabled={isCreatingThread || threadTitle.trim().length === 0}
-          >
-            <Plus size={18} />
-          </button>
+          {threadKind === "group" ? (
+            <TextField
+              aria-label="New thread title"
+              className="thread-title-field"
+              placeholder="Group title"
+              value={threadTitle}
+              onChange={(event) => {
+                setThreadTitle(event.target.value);
+                setThreadError(undefined);
+              }}
+            />
+          ) : null}
+          <div className="participant-picker" aria-label="People">
+            {participantOptions.map((user) => {
+              const selected = selectedParticipantIds.includes(user.id);
+              return (
+                <Button
+                  aria-pressed={selected}
+                  className="participant-chip"
+                  data-selected={selected}
+                  key={user.id}
+                  onClick={() => toggleThreadParticipant(user.id)}
+                  size="sm"
+                >
+                  <Avatar name={user.displayName} size="sm" />
+                  {user.displayName}
+                </Button>
+              );
+            })}
+          </div>
+          <Button className="thread-submit-action" type="submit" tone="primary" icon="add" disabled={!canCreateThread}>
+            {threadKind === "dm" ? "Start direct" : "Create group"}
+          </Button>
         </form>
         {threadError ? (
           <p className="thread-error" role="alert">
@@ -544,25 +615,25 @@ function ChatWorkspace({
         ) : null}
         <div className="inbox-list" aria-label="Conversations">
           {inboxItems.map((item) => (
-            <button
+            <WorkspaceListItem
               className="inbox-row"
-              data-selected={item.selected}
               key={item.conversationId}
-              type="button"
+              selected={item.selected}
+              title={conversationDisplayTitle({
+                activeUserId,
+                conversation: visibleConversations.find((candidate) => candidate.id === item.conversationId),
+                conversationId: item.conversationId,
+                members: visibleMembers.filter((member) => member.conversationId === item.conversationId),
+                users,
+              })}
+              subtitle={item.preview}
+              meta={`Read #${item.readSequence} / Last #${item.lastSequence}`}
+              badge={item.unreadCount > 0 ? item.unreadCount : undefined}
               onClick={() => selectConversation(item.conversationId)}
-            >
-              <span>
-                <strong>{item.title}</strong>
-                <small>{item.preview}</small>
-                <small className="read-state">
-                  Read #{item.readSequence} / Last #{item.lastSequence}
-                </small>
-              </span>
-              {item.unreadCount > 0 ? <b>{item.unreadCount}</b> : null}
-            </button>
+            />
           ))}
         </div>
-      </aside>
+      </Surface>
     );
   }
 
@@ -606,15 +677,14 @@ function ChatWorkspace({
         {draftAttachments.length > 0 ? (
           <div className="attachment-tray">
             {draftAttachments.map((attachment) => (
-              <button
+              <Button
                 className="attachment-chip"
+                icon="paperclip"
                 key={attachment.blobId}
-                type="button"
                 onClick={() => removeDraftAttachment(attachment.blobId)}
               >
-                <Paperclip size={14} />
-                <span>{attachment.name}</span>
-              </button>
+                {attachment.name}
+              </Button>
             ))}
           </div>
         ) : null}
@@ -628,41 +698,27 @@ function ChatWorkspace({
             {attachmentError}
           </p>
         ) : null}
-        <input
+        <TextField
           aria-label="Message"
+          className="composer-field"
           placeholder="Message the foundation"
           value={draft}
           onChange={(event) => void updateDraft(event.target.value)}
           onKeyDown={handleComposerKeyDown}
         />
-        <button
+        <IconButton
           className="attach-button"
-          type="button"
-          aria-label={isUploadingAttachment ? "Uploading demo attachment" : "Add demo attachment"}
-          title={isUploadingAttachment ? "Uploading demo attachment" : "Add demo attachment"}
+          icon="paperclip"
+          label={isUploadingAttachment ? "Uploading demo attachment" : "Add demo attachment"}
           disabled={isUploadingAttachment}
           onClick={() => void addDemoAttachment()}
-        >
-          <Paperclip size={18} />
-        </button>
-        <button type="submit" aria-label="Send message">
-          <Send size={18} />
-        </button>
+        />
+        <IconButton type="submit" icon="send" label="Send message" tone="primary" />
       </form>
     );
   }
 
   function renderChatInspector() {
-    const fallbackMembers =
-      selectedMembers.length > 0
-        ? selectedMembers
-        : users.map((user) => ({
-            id: `${selectedConversationId}:${user.id}`,
-            conversationId: selectedConversationId,
-            userId: user.id,
-            role: "member" as const,
-          }));
-
     return (
       <div className="inspector-stack">
         <section className="metrics compact-metrics" aria-label="Runtime metrics">
@@ -674,16 +730,16 @@ function ChatWorkspace({
         <section className="panel call-panel">
           <PanelTitle icon={<Video size={18} />} title="Signals" />
           <strong className="signal-count">{signals.length}</strong>
-          <button className="secondary-action" type="button" onClick={() => void sendFakeSignal()}>
+          <Button className="secondary-action" onClick={() => void sendFakeSignal()}>
             Send offer
-          </button>
+          </Button>
         </section>
 
         <section className="panel member-section">
           <PanelTitle icon={<Users size={18} />} title="Members" />
           <div className="user-list">
-            {fallbackMembers.length > 0 ? (
-              fallbackMembers.map((member) => (
+            {selectedMembers.length > 0 ? (
+              selectedMembers.map((member) => (
                 <div className="user-row" key={member.id}>
                   <Avatar name={displayName(users, member.userId)} size="sm" />
                   <strong>{displayName(users, member.userId)}</strong>
@@ -702,8 +758,14 @@ function ChatWorkspace({
     <WorkspaceShell
       className="chat-workspace-shell"
       destinations={workspaceDestinations}
+      navigationLabel={<span className="workspace-brand">Frick</span>}
+      navigationActions={renderWorkspaceActions()}
+      compactCollectionVisible={compactThreadsOpen}
       selectedDestination={selectedDestination}
-      onDestinationChange={setSelectedDestination}
+      onDestinationChange={(destinationId) => {
+        setSelectedDestination(destinationId);
+        setCompactThreadsOpen(false);
+      }}
       collection={renderThreadsPanel()}
       header={renderChatHeader()}
       footer={selectedDestination === "chat" ? renderChatComposer() : undefined}
@@ -755,6 +817,45 @@ function PanelTitle({ icon, title }: { icon: ReactNode; title: string }) {
 
 function displayName(users: User[], userId: string): string {
   return users.find((user) => user.id === userId)?.displayName ?? userId;
+}
+
+function conversationDisplayTitle({
+  activeUserId,
+  conversation,
+  conversationId,
+  members,
+  users,
+}: {
+  activeUserId: string;
+  conversation: Conversation | undefined;
+  conversationId: string;
+  members: RoomMember[];
+  users: User[];
+}): string {
+  if (conversation?.title?.trim()) {
+    return conversation.title.trim();
+  }
+  if (conversation?.kind === "dm") {
+    const peer = members.find((member) => member.userId !== activeUserId) ?? members[0];
+    return peer ? displayName(users, peer.userId) : "Direct message";
+  }
+  if (members.length > 0) {
+    return members
+      .filter((member) => member.userId !== activeUserId)
+      .map((member) => displayName(users, member.userId))
+      .slice(0, 3)
+      .join(", ") || "Personal thread";
+  }
+  return titleFromConversationId(conversationId);
+}
+
+function titleFromConversationId(conversationId: string): string {
+  return conversationId
+    .replace(/^conversation-/, "")
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function normalizeInboxRows(data: ReturnType<typeof useInbox<InboxRow>>["data"]): InboxRow[] | undefined {

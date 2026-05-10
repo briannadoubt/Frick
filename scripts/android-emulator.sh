@@ -42,6 +42,13 @@ adb kill-server >/dev/null 2>&1 || true
 
 if [ -d "$AVD_DIR" ]; then
   find "$AVD_DIR" -name '*.lock' -delete
+  if [ -f "$AVD_DIR/config.ini" ]; then
+    if grep -q '^hw.keyboard=' "$AVD_DIR/config.ini"; then
+      sed -i.bak 's/^hw.keyboard=.*/hw.keyboard=yes/' "$AVD_DIR/config.ini"
+    else
+      printf '\nhw.keyboard=yes\n' >> "$AVD_DIR/config.ini"
+    fi
+  fi
 fi
 
 adb start-server >/dev/null
@@ -52,4 +59,5 @@ while [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" != "1
   sleep 2
 done
 
+adb shell settings put secure show_ime_with_hard_keyboard 1 >/dev/null 2>&1 || true
 adb devices -l
