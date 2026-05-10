@@ -1,0 +1,40 @@
+[
+  0,
+  {
+    "replicaId": "fixture-replica",
+    "deviceId": "fixture-device",
+    "schemaHash": "frick-foundation-2026-05-09-dev-auth",
+    "knownCursors": {},
+    "clientCapabilities": {
+      "platform": "test",
+      "sdkVersion": "0.0.0-fixture",
+      "schema": {
+        "schemaId": "frick-foundation",
+        "schemaRevision": 1,
+        "schemaHash": "frick-foundation-2026-05-09-dev-auth"
+      },
+      "transports": [
+        "websocket"
+      ],
+      "encodings": [
+        "msgpack"
+      ],
+      "primitives": [
+        "objects",
+        "streams",
+        "presence",
+        "signals"
+      ],
+      "offline": {
+        "cache": true,
+        "pendingAppends": true
+      },
+      "blobUploads": [
+        "direct"
+      ],
+      "push": [],
+      "experimental": [],
+      "required": []
+    }
+  }
+]

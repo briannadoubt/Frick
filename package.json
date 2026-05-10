@@ -8,6 +8,8 @@
     "test": "vitest run",
     "typecheck": "tsc -b packages/protocol packages/core packages/react packages/design packages/design-web apps/server apps/web",
     "schema:generate": "tsx packages/protocol/scripts/generate-native-artifacts.ts",
+    "fixtures:generate": "tsx packages/protocol/scripts/generate-fixtures.ts",
+    "verify:generated": "tsx scripts/check-generated-artifacts.ts",
     "design:check": "pnpm --filter @frick/design check",
     "design:generate": "pnpm --filter @frick/design generate",
     "server": "pnpm --filter @frick/server dev",

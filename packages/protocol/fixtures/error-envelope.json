@@ -1,0 +1,11 @@
+{
+  "code": "schema.incompatible",
+  "message": "Fixture schema mismatch",
+  "requestId": "fixture-error",
+  "retryable": false,
+  "details": {
+    "reason": "fixture"
+  },
+  "schemaHash": "frick-foundation-2026-05-09-dev-auth",
+  "schemaRevision": 1
+}

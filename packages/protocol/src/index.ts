@@ -3,6 +3,7 @@ export * from "./capabilities.js";
 export * from "./codec.js";
 export * from "./compatibility.js";
 export * from "./errors.js";
+export * from "./fixtures.js";
 export * from "./frame.js";
 export * from "./foundation.js";
 export * from "./schema.js";
