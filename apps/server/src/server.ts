@@ -12,6 +12,10 @@ import {
   assertCanSubscribe,
   type Principal,
 } from "./authz.js";
+import {
+  createFrickExtensionRegistry,
+  type FrickExtensionRegistryInput,
+} from "./extensions.js";
 import { SyncGateway } from "./sync/gateway.js";
 import { SseRegistry } from "./sync/sse.js";
 import type { StoredAccount } from "./storage/account-store.js";
@@ -22,6 +26,7 @@ export interface ServerOptions {
   port?: number;
   dbPath?: string;
   sseHeartbeatMs?: number;
+  extensions?: FrickExtensionRegistryInput;
 }
 
 export function createFrickServer(options: ServerOptions = {}) {
@@ -30,6 +35,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     path: options.dbPath ?? process.env.FRICK_DB_PATH ?? defaultDatabasePath(),
     schema: foundationSchema,
   });
+  const extensions = createFrickExtensionRegistry(options.extensions);
 
   const server = http.createServer((request, response) => {
     void handleHttp(request, response);
@@ -415,7 +421,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     });
   }
 
-  return { port, server, store, listen, close };
+  return { port, server, store, extensions, listen, close };
 }
 
 export function defaultDatabasePath(): string {
