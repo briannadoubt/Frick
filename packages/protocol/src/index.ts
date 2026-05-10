@@ -1,4 +1,5 @@
 export * from "./artifacts.js";
+export * from "./capabilities.js";
 export * from "./codec.js";
 export * from "./compatibility.js";
 export * from "./errors.js";

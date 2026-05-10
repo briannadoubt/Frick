@@ -4,6 +4,7 @@ import type {
   PackedSignalEnvelope,
   PackedStreamEvent,
 } from "./codec.js";
+import type { FrickClientCapabilities } from "./capabilities.js";
 import type { FrickErrorCode, FrickErrorEnvelope } from "./errors.js";
 import type { FrickSchema, PackedRecord, PlainObject } from "./schema.js";
 
@@ -37,6 +38,7 @@ export interface HelloPayload {
   deviceId: string;
   schemaHash: string;
   knownCursors: Record<string, number>;
+  clientCapabilities?: FrickClientCapabilities;
 }
 
 export interface SubscribePayload {

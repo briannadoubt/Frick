@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   FrameKind,
   decodeFrame,
+  defaultClientCapabilities,
   encodeFrame,
   foundationSchema,
   rejectSchemaMismatch,
@@ -18,6 +19,11 @@ describe("foundation frames", () => {
           deviceId: "device-1",
           schemaHash: foundationSchema.hash,
           knownCursors: {},
+          clientCapabilities: defaultClientCapabilities({
+            platform: "web",
+            sdkVersion: "0.0.0-test",
+            schema: foundationSchema,
+          }),
         },
       ],
       [
