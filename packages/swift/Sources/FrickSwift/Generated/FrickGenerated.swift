@@ -3,6 +3,11 @@ import Foundation
 
 public enum FrickSchema {
   public static let protocolVersion = 1
+  public static let schemaId = "frick-foundation"
+  public static let schemaVersion = "0.1.0"
+  public static let schemaRevision = 1
+  public static let minimumClientRevision = 1
+  public static let minimumServerRevision = 1
   public static let schemaHash = "frick-foundation-2026-05-09-dev-auth"
 }
 
