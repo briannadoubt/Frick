@@ -1,8 +1,11 @@
 import {
   Activity,
   Database,
+  Inbox,
   MessageCircle,
   Moon,
+  Paperclip,
+  Plus,
   RadioTower,
   Send,
   Signal,
@@ -10,9 +13,12 @@ import {
   Users,
   Video,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import {
+  FrickProvider,
   useAppend,
+  useFrickHttpEndpoint,
+  useInbox,
   useObjects,
   usePresence,
   useSendSignal,
@@ -21,81 +27,333 @@ import {
   useStream,
   useSyncStatus,
 } from "@frick/react";
-import type { PlainObject, StreamEventInput } from "@frick/protocol";
+import { Avatar, ChatBubble, FrickDesignProvider, MessageList, WorkspaceShell } from "@frick/design-web";
 import { resolveInitialTheme, type ThemePreference } from "./theme.js";
+import {
+  appendAttachmentMarker,
+  buildDemoAttachment,
+  createConversation,
+  deriveInboxItems,
+  login,
+  nextReadReceiptPayload,
+  sentMessageEvents,
+  signUp,
+  syncDemoAttachment,
+  type AuthSession,
+  type AttachmentMetadata,
+  type ChatStreamEvent,
+  type Conversation,
+  type InboxRow,
+  type RoomMember,
+  type User,
+} from "./chat-foundation.js";
 
-const conversationId = "conversation-general";
-const localUserId = "user-ada";
-const localDeviceId = "web-device";
-const typingKey = `${conversationId}:${localUserId}:${localDeviceId}`;
-const callKey = "call-demo";
-
-type User = PlainObject & {
-  id: string;
-  displayName: string;
-};
-
-type Conversation = PlainObject & {
-  id: string;
-  title?: string;
-  kind: string;
-};
-
-type MessageEvent = StreamEventInput & {
-  payload: {
-    messageId: string;
-    senderId: string;
-    body: string;
-    createdAt: string;
-  };
-};
+const defaultConversationId = "conversation-general";
+const demoHttpEndpoint = "http://127.0.0.1:4099";
+const authSessionStorageKey = "frick-auth-session";
+const webDeviceStorageKey = "frick-web-device-id";
+const webReplicaStorageKey = "frick-web-replica-id";
 
 export function App() {
+  const [session, setSession] = useState<AuthSession | undefined>(() => readStoredSession());
   const [theme, setTheme] = useState<ThemePreference>(() =>
     resolveInitialTheme(
       window.localStorage.getItem("frick-theme"),
       window.matchMedia("(prefers-color-scheme: dark)").matches,
     ),
   );
-  const [draft, setDraft] = useState("");
-  const users = useObjects<User>("User");
-  const conversations = useObjects<Conversation>("Conversation");
-  const messages = useStream<MessageEvent>("MessageStream", conversationId);
-  const typing = usePresence<{ isTyping: boolean }>("TypingState", typingKey);
-  const setTyping = useSetPresence("TypingState", typingKey);
-  const appendMessage = useAppend("MessageStream", conversationId);
-  const signals = useSignalChannel("WebRTCSignal", callKey);
-  const sendSignal = useSendSignal("WebRTCSignal", callKey);
-  const status = useSyncStatus();
-  const messagesEndRef = useRef<HTMLDivElement | null>(null);
-
-  const conversation = conversations.find((item) => item.id === conversationId);
-  const sortedMessages = useMemo(
-    () => [...messages].sort((left, right) => left.sequence - right.sequence),
-    [messages],
+  const clientIdentity = useMemo(
+    () => ({
+      deviceId: readOrCreateStoredId(webDeviceStorageKey, "web-device"),
+      replicaId: readOrCreateStoredId(webReplicaStorageKey, "web-replica"),
+    }),
+    [],
   );
-  const lastCursor = Math.max(0, ...Object.values(status.cursors));
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     window.localStorage.setItem("frick-theme", theme);
   }, [theme]);
 
+  function acceptSession(nextSession: AuthSession) {
+    setSession(nextSession);
+    window.localStorage.setItem(authSessionStorageKey, JSON.stringify(nextSession));
+  }
+
+  function logout() {
+    window.localStorage.removeItem(authSessionStorageKey);
+    setSession(undefined);
+  }
+
+  return (
+    <FrickDesignProvider mode={theme} density="comfortable" brand="frickenChat">
+      {session ? (
+        <FrickProvider key={session.sessionToken} session={session}>
+          <ChatWorkspace
+            onLogout={logout}
+            session={session}
+            setTheme={setTheme}
+            theme={theme}
+          />
+        </FrickProvider>
+      ) : (
+        <AuthWorkspace
+          clientIdentity={clientIdentity}
+          onAuthenticated={acceptSession}
+          setTheme={setTheme}
+          theme={theme}
+        />
+      )}
+    </FrickDesignProvider>
+  );
+}
+
+function AuthWorkspace({
+  clientIdentity,
+  onAuthenticated,
+  theme,
+  setTheme,
+}: {
+  clientIdentity: { deviceId: string; replicaId: string };
+  onAuthenticated(session: AuthSession): void;
+  theme: ThemePreference;
+  setTheme(theme: ThemePreference | ((current: ThemePreference) => ThemePreference)): void;
+}) {
+  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [displayName, setDisplayName] = useState("");
+  const [handle, setHandle] = useState("");
+  const [identity, setIdentity] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | undefined>();
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  async function submitAuth(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSubmitting(true);
+    setError(undefined);
+    try {
+      const nextSession =
+        mode === "signup"
+          ? await signUp({
+              httpEndpoint: demoHttpEndpoint,
+              displayName,
+              handle,
+              password,
+              deviceId: clientIdentity.deviceId,
+              replicaId: clientIdentity.replicaId,
+              platform: "web",
+            })
+          : await login({
+              httpEndpoint: demoHttpEndpoint,
+              identity,
+              password,
+              deviceId: clientIdentity.deviceId,
+              replicaId: clientIdentity.replicaId,
+              platform: "web",
+            });
+      onAuthenticated(nextSession);
+    } catch (authError) {
+      setError(authError instanceof Error ? authError.message : "Authentication failed");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  function switchMode(nextMode: "login" | "signup") {
+    setMode(nextMode);
+    setError(undefined);
+  }
+
+  return (
+    <main className="shell auth-shell">
+      <section className="auth-card">
+        <header className="auth-header">
+          <div>
+            <p className="eyebrow">Frick foundation</p>
+            <h1>Foundation General</h1>
+          </div>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label={theme === "dark" ? "Use light theme" : "Use dark theme"}
+            title={theme === "dark" ? "Use light theme" : "Use dark theme"}
+            onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
+          >
+            {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+          </button>
+        </header>
+
+        <div className="auth-tabs" role="tablist" aria-label="Authentication mode">
+          <button type="button" data-selected={mode === "login"} onClick={() => switchMode("login")}>
+            Log in
+          </button>
+          <button type="button" data-selected={mode === "signup"} onClick={() => switchMode("signup")}>
+            Sign up
+          </button>
+        </div>
+
+        <form className="auth-form" onSubmit={submitAuth}>
+          {mode === "signup" ? (
+            <label>
+              Display name
+              <input
+                autoComplete="name"
+                placeholder="Ada Lovelace"
+                value={displayName}
+                onChange={(event) => setDisplayName(event.target.value)}
+              />
+            </label>
+          ) : null}
+          <label>
+            {mode === "signup" ? "Handle" : "Handle"}
+            <input
+              autoComplete="username"
+              placeholder="ada"
+              value={mode === "signup" ? handle : identity}
+              onChange={(event) =>
+                mode === "signup" ? setHandle(event.target.value) : setIdentity(event.target.value)
+              }
+            />
+          </label>
+          <label>
+            Password
+            <input
+              autoComplete={mode === "signup" ? "new-password" : "current-password"}
+              placeholder="At least 8 characters"
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+          </label>
+          {error ? (
+            <p className="auth-note" role="alert">
+              {error}
+            </p>
+          ) : null}
+          <button className="primary-action" type="submit" disabled={isSubmitting}>
+            {isSubmitting ? "Working..." : mode === "signup" ? "Create person" : "Log in"}
+          </button>
+        </form>
+      </section>
+    </main>
+  );
+}
+
+function ChatWorkspace({
+  session,
+  theme,
+  setTheme,
+  onLogout,
+}: {
+  session: AuthSession;
+  theme: ThemePreference;
+  setTheme(theme: ThemePreference | ((current: ThemePreference) => ThemePreference)): void;
+  onLogout(): void;
+}) {
+  const [selectedConversationId, setSelectedConversationId] = useState(defaultConversationId);
+  const [draft, setDraft] = useState("");
+  const [draftAttachments, setDraftAttachments] = useState<AttachmentMetadata[]>([]);
+  const [attachmentStatus, setAttachmentStatus] = useState<string | undefined>();
+  const [attachmentError, setAttachmentError] = useState<string | undefined>();
+  const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
+  const [threadTitle, setThreadTitle] = useState("");
+  const [threadError, setThreadError] = useState<string | undefined>();
+  const [isCreatingThread, setIsCreatingThread] = useState(false);
+  const [createdConversations, setCreatedConversations] = useState<Conversation[]>([]);
+  const [createdMembers, setCreatedMembers] = useState<RoomMember[]>([]);
+  const [readSequences, setReadSequences] = useState<Record<string, number>>({});
+  const [selectedDestination, setSelectedDestination] = useState("chat");
+  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const activeUserId = session.userId;
+  const activeDeviceId = session.deviceId;
+  const users = useObjects<User>("User");
+  const conversations = useObjects<Conversation>("Conversation");
+  const members = useObjects<RoomMember>("RoomMember");
+  const remoteInbox = useInbox<InboxRow>(activeUserId);
+  const httpEndpoint = useFrickHttpEndpoint();
+  const messages = useStream<ChatStreamEvent>("MessageStream", selectedConversationId);
+  const typingKey = `${selectedConversationId}:${activeUserId}:${activeDeviceId}`;
+  const typing = usePresence<{ isTyping: boolean }>("TypingState", typingKey);
+  const setTyping = useSetPresence("TypingState", typingKey);
+  const appendMessage = useAppend("MessageStream", selectedConversationId);
+  const callKey = `call:${selectedConversationId}`;
+  const signals = useSignalChannel("WebRTCSignal", callKey);
+  const sendSignal = useSendSignal("WebRTCSignal", callKey);
+  const status = useSyncStatus();
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const lastReceiptRef = useRef<Record<string, number>>({});
+
+  const visibleConversations = useMemo(
+    () => mergeById(conversations, createdConversations),
+    [conversations, createdConversations],
+  );
+  const visibleMembers = useMemo(
+    () => mergeById(members, createdMembers),
+    [members, createdMembers],
+  );
+  const conversation = visibleConversations.find((item) => item.id === selectedConversationId);
+  const sortedEvents = useMemo(
+    () => [...messages].sort((left, right) => left.sequence - right.sequence),
+    [messages],
+  );
+  const sortedMessages = useMemo(() => sentMessageEvents(sortedEvents), [sortedEvents]);
+  const selectedMessages = useMemo(
+    () => sortedMessages.filter((message) => message.streamId === selectedConversationId),
+    [selectedConversationId, sortedMessages],
+  );
+  const inboxRows = useMemo(() => normalizeInboxRows(remoteInbox.data), [remoteInbox.data]);
+  const inboxItems = useMemo(
+    () =>
+      deriveInboxItems({
+        conversations: visibleConversations,
+        inboxRows,
+        localMessages: selectedMessages,
+        selectedConversationId,
+        readSequences,
+      }),
+    [visibleConversations, inboxRows, readSequences, selectedConversationId, selectedMessages],
+  );
+  const selectedMembers = useMemo(
+    () => visibleMembers.filter((member) => member.conversationId === selectedConversationId),
+    [visibleMembers, selectedConversationId],
+  );
+  const latestMessageSequence = selectedMessages.at(-1)?.sequence ?? 0;
+  const lastCursor = Math.max(0, ...Object.values(status.cursors));
+  const workspaceDestinations = useMemo(
+    () => [
+      { id: "chat", label: "Chat", icon: "message" as const },
+      { id: "files", label: "Files", icon: "paperclip" as const, disabled: true, badge: "Soon" },
+      { id: "calls", label: "Calls", icon: "video" as const, disabled: true, badge: "Soon" },
+      { id: "admin", label: "Admin", icon: "settings" as const, disabled: true, badge: "Soon" },
+    ],
+    [],
+  );
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ block: "end" });
-  }, [sortedMessages.length, sortedMessages.at(-1)?.eventId]);
+  }, [selectedMessages.length, selectedMessages.at(-1)?.eventId]);
 
-  async function submitMessage() {
-    const body = draft.trim();
+  useEffect(() => {
+    advanceReadCursor();
+  }, [latestMessageSequence, selectedConversationId]);
+
+  async function submitMessage(nextDraft = draft) {
+    const body = appendAttachmentMarker(nextDraft, draftAttachments);
     if (!body) {
       return;
     }
     setDraft("");
+    setDraftAttachments([]);
+    setAttachmentStatus(undefined);
+    setAttachmentError(undefined);
+    await setTyping({ isTyping: false });
+    const attachmentBlobIds = draftAttachments.map((attachment) => attachment.blobId);
     await appendMessage("MessageSent", {
       messageId: `message-${crypto.randomUUID()}`,
-      senderId: localUserId,
+      senderId: activeUserId,
       body,
       createdAt: new Date().toISOString(),
+      ...(attachmentBlobIds.length > 0 ? { attachmentBlobIds } : {}),
     });
   }
 
@@ -104,109 +362,373 @@ export function App() {
     await setTyping({ isTyping: value.trim().length > 0 });
   }
 
+  function handleComposerKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) {
+      return;
+    }
+    event.preventDefault();
+    void submitMessage(event.currentTarget.value);
+  }
+
+  async function createThread(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const title = threadTitle.trim();
+    if (!title || isCreatingThread) {
+      return;
+    }
+
+    setIsCreatingThread(true);
+    setThreadError(undefined);
+    try {
+      const created = await createConversation({
+        httpEndpoint,
+        title,
+        sessionToken: session.sessionToken,
+      });
+      setCreatedConversations((current) => mergeById(current, [created.conversation]));
+      setCreatedMembers((current) => mergeById(current, [created.member]));
+      setSelectedConversationId(created.conversation.id);
+      setThreadTitle("");
+      setDraft("");
+      setDraftAttachments([]);
+      setAttachmentStatus(undefined);
+      setAttachmentError(undefined);
+    } catch (error) {
+      setThreadError(error instanceof Error ? error.message : "Could not create thread");
+    } finally {
+      setIsCreatingThread(false);
+    }
+  }
+
+  async function addDemoAttachment() {
+    setIsUploadingAttachment(true);
+    setAttachmentStatus("Uploading demo attachment...");
+    setAttachmentError(undefined);
+    try {
+      const attachment = await buildDemoAttachment();
+      await syncDemoAttachment({
+        httpEndpoint,
+        attachment,
+        ownerId: activeUserId,
+        sessionToken: session.sessionToken,
+      });
+      setDraftAttachments((current) => [
+        ...current,
+        {
+          blobId: attachment.blobId,
+          name: attachment.name,
+          byteLength: attachment.byteLength,
+          mimeType: attachment.mimeType,
+          contentHash: attachment.contentHash,
+        },
+      ]);
+      setAttachmentStatus(`Uploaded ${attachment.name} (${formatByteCount(attachment.byteLength)})`);
+    } catch (error) {
+      setAttachmentStatus(undefined);
+      setAttachmentError(error instanceof Error ? error.message : "Attachment upload failed");
+    } finally {
+      setIsUploadingAttachment(false);
+    }
+  }
+
+  function removeDraftAttachment(blobId: string) {
+    setDraftAttachments((current) => current.filter((attachment) => attachment.blobId !== blobId));
+    setAttachmentStatus(undefined);
+  }
+
+  function selectConversation(nextConversationId: string) {
+    setSelectedConversationId(nextConversationId);
+    setDraft("");
+    setDraftAttachments([]);
+    setAttachmentStatus(undefined);
+    setAttachmentError(undefined);
+  }
+
+  function advanceReadCursor() {
+    const payload = nextReadReceiptPayload({
+      userId: activeUserId,
+      messages: selectedMessages,
+      lastSentSequence: lastReceiptRef.current[selectedConversationId] ?? readSequences[selectedConversationId] ?? 0,
+    });
+    if (!payload) {
+      return;
+    }
+    lastReceiptRef.current[selectedConversationId] = payload.sequence;
+    setReadSequences((current) => ({
+      ...current,
+      [selectedConversationId]: Math.max(current[selectedConversationId] ?? 0, payload.sequence),
+    }));
+    void appendMessage("ReceiptAdvanced", payload);
+  }
+
   async function sendFakeSignal() {
     await sendSignal({
-      senderDeviceId: localDeviceId,
+      senderDeviceId: activeDeviceId,
       kind: "offer",
       payload: new Uint8Array([signals.length + 1]),
     });
   }
 
-  return (
-    <main className="shell">
-      <section className="workspace">
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">Frick foundation</p>
-            <h1>{conversation?.title ?? "Foundation General"}</h1>
+  function renderChatHeader() {
+    return (
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">Frick foundation</p>
+          <h1>{conversation?.title ?? "Foundation General"}</h1>
+        </div>
+        <div className="top-actions">
+          <div className="account-chip" aria-label="Signed in user">
+            <Avatar name={session.displayName ?? displayName(users, activeUserId)} size="sm" />
+            <span>
+              <strong>{session.displayName ?? displayName(users, activeUserId)}</strong>
+              <small>{session.handle ? `@${session.handle}` : activeUserId}</small>
+            </span>
           </div>
-          <div className="top-actions">
-            <div className="status" data-connected={status.connected}>
-              <RadioTower size={18} />
-              <span>{status.connected ? "Live" : "Offline"}</span>
-            </div>
-            <button
-              className="icon-button"
-              type="button"
-              aria-label={theme === "dark" ? "Use light theme" : "Use dark theme"}
-              title={theme === "dark" ? "Use light theme" : "Use dark theme"}
-              onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
-            >
-              {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
-            </button>
+          <div className="status" data-connected={status.connected}>
+            <RadioTower size={18} />
+            <span>{status.connected ? "Live" : "Offline"}</span>
           </div>
-        </header>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label={inspectorOpen ? "Hide details" : "Show details"}
+            title={inspectorOpen ? "Hide details" : "Show details"}
+            onClick={() => setInspectorOpen((current) => !current)}
+          >
+            <Signal size={18} />
+          </button>
+          <button className="text-action" type="button" onClick={onLogout}>
+            Log out
+          </button>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label={theme === "dark" ? "Use light theme" : "Use dark theme"}
+            title={theme === "dark" ? "Use light theme" : "Use dark theme"}
+            onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
+          >
+            {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+          </button>
+        </div>
+      </header>
+    );
+  }
 
-        <section className="metrics" aria-label="Runtime metrics">
+  function renderThreadsPanel() {
+    return (
+      <aside className="panel side-panel">
+        <PanelTitle icon={<Inbox size={18} />} title="Threads" />
+        <form className="thread-create" onSubmit={(event) => void createThread(event)}>
+          <input
+            aria-label="New thread title"
+            placeholder="New thread"
+            value={threadTitle}
+            onChange={(event) => {
+              setThreadTitle(event.target.value);
+              setThreadError(undefined);
+            }}
+          />
+          <button
+            type="submit"
+            aria-label="Create thread"
+            title="Create thread"
+            disabled={isCreatingThread || threadTitle.trim().length === 0}
+          >
+            <Plus size={18} />
+          </button>
+        </form>
+        {threadError ? (
+          <p className="thread-error" role="alert">
+            {threadError}
+          </p>
+        ) : null}
+        <div className="inbox-list" aria-label="Conversations">
+          {inboxItems.map((item) => (
+            <button
+              className="inbox-row"
+              data-selected={item.selected}
+              key={item.conversationId}
+              type="button"
+              onClick={() => selectConversation(item.conversationId)}
+            >
+              <span>
+                <strong>{item.title}</strong>
+                <small>{item.preview}</small>
+                <small className="read-state">
+                  Read #{item.readSequence} / Last #{item.lastSequence}
+                </small>
+              </span>
+              {item.unreadCount > 0 ? <b>{item.unreadCount}</b> : null}
+            </button>
+          ))}
+        </div>
+      </aside>
+    );
+  }
+
+  function renderChatMessages() {
+    return (
+      <section className="panel message-panel">
+        <div className="panel-head">
+          <PanelTitle icon={<MessageCircle size={18} />} title="Messages" />
+          <div className="typing" data-active={typing?.isTyping === true}>
+            {typing?.isTyping ? "Typing" : "Idle"}
+          </div>
+        </div>
+
+        <MessageList className="messages" onScroll={advanceReadCursor}>
+          {selectedMessages.map((message) => (
+            <ChatBubble
+              author={displayName(users, message.payload.senderId)}
+              key={message.eventId}
+              timestamp={new Date(message.payload.createdAt).toLocaleTimeString()}
+              variant={message.payload.senderId === activeUserId ? "outgoing" : "incoming"}
+            >
+              {message.payload.body}
+            </ChatBubble>
+          ))}
+          {selectedMessages.length === 0 ? <p className="empty">No messages yet</p> : null}
+          <div aria-hidden="true" ref={messagesEndRef} />
+        </MessageList>
+      </section>
+    );
+  }
+
+  function renderChatComposer() {
+    return (
+      <form
+        className="composer"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void submitMessage();
+        }}
+      >
+        {draftAttachments.length > 0 ? (
+          <div className="attachment-tray">
+            {draftAttachments.map((attachment) => (
+              <button
+                className="attachment-chip"
+                key={attachment.blobId}
+                type="button"
+                onClick={() => removeDraftAttachment(attachment.blobId)}
+              >
+                <Paperclip size={14} />
+                <span>{attachment.name}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {attachmentStatus ? (
+          <p className="composer-status" role="status">
+            {attachmentStatus}
+          </p>
+        ) : null}
+        {attachmentError ? (
+          <p className="composer-error" role="alert">
+            {attachmentError}
+          </p>
+        ) : null}
+        <input
+          aria-label="Message"
+          placeholder="Message the foundation"
+          value={draft}
+          onChange={(event) => void updateDraft(event.target.value)}
+          onKeyDown={handleComposerKeyDown}
+        />
+        <button
+          className="attach-button"
+          type="button"
+          aria-label={isUploadingAttachment ? "Uploading demo attachment" : "Add demo attachment"}
+          title={isUploadingAttachment ? "Uploading demo attachment" : "Add demo attachment"}
+          disabled={isUploadingAttachment}
+          onClick={() => void addDemoAttachment()}
+        >
+          <Paperclip size={18} />
+        </button>
+        <button type="submit" aria-label="Send message">
+          <Send size={18} />
+        </button>
+      </form>
+    );
+  }
+
+  function renderChatInspector() {
+    const fallbackMembers =
+      selectedMembers.length > 0
+        ? selectedMembers
+        : users.map((user) => ({
+            id: `${selectedConversationId}:${user.id}`,
+            conversationId: selectedConversationId,
+            userId: user.id,
+            role: "member" as const,
+          }));
+
+    return (
+      <div className="inspector-stack">
+        <section className="metrics compact-metrics" aria-label="Runtime metrics">
           <Metric icon={<Database size={20} />} label="Schema" value="foundation" />
           <Metric icon={<Activity size={20} />} label="Cursor" value={`#${lastCursor}`} />
           <Metric icon={<Signal size={20} />} label="Pending" value={String(status.pendingMutations)} />
         </section>
 
-        <section className="grid">
-          <aside className="panel side-panel">
-            <PanelTitle icon={<Users size={18} />} title="Users" />
-            <div className="user-list">
-              {users.map((user) => (
-                <div className="user-row" key={user.id}>
-                  <span>{initials(user.displayName)}</span>
-                  <strong>{user.displayName}</strong>
-                </div>
-              ))}
-            </div>
-          </aside>
-
-          <section className="panel message-panel">
-            <div className="panel-head">
-              <PanelTitle icon={<MessageCircle size={18} />} title="Messages" />
-              <div className="typing" data-active={typing?.isTyping === true}>
-                {typing?.isTyping ? "Typing" : "Idle"}
-              </div>
-            </div>
-
-            <div className="messages">
-              {sortedMessages.map((message) => (
-                <article className="message" key={message.eventId}>
-                  <div className="message-meta">
-                    <strong>{displayName(users, message.payload.senderId)}</strong>
-                    <span>{new Date(message.payload.createdAt).toLocaleTimeString()}</span>
-                  </div>
-                  <p>{message.payload.body}</p>
-                </article>
-              ))}
-              {sortedMessages.length === 0 ? <p className="empty">No messages yet</p> : null}
-              <div aria-hidden="true" ref={messagesEndRef} />
-            </div>
-
-            <form
-              className="composer"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void submitMessage();
-              }}
-            >
-              <input
-                aria-label="Message"
-                placeholder="Message the foundation"
-                value={draft}
-                onChange={(event) => void updateDraft(event.target.value)}
-              />
-              <button type="submit" aria-label="Send message">
-                <Send size={18} />
-              </button>
-            </form>
-          </section>
-
-          <aside className="panel call-panel">
-            <PanelTitle icon={<Video size={18} />} title="Signals" />
-            <strong className="signal-count">{signals.length}</strong>
-            <button className="secondary-action" type="button" onClick={() => void sendFakeSignal()}>
-              Send offer
-            </button>
-          </aside>
+        <section className="panel call-panel">
+          <PanelTitle icon={<Video size={18} />} title="Signals" />
+          <strong className="signal-count">{signals.length}</strong>
+          <button className="secondary-action" type="button" onClick={() => void sendFakeSignal()}>
+            Send offer
+          </button>
         </section>
-      </section>
-    </main>
+
+        <section className="panel member-section">
+          <PanelTitle icon={<Users size={18} />} title="Members" />
+          <div className="user-list">
+            {fallbackMembers.length > 0 ? (
+              fallbackMembers.map((member) => (
+                <div className="user-row" key={member.id}>
+                  <Avatar name={displayName(users, member.userId)} size="sm" />
+                  <strong>{displayName(users, member.userId)}</strong>
+                </div>
+              ))
+            ) : (
+              <p className="empty">No members yet</p>
+            )}
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  return (
+    <WorkspaceShell
+      className="chat-workspace-shell"
+      destinations={workspaceDestinations}
+      selectedDestination={selectedDestination}
+      onDestinationChange={setSelectedDestination}
+      collection={renderThreadsPanel()}
+      header={renderChatHeader()}
+      footer={selectedDestination === "chat" ? renderChatComposer() : undefined}
+      inspector={renderChatInspector()}
+      inspectorOpen={inspectorOpen}
+      onInspectorOpenChange={setInspectorOpen}
+    >
+      {selectedDestination === "chat" ? (
+        renderChatMessages()
+      ) : (
+        <PlaceholderDestination
+          destination={workspaceDestinations.find((item) => item.id === selectedDestination)?.label ?? "Destination"}
+        />
+      )}
+    </WorkspaceShell>
+  );
+}
+
+function PlaceholderDestination({ destination }: { destination: ReactNode }) {
+  return (
+    <section className="placeholder-destination">
+      <p className="eyebrow">Coming soon</p>
+      <h2>{destination}</h2>
+      <p>This destination is not enabled in the web demo yet.</p>
+    </section>
   );
 }
 
@@ -235,11 +757,57 @@ function displayName(users: User[], userId: string): string {
   return users.find((user) => user.id === userId)?.displayName ?? userId;
 }
 
-function initials(name: string): string {
-  return name
-    .split(" ")
-    .map((part) => part[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
+function normalizeInboxRows(data: ReturnType<typeof useInbox<InboxRow>>["data"]): InboxRow[] | undefined {
+  if (Array.isArray(data)) {
+    return data;
+  }
+  if (data && Array.isArray(data.data)) {
+    return data.data;
+  }
+  return undefined;
+}
+
+function mergeById<T extends { id: string }>(base: T[], overlay: T[]): T[] {
+  const values = new Map(base.map((item) => [item.id, item]));
+  for (const item of overlay) {
+    values.set(item.id, item);
+  }
+  return Array.from(values.values()).sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function formatByteCount(byteLength: number): string {
+  return byteLength < 1024 ? `${byteLength} B` : `${Math.round(byteLength / 1024)} KB`;
+}
+
+function readStoredSession(): AuthSession | undefined {
+  const stored = window.localStorage.getItem(authSessionStorageKey);
+  if (!stored) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(stored) as Partial<AuthSession>;
+    if (
+      typeof parsed.sessionToken === "string" &&
+      typeof parsed.userId === "string" &&
+      typeof parsed.deviceId === "string" &&
+      typeof parsed.replicaId === "string" &&
+      typeof parsed.schemaHash === "string" &&
+      typeof parsed.expiresAt === "string"
+    ) {
+      return parsed as AuthSession;
+    }
+  } catch {
+    window.localStorage.removeItem(authSessionStorageKey);
+  }
+  return undefined;
+}
+
+function readOrCreateStoredId(storageKey: string, prefix: string): string {
+  const existing = window.localStorage.getItem(storageKey);
+  if (existing) {
+    return existing;
+  }
+  const next = `${prefix}-${crypto.randomUUID()}`;
+  window.localStorage.setItem(storageKey, next);
+  return next;
 }
