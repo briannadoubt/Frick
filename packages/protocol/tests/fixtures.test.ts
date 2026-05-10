@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  defaultClientCapabilities,
   FrameKind,
   foundationSchema,
   isFrickErrorEnvelope,
@@ -38,6 +39,12 @@ describe("protocol fixtures", () => {
       replicaId: "fixture-replica",
       deviceId: "fixture-device",
       schemaHash: foundationSchema.hash,
+      knownCursors: {},
+      clientCapabilities: defaultClientCapabilities({
+        platform: "test",
+        sdkVersion: "0.0.0-fixture",
+        schema: foundationSchema,
+      }),
     });
   });
 });

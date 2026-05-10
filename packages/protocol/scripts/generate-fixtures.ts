@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   errorEnvelopeFixture,
@@ -8,6 +8,7 @@ import {
 
 const fixturesDir = join(process.cwd(), "packages/protocol/fixtures");
 
+rmSync(fixturesDir, { recursive: true, force: true });
 mkdirSync(fixturesDir, { recursive: true });
 writeJson("foundation-schema.json", foundationSchemaFixture());
 writeJson("error-envelope.json", errorEnvelopeFixture());
