@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
@@ -145,5 +146,11 @@ describe("Frick design web components", () => {
     expect(html).toContain("Inspector area");
     expect(html).toContain("Threads collection");
     expect(html).toContain("Primary chat content");
+  });
+
+  test("uses compact workspace navigation before side panes become cramped", () => {
+    const css = readFileSync(new URL("./components.css", import.meta.url), "utf8");
+
+    expect(css).toContain("@media (max-width: 1040px)");
   });
 });

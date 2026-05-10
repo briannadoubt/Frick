@@ -263,7 +263,7 @@ function ChatWorkspace({
   const [createdMembers, setCreatedMembers] = useState<RoomMember[]>([]);
   const [readSequences, setReadSequences] = useState<Record<string, number>>({});
   const [selectedDestination, setSelectedDestination] = useState("chat");
-  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [inspectorOpen, setInspectorOpen] = useState(() => window.matchMedia("(min-width: 1041px)").matches);
   const activeUserId = session.userId;
   const activeDeviceId = session.deviceId;
   const users = useObjects<User>("User");
