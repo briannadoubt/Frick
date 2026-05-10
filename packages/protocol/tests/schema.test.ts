@@ -39,12 +39,40 @@ describe("foundation schema", () => {
     expect(projectionByName(schema, "ConversationInbox").id).toBe(1);
   });
 
-  it("has a stable canonical schema hash", () => {
+  it("has stable schema identity metadata", () => {
     const schema = validateSchema(foundationSchema);
 
+    expect(schema.name).toBe("frick-foundation");
+    expect(schema.schemaId).toBe("frick-foundation");
+    expect(schema.schemaVersion).toBe("0.1.0");
+    expect(schema.schemaRevision).toBe(1);
+    expect(schema.minimumClientRevision).toBe(1);
+    expect(schema.minimumServerRevision).toBe(1);
     expect(schema.hash).toMatch(/^frick-foundation-/);
     expect(schema.protocol).toBe("frick.realtime");
     expect(schema.compatibility).toBe("greenfield-cutover");
+  });
+
+  it("rejects missing or invalid schema identity metadata", () => {
+    const missingSchemaId = structuredClone(foundationSchema);
+    delete (missingSchemaId as Partial<typeof foundationSchema>).schemaId;
+
+    expect(() => validateSchema(missingSchemaId)).toThrow(/schemaId/i);
+
+    const blankSchemaId = structuredClone(foundationSchema);
+    blankSchemaId.schemaId = "   ";
+
+    expect(() => validateSchema(blankSchemaId)).toThrow(/schemaId/i);
+
+    const blankSchemaVersion = structuredClone(foundationSchema);
+    blankSchemaVersion.schemaVersion = "\t\n";
+
+    expect(() => validateSchema(blankSchemaVersion)).toThrow(/schemaVersion/i);
+
+    const invalidSchemaRevision = structuredClone(foundationSchema);
+    invalidSchemaRevision.schemaRevision = 0;
+
+    expect(() => validateSchema(invalidSchemaRevision)).toThrow(/schemaRevision/i);
   });
 
   it("allows messages to reference attachment blob metadata", () => {

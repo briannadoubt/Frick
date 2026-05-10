@@ -82,6 +82,11 @@ export interface ProjectionDef {
 
 export interface FrickSchema {
   name: string;
+  schemaId: string;
+  schemaVersion: string;
+  schemaRevision: number;
+  minimumClientRevision: number;
+  minimumServerRevision: number;
   protocol: "frick.realtime";
   protocolVersion: number;
   compatibility: "greenfield-cutover";
@@ -109,6 +114,7 @@ export function validateSchema(schema: FrickSchema): FrickSchema {
   if (normalized.compatibility !== "greenfield-cutover") {
     throw new Error(`Unsupported compatibility mode: ${String(normalized.compatibility)}`);
   }
+  validateSchemaIdentity(normalized);
 
   validateTypeSet(normalized.objects, "object");
   validateTypeSet(normalized.streams, "stream");
@@ -255,6 +261,32 @@ function validateTypeSet(types: readonly { id: number; name: string }[], label: 
     }
     names.add(lowerName);
   }
+}
+
+function validateSchemaIdentity(schema: FrickSchema): void {
+  if (!isNonEmptyString(schema.schemaId)) {
+    throw new Error("schemaId must be a non-empty string");
+  }
+  if (!isNonEmptyString(schema.schemaVersion)) {
+    throw new Error("schemaVersion must be a non-empty string");
+  }
+  if (!isPositiveInteger(schema.schemaRevision)) {
+    throw new Error("schemaRevision must be a positive integer");
+  }
+  if (!isPositiveInteger(schema.minimumClientRevision)) {
+    throw new Error("minimumClientRevision must be a positive integer");
+  }
+  if (!isPositiveInteger(schema.minimumServerRevision)) {
+    throw new Error("minimumServerRevision must be a positive integer");
+  }
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
 function validateFields(
