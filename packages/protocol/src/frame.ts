@@ -4,6 +4,7 @@ import type {
   PackedSignalEnvelope,
   PackedStreamEvent,
 } from "./codec.js";
+import type { FrickErrorCode, FrickErrorEnvelope } from "./errors.js";
 import type { FrickSchema, PackedRecord, PlainObject } from "./schema.js";
 
 export const PROTOCOL_VERSION = 1;
@@ -74,8 +75,9 @@ export interface AckPayload {
 
 export interface NackPayload {
   requestId: string;
-  code: string;
-  message: string;
+  error: FrickErrorEnvelope;
+  code?: FrickErrorCode;
+  message?: string;
 }
 
 export interface DeltaPayload {

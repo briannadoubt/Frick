@@ -504,7 +504,18 @@ describe("foundation sync gateway", () => {
 
     const frame = await nextFrame(socket);
     expect(frame[0]).toBe(FrameKind.Nack);
-    expect(frame[1].code).toBe("schema_mismatch");
+    expect(frame[1].error).toMatchObject({
+      code: "schema.incompatible",
+      message: expect.stringMatching(/schema mismatch/i),
+      requestId: "hello",
+      retryable: false,
+      schemaHash: foundationSchema.hash,
+      schemaRevision: foundationSchema.schemaRevision,
+    });
+    expect(frame[1]).toMatchObject({
+      code: "schema.incompatible",
+      message: expect.stringMatching(/schema mismatch/i),
+    });
     socket.close();
   });
 

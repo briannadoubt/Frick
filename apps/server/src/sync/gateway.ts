@@ -2,6 +2,7 @@ import type { IncomingMessage } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   FrameKind,
+  createFrickErrorEnvelope,
   decodeFrame,
   packObjectRecord,
   packPresenceRecord,
@@ -86,12 +87,19 @@ export class SyncGateway {
     try {
       this.#handleFrame(client, decodeFrame(payload));
     } catch (error) {
+      const envelope = createFrickErrorEnvelope({
+        code: "sync.protocolError",
+        message: error instanceof Error ? error.message : "Unknown frame error",
+        requestId: "unknown",
+        retryable: false,
+      });
       sendFrame(socket, [
         FrameKind.Nack,
         {
           requestId: "unknown",
-          code: "frame_rejected",
-          message: error instanceof Error ? error.message : "Unknown frame error",
+          error: envelope,
+          code: envelope.code,
+          message: envelope.message,
         },
       ]);
     }
@@ -103,12 +111,21 @@ export class SyncGateway {
         try {
           rejectSchemaMismatch(frame[1].schemaHash, this.store.schema.hash);
         } catch (error) {
+          const envelope = createFrickErrorEnvelope({
+            code: "schema.incompatible",
+            message: error instanceof Error ? error.message : "Schema mismatch",
+            requestId: "hello",
+            retryable: false,
+            schemaHash: this.store.schema.hash,
+            schemaRevision: this.store.schema.schemaRevision,
+          });
           sendFrame(client.socket, [
             FrameKind.Nack,
             {
               requestId: "hello",
-              code: "schema_mismatch",
-              message: error instanceof Error ? error.message : "Schema mismatch",
+              error: envelope,
+              code: envelope.code,
+              message: envelope.message,
             },
           ]);
           return;

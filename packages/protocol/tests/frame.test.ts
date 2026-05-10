@@ -58,6 +58,21 @@ describe("foundation frames", () => {
           value: { kind: "offer", payload: new Uint8Array([1]) },
         },
       ],
+      [
+        FrameKind.Nack,
+        {
+          requestId: "request-nack",
+          error: {
+            code: "schema.incompatible",
+            message: "Schema mismatch",
+            requestId: "request-nack",
+            retryable: false,
+            schemaRevision: foundationSchema.schemaRevision,
+          },
+          code: "schema.incompatible",
+          message: "Schema mismatch",
+        },
+      ],
       [FrameKind.CursorCommit, { subscriptionId: "sub-1", cursor: 12 }],
     ];
 
