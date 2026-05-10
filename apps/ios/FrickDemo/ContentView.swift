@@ -367,6 +367,7 @@ struct ContentView: View {
                     ChatInspector(model: model)
                 }
                 .navigationTitle(model.title)
+                .navigationBarTitleDisplayMode(.inline)
             }
         }
         .frickDesignContext(FrickDesignContext(density: .comfortable, brand: .frickenChat))
