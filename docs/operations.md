@@ -149,6 +149,15 @@ record:
 The logger redacts `sessionToken`, `password`, and `passwordHash` field
 values by name as a defense-in-depth check.
 
+## Per-request log line
+
+Every HTTP request emits one `frick.http.request` log line with
+`requestId`, `method`, `path`, `status`, `durationMs`, and (when the
+request resolves a principal) `tenantId` and `userId`. The
+`Authorization` header and any field named `sessionToken`, `password`,
+or `passwordHash` are redacted before emission. Set
+`FRICK_LOG_LEVEL=info` (the default) or higher to see them.
+
 ## Known gaps
 
 - CORS is parsed (`allowedOrigins`) but not yet enforced in HTTP
