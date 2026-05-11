@@ -64,6 +64,12 @@ export interface ServerOptions {
    * {@link DEFAULT_FRICK_LIMITS}.
    */
   limits?: Partial<FrickLimits>;
+  /**
+   * Capacity of the in-process LRU front cache for idempotency lookups.
+   * Defaults to 10,000. Tune lower for quiet single-tenant deployments,
+   * higher for noisy ones. See `docs/operations.md`.
+   */
+  idempotencyCacheCapacity?: number;
 }
 
 export function createFrickServer(options: ServerOptions = {}) {
@@ -82,6 +88,9 @@ export function createFrickServer(options: ServerOptions = {}) {
   const store = new FrickStore({
     path: options.dbPath ?? process.env.FRICK_DB_PATH ?? defaultDatabasePath(),
     schema: foundationSchema,
+    ...(options.idempotencyCacheCapacity !== undefined
+      ? { idempotencyCacheCapacity: options.idempotencyCacheCapacity }
+      : {}),
   });
   const extensions = createFrickExtensionRegistry(options.extensions);
   const policyHooks: readonly FrickPolicyHook[] = options.policyHooks ?? [];

@@ -120,6 +120,31 @@ describe("operational HTTP endpoints", () => {
     expect(body.idempotencyCache.evictions).toBe(0);
   });
 
+  it("/_frick/inspect/db honors operator-tuned idempotencyCacheCapacity and reports evictions", async () => {
+    app = await startServer({ idempotencyCacheCapacity: 2 });
+    for (let i = 0; i < 5; i += 1) {
+      app.store.appendEvent({
+        requestId: `request-tight-${i}`,
+        replicaId: "replica-ops-test",
+        stream: "MessageStream",
+        streamId: "conversation-ops-test",
+        event: "MessageSent",
+        payload: {
+          messageId: `message-ops-${i}`,
+          senderId: "user-ops",
+          body: "ops",
+          createdAt: "2026-05-09T00:00:00.000Z",
+        },
+      });
+    }
+    const response = await fetch(`${app.httpUrl}/_frick/inspect/db`);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.idempotencyCache.capacity).toBe(2);
+    expect(body.idempotencyCache.size).toBeLessThanOrEqual(2);
+    expect(body.idempotencyCache.evictions).toBeGreaterThanOrEqual(3);
+  });
+
   it("hides inspection routes (404) when inspectionEnabled is false", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "frick-ops-"));
     const dbPath = path.join(dir, "frick.sqlite");
