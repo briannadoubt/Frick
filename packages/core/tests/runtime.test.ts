@@ -96,6 +96,49 @@ describe("foundation runtime", () => {
     expect(client.syncStatus.value.cursors["MessageStream:conversation-general"]).toBe(42);
   });
 
+  it("merges projection deltas into the projection signal", () => {
+    const socket = TestWebSocket.prepare();
+    const client = new FrickClient({
+      endpoint: "ws://test",
+      schema: foundationSchema,
+      WebSocketImpl: TestWebSocket as never,
+    });
+
+    const inbox = client.projection<{ unreadCount: number }>("conversation-inbox");
+    client.connect();
+    socket.emit("open", {});
+
+    socket.emit("message", {
+      data: encodeFrame([
+        FrameKind.ProjectionDelta,
+        {
+          projection: "conversation-inbox",
+          changes: [
+            { key: "user-ada:conversation-general", value: { unreadCount: 2 } },
+            { key: "user-grace:conversation-general", value: { unreadCount: 0 } },
+          ],
+        },
+      ]),
+    });
+
+    expect(inbox.value.size).toBe(2);
+    expect(inbox.value.get("user-ada:conversation-general")?.unreadCount).toBe(2);
+    expect(inbox.value.get("user-grace:conversation-general")?.unreadCount).toBe(0);
+
+    socket.emit("message", {
+      data: encodeFrame([
+        FrameKind.ProjectionDelta,
+        {
+          projection: "conversation-inbox",
+          changes: [{ key: "user-grace:conversation-general", value: null }],
+        },
+      ]),
+    });
+
+    expect(inbox.value.size).toBe(1);
+    expect(inbox.value.has("user-grace:conversation-general")).toBe(false);
+  });
+
   it("appends the session token to websocket URLs", () => {
     const socket = TestWebSocket.prepare();
     const client = new FrickClient({

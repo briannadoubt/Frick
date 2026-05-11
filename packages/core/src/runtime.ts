@@ -112,6 +112,8 @@ export class FrickClient {
   #streamSignals = new Map<string, Signal<StreamEventInput[]>>();
   #presenceSignals = new Map<string, Signal<PlainObject | undefined>>();
   #signalSignals = new Map<string, Signal<PlainObject[]>>();
+  #projectionRows = new Map<string, Map<string, PlainObject>>();
+  #projectionSignals = new Map<string, Signal<Map<string, PlainObject>>>();
 
   constructor(options: FrickClientOptions) {
     this.#endpoint = options.endpoint;
@@ -260,6 +262,27 @@ export class FrickClient {
     return signal;
   }
 
+  /**
+   * Subscribe to a projection by name. Returns a Signal whose value is a Map
+   * from projection-defined row key to the latest row value. Updates arrive
+   * via ProjectionDelta frames pushed by the server; `null` values delete
+   * the corresponding key. Auto-subscribes on first access.
+   */
+  projection<T extends PlainObject = PlainObject>(name: string): Signal<Map<string, T>> {
+    const existing = this.#projectionSignals.get(name);
+    if (existing) {
+      return existing as unknown as Signal<Map<string, T>>;
+    }
+    const rows = this.#projectionRows.get(name) ?? new Map<string, PlainObject>();
+    this.#projectionRows.set(name, rows);
+    const signal = new Signal<Map<string, PlainObject>>(new Map(rows));
+    this.#projectionSignals.set(name, signal);
+    if (this.syncStatus.value.connected) {
+      this.#sendSubscribe({ kind: "projection", name });
+    }
+    return signal as unknown as Signal<Map<string, T>>;
+  }
+
   signalChannel(name: string, key: string): Signal<PlainObject[]> {
     const id = streamKey(name, key);
     const existing = this.#signalSignals.get(id);
@@ -376,6 +399,21 @@ export class FrickClient {
           this.#presenceSignals.get(key)?.set(undefined);
         }
         return;
+      case FrameKind.ProjectionDelta: {
+        const { projection, changes } = frame[1];
+        const rows = this.#projectionRows.get(projection) ?? new Map<string, PlainObject>();
+        for (const change of changes) {
+          if (change.value === null) {
+            rows.delete(change.key);
+          } else {
+            rows.set(change.key, change.value);
+          }
+        }
+        this.#projectionRows.set(projection, rows);
+        // Replace the Map reference so listeners observe the change.
+        this.#projectionSignals.get(projection)?.set(new Map(rows));
+        return;
+      }
       case FrameKind.SignalDeliver: {
         const signal = unpackSignalEnvelope(this.schema, frame[1].envelope);
         const id = streamKey(signal.type, signal.key);
@@ -465,9 +503,12 @@ export class FrickClient {
       const [name, key] = splitSubscriptionKey(id);
       this.#sendSubscribe({ kind: "signal", name, key });
     }
+    for (const name of this.#projectionSignals.keys()) {
+      this.#sendSubscribe({ kind: "projection", name });
+    }
   }
 
-  #sendSubscribe(input: { kind: "object" | "stream" | "presence" | "signal"; name: string; key?: string }): void {
+  #sendSubscribe(input: { kind: "object" | "stream" | "presence" | "signal" | "projection"; name: string; key?: string }): void {
     const subscriptionId = input.key ? streamKey(input.name, input.key) : input.name;
     const payload = {
       subscriptionId,
