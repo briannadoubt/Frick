@@ -68,6 +68,16 @@ final class FoundationModel {
     private let deviceId = "ios-demo-device"
     @ObservationIgnored
     private let replicaId = "ios-demo"
+    @ObservationIgnored
+    var socket: FrickSyncSocket?
+    @ObservationIgnored
+    private var socketStatusTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var socketEventsTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var subscribedConversationId: String?
+
+    var syncStatus: FrickSyncStatus = .initial
 
     var title: String {
         guard let selectedConversation else {
@@ -161,23 +171,87 @@ final class FoundationModel {
             conversations = loadedConversations
             roomMembers = loadedRoomMembers
             ensureSelectedConversationExists()
-            guard selectedConversationId == requestedConversationId else {
+            let resolvedConversationId = selectedConversationId
+            // Cold-start: HTTP fetch the existing page so the UI is responsive
+            // before the WS delta stream kicks in.
+            let initial = try await client.fetchMessages(
+                conversationId: resolvedConversationId,
+                readUserId: session.userId
+            )
+            guard currentSession?.sessionToken == sessionToken, selectedConversationId == resolvedConversationId else {
                 return
             }
+            messages = initial
 
-            for try await nextMessages in client.streamMessages(conversationId: requestedConversationId, readUserId: session.userId) {
-                guard currentSession?.sessionToken == sessionToken, selectedConversationId == requestedConversationId else {
-                    return
-                }
-                messages = nextMessages
-                status = "Live"
-            }
+            // Bring up the live WebSocket subscription for this conversation.
+            try await ensureSocket()
+            await resubscribeMessages(for: resolvedConversationId)
+            status = "Live"
         } catch is CancellationError {
             // Normal when signing out or replacing the active stream.
         } catch {
             if currentSession?.sessionToken == sessionToken, selectedConversationId == requestedConversationId {
                 status = error.localizedDescription
             }
+        }
+    }
+
+    private func ensureSocket() async throws {
+        if socket != nil { return }
+        let opened = try client.connectSync()
+        socket = opened
+        socketStatusTask = Task { [weak self] in
+            for await update in await opened.statusUpdates() {
+                await self?.applySyncStatus(update)
+            }
+        }
+        socketEventsTask = Task { [weak self] in
+            do {
+                for try await event in await opened.events {
+                    await self?.handleInbound(event)
+                }
+            } catch {
+                // Stream closed; status updates will reflect the state.
+            }
+        }
+    }
+
+    private func applySyncStatus(_ update: FrickSyncStatus) {
+        syncStatus = update
+    }
+
+    private func handleInbound(_ event: FrickInboundEvent) async {
+        switch event {
+        case .delta(_, let events, _):
+            messages = mergeStreamEvents(messages, events)
+        case .status(let value):
+            syncStatus = value
+        default:
+            break
+        }
+    }
+
+    private func resubscribeMessages(for conversationId: String) async {
+        guard let socket else { return }
+        if subscribedConversationId == conversationId { return }
+        subscribedConversationId = conversationId
+        do {
+            try await socket.subscribe(stream: "MessageStream", key: conversationId)
+        } catch {
+            status = "Subscribe failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func mergeStreamEvents(_ base: [FrickStreamEvent], _ incoming: [FrickStreamEvent]) -> [FrickStreamEvent] {
+        var byId = Dictionary(uniqueKeysWithValues: base.map { ($0.eventId, $0) })
+        for event in incoming {
+            byId[event.eventId] = event
+        }
+        return byId.values.sorted { lhs, rhs in
+            if lhs.streamId != rhs.streamId {
+                return lhs.streamId < rhs.streamId
+            }
+            return lhs.sequence < rhs.sequence
         }
     }
 
@@ -304,6 +378,7 @@ final class FoundationModel {
         draft = ""
         threadError = nil
         status = "Loading"
+        subscribedConversationId = nil
     }
 
     func submitAuth() async {
@@ -354,6 +429,16 @@ final class FoundationModel {
     }
 
     func logout() {
+        Task { [socket, socketStatusTask, socketEventsTask] in
+            await socket?.close()
+            socketStatusTask?.cancel()
+            socketEventsTask?.cancel()
+        }
+        socket = nil
+        socketStatusTask = nil
+        socketEventsTask = nil
+        subscribedConversationId = nil
+        syncStatus = .initial
         client.signOut()
         currentSession = nil
         users = []
