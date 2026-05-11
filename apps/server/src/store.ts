@@ -47,7 +47,7 @@ export class FrickStore {
 
     this.schema = validateSchema(options.schema ?? foundationSchema);
     this.#db = new DatabaseSync(options.path);
-    initializeStorage(this.#db);
+    initializeStorage(this.#db, this.schema.schemaRevision);
     this.#recordSchema();
 
     this.objects = new ObjectStore(this.#db, this.schema);
