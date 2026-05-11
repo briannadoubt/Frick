@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
+  blobDerivativeUrl,
   buildDemoAttachment,
   computeSha256ContentHash,
   createBlobMetadataPayload,
@@ -10,13 +11,21 @@ import {
   login,
   nextReadReceiptPayload,
   postHttpSignal,
+  projectionInboxRowsForUser,
+  readReceiptsForConversation,
+  registerPushDevice,
+  revokePushDevice,
+  searchMessages,
   sentMessageEvents,
   signUp,
   syncDemoAttachment,
+  uploadImageAttachment,
   type ChatMessageEvent,
   type ChatStreamEvent,
   type Conversation,
   type DemoAttachment,
+  type InboxRow,
+  type RoomMember,
 } from "./chat-foundation.js";
 
 const conversations: Conversation[] = [
@@ -588,6 +597,212 @@ describe("HTTP signal helpers", () => {
     expect(calls[0]?.init?.headers).toEqual({ "content-type": "application/json" });
     expect(JSON.parse(String(calls[0]?.init?.body))).toEqual(signal);
     expect(calls[1]?.url).toBe("http://127.0.0.1:4099/signals/WebRTCSignal/conversation%2Fgeneral");
+  });
+});
+
+describe("projectionInboxRowsForUser", () => {
+  test("filters rows whose userId matches and infers userId from key when missing", () => {
+    const rows = new Map<string, InboxRow>([
+      [
+        "user-ada:conversation-general",
+        {
+          conversationId: "conversation-general",
+          userId: "user-ada",
+          lastSequence: 4,
+          readSequence: 2,
+        },
+      ],
+      [
+        "user-grace:conversation-general",
+        {
+          conversationId: "conversation-general",
+          userId: "user-grace",
+          lastSequence: 4,
+          readSequence: 4,
+        },
+      ],
+      [
+        "user-ada:conversation-design",
+        {
+          conversationId: "conversation-design",
+          lastSequence: 1,
+          readSequence: 0,
+        },
+      ],
+    ]);
+
+    const filtered = projectionInboxRowsForUser(rows, "user-ada");
+    expect(filtered).toHaveLength(2);
+    expect(filtered.map((row) => row.conversationId).sort()).toEqual([
+      "conversation-design",
+      "conversation-general",
+    ]);
+    const design = filtered.find((row) => row.conversationId === "conversation-design");
+    expect(design?.userId).toBe("user-ada");
+  });
+});
+
+describe("readReceiptsForConversation", () => {
+  test("returns per-member read sequences excluding the active user", () => {
+    const members: RoomMember[] = [
+      { id: "m-ada", conversationId: "conversation-general", userId: "user-ada", role: "owner" },
+      { id: "m-grace", conversationId: "conversation-general", userId: "user-grace", role: "member" },
+      { id: "m-dorothy", conversationId: "conversation-general", userId: "user-dorothy", role: "member" },
+    ];
+    const inboxRows: InboxRow[] = [
+      { conversationId: "conversation-general", userId: "user-grace", readSequence: 4 },
+      { conversationId: "conversation-general", userId: "user-dorothy", readSequence: 1 },
+      { conversationId: "conversation-general", userId: "user-ada", readSequence: 5 },
+    ];
+
+    const receipts = readReceiptsForConversation({
+      conversationId: "conversation-general",
+      members,
+      inboxRows,
+      activeUserId: "user-ada",
+    });
+
+    expect(receipts).toEqual([
+      { userId: "user-grace", readSequence: 4 },
+      { userId: "user-dorothy", readSequence: 1 },
+    ]);
+  });
+});
+
+describe("blob derivative url", () => {
+  test("encodes blob id and derivative name into the canonical path", () => {
+    expect(blobDerivativeUrl("http://127.0.0.1:4099/", "blob-img-abc", "thumb")).toBe(
+      "http://127.0.0.1:4099/blobs/blob-img-abc/derivatives/thumb/content",
+    );
+  });
+});
+
+describe("searchMessages", () => {
+  test("posts to /search with the messages-fts index and an optional conversation filter", async () => {
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    const fetchImpl = async (input: URL, init?: RequestInit) => {
+      calls.push({ url: input.toString(), init });
+      return new Response(
+        JSON.stringify({
+          schemaHash: "h",
+          index: "messages-fts",
+          hits: [{ docId: "event-1", score: 0.5, fields: { conversationId: "conversation-general" } }],
+          total: 1,
+        }),
+        { status: 200 },
+      );
+    };
+
+    await expect(
+      searchMessages({
+        httpEndpoint: "http://127.0.0.1:4099/",
+        q: "hello",
+        conversationId: "conversation-general",
+        sessionToken: "session-token",
+        fetchImpl,
+      }),
+    ).resolves.toMatchObject({ index: "messages-fts", total: 1 });
+
+    expect(calls[0]?.url).toBe("http://127.0.0.1:4099/search");
+    expect(calls[0]?.init?.method).toBe("POST");
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
+      index: "messages-fts",
+      q: "hello",
+      limit: 50,
+      filter: { conversationId: "conversation-general" },
+    });
+    expect(headersObject(calls[0]?.init?.headers)).toEqual({
+      authorization: "Bearer session-token",
+      "content-type": "application/json",
+    });
+  });
+});
+
+describe("push registration helpers", () => {
+  test("registerPushDevice posts the device payload and parses the registration", async () => {
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    const fetchImpl = async (input: URL, init?: RequestInit) => {
+      calls.push({ url: input.toString(), init });
+      return new Response(
+        JSON.stringify({ registration: { id: "reg-1", deviceId: "device-web", platform: "test" } }),
+        { status: 201 },
+      );
+    };
+
+    await expect(
+      registerPushDevice({
+        httpEndpoint: "http://127.0.0.1:4099/",
+        deviceId: "device-web",
+        token: "tok-123",
+        sessionToken: "session-token",
+        fetchImpl,
+      }),
+    ).resolves.toEqual({ id: "reg-1", deviceId: "device-web", platform: "test" });
+
+    expect(calls[0]?.url).toBe("http://127.0.0.1:4099/push/registrations");
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
+      deviceId: "device-web",
+      token: "tok-123",
+      platform: "test",
+      environment: "production",
+    });
+  });
+
+  test("revokePushDevice DELETEs and swallows 404 responses", async () => {
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    const fetchImpl = async (input: URL, init?: RequestInit) => {
+      calls.push({ url: input.toString(), init });
+      return new Response(null, { status: 404 });
+    };
+
+    await expect(
+      revokePushDevice({
+        httpEndpoint: "http://127.0.0.1:4099/",
+        registrationId: "reg-1",
+        sessionToken: "session-token",
+        fetchImpl,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(calls[0]?.url).toBe("http://127.0.0.1:4099/push/registrations/reg-1");
+    expect(calls[0]?.init?.method).toBe("DELETE");
+  });
+});
+
+describe("uploadImageAttachment", () => {
+  test("posts blob metadata then PUTs the image bytes to /content", async () => {
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    const bytes = new Uint8Array([1, 2, 3, 4]);
+    const file = new File([bytes], "cat.png", { type: "image/png" });
+    const fetchImpl = async (input: URL, init?: RequestInit) => {
+      calls.push({ url: input.toString(), init });
+      if (calls.length === 1) {
+        return new Response(JSON.stringify({ ok: true }), { status: 201 });
+      }
+      return new Response(null, { status: 204 });
+    };
+
+    const metadata = await uploadImageAttachment({
+      httpEndpoint: "http://127.0.0.1:4099/",
+      file,
+      ownerId: "user-ada",
+      sessionToken: "session-token",
+      fetchImpl,
+    });
+
+    expect(metadata.mimeType).toBe("image/png");
+    expect(metadata.byteLength).toBe(4);
+    expect(metadata.blobId).toMatch(/^blob-img-/);
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.url).toBe("http://127.0.0.1:4099/blobs");
+    expect(calls[1]?.url).toContain("/blobs/");
+    expect(calls[1]?.url).toContain("/content?ownerId=user-ada");
+    expect(calls[1]?.init?.method).toBe("PUT");
+    expect(headersObject(calls[1]?.init?.headers)).toEqual({
+      authorization: "Bearer session-token",
+      "content-type": "image/png",
+    });
   });
 });
 

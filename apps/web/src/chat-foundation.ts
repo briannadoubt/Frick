@@ -114,6 +114,78 @@ export interface CreatedConversationResponse {
   members: RoomMember[];
 }
 
+export interface SearchHit {
+  docId: string;
+  score: number;
+  fields: Record<string, string | number>;
+}
+
+export interface SearchResponse {
+  schemaHash: string;
+  index: string;
+  hits: SearchHit[];
+  total: number;
+}
+
+export interface PushRegistration {
+  id: string;
+  deviceId: string;
+  platform: string;
+  environment?: string;
+}
+
+export interface PushRegistrationResponse {
+  registration: PushRegistration;
+}
+
+/** Selects the rows from a `useProjection` Map that belong to `userId`. */
+export function projectionInboxRowsForUser(
+  rows: Map<string, InboxRow>,
+  userId: string,
+): InboxRow[] {
+  const filtered: InboxRow[] = [];
+  for (const [key, row] of rows) {
+    if (row.userId === userId) {
+      filtered.push(row);
+      continue;
+    }
+    // Server keys rows as `${userId}:${conversationId}`; fall back to the key
+    // when the projection payload doesn't echo userId.
+    if (!row.userId && key.startsWith(`${userId}:`)) {
+      filtered.push({ ...row, userId });
+    }
+  }
+  return filtered;
+}
+
+/**
+ * Per-conversation "read by" map derived from the inbox projection. For each
+ * member, returns the highest sequence they have acknowledged (their
+ * `readSequence`). Senders don't see themselves in the result.
+ */
+export function readReceiptsForConversation(input: {
+  conversationId: string;
+  members: RoomMember[];
+  inboxRows: InboxRow[];
+  activeUserId: string;
+}): { userId: string; readSequence: number }[] {
+  const sequenceByUser = new Map<string, number>();
+  for (const row of input.inboxRows) {
+    if (row.conversationId !== input.conversationId) continue;
+    if (!row.userId) continue;
+    if (typeof row.readSequence !== "number") continue;
+    sequenceByUser.set(row.userId, row.readSequence);
+  }
+  const result: { userId: string; readSequence: number }[] = [];
+  for (const member of input.members) {
+    if (member.conversationId !== input.conversationId) continue;
+    if (member.userId === input.activeUserId) continue;
+    const readSequence = sequenceByUser.get(member.userId) ?? 0;
+    result.push({ userId: member.userId, readSequence });
+  }
+  return result;
+}
+
 export function sentMessageEvents(events: ChatStreamEvent[]): ChatMessageEvent[] {
   return events.filter((event): event is ChatMessageEvent => {
     const payload = event.payload as Partial<ChatMessageEvent["payload"]>;
@@ -370,6 +442,157 @@ export async function drainHttpSignals<TSignal extends PlainObject = PlainObject
     throw new Error("Signal drain returned invalid JSON");
   }
   return signals as TSignal[];
+}
+
+export async function searchMessages({
+  httpEndpoint,
+  q,
+  conversationId,
+  sessionToken,
+  limit = 50,
+  fetchImpl = fetch,
+}: {
+  httpEndpoint: string;
+  q: string;
+  conversationId?: string | undefined;
+  sessionToken?: string | undefined;
+  limit?: number | undefined;
+  fetchImpl?: FetchImpl | undefined;
+}): Promise<SearchResponse> {
+  const baseUrl = `${httpEndpoint.replace(/\/$/, "")}/`;
+  const body: Record<string, unknown> = {
+    index: "messages-fts",
+    q,
+    limit,
+  };
+  if (conversationId) {
+    body.filter = { conversationId };
+  }
+  const response = await fetchImpl(new URL("/search", baseUrl), {
+    method: "POST",
+    headers: authorizedHeaders(sessionToken, { "content-type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw new Error(await authErrorMessage(response, "Search"));
+  }
+  return (await response.json()) as SearchResponse;
+}
+
+export async function registerPushDevice({
+  httpEndpoint,
+  deviceId,
+  token,
+  platform = "test",
+  environment = "production",
+  sessionToken,
+  fetchImpl = fetch,
+}: {
+  httpEndpoint: string;
+  deviceId: string;
+  token: string;
+  platform?: string | undefined;
+  environment?: "production" | "sandbox" | undefined;
+  sessionToken?: string | undefined;
+  fetchImpl?: FetchImpl | undefined;
+}): Promise<PushRegistration> {
+  const baseUrl = `${httpEndpoint.replace(/\/$/, "")}/`;
+  const response = await fetchImpl(new URL("/push/registrations", baseUrl), {
+    method: "POST",
+    headers: authorizedHeaders(sessionToken, { "content-type": "application/json" }),
+    body: JSON.stringify({ deviceId, token, platform, environment }),
+  });
+  if (!response.ok) {
+    throw new Error(await authErrorMessage(response, "Push registration"));
+  }
+  const json = (await response.json()) as PushRegistrationResponse;
+  return json.registration;
+}
+
+export async function revokePushDevice({
+  httpEndpoint,
+  registrationId,
+  sessionToken,
+  fetchImpl = fetch,
+}: {
+  httpEndpoint: string;
+  registrationId: string;
+  sessionToken?: string | undefined;
+  fetchImpl?: FetchImpl | undefined;
+}): Promise<void> {
+  const baseUrl = `${httpEndpoint.replace(/\/$/, "")}/`;
+  const response = await fetchImpl(
+    new URL(`/push/registrations/${encodeURIComponent(registrationId)}`, baseUrl),
+    {
+      method: "DELETE",
+      headers: authorizedHeaders(sessionToken),
+    },
+  );
+  if (!response.ok && response.status !== 404) {
+    throw new Error(await authErrorMessage(response, "Push revoke"));
+  }
+}
+
+export async function uploadImageAttachment({
+  httpEndpoint,
+  file,
+  ownerId,
+  sessionToken,
+  fetchImpl = fetch,
+}: {
+  httpEndpoint: string;
+  file: File;
+  ownerId: string;
+  sessionToken?: string | undefined;
+  fetchImpl?: FetchImpl | undefined;
+}): Promise<AttachmentMetadata> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const contentHash = await computeSha256ContentHash(bytes);
+  const mimeType = file.type || "application/octet-stream";
+  const blobId = `blob-img-${crypto.randomUUID()}`;
+  const metadata: AttachmentMetadata = {
+    blobId,
+    name: file.name || "attachment",
+    byteLength: bytes.byteLength,
+    mimeType,
+    contentHash,
+  };
+  const baseUrl = `${httpEndpoint.replace(/\/$/, "")}/`;
+  const metadataResponse = await fetchImpl(new URL("/blobs", baseUrl), {
+    method: "POST",
+    headers: authorizedHeaders(sessionToken, { "content-type": "application/json" }),
+    body: JSON.stringify(createBlobMetadataPayload(metadata, ownerId)),
+  });
+  if (!metadataResponse.ok) {
+    throw new Error(await authErrorMessage(metadataResponse, "Blob metadata"));
+  }
+  const contentUrl = new URL(
+    `/blobs/${encodeURIComponent(blobId)}/content?ownerId=${encodeURIComponent(ownerId)}`,
+    baseUrl,
+  );
+  const uploadResponse = await fetchImpl(contentUrl, {
+    method: "PUT",
+    headers: authorizedHeaders(sessionToken, { "content-type": mimeType }),
+    body: arrayBufferCopy(bytes),
+  });
+  if (!uploadResponse.ok) {
+    throw new Error(await authErrorMessage(uploadResponse, "Blob upload"));
+  }
+  return metadata;
+}
+
+export function blobContentUrl(httpEndpoint: string, blobId: string): string {
+  const base = httpEndpoint.replace(/\/$/, "");
+  return `${base}/blobs/${encodeURIComponent(blobId)}/content`;
+}
+
+export function blobDerivativeUrl(
+  httpEndpoint: string,
+  blobId: string,
+  derivative: string,
+): string {
+  const base = httpEndpoint.replace(/\/$/, "");
+  return `${base}/blobs/${encodeURIComponent(blobId)}/derivatives/${encodeURIComponent(derivative)}/content`;
 }
 
 export async function createConversation({
