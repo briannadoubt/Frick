@@ -272,6 +272,18 @@ URL routing and Hello handshake only — storage is server-shared.**
 Partitioning the SQLite layer per app (an `app_id` column on relevant
 tables and corresponding read/write scoping) is a follow-up slice.
 
+## Schema lint
+
+Use `frick lint` to validate the current foundation schema (`frick lint`)
+or to diff it against a previous snapshot (`frick lint --against ./prev.json`).
+Findings are JSON Lines with a stable `ruleId` (e.g. `object.removed`,
+`field.required.added`) so CI can filter or suppress rules without parsing
+free-form messages; the CLI exits 1 when any finding has severity
+`breaking`. The same linter is available over HTTP at
+`POST /_frick/admin/schema/lint` (admin-only, audit-logged as
+`schema.lint`); the body is `{ previous?: FrickSchema }` and the response
+is `{ findings, breakingCount }`.
+
 ## Known gaps
 
 - CORS is parsed (`allowedOrigins`) but not yet enforced in HTTP

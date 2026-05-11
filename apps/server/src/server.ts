@@ -8,6 +8,8 @@ import { encode as msgpackEncode } from "@msgpack/msgpack";
 import {
   createFrickErrorEnvelope,
   foundationSchema,
+  lintSchema,
+  lintSchemaChange,
   type FrickErrorCode,
   type FrickSchema,
 } from "@frick/protocol";
@@ -2850,6 +2852,35 @@ async function handleAdminRoute(
     const result = store.adminAudit.verifyChain();
     const status = result.valid ? 200 : 409;
     sendJson(response, status, result);
+    return;
+  }
+
+  if (request.method === "POST" && sub === "schema/lint") {
+    try {
+      const body = await readJsonBody(request, maxBodyBytes);
+      const previous = body.previous;
+      const result =
+        previous === undefined
+          ? lintSchema(store.schema)
+          : lintSchemaChange(store.schema, previous as FrickSchema);
+      audit({
+        action: "schema.lint",
+        outcome: "allow",
+        detail: {
+          mode: previous === undefined ? "single" : "change",
+          findings: result.findings.length,
+          breaking: result.breakingCount,
+        },
+      });
+      sendJson(response, 200, result);
+    } catch (error) {
+      audit({
+        action: "schema.lint",
+        outcome: "error",
+        detail: { error: error instanceof Error ? error.message : String(error) },
+      });
+      throw error;
+    }
     return;
   }
 
