@@ -78,6 +78,12 @@ server exposes three additional GET endpoints under `/_frick/inspect/`:
   appliedAt, checksum, durationMs }, ...] }` read from the
   `frick_migrations` ledger.
 - `/_frick/inspect/db` — `{ ready, applied, lastApplied?, idempotencyCache }`.
+- `/_frick/inspect/metrics` — `{ snapshotAt, uptimeSeconds, counters, gauges }`.
+  Returns a JSON snapshot of in-process counters and gauges. Counter names
+  include `frick.http.requests.total{method,status}`,
+  `frick.http.errors.total{code}`, and `frick.ws.frames.total{kind}`. Gauges
+  include `frick.ws.connections.current`. No retention or historical
+  aggregation — scrape periodically to integrate with a metrics backend.
 
 The `idempotencyCache` object reports the in-memory front cache state —
 `size` (currently held entries), `capacity` (configured maximum), and
