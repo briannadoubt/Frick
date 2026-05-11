@@ -7,6 +7,15 @@ export interface Principal {
 export interface MembershipReader {
   hasUser(userId: string): boolean;
   isRoomMember(conversationId: string, userId: string): boolean;
+  /**
+   * Returns `true` when a conversation with this id exists. Used by
+   * {@link assertCanSignal} to scope membership enforcement to signals
+   * keyed by a known conversation — signals keyed by unrelated rooms
+   * (e.g. ad-hoc call ids) are not gated by conversation membership.
+   * Optional for backwards compatibility with callers built against
+   * the original two-method interface.
+   */
+  hasConversation?(conversationId: string): boolean;
 }
 
 /**
@@ -132,6 +141,25 @@ export function decide(input: FrickPolicyInput, memberships: MembershipReader): 
       }
       return ALLOW;
     }
+    case "signal.send": {
+      const conversationId = resource.key;
+      if (!conversationId) {
+        return ALLOW;
+      }
+      // Only enforce membership when the key references a known conversation.
+      // Signals keyed by other room-like objects (e.g. ad-hoc CallRoom ids)
+      // are not gated by conversation membership in this slice.
+      if (!memberships.hasConversation || !memberships.hasConversation(conversationId)) {
+        return ALLOW;
+      }
+      if (!memberships.isRoomMember(conversationId, principal.userId)) {
+        return deny(
+          "notMember",
+          `${principal.userId} is not a member of ${conversationId}`,
+        );
+      }
+      return ALLOW;
+    }
     case "stream.read":
     case "stream.append": {
       if (resource.name !== "MessageStream") {
@@ -220,7 +248,27 @@ export function assertCanAppend(
   }
 }
 
-export function assertCanSignal(_principal: Principal, _signal: string, _key: string): void {}
+export function assertCanSignal(
+  principal: Principal,
+  signal: string,
+  key: string,
+  memberships?: MembershipReader,
+): void {
+  // Without a membership reader we can't tell whether the signal key is
+  // a conversation we should gate on. This is the legacy code path
+  // (e.g. the WebSocket gateway) and remains permissive for now —
+  // conversation-keyed enforcement happens only when a reader is supplied.
+  if (!memberships) {
+    return;
+  }
+  const decision = decide(
+    { principal, action: "signal.send", resource: { kind: "signal", name: signal, key } },
+    memberships,
+  );
+  if (!decision.allow) {
+    throw new AuthorizationError(decision);
+  }
+}
 
 export function assertCanReadInbox(principal: Principal, userId: string, memberships: MembershipReader): void {
   const decision = decide(

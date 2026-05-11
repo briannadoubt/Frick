@@ -203,6 +203,10 @@ export class FrickStore {
     return this.listRoomMembers(conversationId).some((member) => member.userId === userId);
   }
 
+  hasConversation(conversationId: string): boolean {
+    return this.readObject("Conversation", conversationId) !== undefined;
+  }
+
   hasUser(userId: string): boolean {
     return this.readObject("User", userId) !== undefined;
   }

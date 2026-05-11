@@ -11,6 +11,7 @@ import {
   assertBlobOwnership,
   assertCanAppend,
   assertCanReadInbox,
+  assertCanSignal,
   assertCanSubscribe,
   type Principal,
 } from "./authz.js";
@@ -442,6 +443,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     const signalRoute = parseSignalPath(url);
     if (signalRoute && request.method === "POST") {
       try {
+        assertCanSignal(principal, signalRoute.name, signalRoute.key, store);
         const value = await readJsonBody(request);
         store.enqueueSignal(signalRoute.name, signalRoute.key, value);
         gateway.publishSignal(signalRoute.name, signalRoute.key, value);

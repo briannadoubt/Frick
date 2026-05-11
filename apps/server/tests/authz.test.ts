@@ -87,6 +87,31 @@ describe("authorization denial envelopes", () => {
     expect(body.error.details.reason).toBe("ownerMismatch");
   });
 
+  it("denies non-members POSTing signals to another conversation with reason notMember", async () => {
+    app = await startServer();
+    app.store.upsertObject("User", "user-mallory", {
+      displayName: "Mallory",
+      avatarBlobId: undefined,
+    });
+    const malloryLogin = await devLogin(app.httpUrl, { userId: "user-mallory" });
+
+    const response = await fetch(`${app.httpUrl}/signals/WebRTCSignal/conversation-general`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders(malloryLogin.sessionToken) },
+      body: JSON.stringify({
+        senderDeviceId: "device-mallory",
+        kind: "offer",
+        payload: "sdp-from-outsider",
+      }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(isFrickErrorEnvelope(body.error)).toBe(true);
+    expect(body.error.code).toBe("auth.forbidden");
+    expect(body.error.details.reason).toBe("notMember");
+  });
+
   it("denies reading another user's inbox with notAuthorizedForResource", async () => {
     app = await startServer();
     const adaLogin = await devLogin(app.httpUrl, { userId: "user-ada" });
