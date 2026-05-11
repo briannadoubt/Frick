@@ -60,6 +60,7 @@ import { FrickObjectVersionConflictError } from "./storage/object-errors.js";
 import { loadFrickConfig, type FrickConfig, type FrickConfigOverrides } from "./config.js";
 import { createConsoleLogger, createNoopLogger, type FrickLogger } from "./logger.js";
 import { FrickLimitError, mergeLimits, type FrickLimits } from "./limits.js";
+import { resolveTenantLimits } from "./tenant-config.js";
 import { createInMemoryMetrics, type FrickMetrics } from "./metrics.js";
 import {
   createFrickJobRegistry,
@@ -705,10 +706,15 @@ export function createFrickServer(options: ServerOptions = {}) {
       return;
     }
     onPrincipal(principal);
+    // Resolve per-tenant limits once per request; the tenant_settings table
+    // is read in a single point query so this is cheap relative to the rest
+    // of the handler. Shadowing the outer `limits` keeps the existing
+    // `limits.maxXxx` call sites untouched.
+    const tenantLimits = resolveTenantLimits(principal.tenantId, store, limits);
 
     if (request.method === "POST" && url.pathname === "/conversations") {
       try {
-        const body = await readJsonBody(request, limits.maxHttpBodyBytes);
+        const body = await readJsonBody(request, tenantLimits.maxHttpBodyBytes);
         const kind = parseConversationKind(typeof body.kind === "string" ? body.kind : "group");
         const title =
           typeof body.title === "string" && body.title.trim().length > 0
@@ -754,7 +760,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     const objectWriteRoute = parseObjectWritePath(url);
     if (objectWriteRoute && (request.method === "POST" || request.method === "PUT")) {
       try {
-        const value = await readJsonBody(request, limits.maxHttpBodyBytes);
+        const value = await readJsonBody(request, tenantLimits.maxHttpBodyBytes);
         // Inline auth check: any authenticated principal may write any object
         // within their tenant. TODO(authz): integrate with the policy
         // `decide()` for `object.write` once the round-3 wiring stabilizes —
@@ -835,7 +841,7 @@ export function createFrickServer(options: ServerOptions = {}) {
 
     if (request.method === "POST" && url.pathname === "/push/registrations") {
       try {
-        const body = await readJsonBody(request, limits.maxHttpBodyBytes);
+        const body = await readJsonBody(request, tenantLimits.maxHttpBodyBytes);
         const deviceId = requireString(body.deviceId, "deviceId");
         const platform = requireString(body.platform, "platform");
         if (!isPushPlatform(platform)) {
@@ -943,7 +949,7 @@ export function createFrickServer(options: ServerOptions = {}) {
 
     if (request.method === "POST" && url.pathname === "/search") {
       try {
-        const body = await readJsonBody(request, limits.maxHttpBodyBytes);
+        const body = await readJsonBody(request, tenantLimits.maxHttpBodyBytes);
         const indexName = requireString(body.index, "index");
         const q = requireString(body.q, "q");
         const def = store.searchIndexes.get(indexName);
@@ -995,7 +1001,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     const blobContentId = parseBlobContentPath(url);
     if (blobContentId && request.method === "PUT") {
       try {
-        const content = await readRawBody(request, limits.maxBlobBytes, "maxBlobBytes");
+        const content = await readRawBody(request, tenantLimits.maxBlobBytes, "maxBlobBytes");
         const metadata = store.blobs.read(principal.tenantId, blobContentId);
         const contentHash = sha256ContentHash(content);
         let responseStatus = 200;
@@ -1192,7 +1198,7 @@ export function createFrickServer(options: ServerOptions = {}) {
 
     if (request.method === "POST" && url.pathname === "/blobs") {
       try {
-        const body = await readJsonBody(request, limits.maxHttpBodyBytes);
+        const body = await readJsonBody(request, tenantLimits.maxHttpBodyBytes);
         const ownerId = requireString(body.ownerId, "ownerId");
         assertBlobOwnership(principal, ownerId, policyHooks);
         store.blobs.create(principal.tenantId, {
@@ -1220,7 +1226,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           tenantMembershipReader(store, principal.tenantId),
           policyHooks,
         );
-        const value = await readJsonBody(request, limits.maxHttpBodyBytes);
+        const value = await readJsonBody(request, tenantLimits.maxHttpBodyBytes);
         store.enqueueSignal(principal.tenantId, signalRoute.name, signalRoute.key, value);
         gateway.publishSignal(signalRoute.name, signalRoute.key, value, principal.tenantId);
         sendJson(response, 200, { ok: true });
@@ -1286,12 +1292,12 @@ export function createFrickServer(options: ServerOptions = {}) {
 
     if (request.method === "POST" && url.pathname === "/append") {
       try {
-        const body = await readJsonBody(request, limits.maxHttpBodyBytes);
+        const body = await readJsonBody(request, tenantLimits.maxHttpBodyBytes);
         const stream = requireString(body.stream, "stream");
         const key = requireString(body.key, "key");
         const event = requireString(body.event, "event");
         const payload = requireRecord(body.payload, "payload");
-        assertPayloadWithinLimit(payload, limits.maxStreamAppendPayloadBytes);
+        assertPayloadWithinLimit(payload, tenantLimits.maxStreamAppendPayloadBytes);
         assertCanAppend(
           principal,
           stream,
