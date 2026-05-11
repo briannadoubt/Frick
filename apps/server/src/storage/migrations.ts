@@ -404,6 +404,28 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
         ON idempotency_keys (created_at);
     `,
   },
+  {
+    // Tenants ledger: tenants were emergent strings before this migration —
+    // any session referencing a tenant id implicitly created one. The ledger
+    // makes them explicit so the server can list them and admins can refuse
+    // traffic for unknown tenants. `INSERT OR IGNORE` covers the
+    // already-present `_default` case so the migration stays idempotent on
+    // databases that somehow already have the row.
+    id: "0004_tenants_ledger",
+    schemaRevision: 1,
+    description: "Create explicit tenants ledger and backfill the default tenant.",
+    sql: `
+      CREATE TABLE IF NOT EXISTS tenants (
+        tenant_id TEXT PRIMARY KEY NOT NULL,
+        display_name TEXT,
+        created_at TEXT NOT NULL,
+        archived_at TEXT
+      );
+
+      INSERT OR IGNORE INTO tenants (tenant_id, display_name, created_at)
+      VALUES ('_default', 'Default Tenant', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+    `,
+  },
 ];
 
 /** Names of all framework tables (and indexes) the runner manages. Used by the
@@ -423,6 +445,7 @@ export const FRAMEWORK_TABLES: readonly string[] = [
   "jobs",
   "auth_sessions",
   "auth_accounts",
+  "tenants",
 ];
 
 export interface MigrationRunResult {

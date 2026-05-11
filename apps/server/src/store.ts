@@ -11,6 +11,7 @@ import { ObjectStore } from "./storage/object-store.js";
 import { PresenceStore } from "./storage/presence-store.js";
 import { initializeStorage } from "./storage/schema.js";
 import { SessionStore, type StoredSession } from "./storage/session-store.js";
+import { TenantStore } from "./storage/tenant-store.js";
 import { SignalStore } from "./storage/signal-store.js";
 import { StreamStore, type AppendInput, type AppendResult, type StoredEvent } from "./storage/stream-store.js";
 import { BoundedIdempotencyCache } from "./storage/idempotency-cache.js";
@@ -93,6 +94,7 @@ export class FrickStore {
   readonly jobs: JobStore;
   readonly sessions: SessionStore;
   readonly accounts: AccountStore;
+  readonly tenants: TenantStore;
 
   readonly #db: DatabaseSync;
   readonly #idempotencyCacheCapacity: number;
@@ -130,6 +132,7 @@ export class FrickStore {
     this.jobs = new JobStore(this.#db);
     this.sessions = new SessionStore(this.#db);
     this.accounts = new AccountStore(this.#db);
+    this.tenants = new TenantStore(this.#db);
     this.inbox.repairInvalidReadCursors();
 
     if (options.seed ?? true) {

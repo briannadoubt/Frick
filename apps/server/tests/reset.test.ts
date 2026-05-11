@@ -39,8 +39,8 @@ describe("resetFrickDatabase", () => {
     const result = runFrameworkMigrations(db, {
       supportedSchemaRevision: foundationSchema.schemaRevision,
     });
-    expect(result.applied).toHaveLength(3);
-    expect(listAppliedMigrations(db)).toHaveLength(3);
+    expect(result.applied).toHaveLength(4);
+    expect(listAppliedMigrations(db)).toHaveLength(4);
     db.close();
   });
 
