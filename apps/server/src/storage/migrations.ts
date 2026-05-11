@@ -451,6 +451,53 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
         ON admin_audit_log (action, occurred_at DESC);
     `,
   },
+  {
+    // Jobs lifecycle: the foundation `jobs` table shipped with just
+    // (id, job_type, packed, status, created_at, tenant_id). The framework's
+    // background worker needs claim/retry/dead-letter columns, an idempotency
+    // key, an `available_at` timestamp so callers can defer execution, and a
+    // bounded retry policy via `max_attempts` / `attempt_count`. We also need
+    // `last_error_code` / `last_error_message` so operators can debug failures
+    // without consulting external logs.
+    //
+    // Existing rows wrote status = 'queued'; the new state machine uses
+    // 'ready' / 'running' / 'completed' / 'dead_lettered'. Backfill 'queued'
+    // → 'ready' so any in-flight queued rows survive the upgrade. 'running'
+    // rows from a crashed previous run are also rewound to 'ready' so the
+    // worker can re-claim them — at-least-once semantics, plus `attempt_count`
+    // is incremented to reflect the prior crashed attempt.
+    id: "0006_jobs_lifecycle",
+    schemaRevision: 1,
+    description:
+      "Extend jobs table with claim/retry/dead-letter lifecycle columns and supporting indexes.",
+    sql: `
+      ALTER TABLE jobs ADD COLUMN available_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z';
+      ALTER TABLE jobs ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 5;
+      ALTER TABLE jobs ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE jobs ADD COLUMN claimed_at TEXT;
+      ALTER TABLE jobs ADD COLUMN claimed_by TEXT;
+      ALTER TABLE jobs ADD COLUMN completed_at TEXT;
+      ALTER TABLE jobs ADD COLUMN failed_at TEXT;
+      ALTER TABLE jobs ADD COLUMN dead_lettered_at TEXT;
+      ALTER TABLE jobs ADD COLUMN idempotency_key TEXT;
+      ALTER TABLE jobs ADD COLUMN last_error_code TEXT;
+      ALTER TABLE jobs ADD COLUMN last_error_message TEXT;
+
+      -- Backfill the available_at default to the row's created_at so legacy
+      -- rows become immediately claimable rather than sitting at the epoch.
+      UPDATE jobs SET available_at = created_at WHERE available_at = '1970-01-01T00:00:00.000Z';
+
+      -- Rewind legacy 'queued'/'running' rows into the new 'ready' state.
+      UPDATE jobs SET status = 'ready' WHERE status = 'queued';
+      UPDATE jobs SET status = 'ready', attempt_count = attempt_count + 1 WHERE status = 'running';
+
+      CREATE INDEX IF NOT EXISTS idx_jobs_status_available_at
+        ON jobs (tenant_id, status, available_at);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency_key
+        ON jobs (tenant_id, job_type, idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
+    `,
+  },
 ];
 
 /** Names of all framework tables (and indexes) the runner manages. Used by the

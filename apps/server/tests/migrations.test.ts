@@ -52,6 +52,7 @@ describe("framework migration runner", () => {
       "0003_tenant_boundary",
       "0004_tenants_ledger",
       "0005_admin_audit_log",
+      "0006_jobs_lifecycle",
     ]);
     expect(result.applied[0]?.schemaRevision).toBe(1);
     expect(result.applied[0]?.checksum).toMatch(/^sha256-[0-9a-f]{64}$/);
@@ -64,6 +65,7 @@ describe("framework migration runner", () => {
       "0003_tenant_boundary",
       "0004_tenants_ledger",
       "0005_admin_audit_log",
+      "0006_jobs_lifecycle",
     ]);
 
     const tables = listTables(db);
@@ -85,10 +87,10 @@ describe("framework migration runner", () => {
       supportedSchemaRevision: foundationSchema.schemaRevision,
     });
 
-    expect(first.applied).toHaveLength(5);
+    expect(first.applied).toHaveLength(6);
     expect(second.applied).toHaveLength(0);
-    expect(second.alreadyApplied).toHaveLength(5);
-    expect(listAppliedMigrations(db)).toHaveLength(5);
+    expect(second.alreadyApplied).toHaveLength(6);
+    expect(listAppliedMigrations(db)).toHaveLength(6);
 
     db.close();
   });
@@ -215,6 +217,7 @@ describe("framework migration runner", () => {
       "0003_tenant_boundary",
       "0004_tenants_ledger",
       "0005_admin_audit_log",
+      "0006_jobs_lifecycle",
       "9000_test_extra",
     ]);
     expect(listTables(db)).toContain("test_extra");
