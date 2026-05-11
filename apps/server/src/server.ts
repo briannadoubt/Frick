@@ -21,16 +21,24 @@ import { SseRegistry } from "./sync/sse.js";
 import type { StoredAccount } from "./storage/account-store.js";
 import type { StoredSession } from "./storage/session-store.js";
 import { FrickStore } from "./store.js";
+import { loadFrickConfig, type FrickConfig, type FrickConfigOverrides } from "./config.js";
 
 export interface ServerOptions {
   port?: number;
   dbPath?: string;
   sseHeartbeatMs?: number;
   extensions?: FrickExtensionRegistryInput;
+  /**
+   * Runtime config. Either a fully-resolved {@link FrickConfig} or a partial
+   * override object — when partial, missing fields are filled in via
+   * {@link loadFrickConfig}. Omit to load entirely from env vars.
+   */
+  config?: FrickConfig | FrickConfigOverrides;
 }
 
 export function createFrickServer(options: ServerOptions = {}) {
   const port = options.port ?? Number(process.env.PORT ?? 4099);
+  const config = resolveConfig(options.config);
   const store = new FrickStore({
     path: options.dbPath ?? process.env.FRICK_DB_PATH ?? defaultDatabasePath(),
     schema: foundationSchema,
@@ -85,7 +93,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           displayName,
           password,
         });
-        const session = createSessionForUser(store, account.userId, deviceId, replicaId, platform);
+        const session = createSessionForUser(store, account.userId, deviceId, replicaId, platform, config);
 
         sendJson(response, 201, authSessionResponse(store, session, account));
       } catch (error) {
@@ -106,7 +114,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         const platform = parsePlatform(typeof body.platform === "string" ? body.platform : "web");
         const deviceId = typeof body.deviceId === "string" && body.deviceId.length > 0 ? body.deviceId : `device-${randomToken(12)}`;
         const replicaId = typeof body.replicaId === "string" && body.replicaId.length > 0 ? body.replicaId : `replica-${randomToken(12)}`;
-        const session = createSessionForUser(store, account.userId, deviceId, replicaId, platform);
+        const session = createSessionForUser(store, account.userId, deviceId, replicaId, platform, config);
 
         sendJson(response, 200, authSessionResponse(store, session, account));
       } catch (error) {
@@ -125,7 +133,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         const platform = parsePlatform(typeof body.platform === "string" ? body.platform : "web");
         const deviceId = typeof body.deviceId === "string" && body.deviceId.length > 0 ? body.deviceId : `device-${randomToken(12)}`;
         const replicaId = typeof body.replicaId === "string" && body.replicaId.length > 0 ? body.replicaId : `replica-${randomToken(12)}`;
-        const session = createSessionForUser(store, userId, deviceId, replicaId, platform);
+        const session = createSessionForUser(store, userId, deviceId, replicaId, platform, config);
 
         sendJson(response, 200, {
           schemaHash: store.schema.hash,
@@ -421,7 +429,25 @@ export function createFrickServer(options: ServerOptions = {}) {
     });
   }
 
-  return { port, server, store, extensions, listen, close };
+  return { port, server, store, extensions, config, listen, close };
+}
+
+function resolveConfig(input: FrickConfig | FrickConfigOverrides | undefined): FrickConfig {
+  if (!input) {
+    return loadFrickConfig();
+  }
+  if (isFrickConfig(input)) {
+    return input;
+  }
+  return loadFrickConfig(input);
+}
+
+function isFrickConfig(value: FrickConfig | FrickConfigOverrides): value is FrickConfig {
+  return (
+    typeof (value as FrickConfig).env === "string" &&
+    typeof (value as FrickConfig).demoAuthEnabled === "boolean" &&
+    typeof (value as FrickConfig).sessionTtlSeconds === "number"
+  );
 }
 
 export function defaultDatabasePath(): string {
@@ -621,8 +647,9 @@ function createSessionForUser(
   deviceId: string,
   replicaId: string,
   platform: "web" | "ios" | "android" | "server",
+  config: FrickConfig,
 ): StoredSession {
-  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+  const expiresAt = new Date(Date.now() + config.sessionTtlSeconds * 1000).toISOString();
   const sessionToken = randomToken(32);
   store.recordUserDevice(deviceId, userId, platform);
   return store.createSession({ sessionToken, userId, deviceId, replicaId, expiresAt });
