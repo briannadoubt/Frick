@@ -454,6 +454,33 @@ describe("account auth helpers", () => {
       platform: "web",
     });
   });
+
+  test("login surfaces shared error envelope messages", async () => {
+    const fetchImpl = async () =>
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "auth.unauthenticated",
+            message: "Nope",
+            requestId: "login_rejected",
+            retryable: false,
+          },
+        }),
+        {
+          status: 401,
+          headers: { "content-type": "application/json" },
+        },
+      );
+
+    await expect(
+      login({
+        httpEndpoint: "http://127.0.0.1:4099/",
+        identity: "dorothy",
+        password: "correct horse battery staple",
+        fetchImpl,
+      }),
+    ).rejects.toThrow("Nope");
+  });
 });
 
 describe("conversation helpers", () => {

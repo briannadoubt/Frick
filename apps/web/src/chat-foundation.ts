@@ -1,4 +1,4 @@
-import type { PlainObject, StreamEventInput } from "@frick/protocol";
+import type { FrickErrorEnvelope, PlainObject, StreamEventInput } from "@frick/protocol";
 
 export type User = PlainObject & {
   id: string;
@@ -71,6 +71,11 @@ export interface AuthSession {
   expiresAt: string;
   displayName?: string;
   handle?: string;
+}
+
+export interface FrickHttpErrorBody {
+  error?: FrickErrorEnvelope;
+  message?: string;
 }
 
 export type DevSession = AuthSession;
@@ -597,9 +602,15 @@ async function postAuthSession({
 
 async function authErrorMessage(response: Response, statusName: string): Promise<string> {
   try {
-    const body = (await response.clone().json()) as unknown;
-    if (body && typeof body === "object" && "message" in body && typeof body.message === "string") {
-      return body.message;
+    const body = (await response.clone().json()) as FrickHttpErrorBody | unknown;
+    if (body && typeof body === "object") {
+      const error = "error" in body ? body.error : undefined;
+      if (error && typeof error === "object" && "message" in error && typeof error.message === "string") {
+        return error.message;
+      }
+      if ("message" in body && typeof body.message === "string") {
+        return body.message;
+      }
     }
   } catch {
     // Fall back to the status line when the server did not return JSON.

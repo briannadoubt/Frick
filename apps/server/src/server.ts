@@ -3,7 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
-import { foundationSchema } from "@frick/protocol";
+import { createFrickErrorEnvelope, foundationSchema, type FrickErrorCode } from "@frick/protocol";
 import {
   AuthenticationError,
   AuthorizationError,
@@ -441,12 +441,34 @@ function sendJson(response: http.ServerResponse, status: number, body: unknown):
   response.end(JSON.stringify(body));
 }
 
-function sendError(response: http.ServerResponse, error: unknown, code: string): void {
+function sendError(response: http.ServerResponse, error: unknown, requestId: string): void {
   const status = error instanceof AuthenticationError ? 401 : error instanceof AuthorizationError ? 403 : 400;
-  sendJson(response, status, {
-    error: code,
+  const envelope = createFrickErrorEnvelope({
+    code: httpErrorCode(error),
     message: error instanceof Error ? error.message : "Unknown request error",
+    requestId,
+    retryable: false,
+    details: { routeCode: requestId },
+    schemaHash: foundationSchema.hash,
+    schemaRevision: foundationSchema.schemaRevision,
   });
+  sendJson(response, status, {
+    error: envelope,
+    code: envelope.code,
+    message: envelope.message,
+    requestId: envelope.requestId,
+    retryable: envelope.retryable,
+  });
+}
+
+function httpErrorCode(error: unknown): FrickErrorCode {
+  if (error instanceof AuthenticationError) {
+    return "auth.unauthenticated";
+  }
+  if (error instanceof AuthorizationError) {
+    return "auth.forbidden";
+  }
+  return "sync.protocolError";
 }
 
 async function readJsonBody(request: http.IncomingMessage): Promise<Record<string, unknown>> {
