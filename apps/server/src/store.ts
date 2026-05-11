@@ -17,6 +17,7 @@ import { InboxStore, type ConversationInboxRow } from "./storage/inbox-store.js"
 import { JobStore, type StoredJob } from "./storage/job-store.js";
 import { ObjectStore, type ObjectUpsertResult } from "./storage/object-store.js";
 import { PresenceStore } from "./storage/presence-store.js";
+import { PushRegistrationStore } from "./storage/push-registration-store.js";
 import { initializeStorage } from "./storage/schema.js";
 import { SessionStore, type StoredSession } from "./storage/session-store.js";
 import { TenantStore } from "./storage/tenant-store.js";
@@ -125,6 +126,7 @@ export class FrickStore {
   readonly accounts: AccountStore;
   readonly tenants: TenantStore;
   readonly adminAudit: AdminAuditStore;
+  readonly pushRegistrations: PushRegistrationStore;
   readonly projections: FrickProjectionRegistry;
   readonly #logger: FrickLogger;
 
@@ -166,6 +168,7 @@ export class FrickStore {
     this.accounts = new AccountStore(this.#db);
     this.tenants = new TenantStore(this.#db);
     this.adminAudit = new AdminAuditStore(this.#db);
+    this.pushRegistrations = new PushRegistrationStore(this.#db);
     this.projections = options.projections ?? createFrickProjectionRegistry();
     this.#logger = options.logger ?? createNoopLogger();
     this.inbox.repairInvalidReadCursors();

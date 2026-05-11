@@ -498,6 +498,33 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
         WHERE idempotency_key IS NOT NULL;
     `,
   },
+  {
+    // Push device registrations: one row per (tenantId, userId, deviceId,
+    // platform) pair. `revoked_at` is the soft-delete marker — partial indexes
+    // ensure uniqueness only over active rows so a revoke-then-re-register
+    // flow doesn't collide with the now-tombstoned row.
+    id: "0007_push_registrations",
+    schemaRevision: 1,
+    description: "Create push_device_registrations for the notification framework.",
+    sql: `
+      CREATE TABLE IF NOT EXISTS push_device_registrations (
+        registration_id TEXT PRIMARY KEY NOT NULL,
+        tenant_id TEXT NOT NULL DEFAULT '_default',
+        user_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        token TEXT NOT NULL,
+        environment TEXT NOT NULL DEFAULT 'production',
+        created_at TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL,
+        revoked_at TEXT
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_push_device_registrations_tenant_user_device_platform
+        ON push_device_registrations (tenant_id, user_id, device_id, platform) WHERE revoked_at IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_push_device_registrations_tenant_user
+        ON push_device_registrations (tenant_id, user_id) WHERE revoked_at IS NULL;
+    `,
+  },
 ];
 
 /** Names of all framework tables (and indexes) the runner manages. Used by the
@@ -519,6 +546,7 @@ export const FRAMEWORK_TABLES: readonly string[] = [
   "auth_accounts",
   "tenants",
   "admin_audit_log",
+  "push_device_registrations",
 ];
 
 export interface MigrationRunResult {
