@@ -1,5 +1,6 @@
 import http from "node:http";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
@@ -145,6 +146,34 @@ export function createFrickServer(options: ServerOptions = {}) {
 
   async function handleHttp(request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
+    const requestId = randomUUID();
+    const startedAt = performance.now();
+    let requestLogger = logger.child({
+      requestId,
+      method: request.method ?? "",
+      path: url.pathname,
+    });
+    try {
+      await dispatchHttp(request, response, url, (principal) => {
+        requestLogger = requestLogger.child({
+          tenantId: principal.tenantId,
+          userId: principal.userId,
+        });
+      });
+    } finally {
+      requestLogger.info("frick.http.request", {
+        status: response.statusCode,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+    }
+  }
+
+  async function dispatchHttp(
+    request: http.IncomingMessage,
+    response: http.ServerResponse,
+    url: URL,
+    onPrincipal: (principal: Principal) => void,
+  ): Promise<void> {
     const requestOrigin = headerValue(request, "origin");
     const originAllowed = isOriginAllowed(requestOrigin, config.allowedOrigins);
     setCors(response, requestOrigin, config.allowedOrigins, originAllowed);
@@ -406,6 +435,7 @@ export function createFrickServer(options: ServerOptions = {}) {
       sendError(response, principal, "unauthorized");
       return;
     }
+    onPrincipal(principal);
 
     if (request.method === "POST" && url.pathname === "/conversations") {
       try {
