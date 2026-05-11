@@ -154,6 +154,25 @@ export function useSendSignal(
   return useCallback((value: PlainObject) => client.sendSignal(name, key, value), [client, name, key]);
 }
 
+/**
+ * Subscribe to a server-side projection by name. Returns a Map keyed by the
+ * projection's row key. Updates arrive via ProjectionDelta frames; `null`
+ * values delete the corresponding key.
+ */
+export function useProjection<T extends PlainObject = PlainObject>(
+  name: string,
+): Map<string, T> {
+  const client = useFrick();
+  const signal = useMemo(() => client.projection<T>(name), [client, name]);
+  return useSignalValue(signal);
+}
+
+/** Convenience wrapper returning the projection rows as an array. */
+export function useProjectionRows<T extends PlainObject = PlainObject>(name: string): T[] {
+  const rows = useProjection<T>(name);
+  return useMemo(() => Array.from(rows.values()), [rows]);
+}
+
 export function useSyncStatus(): SyncStatus {
   const client = useFrick();
   return useSignalValue(client.syncStatus);
