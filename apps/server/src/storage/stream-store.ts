@@ -9,6 +9,7 @@ import {
   type PlainObject,
   type StreamEventInput,
 } from "@frick/protocol";
+import type { IdempotencyCache } from "./idempotency-cache.js";
 
 export interface AppendInput {
   requestId: string;
@@ -38,11 +39,18 @@ export class StreamStore {
   constructor(
     private readonly db: DatabaseSync,
     private readonly schema: FrickSchema,
+    private readonly idempotencyCache?: IdempotencyCache<StoredEvent>,
   ) {}
 
   append(input: AppendInput): AppendResult {
+    const cacheKey = `${input.replicaId}|${input.requestId}`;
+    const cached = this.idempotencyCache?.get(cacheKey);
+    if (cached) {
+      return { event: cached, created: false };
+    }
     const existing = this.readIdempotentEvent(input.replicaId, input.requestId);
     if (existing) {
+      this.idempotencyCache?.set(cacheKey, existing);
       return { event: existing, created: false };
     }
 
@@ -85,6 +93,7 @@ export class StreamStore {
       )
       .run(input.replicaId, input.requestId, eventId, createdAt);
 
+    this.idempotencyCache?.set(cacheKey, event);
     return { event, created: true };
   }
 

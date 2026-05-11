@@ -13,12 +13,29 @@ import { initializeStorage } from "./storage/schema.js";
 import { SessionStore, type StoredSession } from "./storage/session-store.js";
 import { SignalStore } from "./storage/signal-store.js";
 import { StreamStore, type AppendInput, type AppendResult, type StoredEvent } from "./storage/stream-store.js";
+import { BoundedIdempotencyCache } from "./storage/idempotency-cache.js";
 import { listAppliedMigrations, type AppliedMigrationRow } from "./storage/migrations.js";
+
+/**
+ * Default capacity of the in-process idempotency front-cache. Sized to absorb
+ * the request-id working set of a moderately busy server (~10k recent appends)
+ * while keeping worst-case memory bounded. Capacity-evicted entries fall
+ * through to the durable `idempotency_keys` SQLite table on the next lookup,
+ * so this is purely a hot-path optimisation — never a correctness boundary.
+ */
+export const DEFAULT_IDEMPOTENCY_CACHE_CAPACITY = 10_000;
 
 export interface StoreOptions {
   path: string;
   schema?: FrickSchema;
   seed?: boolean;
+  /**
+   * Capacity of the in-process LRU front cache for idempotency lookups.
+   * Defaults to {@link DEFAULT_IDEMPOTENCY_CACHE_CAPACITY}. Eviction is purely
+   * recency-based; evicted entries simply fall through to the SQLite source
+   * of truth on the next access.
+   */
+  idempotencyCacheCapacity?: number;
 }
 
 export interface CreatedConversation {
@@ -38,6 +55,7 @@ export class FrickStore {
   readonly jobs: JobStore;
   readonly sessions: SessionStore;
   readonly accounts: AccountStore;
+  readonly idempotencyCache: BoundedIdempotencyCache<StoredEvent>;
 
   readonly #db: DatabaseSync;
 
@@ -51,8 +69,11 @@ export class FrickStore {
     initializeStorage(this.#db, this.schema.schemaRevision);
     this.#recordSchema();
 
+    this.idempotencyCache = new BoundedIdempotencyCache<StoredEvent>(
+      options.idempotencyCacheCapacity ?? DEFAULT_IDEMPOTENCY_CACHE_CAPACITY,
+    );
     this.objects = new ObjectStore(this.#db, this.schema);
-    this.streams = new StreamStore(this.#db, this.schema);
+    this.streams = new StreamStore(this.#db, this.schema, this.idempotencyCache);
     this.presence = new PresenceStore(this.#db, this.schema);
     this.signals = new SignalStore(this.#db, this.schema);
     this.blobs = new BlobStore(this.#db);

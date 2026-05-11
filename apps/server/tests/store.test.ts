@@ -60,6 +60,62 @@ describe("FrickStore foundation storage", () => {
     expect(store.readEvents("MessageStream", "conversation-general", 0)).toHaveLength(1);
   });
 
+  it("preserves idempotency when the front cache evicts the entry", () => {
+    // Capacity of 1 forces the original request's cache entry to be evicted
+    // by the second distinct request. The repeated append of request-1 must
+    // still resolve to the same eventId by falling through to SQLite.
+    store = new FrickStore({ path: ":memory:", seed: true, idempotencyCacheCapacity: 1 });
+
+    const first = store.appendEvent({
+      requestId: "request-1",
+      replicaId: "replica-1",
+      stream: "MessageStream",
+      streamId: "conversation-general",
+      event: "MessageSent",
+      payload: {
+        messageId: "message-1",
+        senderId: "user-ada",
+        body: "first",
+        createdAt: "2026-05-09T00:00:00.000Z",
+      },
+    });
+
+    // Different requestId — evicts request-1 from the front cache.
+    store.appendEvent({
+      requestId: "request-2",
+      replicaId: "replica-1",
+      stream: "MessageStream",
+      streamId: "conversation-general",
+      event: "MessageSent",
+      payload: {
+        messageId: "message-2",
+        senderId: "user-ada",
+        body: "second",
+        createdAt: "2026-05-09T00:00:01.000Z",
+      },
+    });
+
+    expect(store.idempotencyCache.evictions).toBeGreaterThan(0);
+
+    // Replaying request-1 must still hit the durable idempotency table.
+    const replay = store.appendEvent({
+      requestId: "request-1",
+      replicaId: "replica-1",
+      stream: "MessageStream",
+      streamId: "conversation-general",
+      event: "MessageSent",
+      payload: {
+        messageId: "message-1",
+        senderId: "user-ada",
+        body: "first",
+        createdAt: "2026-05-09T00:00:00.000Z",
+      },
+    });
+    expect(replay.created).toBe(false);
+    expect(replay.event.eventId).toBe(first.event.eventId);
+    expect(replay.event.sequence).toBe(first.event.sequence);
+  });
+
   it("stores presence leases, signal envelopes, blob metadata, and jobs", () => {
     store = new FrickStore({ path: ":memory:", seed: true });
 
