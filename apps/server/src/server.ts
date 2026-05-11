@@ -102,6 +102,13 @@ export function createFrickServer(options: ServerOptions = {}) {
       : {}),
   });
   const extensions = createFrickExtensionRegistry(options.extensions);
+  // Precompute the admin token fingerprint once so audit-log inserts don't
+  // hash on every request. SHA-256 truncated to 12 hex chars: short enough to
+  // skim in logs, long enough that two distinct tokens collide with
+  // negligible probability for the operator-token cardinalities we expect.
+  const adminTokenFingerprint = config.adminToken
+    ? createHash("sha256").update(config.adminToken).digest("hex").slice(0, 12)
+    : "";
   const policyHooks: readonly FrickPolicyHook[] = options.policyHooks ?? [];
   let inFlight = 0;
   let closing = false;
@@ -310,7 +317,14 @@ export function createFrickServer(options: ServerOptions = {}) {
         return;
       }
       try {
-        await handleAdminRoute(request, response, url, store, limits.maxHttpBodyBytes);
+        await handleAdminRoute(
+          request,
+          response,
+          url,
+          store,
+          limits.maxHttpBodyBytes,
+          adminTokenFingerprint,
+        );
       } catch (error) {
         sendError(response, error, "admin_rejected");
       }
@@ -1244,27 +1258,82 @@ async function handleAdminRoute(
   url: URL,
   store: FrickStore,
   maxBodyBytes: number,
+  adminTokenFingerprint: string,
 ): Promise<void> {
   const sub = url.pathname.slice("/_frick/admin/".length);
 
+  // Helper that records an audit row. Wrapped so we can swallow audit-store
+  // failures rather than letting an audit hiccup mask the real handler
+  // response — losing one audit row beats failing a legitimate admin call.
+  const audit = (input: {
+    action: string;
+    target?: string;
+    outcome: "allow" | "deny" | "error";
+    detail?: Record<string, unknown>;
+  }): void => {
+    try {
+      store.adminAudit.record({
+        adminTokenFingerprint,
+        action: input.action,
+        ...(input.target !== undefined ? { target: input.target } : {}),
+        outcome: input.outcome,
+        ...(input.detail !== undefined ? { detail: JSON.stringify(input.detail) } : {}),
+      });
+    } catch {
+      // Audit failures are best-effort. Don't tear down the request.
+    }
+  };
+
+  if (request.method === "GET" && sub === "audit-log") {
+    const sinceParam = url.searchParams.get("since") ?? undefined;
+    const actionParam = url.searchParams.get("action") ?? undefined;
+    const limitParam = url.searchParams.get("limit");
+    const options: { since?: string; action?: string; limit?: number } = {};
+    if (sinceParam !== undefined) options.since = sinceParam;
+    if (actionParam !== undefined) options.action = actionParam;
+    if (limitParam !== null) {
+      const parsed = Number.parseInt(limitParam, 10);
+      if (Number.isFinite(parsed)) options.limit = parsed;
+    }
+    const entries = store.adminAudit.list(options);
+    sendJson(response, 200, { entries });
+    return;
+  }
+
   if (request.method === "GET" && sub === "tenants") {
+    // Read-side audit deliberately skipped: list-tenants is the admin UI's
+    // poll target and would dwarf mutation rows. Documented as a known gap
+    // in docs/operations.md so operators know reads aren't traced here.
     const includeArchived = url.searchParams.get("includeArchived") === "true";
     sendJson(response, 200, { tenants: store.tenants.list(includeArchived) });
     return;
   }
 
   if (request.method === "POST" && sub === "tenants") {
-    const body = await readJsonBody(request, maxBodyBytes);
-    const tenantId = requireString(body.tenantId, "tenantId");
-    const displayName =
-      typeof body.displayName === "string" && body.displayName.length > 0
-        ? body.displayName
-        : undefined;
+    let tenantId: string | undefined;
     try {
+      const body = await readJsonBody(request, maxBodyBytes);
+      tenantId = requireString(body.tenantId, "tenantId");
+      const displayName =
+        typeof body.displayName === "string" && body.displayName.length > 0
+          ? body.displayName
+          : undefined;
       const row = store.tenants.create(tenantId, displayName);
+      audit({
+        action: "tenants.create",
+        target: tenantId,
+        outcome: "allow",
+        detail: displayName !== undefined ? { displayName } : {},
+      });
       sendJson(response, 201, row);
     } catch (error) {
       if (error instanceof TenantAlreadyExistsError) {
+        audit({
+          action: "tenants.create",
+          target: error.tenantId,
+          outcome: "deny",
+          detail: { reason: "tenantExists" },
+        });
         const envelope = createFrickErrorEnvelope({
           code: "sync.protocolError",
           message: error.message,
@@ -1283,6 +1352,12 @@ async function handleAdminRoute(
         });
         return;
       }
+      audit({
+        action: "tenants.create",
+        ...(tenantId !== undefined ? { target: tenantId } : {}),
+        outcome: "error",
+        detail: { error: error instanceof Error ? error.message : String(error) },
+      });
       throw error;
     }
     return;
@@ -1293,17 +1368,35 @@ async function handleAdminRoute(
     const tenantId = decodeURIComponent(archiveMatch[1]!);
     const existing = store.tenants.get(tenantId);
     if (!existing) {
+      audit({
+        action: "tenants.archive",
+        target: tenantId,
+        outcome: "deny",
+        detail: { reason: "tenantNotFound" },
+      });
       sendJson(response, 404, { error: "tenant_not_found" });
       return;
     }
-    store.tenants.archive(tenantId);
-    const row = store.tenants.get(tenantId);
-    sendJson(response, 200, row);
+    try {
+      store.tenants.archive(tenantId);
+      const row = store.tenants.get(tenantId);
+      audit({ action: "tenants.archive", target: tenantId, outcome: "allow" });
+      sendJson(response, 200, row);
+    } catch (error) {
+      audit({
+        action: "tenants.archive",
+        target: tenantId,
+        outcome: "error",
+        detail: { error: error instanceof Error ? error.message : String(error) },
+      });
+      throw error;
+    }
     return;
   }
 
   const showMatch = /^tenants\/([^/]+)$/.exec(sub);
   if (request.method === "GET" && showMatch) {
+    // Read-side audit skipped — see GET /tenants comment above.
     const tenantId = decodeURIComponent(showMatch[1]!);
     const row = store.tenants.get(tenantId);
     if (!row) {
