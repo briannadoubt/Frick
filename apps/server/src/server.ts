@@ -2134,6 +2134,66 @@ async function handleAdminRoute(
     return;
   }
 
+  // Per-tenant settings. The routes are placed before the bare
+  // `^tenants/(...)$` show route so the more specific `/settings` segment
+  // matches first.
+  const settingsListMatch = /^tenants\/([^/]+)\/settings$/.exec(sub);
+  if (request.method === "GET" && settingsListMatch) {
+    const tenantId = decodeURIComponent(settingsListMatch[1]!);
+    try {
+      const settings = store.tenantSettings.list(tenantId);
+      audit({ action: "tenants.settings.list", target: tenantId, outcome: "allow" });
+      sendJson(response, 200, { tenantId, settings });
+    } catch (error) {
+      audit({
+        action: "tenants.settings.list",
+        target: tenantId,
+        outcome: "error",
+        detail: { error: error instanceof Error ? error.message : String(error) },
+      });
+      throw error;
+    }
+    return;
+  }
+
+  const settingsPutMatch = /^tenants\/([^/]+)\/settings\/([^/]+)$/.exec(sub);
+  if (request.method === "PUT" && settingsPutMatch) {
+    const tenantId = decodeURIComponent(settingsPutMatch[1]!);
+    const settingKey = decodeURIComponent(settingsPutMatch[2]!);
+    try {
+      // Read the raw bytes so the body can be any JSON value — number,
+      // string, or object. readJsonBody assumes an object envelope, which
+      // is too strict for a setting like `retentionMs: 60000`.
+      const raw = await readBoundedRawBody(request, maxBodyBytes, "maxHttpBodyBytes");
+      let value: unknown = null;
+      if (raw.byteLength > 0) {
+        try {
+          value = JSON.parse(raw.toString("utf8")) as unknown;
+        } catch (parseError) {
+          throw new Error(
+            `body must be a valid JSON value (${parseError instanceof Error ? parseError.message : String(parseError)})`,
+          );
+        }
+      }
+      store.tenantSettings.set(tenantId, settingKey, value);
+      audit({
+        action: "tenants.settings.put",
+        target: `${tenantId}/${settingKey}`,
+        outcome: "allow",
+      });
+      sendJson(response, 200, { tenantId, key: settingKey, value });
+    } catch (error) {
+      audit({
+        action: "tenants.settings.put",
+        target: `${tenantId}/${settingKey}`,
+        outcome: "error",
+        detail: { error: error instanceof Error ? error.message : String(error) },
+      });
+      throw error;
+    }
+    return;
+  }
+
   const showMatch = /^tenants\/([^/]+)$/.exec(sub);
   if (request.method === "GET" && showMatch) {
     // Read-side audit skipped — see GET /tenants comment above.
