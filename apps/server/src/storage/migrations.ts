@@ -603,6 +603,32 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
       END;
     `,
   },
+  {
+    // Per-tenant settings: a small key/value table for runtime config knobs
+    // applied on a per-tenant basis. Values are JSON-encoded so the table
+    // shape stays uniform across knob types (numbers, strings, structured
+    // objects). The primary key is (tenant_id, setting_key) so each tenant
+    // gets its own namespace.
+    //
+    // Known keys at the time of this migration:
+    //   "limits"      — partial FrickLimits overrides (merged over defaults)
+    //   "retentionMs" — per-tenant override for idempotency_keys retention
+    //
+    // Schema revision stays at 1: this is server-side runtime config and
+    // never crosses the wire.
+    id: "0010_tenant_settings",
+    schemaRevision: 1,
+    description: "Create tenant_settings table for per-tenant runtime config knobs.",
+    sql: `
+      CREATE TABLE IF NOT EXISTS tenant_settings (
+        tenant_id TEXT NOT NULL,
+        setting_key TEXT NOT NULL,
+        setting_value TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, setting_key)
+      );
+    `,
+  },
 ];
 
 /** Names of all framework tables (and indexes) the runner manages. Used by the
@@ -628,6 +654,7 @@ export const FRAMEWORK_TABLES: readonly string[] = [
   "blob_derivatives",
   "search_indexes",
   "search_index_fts",
+  "tenant_settings",
 ];
 
 export interface MigrationRunResult {

@@ -56,6 +56,7 @@ describe("framework migration runner", () => {
       "0007_push_registrations",
       "0008_blob_derivatives",
       "0009_search_indexes",
+      "0010_tenant_settings",
     ]);
     expect(result.applied[0]?.schemaRevision).toBe(1);
     expect(result.applied[0]?.checksum).toMatch(/^sha256-[0-9a-f]{64}$/);
@@ -72,6 +73,7 @@ describe("framework migration runner", () => {
       "0007_push_registrations",
       "0008_blob_derivatives",
       "0009_search_indexes",
+      "0010_tenant_settings",
     ]);
 
     const tables = listTables(db);
@@ -93,10 +95,10 @@ describe("framework migration runner", () => {
       supportedSchemaRevision: foundationSchema.schemaRevision,
     });
 
-    expect(first.applied).toHaveLength(9);
+    expect(first.applied).toHaveLength(10);
     expect(second.applied).toHaveLength(0);
-    expect(second.alreadyApplied).toHaveLength(9);
-    expect(listAppliedMigrations(db)).toHaveLength(9);
+    expect(second.alreadyApplied).toHaveLength(10);
+    expect(listAppliedMigrations(db)).toHaveLength(10);
 
     db.close();
   });
@@ -227,6 +229,7 @@ describe("framework migration runner", () => {
       "0007_push_registrations",
       "0008_blob_derivatives",
       "0009_search_indexes",
+      "0010_tenant_settings",
       "9000_test_extra",
     ]);
     expect(listTables(db)).toContain("test_extra");
