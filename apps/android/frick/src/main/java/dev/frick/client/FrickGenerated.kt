@@ -10,6 +10,55 @@ const val FRICK_MINIMUM_CLIENT_REVISION: Int = 1
 const val FRICK_MINIMUM_SERVER_REVISION: Int = 1
 const val FRICK_SCHEMA_HASH: String = "frick-foundation-2026-05-09-dev-auth"
 
+/**
+ * Type-id → name and (typeId → (fieldId → fieldName)) tables for the
+ * foundation schema. Used by [FrickSyncSocket] to translate packed Delta
+ * tuples (PackedObjectRecord / PackedStreamEvent) into named-field shapes
+ * for consumers.
+ */
+internal val FRICK_OBJECT_NAMES: Map<Int, String> = mapOf(
+  1 to "User",
+  2 to "Conversation",
+  3 to "RoomMember",
+  4 to "CallRoom",
+  5 to "UserDevice",
+  6 to "UserSession",
+)
+internal val FRICK_STREAM_NAMES: Map<Int, String> = mapOf(
+  1 to "MessageStream",
+  2 to "CallEventStream",
+)
+internal val FRICK_EVENT_NAMES: Map<Int, String> = mapOf(
+  1 to "MessageSent",
+  2 to "MessageEdited",
+  3 to "MessageRedacted",
+  4 to "ReactionAdded",
+  5 to "ReceiptAdvanced",
+  6 to "CallCreated",
+  7 to "CallParticipantJoined",
+  8 to "CallParticipantLeft",
+  9 to "CallEnded",
+)
+internal val FRICK_OBJECT_FIELDS: Map<Int, Map<Int, String>> = mapOf(
+  1 to mapOf(1 to "displayName", 2 to "avatarBlobId"),
+  2 to mapOf(1 to "kind", 2 to "title", 3 to "createdBy", 4 to "lastMessageEventId"),
+  3 to mapOf(1 to "conversationId", 2 to "userId", 3 to "role"),
+  4 to mapOf(1 to "conversationId", 2 to "state", 3 to "createdBy"),
+  5 to mapOf(1 to "userId", 2 to "label", 3 to "platform", 4 to "lastSeenAt"),
+  6 to mapOf(1 to "userId", 2 to "deviceId", 3 to "replicaId", 4 to "expiresAt"),
+)
+internal val FRICK_EVENT_FIELDS: Map<Int, Map<Int, String>> = mapOf(
+  1 to mapOf(1 to "messageId", 2 to "senderId", 3 to "body", 4 to "createdAt", 5 to "attachmentBlobIds"),
+  2 to mapOf(1 to "messageId", 2 to "body", 3 to "editedAt"),
+  3 to mapOf(1 to "messageId", 2 to "redactedAt"),
+  4 to mapOf(1 to "messageId", 2 to "userId", 3 to "emoji"),
+  5 to mapOf(1 to "userId", 2 to "sequence"),
+  6 to mapOf(1 to "callId", 2 to "createdBy"),
+  7 to mapOf(1 to "userId", 2 to "deviceId"),
+  8 to mapOf(1 to "userId", 2 to "deviceId"),
+  9 to mapOf(1 to "endedAt"),
+)
+
 data class UserDto(
   val id: String,
   val displayName: String,

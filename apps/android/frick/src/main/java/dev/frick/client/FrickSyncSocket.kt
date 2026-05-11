@@ -528,12 +528,17 @@ class FrickSyncSocket internal constructor(
                 _events.tryEmit(FrickInboundEvent.Nack(requestId, envelope))
             }
             FrameKindCodes.DELTA -> {
-                @Suppress("UNCHECKED_CAST")
+                // Delta `objects` and `events` arrive on the wire as packed
+                // positional tuples — `PackedObjectRecord` and
+                // `PackedStreamEvent`. The previous implementation cast each
+                // entry as `Map<String, Any?>` and silently dropped every one,
+                // because the wire form is `List<Any?>`. Resolve type/field
+                // names via the generated `FRICK_*` descriptor tables and emit
+                // named-field maps for consumers.
                 val objects = (payload.listField("objects") ?: emptyList())
-                    .mapNotNull { it as? Map<String, Any?> }
-                @Suppress("UNCHECKED_CAST")
+                    .mapNotNull(::decodePackedObjectRecord)
                 val events = (payload.listField("events") ?: emptyList())
-                    .mapNotNull { it as? Map<String, Any?> }
+                    .mapNotNull(::decodePackedStreamEvent)
                 val cursor = payload.intField("cursor") ?: 0
                 _events.tryEmit(FrickInboundEvent.Delta(objects, events, cursor))
             }
@@ -567,6 +572,73 @@ class FrickSyncSocket internal constructor(
             }
             // Other kinds handled in follow-up commits.
         }
+    }
+
+    /**
+     * Decode a `PackedObjectRecord` tuple `[objectTypeId, recordId, packedFields]`
+     * into a named-field map: `{ type, id, value }`. `value` is itself a
+     * `Map<String, Any?>` keyed by field name. Returns null when the tuple is
+     * malformed or the object type id is not in [FRICK_OBJECT_NAMES].
+     */
+    private fun decodePackedObjectRecord(raw: Any?): Map<String, Any?>? {
+        val tuple = raw as? List<*> ?: return null
+        if (tuple.size < 3) return null
+        val typeId = (tuple[0] as? Number)?.toInt() ?: return null
+        val id = tuple[1] as? String ?: return null
+        val typeName = FRICK_OBJECT_NAMES[typeId] ?: return null
+        val fieldTable = FRICK_OBJECT_FIELDS[typeId] ?: emptyMap()
+        val packedFields = tuple[2] as? List<*> ?: emptyList<Any?>()
+        val value = unpackFields(packedFields, fieldTable).toMutableMap()
+        value["id"] = id
+        return mapOf("type" to typeName, "id" to id, "value" to value)
+    }
+
+    /**
+     * Decode a `PackedStreamEvent` tuple
+     * `[streamTypeId, streamKey, sequence, eventId, eventTypeId, packedFields]`
+     * into a named-field map: `{ stream, streamId, sequence, eventId, event, payload }`.
+     * Returns null when the tuple is malformed or the stream/event type id is
+     * not in [FRICK_STREAM_NAMES] / [FRICK_EVENT_NAMES].
+     */
+    private fun decodePackedStreamEvent(raw: Any?): Map<String, Any?>? {
+        val tuple = raw as? List<*> ?: return null
+        if (tuple.size < 6) return null
+        val streamTypeId = (tuple[0] as? Number)?.toInt() ?: return null
+        val streamKey = tuple[1] as? String ?: return null
+        val sequence = (tuple[2] as? Number)?.toInt() ?: return null
+        val eventId = tuple[3] as? String ?: return null
+        val eventTypeId = (tuple[4] as? Number)?.toInt() ?: return null
+        val streamName = FRICK_STREAM_NAMES[streamTypeId] ?: return null
+        val eventName = FRICK_EVENT_NAMES[eventTypeId] ?: return null
+        val fieldTable = FRICK_EVENT_FIELDS[eventTypeId] ?: emptyMap()
+        val packedFields = tuple[5] as? List<*> ?: emptyList<Any?>()
+        val payload = unpackFields(packedFields, fieldTable)
+        return mapOf(
+            "stream" to streamName,
+            "streamId" to streamKey,
+            "sequence" to sequence,
+            "eventId" to eventId,
+            "event" to eventName,
+            "payload" to payload,
+        )
+    }
+
+    /**
+     * Translate a packed field list `[[fieldId, value], ...]` into a named
+     * map using the provided fieldId → fieldName table. Unknown field ids are
+     * preserved under a stringified-id key so callers can still observe them
+     * after a schema bump (forward compatibility).
+     */
+    private fun unpackFields(packed: List<*>, fieldTable: Map<Int, String>): Map<String, Any?> {
+        val result = LinkedHashMap<String, Any?>(packed.size)
+        for (entry in packed) {
+            val pair = entry as? List<*> ?: continue
+            if (pair.size < 2) continue
+            val fieldId = (pair[0] as? Number)?.toInt() ?: continue
+            val name = fieldTable[fieldId] ?: "#$fieldId"
+            result[name] = pair[1]
+        }
+        return result
     }
 
     private inner class Listener : WebSocketListener() {

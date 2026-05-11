@@ -40,6 +40,31 @@ describe("native artifacts", () => {
     expect(kotlin).toContain("val attachmentBlobIds: JsonElement? = null");
   });
 
+  it("emits Swift schema descriptor tables for objects, streams, and events", () => {
+    const swift = generateSwiftArtifact(foundationSchema);
+
+    expect(swift).toContain("public enum FrickSchemaDescriptor");
+    expect(swift).toContain("public static let objectNames: [Int: String]");
+    expect(swift).toContain("public static let streamNames: [Int: String]");
+    expect(swift).toContain("public static let eventNames: [Int: String]");
+    expect(swift).toContain("public static let objectFields: [Int: [Int: String]]");
+    expect(swift).toContain("public static let eventFields: [Int: [Int: String]]");
+    expect(swift).toMatch(/"MessageSent"/);
+    expect(swift).toMatch(/"MessageStream"/);
+  });
+
+  it("emits Kotlin schema descriptor tables for objects, streams, and events", () => {
+    const kotlin = generateKotlinArtifact(foundationSchema);
+
+    expect(kotlin).toContain("internal val FRICK_OBJECT_NAMES: Map<Int, String>");
+    expect(kotlin).toContain("internal val FRICK_STREAM_NAMES: Map<Int, String>");
+    expect(kotlin).toContain("internal val FRICK_EVENT_NAMES: Map<Int, String>");
+    expect(kotlin).toContain("internal val FRICK_OBJECT_FIELDS: Map<Int, Map<Int, String>>");
+    expect(kotlin).toContain("internal val FRICK_EVENT_FIELDS: Map<Int, Map<Int, String>>");
+    expect(kotlin).toMatch(/"MessageSent"/);
+    expect(kotlin).toMatch(/"MessageStream"/);
+  });
+
   it("emits native JSON value support when schema fields use json", () => {
     const swift = generateSwiftArtifact(foundationSchema);
     const kotlin = generateKotlinArtifact(foundationSchema);

@@ -1054,6 +1054,13 @@ public actor FrickSyncSocket {
         let eventArray = map["events"]?.arrayValue ?? []
         var streamEvents: [FrickStreamEvent] = []
         for e in eventArray {
+            if let decoded = Self.decodePackedStreamEvent(e) {
+                streamEvents.append(decoded)
+                continue
+            }
+            // Tolerate the legacy `{stream, streamId, sequence, eventId, event, payload}`
+            // map shape used by older fixtures and test harnesses. Production
+            // gateways now ship the `PackedStreamEvent` tuple form above.
             guard let em = e.mapValue else { continue }
             let stream = em["stream"]?.stringValue ?? ""
             let streamId = em["streamId"]?.stringValue ?? em["key"]?.stringValue ?? ""
@@ -1075,6 +1082,40 @@ public actor FrickSyncSocket {
         }
         let streamName = streamEvents.first?.stream
         eventContinuation?.yield(.delta(stream: streamName, events: streamEvents, cursor: cursor))
+    }
+
+    /// Decode a `PackedStreamEvent` tuple
+    /// `[streamTypeId, streamKey, sequence, eventId, eventTypeId, packedFields]`
+    /// into a `FrickStreamEvent`, resolving stream/event/field ids via
+    /// `FrickSchemaDescriptor`. Returns `nil` for unrecognized tuple shapes —
+    /// callers fall back to the legacy map decoder.
+    private static func decodePackedStreamEvent(_ value: FrickMsgPackValue) -> FrickStreamEvent? {
+        guard let tuple = value.arrayValue, tuple.count >= 6 else { return nil }
+        guard let streamTypeId = tuple[0].intValue,
+              let streamKey = tuple[1].stringValue,
+              let sequence = tuple[2].intValue,
+              let eventId = tuple[3].stringValue,
+              let eventTypeId = tuple[4].intValue
+        else { return nil }
+        let streamName = FrickSchemaDescriptor.streamNames[streamTypeId] ?? "#\(streamTypeId)"
+        let eventName = FrickSchemaDescriptor.eventNames[eventTypeId] ?? "#\(eventTypeId)"
+        let fieldTable = FrickSchemaDescriptor.eventFields[eventTypeId] ?? [:]
+        let packedFields = tuple[5].arrayValue ?? []
+        var payload: [String: String] = [:]
+        for entry in packedFields {
+            guard let pair = entry.arrayValue, pair.count >= 2,
+                  let fieldId = pair[0].intValue else { continue }
+            let name = fieldTable[fieldId] ?? "#\(fieldId)"
+            payload[name] = Self.stringify(pair[1])
+        }
+        return FrickStreamEvent(
+            stream: streamName,
+            streamId: streamKey,
+            sequence: sequence,
+            eventId: eventId,
+            event: eventName,
+            payload: payload,
+        )
     }
 
     private func handleProjectionDelta(payload: FrickMsgPackValue) {

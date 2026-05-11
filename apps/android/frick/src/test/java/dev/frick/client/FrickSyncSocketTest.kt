@@ -207,8 +207,19 @@ class FrickSyncSocketTest {
                         FrameKindCodes.DELTA,
                         mapOf(
                             "objects" to emptyList<Any?>(),
+                            // PackedStreamEvent tuple:
+                            //   [streamTypeId, streamKey, sequence, eventId, eventTypeId, packedFields]
+                            // MessageStream = stream id 1, MessageSent = event id 1.
+                            // packedFields = [[fieldId, value], ...] — MessageSent.body = field id 3.
                             "events" to listOf(
-                                mapOf("event" to "MessageSent", "sequence" to 1),
+                                listOf(
+                                    1,
+                                    "room",
+                                    1,
+                                    "evt-1",
+                                    1,
+                                    listOf(listOf(3, "hello")),
+                                ),
                             ),
                             "cursor" to 1,
                         ),
@@ -230,6 +241,15 @@ class FrickSyncSocketTest {
             val delta = deltaDeferred.await()
             assertEquals(1, delta.cursor)
             assertEquals(1, delta.events.size)
+            val event = delta.events.first()
+            assertEquals("MessageStream", event["stream"])
+            assertEquals("room", event["streamId"])
+            assertEquals(1, event["sequence"])
+            assertEquals("evt-1", event["eventId"])
+            assertEquals("MessageSent", event["event"])
+            @Suppress("UNCHECKED_CAST")
+            val payload = event["payload"] as Map<String, Any?>
+            assertEquals("hello", payload["body"])
         } finally {
             socket.close()
         }

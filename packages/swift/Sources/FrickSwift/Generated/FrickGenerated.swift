@@ -13,6 +13,55 @@ public enum FrickSchema {
 
 public let frickSchemaHash = "frick-foundation-2026-05-09-dev-auth"
 
+/// Type-id → name and (typeId → (fieldId → fieldName)) tables for the
+/// foundation schema. Used by `FrickSyncSocket` to translate packed Delta
+/// tuples (`PackedObjectRecord` / `PackedStreamEvent`) into named-field
+/// shapes for consumers.
+public enum FrickSchemaDescriptor {
+  public static let objectNames: [Int: String] = [
+    1: "User",
+    2: "Conversation",
+    3: "RoomMember",
+    4: "CallRoom",
+    5: "UserDevice",
+    6: "UserSession",
+  ]
+  public static let streamNames: [Int: String] = [
+    1: "MessageStream",
+    2: "CallEventStream",
+  ]
+  public static let eventNames: [Int: String] = [
+    1: "MessageSent",
+    2: "MessageEdited",
+    3: "MessageRedacted",
+    4: "ReactionAdded",
+    5: "ReceiptAdvanced",
+    6: "CallCreated",
+    7: "CallParticipantJoined",
+    8: "CallParticipantLeft",
+    9: "CallEnded",
+  ]
+  public static let objectFields: [Int: [Int: String]] = [
+    1: [1: "displayName", 2: "avatarBlobId"],
+    2: [1: "kind", 2: "title", 3: "createdBy", 4: "lastMessageEventId"],
+    3: [1: "conversationId", 2: "userId", 3: "role"],
+    4: [1: "conversationId", 2: "state", 3: "createdBy"],
+    5: [1: "userId", 2: "label", 3: "platform", 4: "lastSeenAt"],
+    6: [1: "userId", 2: "deviceId", 3: "replicaId", 4: "expiresAt"],
+  ]
+  public static let eventFields: [Int: [Int: String]] = [
+    1: [1: "messageId", 2: "senderId", 3: "body", 4: "createdAt", 5: "attachmentBlobIds"],
+    2: [1: "messageId", 2: "body", 3: "editedAt"],
+    3: [1: "messageId", 2: "redactedAt"],
+    4: [1: "messageId", 2: "userId", 3: "emoji"],
+    5: [1: "userId", 2: "sequence"],
+    6: [1: "callId", 2: "createdBy"],
+    7: [1: "userId", 2: "deviceId"],
+    8: [1: "userId", 2: "deviceId"],
+    9: [1: "endedAt"],
+  ]
+}
+
 public indirect enum FrickJSONValue: Codable, Equatable, Sendable {
   case string(String)
   case int(Int)

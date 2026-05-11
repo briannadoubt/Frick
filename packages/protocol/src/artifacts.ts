@@ -25,8 +25,46 @@ export function generateSwiftArtifact(schema: FrickSchema): string {
     "",
     `public let frickSchemaHash = ${JSON.stringify(schema.hash)}`,
     "",
+    swiftSchemaDescriptor(schema),
+    "",
     ...jsonSupport,
     ...declarations,
+  ].join("\n");
+}
+
+function swiftSchemaDescriptor(schema: FrickSchema): string {
+  const objectNames = schema.objects.map((t) => `    ${t.id}: ${JSON.stringify(t.name)},`).join("\n");
+  const streamNames = schema.streams.map((t) => `    ${t.id}: ${JSON.stringify(t.name)},`).join("\n");
+  const eventNames = schema.events.map((t) => `    ${t.id}: ${JSON.stringify(t.name)},`).join("\n");
+  const objectFieldEntries = schema.objects
+    .map((t) => `    ${t.id}: [${t.fields.map((f) => `${f.id}: ${JSON.stringify(f.name)}`).join(", ")}],`)
+    .join("\n");
+  const eventFieldEntries = schema.events
+    .map((t) => `    ${t.id}: [${t.fields.map((f) => `${f.id}: ${JSON.stringify(f.name)}`).join(", ")}],`)
+    .join("\n");
+
+  return [
+    "/// Type-id → name and (typeId → (fieldId → fieldName)) tables for the",
+    "/// foundation schema. Used by `FrickSyncSocket` to translate packed Delta",
+    "/// tuples (`PackedObjectRecord` / `PackedStreamEvent`) into named-field",
+    "/// shapes for consumers.",
+    "public enum FrickSchemaDescriptor {",
+    "  public static let objectNames: [Int: String] = [",
+    objectNames,
+    "  ]",
+    "  public static let streamNames: [Int: String] = [",
+    streamNames,
+    "  ]",
+    "  public static let eventNames: [Int: String] = [",
+    eventNames,
+    "  ]",
+    "  public static let objectFields: [Int: [Int: String]] = [",
+    objectFieldEntries,
+    "  ]",
+    "  public static let eventFields: [Int: [Int: String]] = [",
+    eventFieldEntries,
+    "  ]",
+    "}",
   ].join("\n");
 }
 
@@ -51,7 +89,45 @@ export function generateKotlinArtifact(schema: FrickSchema): string {
     `const val FRICK_MINIMUM_SERVER_REVISION: Int = ${schema.minimumServerRevision}`,
     `const val FRICK_SCHEMA_HASH: String = ${JSON.stringify(schema.hash)}`,
     "",
+    kotlinSchemaDescriptor(schema),
+    "",
     ...declarations,
+  ].join("\n");
+}
+
+function kotlinSchemaDescriptor(schema: FrickSchema): string {
+  const objectNames = schema.objects.map((t) => `  ${t.id} to ${JSON.stringify(t.name)},`).join("\n");
+  const streamNames = schema.streams.map((t) => `  ${t.id} to ${JSON.stringify(t.name)},`).join("\n");
+  const eventNames = schema.events.map((t) => `  ${t.id} to ${JSON.stringify(t.name)},`).join("\n");
+  const objectFieldEntries = schema.objects
+    .map((t) => `  ${t.id} to mapOf(${t.fields.map((f) => `${f.id} to ${JSON.stringify(f.name)}`).join(", ")}),`)
+    .join("\n");
+  const eventFieldEntries = schema.events
+    .map((t) => `  ${t.id} to mapOf(${t.fields.map((f) => `${f.id} to ${JSON.stringify(f.name)}`).join(", ")}),`)
+    .join("\n");
+
+  return [
+    "/**",
+    " * Type-id → name and (typeId → (fieldId → fieldName)) tables for the",
+    " * foundation schema. Used by [FrickSyncSocket] to translate packed Delta",
+    " * tuples (PackedObjectRecord / PackedStreamEvent) into named-field shapes",
+    " * for consumers.",
+    " */",
+    "internal val FRICK_OBJECT_NAMES: Map<Int, String> = mapOf(",
+    objectNames,
+    ")",
+    "internal val FRICK_STREAM_NAMES: Map<Int, String> = mapOf(",
+    streamNames,
+    ")",
+    "internal val FRICK_EVENT_NAMES: Map<Int, String> = mapOf(",
+    eventNames,
+    ")",
+    "internal val FRICK_OBJECT_FIELDS: Map<Int, Map<Int, String>> = mapOf(",
+    objectFieldEntries,
+    ")",
+    "internal val FRICK_EVENT_FIELDS: Map<Int, Map<Int, String>> = mapOf(",
+    eventFieldEntries,
+    ")",
   ].join("\n");
 }
 

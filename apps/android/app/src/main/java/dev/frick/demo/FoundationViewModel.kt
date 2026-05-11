@@ -451,13 +451,12 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
         }
     }
 
-    // WebSocket sync socket lifecycle. Round-10b added FrickSyncSocket which
-    // negotiates a HelloAck and then exposes subscribe/append/upsert plus an
-    // events flow. The existing SSE streamMessages() path stays around for
-    // initial cold-start and for live updates as a belt-and-braces fallback,
-    // because the SDK's Delta decoder currently only emits Map-shaped events
-    // — wire stream events arrive as PackedStreamEvent tuples and the
-    // inbound Delta filter drops them.
+    // WebSocket sync socket lifecycle. FrickSyncSocket negotiates a HelloAck
+    // and then exposes subscribe/append/upsert plus an `events` flow. Live
+    // stream events arrive as `FrickInboundEvent.Delta` carrying named-field
+    // maps decoded from the wire's PackedStreamEvent tuples via the generated
+    // FRICK_* descriptor tables. SSE streamMessages() is still used for the
+    // initial cold-start (history backfill), but live updates flow over WS.
     private fun connectSocket() {
         val session = _uiState.value.session ?: return
         if (socket != null) return
