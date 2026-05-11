@@ -55,6 +55,7 @@ describe("framework migration runner", () => {
       "0006_jobs_lifecycle",
       "0007_push_registrations",
       "0008_blob_derivatives",
+      "0009_search_indexes",
     ]);
     expect(result.applied[0]?.schemaRevision).toBe(1);
     expect(result.applied[0]?.checksum).toMatch(/^sha256-[0-9a-f]{64}$/);
@@ -70,6 +71,7 @@ describe("framework migration runner", () => {
       "0006_jobs_lifecycle",
       "0007_push_registrations",
       "0008_blob_derivatives",
+      "0009_search_indexes",
     ]);
 
     const tables = listTables(db);
@@ -224,6 +226,7 @@ describe("framework migration runner", () => {
       "0006_jobs_lifecycle",
       "0007_push_registrations",
       "0008_blob_derivatives",
+      "0009_search_indexes",
       "9000_test_extra",
     ]);
     expect(listTables(db)).toContain("test_extra");

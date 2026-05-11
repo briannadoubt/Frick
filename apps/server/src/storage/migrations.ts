@@ -557,6 +557,52 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
         ON blob_derivatives (tenant_id, processor_id, created_at DESC);
     `,
   },
+  {
+    // Search indexes: a single canonical table `search_indexes` storing one
+    // row per `(tenant_id, index_name, doc_id)` plus an FTS5 virtual table
+    // mirroring the `text` column. Triggers keep the FTS table in lockstep
+    // with the canonical rows so the adapter only writes to one place.
+    //
+    // `content='search_indexes'` + `content_rowid='rowid'` configures FTS5 in
+    // contentless-companion mode: the FTS table doesn't own the text itself
+    // (saves space) and joins back to `search_indexes.rowid` on read. The
+    // triggers populate FTS via the `INSERT INTO fts (rowid, text) VALUES ...`
+    // and `INSERT INTO fts (fts, rowid, text) VALUES ('delete', ...)` idioms
+    // that contentless FTS5 supports.
+    //
+    // Schema revision stays at 1: no wire-protocol shape change.
+    id: "0009_search_indexes",
+    schemaRevision: 1,
+    description: "Create search_indexes + search_index_fts for the SQLite FTS5 adapter.",
+    sql: `
+      CREATE TABLE IF NOT EXISTS search_indexes (
+        index_name TEXT NOT NULL,
+        tenant_id TEXT NOT NULL DEFAULT '_default',
+        doc_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        fields TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, index_name, doc_id)
+      );
+
+      CREATE VIRTUAL TABLE IF NOT EXISTS search_index_fts USING fts5(
+        text,
+        content='search_indexes',
+        content_rowid='rowid',
+        tokenize='unicode61'
+      );
+
+      CREATE TRIGGER IF NOT EXISTS search_indexes_ai AFTER INSERT ON search_indexes BEGIN
+        INSERT INTO search_index_fts (rowid, text) VALUES (new.rowid, new.text);
+      END;
+      CREATE TRIGGER IF NOT EXISTS search_indexes_ad AFTER DELETE ON search_indexes BEGIN
+        INSERT INTO search_index_fts (search_index_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+      END;
+      CREATE TRIGGER IF NOT EXISTS search_indexes_au AFTER UPDATE ON search_indexes BEGIN
+        INSERT INTO search_index_fts (search_index_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+        INSERT INTO search_index_fts (rowid, text) VALUES (new.rowid, new.text);
+      END;
+    `,
+  },
 ];
 
 /** Names of all framework tables (and indexes) the runner manages. Used by the
@@ -580,6 +626,8 @@ export const FRAMEWORK_TABLES: readonly string[] = [
   "admin_audit_log",
   "push_device_registrations",
   "blob_derivatives",
+  "search_indexes",
+  "search_index_fts",
 ];
 
 export interface MigrationRunResult {
