@@ -59,12 +59,26 @@ export interface FrickClientOptions {
   endpoint: string;
   schema?: FrickSchema;
   cache?: FrickLocalCache;
+  /** Initial reconnect delay, in ms. Subsequent attempts back off up to {@link maxReconnectDelayMs}. */
   reconnectDelayMs?: number;
+  /** Cap for the reconnect backoff. Defaults to 30_000ms. */
+  maxReconnectDelayMs?: number;
   replicaId?: string;
   deviceId?: string;
   session?: FrickSession | null | undefined;
   sessionToken?: string | undefined;
   WebSocketImpl?: typeof WebSocket;
+  /** Maximum number of unacknowledged appends queued before rejecting new ones. Defaults to 1_000. */
+  maxPendingAppends?: number;
+}
+
+export class FrickClientLimitError extends Error {
+  readonly envelope: FrickErrorEnvelope;
+  constructor(envelope: FrickErrorEnvelope) {
+    super(envelope.message);
+    this.name = "FrickClientLimitError";
+    this.envelope = envelope;
+  }
 }
 
 export class FrickClient {
@@ -83,11 +97,14 @@ export class FrickClient {
   #session: FrickSession | undefined;
   #sessionToken: string | undefined;
   readonly #reconnectDelayMs: number;
+  readonly #maxReconnectDelayMs: number;
+  readonly #maxPendingAppends: number;
   readonly #WebSocketImpl: typeof WebSocket | undefined;
 
   #socket: WebSocket | undefined;
   #manualDisconnect = false;
   #reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  #reconnectAttempts = 0;
   #objects = new Map<string, PlainObject>();
   #streams = new Map<string, StreamEventInput[]>();
   #pendingAppends = new Map<string, PendingAppend>();
@@ -105,6 +122,8 @@ export class FrickClient {
     this.#replicaId = options.session?.replicaId ?? options.replicaId ?? `replica-${randomId()}`;
     this.#deviceId = options.session?.deviceId ?? options.deviceId ?? `device-${randomId()}`;
     this.#reconnectDelayMs = options.reconnectDelayMs ?? 1_000;
+    this.#maxReconnectDelayMs = options.maxReconnectDelayMs ?? 30_000;
+    this.#maxPendingAppends = options.maxPendingAppends ?? 1_000;
     this.#WebSocketImpl = options.WebSocketImpl;
     this.#setSessionStatus();
     this.#hydrateFromCache();
@@ -151,6 +170,7 @@ export class FrickClient {
       if (this.#socket !== socket) {
         return;
       }
+      this.#reconnectAttempts = 0;
       this.#send([
         FrameKind.Hello,
         {
@@ -255,6 +275,20 @@ export class FrickClient {
   }
 
   async append(stream: string, key: string, event: string, payload: PlainObject): Promise<void> {
+    if (this.#pendingAppends.size >= this.#maxPendingAppends) {
+      const envelope: FrickErrorEnvelope = {
+        code: "rateLimit.exceeded",
+        message: "Pending append queue is full",
+        requestId: "client",
+        retryable: true,
+        details: {
+          limit: "maxPendingAppends",
+          configuredMax: this.#maxPendingAppends,
+        },
+      };
+      this.#setStatus({ lastError: envelope });
+      throw new FrickClientLimitError(envelope);
+    }
     const append: PendingAppend = {
       requestId: randomId(),
       stream,
@@ -491,7 +525,15 @@ export class FrickClient {
 
   #scheduleReconnect(): void {
     this.#clearReconnectTimer();
-    this.#reconnectTimer = setTimeout(() => this.connect(), this.#reconnectDelayMs);
+    this.#reconnectAttempts += 1;
+    const delay = this.#nextReconnectDelayMs();
+    this.#reconnectTimer = setTimeout(() => this.connect(), delay);
+  }
+
+  #nextReconnectDelayMs(): number {
+    const exponent = Math.min(this.#reconnectAttempts - 1, 16);
+    const exponential = this.#reconnectDelayMs * Math.pow(2, exponent);
+    return Math.min(this.#maxReconnectDelayMs, exponential);
   }
 
   #clearReconnectTimer(): void {

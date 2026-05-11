@@ -8,7 +8,12 @@ import {
   foundationSchema,
   packStreamEvent,
 } from "@frick/protocol";
-import { FrickCacheIncompatibleError, FrickClient, MemoryFrickCache } from "../src/index.js";
+import {
+  FrickCacheIncompatibleError,
+  FrickClient,
+  FrickClientLimitError,
+  MemoryFrickCache,
+} from "../src/index.js";
 
 const HELLO_ACK_FRAME_KIND = (FrameKind as typeof FrameKind & { HelloAck?: number }).HelloAck ?? 18;
 
@@ -226,6 +231,86 @@ describe("foundation runtime", () => {
     expect(client.syncStatus.value.pendingMutations).toBe(0);
     expect(cache.load(foundationSchema).pendingAppends).toHaveLength(0);
     expect(client.syncStatus.value.lastError).toEqual(error);
+  });
+
+  it("rejects appends past maxPendingAppends and records lastError", async () => {
+    const cache = new MemoryFrickCache();
+    const client = new FrickClient({
+      endpoint: "ws://unused",
+      schema: foundationSchema,
+      cache,
+      maxPendingAppends: 2,
+    });
+
+    await client.append("MessageStream", "conversation-general", "MessageSent", {
+      messageId: "message-1",
+      senderId: "user-ada",
+      body: "1",
+      createdAt: "2026-05-09T00:00:00.000Z",
+    });
+    await client.append("MessageStream", "conversation-general", "MessageSent", {
+      messageId: "message-2",
+      senderId: "user-ada",
+      body: "2",
+      createdAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    await expect(
+      client.append("MessageStream", "conversation-general", "MessageSent", {
+        messageId: "message-3",
+        senderId: "user-ada",
+        body: "3",
+        createdAt: "2026-05-09T00:00:00.000Z",
+      }),
+    ).rejects.toBeInstanceOf(FrickClientLimitError);
+
+    expect(client.syncStatus.value.pendingMutations).toBe(2);
+    expect(client.syncStatus.value.lastError).toMatchObject({
+      code: "rateLimit.exceeded",
+      details: expect.objectContaining({ limit: "maxPendingAppends", configuredMax: 2 }),
+    });
+  });
+
+  it("uses monotonic reconnect backoff between attempts", () => {
+    const sockets: TestWebSocket[] = [];
+    const Impl: any = function (endpoint?: string) {
+      const ws = new TestWebSocket(endpoint);
+      sockets.push(ws);
+      return ws;
+    };
+
+    const delays: number[] = [];
+    const realSetTimeout = globalThis.setTimeout;
+    (globalThis as any).setTimeout = (handler: () => void, ms?: number) => {
+      delays.push(ms ?? 0);
+      return realSetTimeout(() => {}, 0); // capture only; do not invoke
+    };
+
+    try {
+      const client = new FrickClient({
+        endpoint: "ws://test",
+        schema: foundationSchema,
+        reconnectDelayMs: 100,
+        maxReconnectDelayMs: 5_000,
+        WebSocketImpl: Impl,
+      });
+      client.connect();
+      sockets[0]!.emit("close", {});
+      sockets[0]!.emit("close", {}); // duplicate ignored — only first triggers schedule
+      // simulate further failed attempts by toggling state manually
+      client.connect();
+      sockets[1]?.emit("close", {});
+      client.connect();
+      sockets[2]?.emit("close", {});
+    } finally {
+      (globalThis as any).setTimeout = realSetTimeout;
+    }
+
+    // first three close-triggered backoffs should be monotonically nondecreasing
+    expect(delays.length).toBeGreaterThanOrEqual(3);
+    expect(delays[1]).toBeGreaterThanOrEqual(delays[0]!);
+    expect(delays[2]).toBeGreaterThanOrEqual(delays[1]!);
+    expect(Math.max(...delays)).toBeLessThanOrEqual(5_000);
   });
 });
 
