@@ -363,6 +363,58 @@ describe("policy hook ordering", () => {
   });
 });
 
+describe("admin scope bypasses tenant isolation", () => {
+  it("admin-scope decide() permits a different resource tenant", () => {
+    const adminPrincipal = {
+      userId: "_admin",
+      deviceId: "_admin",
+      replicaId: "_admin",
+      tenantId: "_default",
+      scope: "admin" as const,
+    };
+    const memberships: MembershipReader = {
+      hasUser: () => true,
+      isRoomMember: () => true,
+      hasConversation: () => true,
+    };
+    const decision = decide(
+      {
+        principal: adminPrincipal,
+        action: "object.read",
+        resource: { kind: "object", tenantId: "tenant-other" },
+      },
+      memberships,
+    );
+    // The cross-tenant check no longer fires; the deny here, if any, is from
+    // the action policy (object.read falls through to the default deny). The
+    // important assertion: it's NOT a tenantMismatch.
+    if (!decision.allow) {
+      expect(decision.reason).not.toBe("tenantMismatch");
+    }
+  });
+
+  it("tenant-scope decide() denies a different resource tenant with tenantMismatch", () => {
+    const tenantPrincipal = principalFromUserId("user-ada", "replica", "device", "tenant-a");
+    const memberships: MembershipReader = {
+      hasUser: () => true,
+      isRoomMember: () => true,
+      hasConversation: () => true,
+    };
+    const decision = decide(
+      {
+        principal: tenantPrincipal,
+        action: "stream.read",
+        resource: { kind: "stream", name: "MessageStream", key: "x", tenantId: "tenant-b" },
+      },
+      memberships,
+    );
+    expect(decision.allow).toBe(false);
+    if (!decision.allow) {
+      expect(decision.reason).toBe("tenantMismatch");
+    }
+  });
+});
+
 async function startServer(options: { policyHooks?: readonly FrickPolicyHook[] } = {}) {
   const server = createFrickServer({
     port: 0,

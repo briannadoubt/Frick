@@ -13,6 +13,15 @@ export interface Principal {
    * reason `tenantMismatch` (see {@link decide}).
    */
   tenantId: string;
+  /**
+   * Scope of authority. `"tenant"` (the default when omitted) means the
+   * principal is bound to {@link Principal.tenantId} and `decide()` denies
+   * any cross-tenant access. `"admin"` means the principal can act across
+   * tenants — `decide()` skips the `tenantMismatch` check, though every
+   * per-action policy still applies. Admin principals are constructed only
+   * by the framework when a request bears the configured `FRICK_ADMIN_TOKEN`.
+   */
+  scope?: "tenant" | "admin";
 }
 
 export interface MembershipReader {
@@ -186,7 +195,8 @@ export function decide(input: FrickPolicyInput, memberships: MembershipReader): 
   // tenant resources from existence-leak.
   if (
     resource.tenantId !== undefined &&
-    resource.tenantId !== principal.tenantId
+    resource.tenantId !== principal.tenantId &&
+    principal.scope !== "admin"
   ) {
     return deny(
       "tenantMismatch",
