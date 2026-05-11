@@ -93,10 +93,10 @@ describe("framework migration runner", () => {
       supportedSchemaRevision: foundationSchema.schemaRevision,
     });
 
-    expect(first.applied).toHaveLength(8);
+    expect(first.applied).toHaveLength(9);
     expect(second.applied).toHaveLength(0);
-    expect(second.alreadyApplied).toHaveLength(8);
-    expect(listAppliedMigrations(db)).toHaveLength(8);
+    expect(second.alreadyApplied).toHaveLength(9);
+    expect(listAppliedMigrations(db)).toHaveLength(9);
 
     db.close();
   });
