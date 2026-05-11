@@ -83,3 +83,71 @@ enum FrickErrorEnvelopeDecoder {
         return try? decoder.decode(FrickErrorEnvelope.self, from: data)
     }
 }
+
+public struct FrickCacheMetadata: Codable, Equatable, Sendable {
+    public let schemaId: String
+    public let schemaVersion: String
+    public let schemaRevision: Int
+    public let schemaHash: String
+
+    public init(schemaId: String, schemaVersion: String, schemaRevision: Int, schemaHash: String) {
+        self.schemaId = schemaId
+        self.schemaVersion = schemaVersion
+        self.schemaRevision = schemaRevision
+        self.schemaHash = schemaHash
+    }
+}
+
+public extension FrickCacheMetadata {
+    static var currentSchema: FrickCacheMetadata {
+        FrickCacheMetadata(
+            schemaId: FrickSchema.schemaId,
+            schemaVersion: FrickSchema.schemaVersion,
+            schemaRevision: FrickSchema.schemaRevision,
+            schemaHash: FrickSchema.schemaHash
+        )
+    }
+}
+
+public enum FrickCacheIncompatibilityReason: String, Codable, Equatable, Sendable {
+    case schemaIdMismatch
+    case cacheTooOld
+}
+
+public struct FrickCacheIncompatibleError: Error, Equatable, Sendable {
+    public let reason: FrickCacheIncompatibilityReason
+    public let cachedMetadata: FrickCacheMetadata
+    public let currentMetadata: FrickCacheMetadata
+    public let minimumClientRevision: Int
+    public let pendingAppendCount: Int
+
+    public init(
+        reason: FrickCacheIncompatibilityReason,
+        cachedMetadata: FrickCacheMetadata,
+        currentMetadata: FrickCacheMetadata,
+        minimumClientRevision: Int,
+        pendingAppendCount: Int
+    ) {
+        self.reason = reason
+        self.cachedMetadata = cachedMetadata
+        self.currentMetadata = currentMetadata
+        self.minimumClientRevision = minimumClientRevision
+        self.pendingAppendCount = pendingAppendCount
+    }
+}
+
+public enum FrickCacheCompatibility {
+    public static func reason(
+        cached: FrickCacheMetadata,
+        current: FrickCacheMetadata,
+        minimumClientRevision: Int
+    ) -> FrickCacheIncompatibilityReason? {
+        if cached.schemaId != current.schemaId {
+            return .schemaIdMismatch
+        }
+        if cached.schemaRevision < minimumClientRevision {
+            return .cacheTooOld
+        }
+        return nil
+    }
+}

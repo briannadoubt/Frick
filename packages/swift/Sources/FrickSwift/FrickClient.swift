@@ -359,6 +359,9 @@ public protocol FrickStorage: AnyObject, Sendable {
     func loadPendingAppends() throws -> [PendingAppend]
     func appendPendingAppend(_ append: PendingAppend) throws
     func removePendingAppend(requestId: String) throws
+    func loadCacheMetadata() throws -> FrickCacheMetadata?
+    func saveCacheMetadata(_ metadata: FrickCacheMetadata) throws
+    func clearCache() throws
 }
 
 public final class FrickSQLiteStorage: FrickStorage, @unchecked Sendable {
@@ -408,6 +411,13 @@ public final class FrickSQLiteStorage: FrickStorage, @unchecked Sendable {
               request_id TEXT PRIMARY KEY NOT NULL,
               body BLOB NOT NULL,
               created_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS frick_cache_metadata (
+              id INTEGER PRIMARY KEY CHECK (id = 1),
+              schema_id TEXT NOT NULL,
+              schema_version TEXT NOT NULL,
+              schema_revision INTEGER NOT NULL,
+              schema_hash TEXT NOT NULL
             );
             """)
     }
@@ -509,6 +519,59 @@ public final class FrickSQLiteStorage: FrickStorage, @unchecked Sendable {
             "DELETE FROM pending_appends WHERE request_id = ?",
             bindings: [.text(requestId)]
         )
+    }
+
+    public func loadCacheMetadata() throws -> FrickCacheMetadata? {
+        lock.lock()
+        defer { lock.unlock() }
+        let rows = try query(
+            "SELECT schema_id, schema_version, schema_revision, schema_hash FROM frick_cache_metadata WHERE id = 1 LIMIT 1",
+            bindings: []
+        )
+        guard let row = rows.first,
+              let schemaId = row[0].text,
+              let schemaVersion = row[1].text,
+              let schemaRevision = row[2].intValue,
+              let schemaHash = row[3].text else {
+            return nil
+        }
+        return FrickCacheMetadata(
+            schemaId: schemaId,
+            schemaVersion: schemaVersion,
+            schemaRevision: schemaRevision,
+            schemaHash: schemaHash
+        )
+    }
+
+    public func saveCacheMetadata(_ metadata: FrickCacheMetadata) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        try run(
+            """
+            INSERT INTO frick_cache_metadata (id, schema_id, schema_version, schema_revision, schema_hash)
+            VALUES (1, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              schema_id = excluded.schema_id,
+              schema_version = excluded.schema_version,
+              schema_revision = excluded.schema_revision,
+              schema_hash = excluded.schema_hash
+            """,
+            bindings: [
+                .text(metadata.schemaId),
+                .text(metadata.schemaVersion),
+                .int(metadata.schemaRevision),
+                .text(metadata.schemaHash),
+            ]
+        )
+    }
+
+    public func clearCache() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        try run("DELETE FROM local_objects", bindings: [])
+        try run("DELETE FROM local_stream_events", bindings: [])
+        try run("DELETE FROM pending_appends", bindings: [])
+        try run("DELETE FROM frick_cache_metadata", bindings: [])
     }
 
     private static func defaultPath() -> String {
@@ -634,6 +697,11 @@ private enum SQLiteValue {
 
     var data: Data? {
         if case let .data(value) = self { return value }
+        return nil
+    }
+
+    var intValue: Int? {
+        if case let .int(value) = self { return value }
         return nil
     }
 }
@@ -775,6 +843,34 @@ public final class FrickClient: Sendable {
 
     public var currentSession: FrickSession? {
         sessionStore.session
+    }
+
+    @discardableResult
+    public func verifyCacheCompatibility(
+        currentMetadata: FrickCacheMetadata = .currentSchema,
+        minimumClientRevision: Int = FrickSchema.minimumClientRevision
+    ) throws -> FrickCacheMetadata {
+        if let cached = try storage.loadCacheMetadata() {
+            if let reason = FrickCacheCompatibility.reason(
+                cached: cached,
+                current: currentMetadata,
+                minimumClientRevision: minimumClientRevision
+            ) {
+                throw FrickCacheIncompatibleError(
+                    reason: reason,
+                    cachedMetadata: cached,
+                    currentMetadata: currentMetadata,
+                    minimumClientRevision: minimumClientRevision,
+                    pendingAppendCount: (try? storage.loadPendingAppends().count) ?? 0
+                )
+            }
+        }
+        try storage.saveCacheMetadata(currentMetadata)
+        return currentMetadata
+    }
+
+    public func resetCache() throws {
+        try storage.clearCache()
     }
 
     public func signOut() {

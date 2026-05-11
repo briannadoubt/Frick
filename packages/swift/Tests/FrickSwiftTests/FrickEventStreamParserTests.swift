@@ -802,6 +802,99 @@ final class FrickEventStreamParserTests: XCTestCase {
         XCTAssertEqual(try storage.loadPendingAppends(), [])
     }
 
+    func testStorageRoundTripsCacheMetadata() throws {
+        let storage = try FrickSQLiteStorage(path: ":memory:")
+        XCTAssertNil(try storage.loadCacheMetadata())
+
+        let metadata = FrickCacheMetadata.currentSchema
+        try storage.saveCacheMetadata(metadata)
+        XCTAssertEqual(try storage.loadCacheMetadata(), metadata)
+
+        let next = FrickCacheMetadata(
+            schemaId: metadata.schemaId,
+            schemaVersion: "0.2.0",
+            schemaRevision: 2,
+            schemaHash: "rolling-upgrade-hash"
+        )
+        try storage.saveCacheMetadata(next)
+        XCTAssertEqual(try storage.loadCacheMetadata(), next)
+    }
+
+    func testClearCacheRemovesAllFrameworkState() throws {
+        let storage = try FrickSQLiteStorage(path: ":memory:")
+        try storage.saveObjectData(
+            type: "User",
+            id: "user-ada",
+            data: try JSONEncoder().encode(UserDTO(id: "user-ada", displayName: "Ada", avatarBlobId: nil)),
+            version: 1
+        )
+        try storage.saveStreamEvent(streamEvent(sequence: 1, eventId: "event-1", body: "kept"))
+        try storage.appendPendingAppend(PendingAppend(requestId: "request-1", body: Data("x".utf8)))
+        try storage.saveCacheMetadata(.currentSchema)
+
+        try storage.clearCache()
+
+        XCTAssertNil(try storage.loadObjectData(type: "User", id: "user-ada"))
+        XCTAssertEqual(try storage.loadStreamEvents(stream: "MessageStream", key: "conversation-general"), [])
+        XCTAssertEqual(try storage.loadPendingAppends(), [])
+        XCTAssertNil(try storage.loadCacheMetadata())
+    }
+
+    func testVerifyCacheCompatibilityStampsMetadataOnFirstRun() async throws {
+        let storage = try FrickSQLiteStorage(path: ":memory:")
+        let client = FrickClient(storage: storage)
+
+        let stamped = try client.verifyCacheCompatibility()
+
+        XCTAssertEqual(stamped, .currentSchema)
+        XCTAssertEqual(try storage.loadCacheMetadata(), .currentSchema)
+    }
+
+    func testVerifyCacheCompatibilityThrowsOnSchemaIdMismatch() async throws {
+        let storage = try FrickSQLiteStorage(path: ":memory:")
+        try storage.saveCacheMetadata(
+            FrickCacheMetadata(
+                schemaId: "legacy-app",
+                schemaVersion: "0.0.1",
+                schemaRevision: 1,
+                schemaHash: "legacy-hash"
+            )
+        )
+        try storage.appendPendingAppend(PendingAppend(requestId: "request-1", body: Data("x".utf8)))
+        let client = FrickClient(storage: storage)
+
+        do {
+            _ = try client.verifyCacheCompatibility()
+            XCTFail("expected FrickCacheIncompatibleError")
+        } catch let error as FrickCacheIncompatibleError {
+            XCTAssertEqual(error.reason, .schemaIdMismatch)
+            XCTAssertEqual(error.cachedMetadata.schemaId, "legacy-app")
+            XCTAssertEqual(error.currentMetadata.schemaId, FrickSchema.schemaId)
+            XCTAssertEqual(error.pendingAppendCount, 1)
+        }
+    }
+
+    func testVerifyCacheCompatibilityThrowsWhenCacheRevisionTooOld() async throws {
+        let storage = try FrickSQLiteStorage(path: ":memory:")
+        try storage.saveCacheMetadata(
+            FrickCacheMetadata(
+                schemaId: FrickSchema.schemaId,
+                schemaVersion: "0.0.1",
+                schemaRevision: 1,
+                schemaHash: "old-hash"
+            )
+        )
+        let client = FrickClient(storage: storage)
+
+        do {
+            _ = try client.verifyCacheCompatibility(minimumClientRevision: 5)
+            XCTFail("expected FrickCacheIncompatibleError")
+        } catch let error as FrickCacheIncompatibleError {
+            XCTAssertEqual(error.reason, .cacheTooOld)
+            XCTAssertEqual(error.minimumClientRevision, 5)
+        }
+    }
+
     func testFrickErrorEnvelopeDecoderHandlesWrappedAndDirectShapes() throws {
         let wrapped = """
         {
