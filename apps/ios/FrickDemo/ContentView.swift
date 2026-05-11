@@ -225,6 +225,10 @@ final class FoundationModel {
         switch event {
         case .delta(_, let events, _):
             messages = mergeStreamEvents(messages, events)
+            // Propagate read state in real-time to other replicas via WS.
+            if let session = currentSession {
+                await advanceReadReceiptViaSocket(for: selectedConversationId, userId: session.userId)
+            }
         case .presenceDelta(let name, let records, let cleared):
             updateTyping(name: name, records: records, cleared: cleared)
         case .status(let value):
@@ -232,6 +236,33 @@ final class FoundationModel {
         default:
             break
         }
+    }
+
+    // MARK: WS read-receipts
+
+    @ObservationIgnored
+    private var lastReceiptSequence: [String: Int] = [:]
+
+    private func advanceReadReceiptViaSocket(for conversationId: String, userId: String) async {
+        let maxSequence = messages
+            .filter { $0.streamId == conversationId && $0.event != "ReceiptAdvanced" }
+            .map(\.sequence)
+            .max() ?? 0
+        guard maxSequence > 0 else { return }
+        if let prev = lastReceiptSequence[conversationId], prev >= maxSequence {
+            return
+        }
+        lastReceiptSequence[conversationId] = maxSequence
+        guard let socket, syncStatus.state == .connected else { return }
+        try? await socket.append(
+            stream: "MessageStream",
+            key: conversationId,
+            event: "ReceiptAdvanced",
+            payload: [
+                "userId": userId,
+                "sequence": String(maxSequence),
+            ]
+        )
     }
 
     private func resubscribeMessages(for conversationId: String) async {
@@ -613,6 +644,7 @@ final class FoundationModel {
         subscribedConversationId = nil
         syncStatus = .initial
         typingNotice = nil
+        lastReceiptSequence = [:]
         client.signOut()
         currentSession = nil
         users = []
