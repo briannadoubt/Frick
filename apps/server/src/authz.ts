@@ -181,7 +181,7 @@ export function decide(input: FrickPolicyInput, memberships: MembershipReader): 
       return ALLOW;
     }
     default:
-      return ALLOW;
+      return deny("notAuthorizedForResource", "Action not authorized");
   }
 }
 

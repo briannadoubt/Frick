@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { isFrickErrorEnvelope } from "@frick/protocol";
 import { createFrickServer } from "../src/server.js";
-import type { FrickPolicyHook } from "../src/authz.js";
+import {
+  decide,
+  principalFromUserId,
+  type FrickPolicyHook,
+  type MembershipReader,
+} from "../src/authz.js";
 
 let app: Awaited<ReturnType<typeof startServer>> | undefined;
 
@@ -255,6 +260,106 @@ describe("authorization denial envelopes", () => {
     expect(response.status).toBe(403);
     expect(body.error.code).toBe("auth.forbidden");
     expect(body.error.details.reason).toBe("notAuthorizedForResource");
+  });
+});
+
+describe("decide() deny-by-default for unrecognised actions", () => {
+  const memberships: MembershipReader = {
+    hasUser: (userId) => userId === "user-ada",
+    isRoomMember: () => false,
+    hasConversation: () => false,
+  };
+  const stranger = principalFromUserId("user-stranger");
+
+  it("denies object.read for an action with no explicit allow rule", () => {
+    const decision = decide(
+      { principal: stranger, action: "object.read", resource: { kind: "object", name: "Conversation" } },
+      memberships,
+    );
+    expect(decision.allow).toBe(false);
+    if (!decision.allow) {
+      expect(decision.reason).toBe("notAuthorizedForResource");
+    }
+  });
+
+  it("denies presence.write for an action with no explicit allow rule", () => {
+    const decision = decide(
+      { principal: stranger, action: "presence.write", resource: { kind: "presence", name: "Typing", key: "conversation-x" } },
+      memberships,
+    );
+    expect(decision.allow).toBe(false);
+    if (!decision.allow) {
+      expect(decision.reason).toBe("notAuthorizedForResource");
+    }
+  });
+
+  it("denies object.write for an action with no explicit allow rule", () => {
+    const decision = decide(
+      { principal: stranger, action: "object.write", resource: { kind: "object", name: "Conversation" } },
+      memberships,
+    );
+    expect(decision.allow).toBe(false);
+  });
+
+  it("still allows the owner's own inbox.read (regression: explicit allow rules unchanged)", () => {
+    const ada = principalFromUserId("user-ada");
+    const decision = decide(
+      { principal: ada, action: "inbox.read", resource: { kind: "inbox", key: "user-ada", ownerId: "user-ada" } },
+      memberships,
+    );
+    expect(decision.allow).toBe(true);
+  });
+});
+
+describe("policy hook ordering", () => {
+  it("invokes hooks in registration order and the first deny wins", async () => {
+    const calls: string[] = [];
+    const allowAll: FrickPolicyHook = () => {
+      calls.push("allowAll");
+      return { allow: true, reason: "allow" };
+    };
+    const denyForX: FrickPolicyHook = (input) => {
+      calls.push("denyForX");
+      if (input.action === "signal.send") {
+        return {
+          allow: false,
+          reason: "notAuthorizedForResource",
+          publicMessage: "Denied by denyForX",
+        };
+      }
+      return null;
+    };
+    const denyForY: FrickPolicyHook = (input) => {
+      calls.push("denyForY");
+      if (input.action === "signal.send") {
+        return {
+          allow: false,
+          reason: "notAuthorizedForResource",
+          publicMessage: "Denied by denyForY",
+        };
+      }
+      return null;
+    };
+
+    app = await startServer({ policyHooks: [allowAll, denyForX, denyForY] });
+    const adaLogin = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    const response = await fetch(`${app.httpUrl}/signals/WebRTCSignal/conversation-general`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders(adaLogin.sessionToken) },
+      body: JSON.stringify({
+        senderDeviceId: "device-ada",
+        kind: "offer",
+        payload: "sdp-order-test",
+      }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body.error.message).toBe("Denied by denyForX");
+    // denyForY must NOT have been consulted for the signal-send action once denyForX denied.
+    expect(calls).toContain("denyForX");
+    expect(calls).not.toContain("denyForY");
   });
 });
 
