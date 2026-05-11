@@ -604,6 +604,7 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
     `,
   },
   {
+<<<<<<< HEAD
     // Per-tenant settings: a small key/value table for runtime config knobs
     // applied on a per-tenant basis. Values are JSON-encoded so the table
     // shape stays uniform across knob types (numbers, strings, structured
@@ -652,6 +653,25 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
       );
       CREATE INDEX idx_devtools_events_kind_at ON devtools_events (kind, occurred_at DESC);
       CREATE INDEX idx_devtools_events_tenant_at ON devtools_events (tenant_id, occurred_at DESC);
+    `,
+  },
+  {
+    // Hash-chained audit log: previously `admin_audit_log` rows were mutable
+    // from the SQLite layer, so a sufficiently-privileged operator could
+    // rewrite history without leaving a trace. Adding a hash chain
+    // (`entry_hash = sha256(previous_hash || canonical_row_json)`) means any
+    // post-hoc tamper breaks the chain and is detectable via
+    // `AdminAuditStore.verifyChain()`. Columns are nullable so the migration
+    // is additive: existing rows have NULL entry_hash and are treated as the
+    // pre-chain prefix. New inserts always populate both columns.
+    id: "0012_audit_chain",
+    schemaRevision: 1,
+    description:
+      "Add hash-chain columns to admin_audit_log so tampering with audit rows is detectable.",
+    sql: `
+      ALTER TABLE admin_audit_log ADD COLUMN previous_hash TEXT;
+      ALTER TABLE admin_audit_log ADD COLUMN entry_hash TEXT;
+      CREATE INDEX idx_admin_audit_log_chain ON admin_audit_log (id, entry_hash);
     `,
   },
 ];

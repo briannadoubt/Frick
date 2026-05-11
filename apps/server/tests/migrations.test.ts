@@ -58,6 +58,7 @@ describe("framework migration runner", () => {
       "0009_search_indexes",
       "0010_tenant_settings",
       "0011_devtools_event_log",
+      "0012_audit_chain",
     ]);
     expect(result.applied[0]?.schemaRevision).toBe(1);
     expect(result.applied[0]?.checksum).toMatch(/^sha256-[0-9a-f]{64}$/);
@@ -76,6 +77,7 @@ describe("framework migration runner", () => {
       "0009_search_indexes",
       "0010_tenant_settings",
       "0011_devtools_event_log",
+      "0012_audit_chain",
     ]);
 
     const tables = listTables(db);
@@ -97,10 +99,10 @@ describe("framework migration runner", () => {
       supportedSchemaRevision: foundationSchema.schemaRevision,
     });
 
-    expect(first.applied).toHaveLength(11);
+    expect(first.applied).toHaveLength(12);
     expect(second.applied).toHaveLength(0);
-    expect(second.alreadyApplied).toHaveLength(11);
-    expect(listAppliedMigrations(db)).toHaveLength(11);
+    expect(second.alreadyApplied).toHaveLength(12);
+    expect(listAppliedMigrations(db)).toHaveLength(12);
 
     db.close();
   });
@@ -233,6 +235,7 @@ describe("framework migration runner", () => {
       "0009_search_indexes",
       "0010_tenant_settings",
       "0011_devtools_event_log",
+      "0012_audit_chain",
       "9000_test_extra",
     ]);
     expect(listTables(db)).toContain("test_extra");
