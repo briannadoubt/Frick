@@ -1,5 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
+import { encode as msgpackEncode } from "@msgpack/msgpack";
 import {
   FrameKind,
   compareSchemaCompatibility,
@@ -34,33 +35,75 @@ import type { StoredEvent } from "../storage/stream-store.js";
 import { routeSignal } from "./signal-router.js";
 import { SubscriptionRegistry, type SyncClient } from "./subscriptions.js";
 import { sendFrame } from "./wire.js";
+import { DEFAULT_FRICK_LIMITS, clampTtlSeconds, type FrickLimits } from "../limits.js";
 
 export class SyncGateway {
   readonly #subscriptions = new SubscriptionRegistry();
+  readonly #limits: FrickLimits;
+  readonly #pendingAppendCounts = new WeakMap<SyncClient, number>();
+  readonly #lastSeenAt = new WeakMap<SyncClient, number>();
+  readonly #heartbeatTimers = new Set<ReturnType<typeof setInterval>>();
 
   constructor(
     private readonly wss: WebSocketServer,
     private readonly store: FrickStore,
-    private readonly options: { onStreamEvent?: (event: StoredEvent) => void } = {},
-  ) {}
+    private readonly options: {
+      onStreamEvent?: (event: StoredEvent) => void;
+      limits?: FrickLimits;
+    } = {},
+  ) {
+    this.#limits = options.limits ?? DEFAULT_FRICK_LIMITS;
+  }
 
   attach(): void {
     this.wss.on("connection", (socket, request) => {
       const principal = this.#principalFromRequest(request);
       const client: SyncClient = { socket, subscriptions: new Map(), ...(principal ? { principal } : {}) };
       this.#subscriptions.addClient(client);
+      this.#pendingAppendCounts.set(client, 0);
+      this.#lastSeenAt.set(client, Date.now());
+
+      const heartbeat = this.#startHeartbeat(client, socket);
 
       socket.on("message", (payload) => {
+        this.#lastSeenAt.set(client, Date.now());
         this.#handleRawFrame(client, socket, payload as Buffer);
       });
       socket.on("close", () => {
+        clearInterval(heartbeat);
+        this.#heartbeatTimers.delete(heartbeat);
         this.#subscriptions.removeClient(client);
       });
     });
   }
 
   close(): void {
+    for (const timer of this.#heartbeatTimers) {
+      clearInterval(timer);
+    }
+    this.#heartbeatTimers.clear();
     this.#subscriptions.closeAll();
+  }
+
+  #startHeartbeat(client: SyncClient, socket: WebSocket): ReturnType<typeof setInterval> {
+    const intervalMs = Math.max(50, this.#limits.heartbeatIntervalSeconds * 1000);
+    const timeoutMs = Math.max(intervalMs, this.#limits.heartbeatTimeoutSeconds * 1000);
+    const timer = setInterval(() => {
+      const lastSeen = this.#lastSeenAt.get(client) ?? 0;
+      if (Date.now() - lastSeen > timeoutMs) {
+        socket.terminate();
+        clearInterval(timer);
+        this.#heartbeatTimers.delete(timer);
+        return;
+      }
+      try {
+        sendFrame(socket, [FrameKind.Ping, { sentAt: Date.now() }]);
+      } catch {
+        // socket already closing
+      }
+    }, intervalMs);
+    this.#heartbeatTimers.add(timer);
+    return timer;
   }
 
   publishStreamEvent(event: StoredEvent): void {
@@ -218,6 +261,26 @@ export class SyncGateway {
 
   #handleSubscribe(client: SyncClient, payload: SubscribePayload): void {
     const principal = requirePrincipal(client);
+    if (
+      !client.subscriptions.has(payload.subscriptionId) &&
+      client.subscriptions.size >= this.#limits.maxSubscriptionsPerConnection
+    ) {
+      const envelope = createFrickErrorEnvelope({
+        code: "rateLimit.exceeded",
+        message: "Maximum subscriptions per connection exceeded",
+        requestId: payload.subscriptionId,
+        retryable: false,
+        details: {
+          limit: "maxSubscriptionsPerConnection",
+          configuredMax: this.#limits.maxSubscriptionsPerConnection,
+        },
+      });
+      sendFrame(client.socket, [
+        FrameKind.Nack,
+        { requestId: payload.subscriptionId, error: envelope, code: envelope.code, message: envelope.message },
+      ]);
+      return;
+    }
     assertCanSubscribe(principal, payload.kind, payload.name, payload.key, this.store);
     this.#subscriptions.addSubscription(client, payload);
 
@@ -261,27 +324,78 @@ export class SyncGateway {
 
   #handleAppend(client: SyncClient, payload: AppendPayload): void {
     const principal = requirePrincipal(client);
-    assertCanAppend(principal, payload.stream, payload.key, this.store, payload.event, payload.payload);
-    const result = this.store.appendEvent({
-      requestId: payload.requestId,
-      replicaId: principal.replicaId,
-      stream: payload.stream,
-      streamId: payload.key,
-      event: payload.event,
-      payload: payload.payload,
-    });
-    sendFrame(client.socket, [FrameKind.Ack, { requestId: payload.requestId, cursor: result.event.sequence }]);
 
-    if (result.created) {
-      this.publishStreamEvent(result.event);
-      this.options.onStreamEvent?.(result.event);
+    const pending = this.#pendingAppendCounts.get(client) ?? 0;
+    if (pending >= this.#limits.maxPendingAppendsPerClient) {
+      const envelope = createFrickErrorEnvelope({
+        code: "rateLimit.exceeded",
+        message: "Pending append queue is full",
+        requestId: payload.requestId,
+        retryable: true,
+        details: {
+          limit: "maxPendingAppendsPerClient",
+          configuredMax: this.#limits.maxPendingAppendsPerClient,
+        },
+      });
+      sendFrame(client.socket, [
+        FrameKind.Nack,
+        { requestId: payload.requestId, error: envelope, code: envelope.code, message: envelope.message },
+      ]);
+      return;
+    }
+
+    const encoded = msgpackEncode(payload.payload);
+    if (encoded.byteLength > this.#limits.maxStreamAppendPayloadBytes) {
+      const envelope = createFrickErrorEnvelope({
+        code: "stream.appendRejected",
+        message: "Append payload exceeds maximum size",
+        requestId: payload.requestId,
+        retryable: false,
+        details: {
+          reason: "payloadTooLarge",
+          configuredMax: this.#limits.maxStreamAppendPayloadBytes,
+        },
+      });
+      sendFrame(client.socket, [
+        FrameKind.Nack,
+        { requestId: payload.requestId, error: envelope, code: envelope.code, message: envelope.message },
+      ]);
+      return;
+    }
+
+    this.#pendingAppendCounts.set(client, pending + 1);
+    try {
+      assertCanAppend(principal, payload.stream, payload.key, this.store, payload.event, payload.payload);
+      const result = this.store.appendEvent({
+        requestId: payload.requestId,
+        replicaId: principal.replicaId,
+        stream: payload.stream,
+        streamId: payload.key,
+        event: payload.event,
+        payload: payload.payload,
+      });
+      sendFrame(client.socket, [FrameKind.Ack, { requestId: payload.requestId, cursor: result.event.sequence }]);
+
+      if (result.created) {
+        this.publishStreamEvent(result.event);
+        this.options.onStreamEvent?.(result.event);
+      }
+    } finally {
+      this.#pendingAppendCounts.set(client, Math.max(0, (this.#pendingAppendCounts.get(client) ?? 1) - 1));
     }
   }
 
   #handlePresenceSet(client: SyncClient, payload: PresenceSetPayload): void {
     requirePrincipal(client);
     const presence = presenceByName(this.store.schema, payload.name);
-    this.store.setPresence(payload.name, payload.key, payload.value, presence.ttlMs);
+    const ttlSeconds = presence.ttlMs / 1000;
+    const clampedSeconds = clampTtlSeconds(
+      ttlSeconds,
+      this.#limits.presenceTtlMinSeconds,
+      this.#limits.presenceTtlMaxSeconds,
+      (from, to) => console.warn(`Clamped presence TTL for ${payload.name} from ${from}s to ${to}s`),
+    );
+    this.store.setPresence(payload.name, payload.key, payload.value, clampedSeconds * 1000);
     const packed = packPresenceRecord(this.store.schema, payload.name, payload.key, payload.value);
     for (const { client: subscriber, subscription } of this.#subscriptions.presenceSubscribers(payload.name, payload.key)) {
       sendFrame(subscriber.socket, [
