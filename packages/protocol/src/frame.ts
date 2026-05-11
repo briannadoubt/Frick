@@ -32,6 +32,7 @@ export enum FrameKind {
   SyncStatus = 17,
   HelloAck = 18,
   ProjectionDelta = 19,
+  ObjectUpsert = 20,
 }
 
 export type SubscriptionKind = "object" | "stream" | "presence" | "signal" | "projection";
@@ -76,6 +77,25 @@ export interface AppendPayload {
 export interface AckPayload {
   requestId: string;
   cursor?: number;
+  /**
+   * For object-write acks ({@link FrameKind.ObjectUpsert}), the new version
+   * written to disk. Omitted for stream-append, presence, and signal acks.
+   */
+  version?: number;
+}
+
+export interface ObjectUpsertPayload {
+  /** Client-supplied identifier for ack/nack correlation. */
+  requestId: string;
+  objectType: string;
+  objectId: string;
+  value: PlainObject;
+  /**
+   * Honored when the schema's `mergePolicy === "versionPrecondition"`. Omit on
+   * create-intent for versionPrecondition policies. Ignored entirely for
+   * `lastWriteWins` schemas.
+   */
+  expectedVersion?: number;
 }
 
 export interface NackPayload {
@@ -167,7 +187,8 @@ export type FrickFrame =
   | [FrameKind.Pong, { sentAt: number; receivedAt: number }]
   | [FrameKind.SyncStatus, { connected: boolean; cursors: Record<string, number>; inFlight: number }]
   | [FrameKind.HelloAck, HelloAckPayload]
-  | [FrameKind.ProjectionDelta, ProjectionDeltaPayload];
+  | [FrameKind.ProjectionDelta, ProjectionDeltaPayload]
+  | [FrameKind.ObjectUpsert, ObjectUpsertPayload];
 
 export function encodeFrame(frame: FrickFrame): Uint8Array {
   return encode(frame);

@@ -106,6 +106,23 @@ describe("foundation frames", () => {
           ],
         },
       ],
+      [
+        FrameKind.ObjectUpsert,
+        {
+          requestId: "request-upsert",
+          objectType: "User",
+          objectId: "user-ada",
+          value: { displayName: "Ada" },
+          expectedVersion: 1,
+        },
+      ],
+      [
+        FrameKind.Ack,
+        {
+          requestId: "request-upsert",
+          version: 2,
+        },
+      ],
     ];
 
     for (const frame of frames) {
