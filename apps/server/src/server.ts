@@ -56,6 +56,18 @@ import {
   type FrickJobHandler,
 } from "./jobs/registry.js";
 import { createFrickJobWorker } from "./jobs/worker.js";
+import {
+  createFrickPushRegistry,
+  type FrickPushRegistry,
+} from "./push/registry.js";
+import { createFrickTestPushAdapter } from "./push/test-adapter.js";
+import {
+  createNotificationRouter,
+  PUSH_DELIVER_JOB_TYPE,
+  type NotificationRouter,
+} from "./push/router.js";
+import type { FrickNotificationIntent, FrickPushAdapter } from "./push/types.js";
+import { isPushPlatform } from "./storage/push-registration-store.js";
 
 export interface ServerOptions {
   port?: number;
@@ -112,6 +124,16 @@ export interface ServerOptions {
     handlers?: Record<string, FrickJobHandler>;
     workerEnabled?: boolean;
     pollIntervalMs?: number;
+  };
+  /**
+   * Push-notification framework configuration. Adapters supplied here are
+   * registered before the default test adapter, so an app that wires its
+   * own `platform: "test"` adapter overrides the framework default. Real
+   * APNs / FCM / web-push adapters are out-of-tree — credentials and SDK
+   * dependencies don't belong in the core server bundle.
+   */
+  push?: {
+    adapters?: FrickPushAdapter[];
   };
   /**
    * Override the schema used by the underlying store. Defaults to
@@ -214,6 +236,31 @@ export function createFrickServer(options: ServerOptions = {}) {
     for (const [jobType, handler] of Object.entries(options.jobs.handlers)) {
       jobRegistry.register(jobType, handler);
     }
+  }
+
+  // Push notification framework. App-provided adapters take precedence over
+  // the default test adapter — `registerAdapter` throws on duplicates, so
+  // we register app adapters first and skip the default if it conflicts.
+  const pushRegistry: FrickPushRegistry = createFrickPushRegistry();
+  const appAdapters = options.push?.adapters ?? [];
+  const appAdapterPlatforms = new Set<string>();
+  for (const adapter of appAdapters) {
+    pushRegistry.registerAdapter(adapter);
+    appAdapterPlatforms.add(adapter.platform);
+  }
+  if (!appAdapterPlatforms.has("test")) {
+    pushRegistry.registerAdapter(createFrickTestPushAdapter());
+  }
+  const notificationRouter: NotificationRouter = createNotificationRouter({
+    store,
+    pushRegistry,
+    logger,
+  });
+  // Register the push.deliver handler unless the app already wired their
+  // own (handler registration is single-shot; we don't want to throw at
+  // boot if someone is intentionally overriding).
+  if (!jobRegistry.resolve(PUSH_DELIVER_JOB_TYPE)) {
+    jobRegistry.register(PUSH_DELIVER_JOB_TYPE, notificationRouter.handler);
   }
   // Default: worker runs in non-test envs. Tests would otherwise have a
   // polling loop ticking during every spec, complicating shutdown ordering
@@ -445,6 +492,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           limits.maxHttpBodyBytes,
           adminTokenFingerprint,
           logger,
+          notificationRouter,
         );
       } catch (error) {
         sendErrorWithMetrics(response, error, "admin_rejected");
@@ -695,6 +743,64 @@ export function createFrickServer(options: ServerOptions = {}) {
         });
       } catch (error) {
         sendErrorWithMetrics(response, error, "inbox_rejected");
+      }
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/push/registrations") {
+      try {
+        const body = await readJsonBody(request, limits.maxHttpBodyBytes);
+        const deviceId = requireString(body.deviceId, "deviceId");
+        const platform = requireString(body.platform, "platform");
+        if (!isPushPlatform(platform)) {
+          throw new Error(
+            `platform must be one of apns, fcm, webPush, test (got "${platform}")`,
+          );
+        }
+        const token = requireString(body.token, "token");
+        const environment =
+          typeof body.environment === "string" && body.environment.length > 0
+            ? body.environment
+            : "production";
+        if (environment !== "production" && environment !== "sandbox") {
+          throw new Error('environment must be "production" or "sandbox"');
+        }
+        const registration = store.pushRegistrations.register({
+          tenantId: principal.tenantId,
+          userId: principal.userId,
+          deviceId,
+          platform,
+          token,
+          environment,
+        });
+        sendJson(response, 201, { registration });
+      } catch (error) {
+        sendErrorWithMetrics(response, error, "push_registration_rejected");
+      }
+      return;
+    }
+
+    if (request.method === "DELETE" && url.pathname.startsWith("/push/registrations/")) {
+      try {
+        const registrationId = decodeURIComponent(
+          url.pathname.slice("/push/registrations/".length),
+        );
+        if (!registrationId) {
+          sendJson(response, 404, { error: "push_registration_not_found" });
+          return;
+        }
+        const existing = store.pushRegistrations.getById(registrationId, principal.tenantId);
+        // 404 covers two cases — truly missing, or owned by another user in
+        // the same tenant. We don't disclose existence across users.
+        if (!existing || existing.userId !== principal.userId) {
+          sendJson(response, 404, { error: "push_registration_not_found" });
+          return;
+        }
+        store.pushRegistrations.revoke(registrationId, principal.tenantId);
+        response.writeHead(204);
+        response.end();
+      } catch (error) {
+        sendErrorWithMetrics(response, error, "push_registration_rejected");
       }
       return;
     }
@@ -1046,7 +1152,19 @@ export function createFrickServer(options: ServerOptions = {}) {
     return closePromise;
   }
 
-  return { port, server, store, extensions, config, logger, startedAt, listen, close };
+  return {
+    port,
+    server,
+    store,
+    extensions,
+    config,
+    logger,
+    startedAt,
+    listen,
+    close,
+    notifications: notificationRouter,
+    pushRegistry,
+  };
 }
 
 function safeListAppliedMigrations(store: FrickStore) {
@@ -1562,6 +1680,7 @@ async function handleAdminRoute(
   maxBodyBytes: number,
   adminTokenFingerprint: string,
   logger: FrickLogger,
+  notificationRouter: NotificationRouter,
 ): Promise<void> {
   const sub = url.pathname.slice("/_frick/admin/".length);
 
@@ -1816,6 +1935,57 @@ async function handleAdminRoute(
     return;
   }
 
+  if (request.method === "POST" && sub === "push/deliver") {
+    let bodyTenant: string | undefined;
+    try {
+      const body = await readJsonBody(request, maxBodyBytes);
+      const tenantId = resolveAuthTenantId(body.tenantId);
+      bodyTenant = tenantId;
+      ensureTenantAllowed(store, config, tenantId);
+      const intentName = requireString(body.intent, "intent");
+      const recipientsRaw = body.recipientUserIds;
+      if (!Array.isArray(recipientsRaw)) {
+        throw new Error("recipientUserIds must be an array");
+      }
+      const recipientUserIds = recipientsRaw.map((value, index) =>
+        requireString(value, `recipientUserIds[${index}]`),
+      );
+      const bodyPayload =
+        body.body !== undefined ? requireRecord(body.body, "body") : {};
+      const intent: FrickNotificationIntent = {
+        intent: intentName,
+        tenantId,
+        recipientUserIds,
+        body: {
+          ...(typeof bodyPayload.title === "string" ? { title: bodyPayload.title } : {}),
+          ...(typeof bodyPayload.body === "string" ? { body: bodyPayload.body } : {}),
+          ...(bodyPayload.data && typeof bodyPayload.data === "object" && !Array.isArray(bodyPayload.data)
+            ? { data: bodyPayload.data as Record<string, unknown> }
+            : {}),
+        },
+        ...(typeof body.threadId === "string" ? { threadId: body.threadId } : {}),
+        ...(typeof body.deepLink === "string" ? { deepLink: body.deepLink } : {}),
+      };
+      const row = notificationRouter.enqueueIntent(intent);
+      audit({
+        action: "push.deliver",
+        target: intentName,
+        outcome: "allow",
+        detail: { tenantId, jobId: row.id, recipientCount: recipientUserIds.length },
+      });
+      sendJson(response, 201, { jobId: row.id, jobType: row.jobType, status: row.status });
+    } catch (error) {
+      audit({
+        action: "push.deliver",
+        ...(bodyTenant !== undefined ? { target: bodyTenant } : {}),
+        outcome: "error",
+        detail: { error: error instanceof Error ? error.message : String(error) },
+      });
+      throw error;
+    }
+    return;
+  }
+
   const rebuildMatch = /^projections\/([^/]+)\/rebuild$/.exec(sub);
   if (request.method === "POST" && rebuildMatch) {
     const name = decodeURIComponent(rebuildMatch[1]!);
@@ -1905,7 +2075,9 @@ function isProtectedPath(pathname: string): boolean {
     pathname.startsWith("/signals/") ||
     pathname === "/streams" ||
     pathname.startsWith("/streams/") ||
-    pathname === "/append"
+    pathname === "/append" ||
+    pathname === "/push/registrations" ||
+    pathname.startsWith("/push/registrations/")
   );
 }
 

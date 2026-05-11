@@ -167,7 +167,7 @@ export class PushRegistrationStore {
           WHERE tenant_id = ? AND user_id = ? AND revoked_at IS NULL
           ORDER BY created_at ASC`,
       )
-      .all(tenantId, userId) as RawRow[];
+      .all(tenantId, userId) as unknown as RawRow[];
     return rows.map(mapRow);
   }
 
