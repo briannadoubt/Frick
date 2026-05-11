@@ -14,6 +14,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -312,21 +313,46 @@ class FrickSyncSocket internal constructor(
         URI(buildSyncUrl(baseUrl, sessionTokenProvider()))
     }
 
+    @Volatile private var reconnectEnabled: Boolean = true
+    private val backoffState = AtomicReference(config.initialBackoffMs)
+    @Volatile private var disconnectedSignal: CompletableDeferred<Unit> = CompletableDeferred()
+
     /** Begin connecting if not already in flight. Idempotent. */
     fun connect() {
         if (closed) return
         if (connectJob?.isActive == true) return
-        connectJob = scope.launch { openSocket() }
+        connectJob = scope.launch { connectLoop() }
     }
 
-    private suspend fun openSocket() {
-        if (closed) return
+    private suspend fun connectLoop() {
+        while (!closed && reconnectEnabled) {
+            try {
+                openSocketOnce()
+                disconnectedSignal.await()
+            } catch (t: Throwable) {
+                _status.value = FrickSyncStatus.Failed(t.message ?: "connect failure")
+            }
+            if (closed || !reconnectEnabled) break
+            val wait = backoffState.get()
+            delay(wait)
+            backoffState.set(minOf(wait * 2, config.maxBackoffMs))
+        }
+    }
+
+    private fun openSocketOnce() {
+        helloAcked = CompletableDeferred()
+        disconnectedSignal = CompletableDeferred()
         _status.value = FrickSyncStatus.Connecting
         val url = buildSyncUrl(baseUrl, sessionTokenProvider())
-        val request = Request.Builder().url(url.replace("ws://", "http://").replace("wss://", "https://")).build()
-        val listener = Listener()
-        val ws = httpClient.newWebSocket(request, listener)
+        val request = Request.Builder()
+            .url(url.replace("ws://", "http://").replace("wss://", "https://"))
+            .build()
+        val ws = httpClient.newWebSocket(request, Listener())
         webSocket = ws
+    }
+
+    private fun signalDisconnected() {
+        if (!disconnectedSignal.isCompleted) disconnectedSignal.complete(Unit)
     }
 
     private fun sendHello() {
@@ -461,9 +487,11 @@ class FrickSyncSocket internal constructor(
     override fun close() {
         if (closed) return
         closed = true
+        reconnectEnabled = false
         webSocket?.close(NORMAL_CLOSURE, "client.close")
         webSocket = null
         _status.value = FrickSyncStatus.Disconnected
+        signalDisconnected()
         scope.cancel()
     }
 
@@ -474,6 +502,7 @@ class FrickSyncSocket internal constructor(
                 val schemaId = payload.stringField("schemaId") ?: FRICK_SCHEMA_ID
                 val schemaRev = payload.intField("schemaRevision") ?: FRICK_SCHEMA_REVISION
                 _status.value = FrickSyncStatus.Ready(schemaHash, schemaId, schemaRev)
+                backoffState.set(config.initialBackoffMs)
                 if (!helloAcked.isCompleted) helloAcked.complete(Unit)
                 flushPending()
             }
@@ -566,11 +595,13 @@ class FrickSyncSocket internal constructor(
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
             _events.tryEmit(FrickInboundEvent.Disconnected)
             _status.value = FrickSyncStatus.Disconnected
+            signalDisconnected()
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
             _events.tryEmit(FrickInboundEvent.Disconnected)
             _status.value = FrickSyncStatus.Failed(t.message ?: "socket failure")
+            signalDisconnected()
         }
     }
 
