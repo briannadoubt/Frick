@@ -10,6 +10,7 @@ import {
   unpackStreamEvent,
   type FrickFrame,
   type FrickErrorEnvelope,
+  type FrickObjectMergePolicy,
   type FrickSchema,
   type FrickServerCapabilities,
   type PlainObject,
@@ -81,6 +82,41 @@ export class FrickClientLimitError extends Error {
   }
 }
 
+/**
+ * Thrown when an upsertObject over the sync socket loses a versionPrecondition
+ * race. `expectedVersion` echoes the value the client sent (omitted on
+ * create-intent attempts); `actualVersion` reports the on-disk row's version.
+ */
+export class FrickObjectConflictError extends Error {
+  readonly envelope: FrickErrorEnvelope;
+  readonly expectedVersion: number | undefined;
+  readonly actualVersion: number;
+  readonly mergePolicy: FrickObjectMergePolicy;
+  constructor(args: {
+    envelope: FrickErrorEnvelope;
+    expectedVersion: number | undefined;
+    actualVersion: number;
+    mergePolicy: FrickObjectMergePolicy;
+  }) {
+    super(args.envelope.message);
+    this.name = "FrickObjectConflictError";
+    this.envelope = args.envelope;
+    this.expectedVersion = args.expectedVersion;
+    this.actualVersion = args.actualVersion;
+    this.mergePolicy = args.mergePolicy;
+  }
+}
+
+interface PendingUpsert {
+  requestId: string;
+  objectType: string;
+  objectId: string;
+  value: PlainObject;
+  expectedVersion?: number;
+  resolve: (result: { version: number }) => void;
+  reject: (error: Error) => void;
+}
+
 export class FrickClient {
   readonly schema: FrickSchema;
   readonly syncStatus = new Signal<SyncStatus>({
@@ -108,6 +144,7 @@ export class FrickClient {
   #objects = new Map<string, PlainObject>();
   #streams = new Map<string, StreamEventInput[]>();
   #pendingAppends = new Map<string, PendingAppend>();
+  #pendingUpserts = new Map<string, PendingUpsert>();
   #objectListSignals = new Map<string, Signal<PlainObject[]>>();
   #streamSignals = new Map<string, Signal<StreamEventInput[]>>();
   #presenceSignals = new Map<string, Signal<PlainObject | undefined>>();
@@ -190,6 +227,7 @@ export class FrickClient {
       this.#setStatus({ connected: true });
       this.#resubscribe();
       this.#flushPendingAppends();
+      this.#flushPendingUpserts();
     });
 
     addSocketListener(socket, "message", (event) => {
@@ -335,6 +373,50 @@ export class FrickClient {
     this.#send([FrameKind.SignalSend, { requestId: randomId(), name, key, value }]);
   }
 
+  /**
+   * Write an object over the sync WebSocket. Resolves with the new on-disk
+   * version. When the schema's mergePolicy is `versionPrecondition`, supply
+   * the row's current version as `expectedVersion`; the promise rejects with a
+   * {@link FrickObjectConflictError} when the precondition fails. If the
+   * socket is disconnected the upsert is queued in-memory and flushed on
+   * reconnect, mirroring the pending-append behavior for stream writes.
+   */
+  upsertObject<T extends PlainObject = PlainObject>(
+    objectType: string,
+    objectId: string,
+    value: T,
+    expectedVersion?: number,
+  ): Promise<{ version: number }> {
+    if (this.#pendingUpserts.size + this.#pendingAppends.size >= this.#maxPendingAppends) {
+      const envelope: FrickErrorEnvelope = {
+        code: "rateLimit.exceeded",
+        message: "Pending write queue is full",
+        requestId: "client",
+        retryable: true,
+        details: {
+          limit: "maxPendingAppends",
+          configuredMax: this.#maxPendingAppends,
+        },
+      };
+      this.#setStatus({ lastError: envelope });
+      return Promise.reject(new FrickClientLimitError(envelope));
+    }
+    return new Promise<{ version: number }>((resolve, reject) => {
+      const pending: PendingUpsert = {
+        requestId: randomId(),
+        objectType,
+        objectId,
+        value: { ...value },
+        ...(expectedVersion !== undefined ? { expectedVersion } : {}),
+        resolve,
+        reject,
+      };
+      this.#pendingUpserts.set(pending.requestId, pending);
+      this.#setStatus({ pendingMutations: this.#pendingAppends.size + this.#pendingUpserts.size });
+      this.#sendUpsert(pending);
+    });
+  }
+
   #hydrateFromCache(): void {
     const cached = this.#cache.load(this.schema);
     for (const object of cached.objects) {
@@ -421,16 +503,52 @@ export class FrickClient {
         channel?.set([...(channel.value ?? []), signal.value]);
         return;
       }
-      case FrameKind.Ack:
-        this.#pendingAppends.delete(frame[1].requestId);
-        this.#cache.removePendingAppend(this.schema, frame[1].requestId);
-        this.#setStatus({ pendingMutations: this.#pendingAppends.size });
+      case FrameKind.Ack: {
+        const requestId = frame[1].requestId;
+        const pendingUpsert = this.#pendingUpserts.get(requestId);
+        if (pendingUpsert) {
+          this.#pendingUpserts.delete(requestId);
+          pendingUpsert.resolve({ version: frame[1].version ?? 0 });
+        } else {
+          this.#pendingAppends.delete(requestId);
+          this.#cache.removePendingAppend(this.schema, requestId);
+        }
+        this.#setStatus({ pendingMutations: this.#pendingAppends.size + this.#pendingUpserts.size });
         return;
-      case FrameKind.Nack:
-        this.#pendingAppends.delete(frame[1].requestId);
-        this.#cache.removePendingAppend(this.schema, frame[1].requestId);
-        this.#setStatus({ pendingMutations: this.#pendingAppends.size, lastError: frame[1].error });
+      }
+      case FrameKind.Nack: {
+        const requestId = frame[1].requestId;
+        const pendingUpsert = this.#pendingUpserts.get(requestId);
+        if (pendingUpsert) {
+          this.#pendingUpserts.delete(requestId);
+          const envelope = frame[1].error;
+          if (envelope.code === "storage.conflict") {
+            const details = (envelope.details ?? {}) as {
+              expectedVersion?: number;
+              actualVersion?: number;
+              mergePolicy?: FrickObjectMergePolicy;
+            };
+            pendingUpsert.reject(
+              new FrickObjectConflictError({
+                envelope,
+                expectedVersion: details.expectedVersion,
+                actualVersion: details.actualVersion ?? 0,
+                mergePolicy: details.mergePolicy ?? "lastWriteWins",
+              }),
+            );
+          } else {
+            pendingUpsert.reject(new FrickClientLimitError(envelope));
+          }
+        } else {
+          this.#pendingAppends.delete(requestId);
+          this.#cache.removePendingAppend(this.schema, requestId);
+        }
+        this.#setStatus({
+          pendingMutations: this.#pendingAppends.size + this.#pendingUpserts.size,
+          lastError: frame[1].error,
+        });
         return;
+      }
       default:
         return;
     }
@@ -484,6 +602,25 @@ export class FrickClient {
   #flushPendingAppends(): void {
     for (const append of this.#pendingAppends.values()) {
       this.#sendAppend(append);
+    }
+  }
+
+  #sendUpsert(pending: PendingUpsert): void {
+    this.#send([
+      FrameKind.ObjectUpsert,
+      {
+        requestId: pending.requestId,
+        objectType: pending.objectType,
+        objectId: pending.objectId,
+        value: pending.value,
+        ...(pending.expectedVersion !== undefined ? { expectedVersion: pending.expectedVersion } : {}),
+      },
+    ]);
+  }
+
+  #flushPendingUpserts(): void {
+    for (const upsert of this.#pendingUpserts.values()) {
+      this.#sendUpsert(upsert);
     }
   }
 

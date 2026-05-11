@@ -12,6 +12,7 @@ import {
   FrickCacheIncompatibleError,
   FrickClient,
   FrickClientLimitError,
+  FrickObjectConflictError,
   MemoryFrickCache,
 } from "../src/index.js";
 
@@ -312,6 +313,117 @@ describe("foundation runtime", () => {
       code: "rateLimit.exceeded",
       details: expect.objectContaining({ limit: "maxPendingAppends", configuredMax: 2 }),
     });
+  });
+
+  it("resolves upsertObject with the server-reported version when an ack arrives", async () => {
+    const socket = TestWebSocket.prepare();
+    const client = new FrickClient({
+      endpoint: "ws://test",
+      schema: foundationSchema,
+      WebSocketImpl: TestWebSocket as never,
+    });
+
+    client.connect();
+    socket.emit("open", {});
+    const pending = client.upsertObject("User", "user-ada", { displayName: "Ada" });
+
+    const upsertFrame = decodeFrame(socket.sent[1] as Uint8Array);
+    if (upsertFrame[0] !== FrameKind.ObjectUpsert) {
+      throw new Error("Expected upsert frame to flush after hello");
+    }
+    expect(upsertFrame[1]).toMatchObject({
+      objectType: "User",
+      objectId: "user-ada",
+      value: { displayName: "Ada" },
+    });
+
+    socket.emit("message", {
+      data: encodeFrame([
+        FrameKind.Ack,
+        { requestId: upsertFrame[1].requestId, version: 1 },
+      ]),
+    });
+
+    await expect(pending).resolves.toEqual({ version: 1 });
+    expect(client.syncStatus.value.pendingMutations).toBe(0);
+  });
+
+  it("rejects upsertObject with FrickObjectConflictError on a storage.conflict nack", async () => {
+    const socket = TestWebSocket.prepare();
+    const client = new FrickClient({
+      endpoint: "ws://test",
+      schema: foundationSchema,
+      WebSocketImpl: TestWebSocket as never,
+    });
+
+    client.connect();
+    socket.emit("open", {});
+    const pending = client.upsertObject("User", "user-ada", { displayName: "Ada" }, 1);
+
+    const upsertFrame = decodeFrame(socket.sent[1] as Uint8Array);
+    if (upsertFrame[0] !== FrameKind.ObjectUpsert) {
+      throw new Error("Expected upsert frame to flush after hello");
+    }
+
+    socket.emit("message", {
+      data: encodeFrame([
+        FrameKind.Nack,
+        {
+          requestId: upsertFrame[1].requestId,
+          error: {
+            code: "storage.conflict",
+            message: "Version conflict",
+            requestId: upsertFrame[1].requestId,
+            retryable: false,
+            details: {
+              expectedVersion: 1,
+              actualVersion: 2,
+              mergePolicy: "versionPrecondition",
+            },
+          },
+        },
+      ]),
+    });
+
+    await expect(pending).rejects.toBeInstanceOf(FrickObjectConflictError);
+    try {
+      await pending;
+    } catch (error) {
+      if (!(error instanceof FrickObjectConflictError)) {
+        throw error;
+      }
+      expect(error.expectedVersion).toBe(1);
+      expect(error.actualVersion).toBe(2);
+      expect(error.mergePolicy).toBe("versionPrecondition");
+    }
+  });
+
+  it("queues upsertObject while disconnected and flushes after reconnect", async () => {
+    const socket = TestWebSocket.prepare();
+    const client = new FrickClient({
+      endpoint: "ws://test",
+      schema: foundationSchema,
+      WebSocketImpl: TestWebSocket as never,
+    });
+
+    const pending = client.upsertObject("User", "user-ada", { displayName: "Ada" });
+    expect(client.syncStatus.value.pendingMutations).toBe(1);
+
+    client.connect();
+    socket.emit("open", {});
+
+    const upsertFrame = decodeFrame(socket.sent[1] as Uint8Array);
+    if (upsertFrame[0] !== FrameKind.ObjectUpsert) {
+      throw new Error("Expected upsert frame to flush after hello");
+    }
+    socket.emit("message", {
+      data: encodeFrame([
+        FrameKind.Ack,
+        { requestId: upsertFrame[1].requestId, version: 1 },
+      ]),
+    });
+
+    await expect(pending).resolves.toEqual({ version: 1 });
   });
 
   it("uses monotonic reconnect backoff between attempts", () => {
