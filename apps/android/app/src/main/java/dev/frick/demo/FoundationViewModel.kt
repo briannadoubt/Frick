@@ -13,6 +13,8 @@ import dev.frick.client.FrickSyncStatus
 import dev.frick.client.RoomMemberDto
 import dev.frick.client.SQLiteFrickStorage
 import dev.frick.client.UserDto
+import java.time.Instant
+import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -212,11 +214,29 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
     fun send() {
         val body = _uiState.value.draft.trim()
         if (body.isEmpty()) return
+        val convoId = _uiState.value.selectedConversationId
+        val senderId = _uiState.value.session?.userId ?: return
         _uiState.update { state -> state.copy(draft = "", status = "Sending") }
         viewModelScope.launch {
+            val current = socket
             try {
-                frick.sendMessage(conversationId = _uiState.value.selectedConversationId, body = body)
-                _uiState.update { state -> state.copy(status = "Sent") }
+                if (current != null && current.status.value is FrickSyncStatus.Ready) {
+                    current.append(
+                        stream = "MessageStream",
+                        key = convoId,
+                        event = "MessageSent",
+                        payload = mapOf(
+                            "messageId" to "message-${UUID.randomUUID()}",
+                            "senderId" to senderId,
+                            "body" to body,
+                            "createdAt" to Instant.now().toString(),
+                        ),
+                    )
+                    _uiState.update { state -> state.copy(status = "Sent (ws)") }
+                } else {
+                    frick.sendMessage(conversationId = convoId, body = body)
+                    _uiState.update { state -> state.copy(status = "Sent (http)") }
+                }
             } catch (error: Exception) {
                 _uiState.update { state -> state.copy(draft = body, status = error.localizedMessage ?: "Send failed") }
             }
