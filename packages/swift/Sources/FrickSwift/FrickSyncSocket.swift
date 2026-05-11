@@ -623,6 +623,20 @@ public enum FrickInboundEvent: Sendable {
     case nack(envelope: FrickErrorEnvelope?, requestId: String)
     case schema
     case syncStatus(connected: Bool, inFlight: Int)
+    /// Inbound presence delta. `records` carry the live presence rows for the
+    /// subscription key, `cleared` lists keys whose leases were revoked.
+    case presenceDelta(name: String, records: [FrickPresenceRecord], cleared: [String])
+}
+
+/// Single presence row delivered in a `presenceDelta` frame.
+public struct FrickPresenceRecord: Sendable, Equatable {
+    public let key: String
+    public let value: [String: String]
+
+    public init(key: String, value: [String: String]) {
+        self.key = key
+        self.value = value
+    }
 }
 
 // MARK: - WebSocket task abstraction (mockable boundary)
@@ -786,6 +800,44 @@ public actor FrickSyncSocket {
             (.string("subscriptionId"), .string(subId)),
             (.string("kind"), .string("stream")),
             (.string("name"), .string(stream)),
+            (.string("key"), .string(key)),
+        ]))
+        try await sendFrame(frame)
+    }
+
+    /// Subscribe to a presence type (e.g. "TypingState"). Inbound presence
+    /// deltas surface via `events` as `.presenceDelta`. Mirrors the gateway's
+    /// `kind: "presence"` subscribe payload.
+    public func subscribePresence(name: String, key: String) async throws {
+        let subId = UUID().uuidString
+        let frame = FrickFrame(kind: .subscribe, payload: .map([
+            (.string("subscriptionId"), .string(subId)),
+            (.string("kind"), .string("presence")),
+            (.string("name"), .string(name)),
+            (.string("key"), .string(key)),
+        ]))
+        try await sendFrame(frame)
+    }
+
+    /// Publish a presence record. The `key` is opaque to the gateway and must
+    /// match how subscribers expect to look it up (the demo composes it as
+    /// "conversationId:userId:deviceId" for TypingState).
+    public func setPresence(name: String, key: String, value: [String: Any]) async throws {
+        let requestId = UUID().uuidString
+        let frame = FrickFrame(kind: .presenceSet, payload: .map([
+            (.string("requestId"), .string(requestId)),
+            (.string("name"), .string(name)),
+            (.string("key"), .string(key)),
+            (.string("value"), FrickMsgPackValue.from(value)),
+        ]))
+        try await sendFrame(frame)
+    }
+
+    public func clearPresence(name: String, key: String) async throws {
+        let requestId = UUID().uuidString
+        let frame = FrickFrame(kind: .presenceClear, payload: .map([
+            (.string("requestId"), .string(requestId)),
+            (.string("name"), .string(name)),
             (.string("key"), .string(key)),
         ]))
         try await sendFrame(frame)
@@ -964,6 +1016,8 @@ public actor FrickSyncSocket {
             handleDelta(payload: frame.payload)
         case .projectionDelta:
             handleProjectionDelta(payload: frame.payload)
+        case .presenceDelta:
+            handlePresenceDelta(payload: frame.payload)
         case .ack:
             handleAck(payload: frame.payload)
         case .nack:
@@ -1039,6 +1093,37 @@ public actor FrickSyncSocket {
             }
         }
         eventContinuation?.yield(.projectionDelta(projection: projection, changes: changes))
+    }
+
+    private func handlePresenceDelta(payload: FrickMsgPackValue) {
+        guard let map = payload.mapValue else { return }
+        let name = map["name"]?.stringValue ?? map["presence"]?.stringValue ?? ""
+        let recordArray = map["records"]?.arrayValue ?? []
+        var records: [FrickPresenceRecord] = []
+        // The gateway packs records as msgpack arrays `[presenceId, key, packedFields]`.
+        // We also accept the `{key, value}` map shape used by other transports.
+        for entry in recordArray {
+            if let arr = entry.arrayValue, arr.count >= 2, let key = arr[1].stringValue {
+                let valueFields: [String: String]
+                if arr.count >= 3, let fields = arr[2].mapValue {
+                    valueFields = fields.reduce(into: [String: String]()) { acc, kv in
+                        acc[kv.key] = Self.stringify(kv.value)
+                    }
+                } else {
+                    valueFields = [:]
+                }
+                records.append(FrickPresenceRecord(key: key, value: valueFields))
+            } else if let recMap = entry.mapValue {
+                let key = recMap["key"]?.stringValue ?? ""
+                let valueMap = recMap["value"]?.mapValue ?? [:]
+                let valueFields = valueMap.reduce(into: [String: String]()) { acc, kv in
+                    acc[kv.key] = Self.stringify(kv.value)
+                }
+                records.append(FrickPresenceRecord(key: key, value: valueFields))
+            }
+        }
+        let cleared = (map["cleared"]?.arrayValue ?? []).compactMap { $0.stringValue }
+        eventContinuation?.yield(.presenceDelta(name: name, records: records, cleared: cleared))
     }
 
     private func handleAck(payload: FrickMsgPackValue) {

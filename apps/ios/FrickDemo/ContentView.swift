@@ -78,6 +78,7 @@ final class FoundationModel {
     private var subscribedConversationId: String?
 
     var syncStatus: FrickSyncStatus = .initial
+    var typingNotice: String?
 
     var title: String {
         guard let selectedConversation else {
@@ -224,6 +225,8 @@ final class FoundationModel {
         switch event {
         case .delta(_, let events, _):
             messages = mergeStreamEvents(messages, events)
+        case .presenceDelta(let name, let records, let cleared):
+            updateTyping(name: name, records: records, cleared: cleared)
         case .status(let value):
             syncStatus = value
         default:
@@ -237,8 +240,70 @@ final class FoundationModel {
         subscribedConversationId = conversationId
         do {
             try await socket.subscribe(stream: "MessageStream", key: conversationId)
+            // Also subscribe to typing presence keyed on the conversationId.
+            try await socket.subscribePresence(name: "TypingState", key: conversationId)
         } catch {
             status = "Subscribe failed: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: Typing presence
+
+    func setTyping(_ isTyping: Bool) async {
+        guard let session = currentSession else { return }
+        let conversationId = selectedConversationId
+        let key = "\(conversationId):\(session.userId):\(deviceId)"
+        guard let socket, syncStatus.state == .connected else {
+            // Presence write requires the live socket. Round 10a does not
+            // expose an HTTP fallback for presence, so we no-op when offline.
+            return
+        }
+        do {
+            if isTyping {
+                try await socket.setPresence(
+                    name: "TypingState",
+                    key: key,
+                    value: [
+                        "isTyping": true,
+                        "conversationId": conversationId,
+                        "userId": session.userId,
+                        "deviceId": deviceId,
+                    ]
+                )
+            } else {
+                try await socket.clearPresence(name: "TypingState", key: key)
+            }
+        } catch {
+            // Best-effort: presence is a fire-and-forget hint.
+        }
+    }
+
+    private func updateTyping(name: String, records: [FrickPresenceRecord], cleared: [String]) {
+        guard name == "TypingState" || name.isEmpty else { return }
+        let activeId = selectedConversationId
+        let selfId = currentSession?.userId
+        var typingNames: [String] = []
+        for record in records {
+            // key is "conversationId:userId:deviceId"
+            let parts = record.key.split(separator: ":")
+            guard parts.count >= 2 else { continue }
+            let convoId = String(parts[0])
+            let userId = String(parts[1])
+            guard convoId == activeId, userId != selfId else { continue }
+            let isTyping = record.value["isTyping"] == "true" || record.value["isTyping"] == "1"
+            if isTyping {
+                typingNames.append(displayName(for: userId))
+            }
+        }
+        if typingNames.isEmpty {
+            if !cleared.isEmpty || records.isEmpty {
+                typingNotice = nil
+            }
+        } else {
+            let unique = Array(Set(typingNames)).sorted()
+            typingNotice = unique.count == 1
+                ? "\(unique[0]) is typing…"
+                : "\(unique.joined(separator: ", ")) are typing…"
         }
     }
 
@@ -339,6 +404,8 @@ final class FoundationModel {
                 draft = ""
             }
             status = "Sent"
+            // Stop the typing presence as soon as the message lands.
+            await setTyping(false)
         } catch {
             guard currentSession?.sessionToken == sessionToken, selectedConversationId == requestedConversationId else {
                 return
@@ -399,6 +466,7 @@ final class FoundationModel {
         threadError = nil
         status = "Loading"
         subscribedConversationId = nil
+        typingNotice = nil
     }
 
     func submitAuth() async {
@@ -459,6 +527,7 @@ final class FoundationModel {
         socketEventsTask = nil
         subscribedConversationId = nil
         syncStatus = .initial
+        typingNotice = nil
         client.signOut()
         currentSession = nil
         users = []
@@ -754,8 +823,16 @@ private struct ChatDetailScene: View {
         }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 8) {
+                if let typing = model.typingNotice {
+                    FrickLabel(LocalizedStringKey(typing))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 FrickComposer(text: $model.draft) { body in
                     Task { await model.send(body: body) }
+                }
+                .onChange(of: model.draft) { _, newValue in
+                    let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    Task { await model.setTyping(!trimmed.isEmpty) }
                 }
                 FrickLabel(LocalizedStringKey(model.status))
             }
