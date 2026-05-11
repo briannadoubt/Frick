@@ -103,7 +103,18 @@ export function createFrickServer(options: ServerOptions = {}) {
     response.on("close", noteRequestEnd);
     void handleHttp(request, response);
   });
-  const wss = new WebSocketServer({ server, path: "/_frick/sync" });
+  const wss = new WebSocketServer({
+    server,
+    path: "/_frick/sync",
+    verifyClient: (info, callback) => {
+      const origin = typeof info.origin === "string" && info.origin.length > 0 ? info.origin : undefined;
+      if (isOriginAllowed(origin, config.allowedOrigins)) {
+        callback(true);
+        return;
+      }
+      callback(false, 403, "origin not allowed");
+    },
+  });
   const sse = new SseRegistry(
     store.schema,
     options.sseHeartbeatMs === undefined ? {} : { heartbeatMs: options.sseHeartbeatMs },
@@ -117,9 +128,19 @@ export function createFrickServer(options: ServerOptions = {}) {
 
   async function handleHttp(request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
-    setCors(response);
+    const requestOrigin = headerValue(request, "origin");
+    const originAllowed = isOriginAllowed(requestOrigin, config.allowedOrigins);
+    setCors(response, requestOrigin, config.allowedOrigins, originAllowed);
 
     if (request.method === "OPTIONS") {
+      if (!originAllowed) {
+        sendError(
+          response,
+          new CorsOriginRejectedError("Origin not allowed by CORS policy"),
+          "cors_rejected",
+        );
+        return;
+      }
       response.writeHead(204);
       response.end();
       return;
@@ -664,12 +685,62 @@ export function defaultDatabasePath(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../data/frick.sqlite");
 }
 
-function setCors(response: http.ServerResponse): void {
-  response.setHeader("Access-Control-Allow-Origin", "*");
-  response.setHeader("Access-Control-Allow-Headers", "authorization, content-type, x-frick-owner-id, x-frick-session-token");
-  response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
-  response.setHeader("Access-Control-Expose-Headers", "x-frick-schema-hash, x-frick-blob-id, x-frick-content-hash");
+/**
+ * Decide whether a request's `Origin` header is permitted by the configured
+ * allowlist. Same-origin / server-to-server requests omit `Origin` entirely
+ * and are always allowed — browsers, not the server, enforce CORS for those.
+ *
+ * Matching is exact-string only. Pattern matching (regex, suffix, subdomain
+ * wildcards) is out of scope; see `docs/threat-model.md` for the rationale.
+ */
+function isOriginAllowed(origin: string | undefined, allowedOrigins: readonly string[]): boolean {
+  if (!origin) return true;
+  if (allowedOrigins.includes("*")) return true;
+  return allowedOrigins.includes(origin);
+}
+
+class CorsOriginRejectedError extends Error {
+  readonly reason = "originNotAllowed";
+  constructor(message: string) {
+    super(message);
+    this.name = "CorsOriginRejectedError";
+  }
+}
+
+function setCors(
+  response: http.ServerResponse,
+  requestOrigin: string | undefined,
+  allowedOrigins: readonly string[],
+  originAllowed: boolean,
+): void {
   response.setHeader("X-Frick-Schema-Hash", foundationSchema.hash);
+  if (!originAllowed) {
+    // Browsers will block the response from reaching JS; the server still
+    // serves the body, matching typical Express/Node CORS-middleware
+    // semantics. Preflight requests are rejected outright at the caller.
+    return;
+  }
+  if (allowedOrigins.includes("*") && (!requestOrigin || allowedOrigins.length === 1)) {
+    response.setHeader("Access-Control-Allow-Origin", "*");
+  } else if (requestOrigin && allowedOrigins.includes(requestOrigin)) {
+    response.setHeader("Access-Control-Allow-Origin", requestOrigin);
+    response.setHeader("Vary", "Origin");
+  } else if (allowedOrigins.includes("*")) {
+    response.setHeader("Access-Control-Allow-Origin", "*");
+  } else {
+    // Same-origin (no Origin header) and no wildcard: emit no
+    // Access-Control-Allow-* headers — browsers wouldn't enforce anyway.
+    return;
+  }
+  response.setHeader(
+    "Access-Control-Allow-Headers",
+    "authorization, content-type, x-frick-owner-id, x-frick-session-token",
+  );
+  response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
+  response.setHeader(
+    "Access-Control-Expose-Headers",
+    "x-frick-schema-hash, x-frick-blob-id, x-frick-content-hash",
+  );
 }
 
 function sendJson(response: http.ServerResponse, status: number, body: unknown): void {
@@ -685,7 +756,9 @@ function sendError(response: http.ServerResponse, error: unknown, requestId: str
         ? 401
         : error instanceof AuthorizationError
           ? 403
-          : 400;
+          : error instanceof CorsOriginRejectedError
+            ? 403
+            : 400;
   const details: Record<string, unknown> = { routeCode: requestId };
   if (
     (error instanceof AuthenticationError || error instanceof AuthorizationError) &&
@@ -693,6 +766,9 @@ function sendError(response: http.ServerResponse, error: unknown, requestId: str
     !error.decision.allow
   ) {
     details.reason = error.decision.reason;
+  }
+  if (error instanceof CorsOriginRejectedError) {
+    details.reason = error.reason;
   }
   if (error instanceof FrickLimitError) {
     details.limit = error.limit;
@@ -725,6 +801,9 @@ function httpErrorCode(error: unknown): FrickErrorCode {
     return "auth.unauthenticated";
   }
   if (error instanceof AuthorizationError) {
+    return "auth.forbidden";
+  }
+  if (error instanceof CorsOriginRejectedError) {
     return "auth.forbidden";
   }
   if (error instanceof FrickLimitError) {
