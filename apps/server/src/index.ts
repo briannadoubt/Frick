@@ -1,5 +1,19 @@
 import { createFrickServer } from "./server.js";
 
+export { createFrickServer, defaultDatabasePath, type ServerOptions } from "./server.js";
+export {
+  FRAMEWORK_MIGRATIONS,
+  FrickMigrationChecksumError,
+  FrickMigrationError,
+  FrickMigrationRevisionError,
+  computeMigrationChecksum,
+  listAppliedMigrations,
+  runFrameworkMigrations,
+  type AppliedMigrationRow,
+  type FrameworkMigration,
+} from "./storage/migrations.js";
+export { FrickResetRefusedError, resetFrickDatabase } from "./storage/reset.js";
+
 const app = createFrickServer();
 await app.listen();
 
