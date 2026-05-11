@@ -247,6 +247,91 @@ final class FoundationModel {
         }
     }
 
+    // MARK: Push notifications
+
+    private let pushRegistrationDefaultsKey = "frick.demo.pushRegistrationId"
+
+    var isPushEnabled: Bool {
+        UserDefaults.standard.string(forKey: pushRegistrationDefaultsKey) != nil
+    }
+
+    func togglePush(_ on: Bool) async {
+        if on {
+            await registerPush()
+        } else {
+            await unregisterPush()
+        }
+    }
+
+    private func registerPush() async {
+        guard let session = currentSession else { return }
+        // Placeholder token — the in-process test adapter records delivery
+        // off this without needing a real APNs round-trip.
+        let token = UUID().uuidString
+        do {
+            let registrationId = try await postPushRegistration(
+                sessionToken: session.sessionToken,
+                deviceId: deviceId,
+                token: token
+            )
+            UserDefaults.standard.set(registrationId, forKey: pushRegistrationDefaultsKey)
+            status = "Push registered"
+        } catch {
+            status = "Push register failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func unregisterPush() async {
+        guard let session = currentSession,
+              let registrationId = UserDefaults.standard.string(forKey: pushRegistrationDefaultsKey)
+        else { return }
+        do {
+            try await deletePushRegistration(sessionToken: session.sessionToken, id: registrationId)
+            UserDefaults.standard.removeObject(forKey: pushRegistrationDefaultsKey)
+            status = "Push revoked"
+        } catch {
+            status = "Push revoke failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func postPushRegistration(sessionToken: String, deviceId: String, token: String) async throws -> String {
+        let url = URL(string: "http://127.0.0.1:4099/push/registrations")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "authorization")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "deviceId": deviceId,
+            "platform": "apns",
+            "token": token,
+            "environment": "sandbox",
+        ])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw URLError(.badServerResponse)
+        }
+        let parsed = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let registration = parsed?["registration"] as? [String: Any]
+        guard let id = registration?["id"] as? String else {
+            throw URLError(.badServerResponse)
+        }
+        return id
+    }
+
+    private func deletePushRegistration(sessionToken: String, id: String) async throws {
+        guard let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
+            throw URLError(.badURL)
+        }
+        let url = URL(string: "http://127.0.0.1:4099/push/registrations/\(encoded)")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "authorization")
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) || http.statusCode == 404 else {
+            throw URLError(.badServerResponse)
+        }
+    }
+
     // MARK: Typing presence
 
     func setTyping(_ isTyping: Bool) async {
@@ -1035,10 +1120,18 @@ struct SyncStatusIndicator: View {
 
 private struct AccountMenu: View {
     let model: FoundationModel
+    @State private var pushEnabled: Bool = false
 
     var body: some View {
         Menu {
             Text(model.authenticatedUserLabel)
+            Toggle("Notifications", isOn: Binding(
+                get: { pushEnabled },
+                set: { newValue in
+                    pushEnabled = newValue
+                    Task { await model.togglePush(newValue) }
+                }
+            ))
             Button("Sign out", role: .destructive) {
                 model.logout()
             }
@@ -1046,6 +1139,7 @@ private struct AccountMenu: View {
             Image(systemName: "person.crop.circle")
         }
         .accessibilityLabel("Account")
+        .onAppear { pushEnabled = model.isPushEnabled }
     }
 }
 
