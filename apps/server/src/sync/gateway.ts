@@ -51,6 +51,7 @@ import { DEFAULT_FRICK_LIMITS, clampTtlSeconds, type FrickLimits } from "../limi
 import { resolveTenantLimits } from "../tenant-config.js";
 import type { FrickMetrics, Gauge } from "../metrics.js";
 import { emitDevToolsEvent } from "../devtools/emit.js";
+import type { FrickAppRegistry } from "../apps/registry.js";
 
 /**
  * Per-connection tracking for the DevTools `ws.disconnect` event. We synth a
@@ -88,6 +89,7 @@ export class SyncGateway {
   #activeConnections = 0;
 
   readonly #projections: FrickProjectionRegistry | undefined;
+  readonly #appRegistry: FrickAppRegistry | undefined;
 
   constructor(
     private readonly wss: WebSocketServer,
@@ -98,6 +100,7 @@ export class SyncGateway {
       policyHooks?: readonly FrickPolicyHook[];
       metrics?: FrickMetrics;
       projections?: FrickProjectionRegistry;
+      appRegistry?: FrickAppRegistry;
     } = {},
   ) {
     this.#limits = options.limits ?? DEFAULT_FRICK_LIMITS;
@@ -105,6 +108,7 @@ export class SyncGateway {
     this.#metrics = options.metrics;
     this.#connectionsGauge = this.#metrics?.gauge("frick.ws.connections.current");
     this.#projections = options.projections;
+    this.#appRegistry = options.appRegistry;
     if (this.#projections) {
       this.#projections.setDeltaListener((notice) => this.publishProjectionDelta(notice));
     }
@@ -321,18 +325,32 @@ export class SyncGateway {
 
   #handleFrame(client: SyncClient, frame: FrickFrame): void {
     switch (frame[0]) {
-      case FrameKind.Hello:
-        if (!frame[1].clientCapabilities) {
+      case FrameKind.Hello: {
+        // Hello-driven app routing: when the client advertises a schemaId
+        // matching a registered app, route this connection to that app's
+        // schema. Falls back to the store's schema in single-app mode (no
+        // registry) or when no app id matches — the compatibility check
+        // below then surfaces the mismatch with the active app id.
+        const clientCaps = frame[1].clientCapabilities;
+        const advertisedSchemaId = clientCaps?.schema.schemaId;
+        const matchedApp = advertisedSchemaId
+          ? this.#appRegistry?.findBySchemaId(advertisedSchemaId)
+          : undefined;
+        const targetSchema = matchedApp?.schema ?? this.store.schema;
+        const targetAppId = matchedApp?.id;
+
+        if (!clientCaps) {
           try {
-            rejectSchemaMismatch(frame[1].schemaHash, this.store.schema.hash);
+            rejectSchemaMismatch(frame[1].schemaHash, targetSchema.hash);
           } catch (error) {
             const envelope = createFrickErrorEnvelope({
               code: "schema.incompatible",
               message: error instanceof Error ? error.message : "Schema mismatch",
               requestId: "hello",
               retryable: false,
-              schemaHash: this.store.schema.hash,
-              schemaRevision: this.store.schema.schemaRevision,
+              ...(targetAppId !== undefined ? { details: { appId: targetAppId } } : {}),
+              schemaHash: targetSchema.hash,
+              schemaRevision: targetSchema.schemaRevision,
             });
             sendFrame(client.socket, [
               FrameKind.Nack,
@@ -345,20 +363,32 @@ export class SyncGateway {
             ]);
             return;
           }
-          this.#sendHelloSuccess(client, compareSchemaCompatibility(this.store.schema, this.store.schema));
+          this.#sendHelloSuccess(client, compareSchemaCompatibility(targetSchema, targetSchema), targetSchema);
           return;
         }
 
-        const clientSchema = schemaFromClientCapabilities(frame[1].clientCapabilities, this.store.schema);
-        const compatibility = compareSchemaCompatibility(clientSchema, this.store.schema);
+        const clientSchema = schemaFromClientCapabilities(clientCaps, targetSchema);
+        const compatibility = compareSchemaCompatibility(clientSchema, targetSchema);
         if (!compatibility.compatible) {
+          // When a registry is configured but no app matched the client's
+          // schemaId, surface that as part of the nack so the client knows
+          // it picked an unknown app. We list the known app ids to help the
+          // user discover the correct id without leaking schema internals.
+          const knownApps = this.#appRegistry?.list();
+          const details: Record<string, unknown> = {};
+          if (targetAppId !== undefined) {
+            details.appId = targetAppId;
+          } else if (knownApps && knownApps.length > 0) {
+            details.knownAppIds = knownApps.map((app) => app.id);
+          }
           const envelope = createFrickErrorEnvelope({
             code: "schema.incompatible",
             message: compatibility.message,
             requestId: "hello",
             retryable: false,
-            schemaHash: this.store.schema.hash,
-            schemaRevision: this.store.schema.schemaRevision,
+            ...(Object.keys(details).length > 0 ? { details } : {}),
+            schemaHash: targetSchema.hash,
+            schemaRevision: targetSchema.schemaRevision,
           });
           sendFrame(client.socket, [
             FrameKind.Nack,
@@ -372,17 +402,20 @@ export class SyncGateway {
           return;
         }
 
-        const serverCapabilities = defaultServerCapabilities(this.store.schema);
-        const unsupportedCapabilities = unsupportedRequiredCapabilities(frame[1].clientCapabilities, serverCapabilities);
+        const serverCapabilities = defaultServerCapabilities(targetSchema);
+        const unsupportedCapabilities = unsupportedRequiredCapabilities(clientCaps, serverCapabilities);
         if (unsupportedCapabilities.length > 0) {
           const envelope = createFrickErrorEnvelope({
             code: "sync.protocolError",
             message: "Client requires unsupported capabilities",
             requestId: "hello",
             retryable: false,
-            details: { unsupportedCapabilities },
-            schemaHash: this.store.schema.hash,
-            schemaRevision: this.store.schema.schemaRevision,
+            details: {
+              unsupportedCapabilities,
+              ...(targetAppId !== undefined ? { appId: targetAppId } : {}),
+            },
+            schemaHash: targetSchema.hash,
+            schemaRevision: targetSchema.schemaRevision,
           });
           sendFrame(client.socket, [
             FrameKind.Nack,
@@ -396,8 +429,9 @@ export class SyncGateway {
           return;
         }
 
-        this.#sendHelloSuccess(client, compatibility);
+        this.#sendHelloSuccess(client, compatibility, targetSchema);
         return;
+      }
       case FrameKind.Subscribe:
         this.#handleSubscribe(client, frame[1]);
         return;
@@ -512,18 +546,22 @@ export class SyncGateway {
     }
   }
 
-  #sendHelloSuccess(client: SyncClient, schemaCompatibility: SchemaCompatibilityResult): void {
+  #sendHelloSuccess(
+    client: SyncClient,
+    schemaCompatibility: SchemaCompatibilityResult,
+    schema: FrickSchema = this.store.schema,
+  ): void {
     sendFrame(client.socket, [
       FrameKind.HelloAck,
       {
-        schemaHash: this.store.schema.hash,
-        schemaId: this.store.schema.schemaId,
-        schemaRevision: this.store.schema.schemaRevision,
+        schemaHash: schema.hash,
+        schemaId: schema.schemaId,
+        schemaRevision: schema.schemaRevision,
         schemaCompatibility,
-        serverCapabilities: defaultServerCapabilities(this.store.schema),
+        serverCapabilities: defaultServerCapabilities(schema),
       },
     ]);
-    sendFrame(client.socket, [FrameKind.Schema, this.store.schema]);
+    sendFrame(client.socket, [FrameKind.Schema, schema]);
   }
 
   #handleAppend(client: SyncClient, payload: AppendPayload): void {
