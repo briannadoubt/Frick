@@ -73,6 +73,14 @@ import {
   FrickRestoreRefusedError,
   restoreFrickDatabase,
 } from "./backup/restore.js";
+import {
+  type FrickBlobProcessor,
+} from "./blobs/processor.js";
+import {
+  BLOB_PROCESS_JOB_TYPE,
+  createBlobProcessorJobHandler,
+  encodeBlobProcessPayload,
+} from "./blobs/processor-job.js";
 
 export interface ServerOptions {
   port?: number;
@@ -140,6 +148,15 @@ export interface ServerOptions {
   push?: {
     adapters?: FrickPushAdapter[];
   };
+  /**
+   * Blob processors registered at boot. Each processor is added to the
+   * store's {@link FrickBlobProcessorRegistry} in declaration order — apps
+   * supply fast `validate(...)` hooks (rejected uploads short-circuit with
+   * `blob.unsupportedContentType`) and/or slow `process(...)` hooks
+   * (executed asynchronously as `blob.process` jobs). The `blob.process`
+   * job handler is registered automatically.
+   */
+  blobProcessors?: FrickBlobProcessor[];
   /**
    * Override the schema used by the underlying store. Defaults to
    * {@link foundationSchema}. Primarily exposed for tests that need to
@@ -267,6 +284,25 @@ export function createFrickServer(options: ServerOptions = {}) {
   // boot if someone is intentionally overriding).
   if (!jobRegistry.resolve(PUSH_DELIVER_JOB_TYPE)) {
     jobRegistry.register(PUSH_DELIVER_JOB_TYPE, notificationRouter.handler);
+  }
+
+  // Blob processor pipeline. App processors are registered first; the
+  // store ships its registry already-empty. Register the `blob.process`
+  // handler before the worker starts so claimed jobs always resolve.
+  if (options.blobProcessors) {
+    for (const processor of options.blobProcessors) {
+      store.blobProcessors.register(processor);
+    }
+  }
+  if (!jobRegistry.resolve(BLOB_PROCESS_JOB_TYPE)) {
+    jobRegistry.register(
+      BLOB_PROCESS_JOB_TYPE,
+      createBlobProcessorJobHandler({
+        store,
+        blobProcessors: store.blobProcessors,
+        logger,
+      }),
+    );
   }
   // Default: worker runs in non-test envs. Tests would otherwise have a
   // polling loop ticking during every spec, complicating shutdown ordering
@@ -878,10 +914,14 @@ export function createFrickServer(options: ServerOptions = {}) {
         const contentHash = sha256ContentHash(content);
         let responseStatus = 200;
         let responseContentHash = metadata?.contentHash ?? contentHash;
+        let resolvedOwnerId: string;
+        let resolvedMimeType: string;
 
         if (metadata) {
           assertBlobOwnership(principal, metadata.ownerId, policyHooks);
           validateBlobContent(blobContentId, metadata.byteLength, metadata.contentHash, content, contentHash);
+          resolvedOwnerId = metadata.ownerId;
+          resolvedMimeType = metadata.mimeType;
         } else {
           responseStatus = 201;
           const ownerId = requireString(
@@ -889,12 +929,47 @@ export function createFrickServer(options: ServerOptions = {}) {
             "ownerId",
           );
           assertBlobOwnership(principal, ownerId, policyHooks);
+          resolvedOwnerId = ownerId;
+          resolvedMimeType = inferMimeType(request);
+        }
+
+        // Synchronous validators run against the resolved (owner, mime,
+        // size) tuple before any row is created or content is written. A
+        // rejection here surfaces as 415 with envelope code
+        // `blob.unsupportedContentType` and never leaves an
+        // upload-in-progress trail in the store.
+        const matchingProcessors = store.blobProcessors.matching(
+          resolvedMimeType,
+          content.byteLength,
+        );
+        const preview = content.subarray(
+          0,
+          Math.min(content.byteLength, 4 * 1024),
+        );
+        for (const processor of matchingProcessors) {
+          if (!processor.validate) continue;
+          const verdict = await processor.validate({
+            tenantId: principal.tenantId,
+            blobId: blobContentId,
+            ownerId: resolvedOwnerId,
+            mimeType: resolvedMimeType,
+            byteLength: content.byteLength,
+            preview,
+            store,
+            logger,
+          });
+          if (!verdict.ok) {
+            throw new BlobValidationRejectedError(processor.id, verdict.reason);
+          }
+        }
+
+        if (!metadata) {
           const createdMetadata = {
             blobId: blobContentId,
-            ownerId,
+            ownerId: resolvedOwnerId,
             contentHash,
             byteLength: content.byteLength,
-            mimeType: inferMimeType(request),
+            mimeType: resolvedMimeType,
             createdAt: new Date().toISOString(),
           };
           store.blobs.create(principal.tenantId, createdMetadata);
@@ -902,6 +977,23 @@ export function createFrickServer(options: ServerOptions = {}) {
         }
 
         store.blobs.writeContent(principal.tenantId, blobContentId, content);
+
+        // Enqueue async post-processing jobs. Each matching processor with a
+        // `process` hook gets its own job — apps that want fan-in across
+        // processors can do that inside their handlers.
+        for (const processor of matchingProcessors) {
+          if (!processor.process) continue;
+          store.jobs.enqueue({
+            tenantId: principal.tenantId,
+            jobType: BLOB_PROCESS_JOB_TYPE,
+            payload: encodeBlobProcessPayload({
+              blobId: blobContentId,
+              processorId: processor.id,
+            }),
+            idempotencyKey: `${blobContentId}:${processor.id}:${contentHash}`,
+          });
+        }
+
         sendJson(response, responseStatus, {
           ok: true,
           blobId: blobContentId,
@@ -1248,6 +1340,23 @@ class AccountNotFoundError extends Error {
  * requested projection isn't registered. Maps to 404 with
  * `details.reason = "projectionNotFound"`.
  */
+/**
+ * Thrown when a registered blob processor's `validate(...)` hook returns
+ * `ok: false`. Maps to 415 with envelope code
+ * `blob.unsupportedContentType` and `details.processorId` / `details.reason`.
+ */
+class BlobValidationRejectedError extends Error {
+  readonly reason = "blobValidationRejected";
+  constructor(readonly processorId: string, readonly rejectionReason?: string) {
+    super(
+      rejectionReason
+        ? `Blob rejected by processor ${processorId}: ${rejectionReason}`
+        : `Blob rejected by processor ${processorId}`,
+    );
+    this.name = "BlobValidationRejectedError";
+  }
+}
+
 class ProjectionNotFoundError extends Error {
   readonly reason = "projectionNotFound";
   readonly projection: string;
@@ -1320,6 +1429,8 @@ function sendError(response: http.ServerResponse, error: unknown, requestId: str
   const status =
     error instanceof FrickLimitError
       ? 413
+      : error instanceof BlobValidationRejectedError
+        ? 415
       : error instanceof AccountNotFoundError
         ? 401
         : error instanceof AuthenticationError
@@ -1357,6 +1468,13 @@ function sendError(response: http.ServerResponse, error: unknown, requestId: str
   if (error instanceof ProjectionNotFoundError) {
     details.reason = error.reason;
     details.projection = error.projection;
+  }
+  if (error instanceof BlobValidationRejectedError) {
+    details.reason = error.reason;
+    details.processorId = error.processorId;
+    if (error.rejectionReason) {
+      details.rejectionReason = error.rejectionReason;
+    }
   }
   if (error instanceof FrickLimitError) {
     details.limit = error.limit;
@@ -1396,6 +1514,9 @@ function httpErrorCode(error: unknown): FrickErrorCode {
   }
   if (error instanceof CorsOriginRejectedError) {
     return "auth.forbidden";
+  }
+  if (error instanceof BlobValidationRejectedError) {
+    return "blob.unsupportedContentType";
   }
   if (error instanceof FrickLimitError) {
     if (error.limit === "maxBlobBytes") {
