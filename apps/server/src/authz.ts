@@ -248,6 +248,13 @@ export function decide(input: FrickPolicyInput, memberships: MembershipReader): 
       // via a registered FrickPolicyHook.
       return ALLOW;
     }
+    case "object.write": {
+      // Any authenticated principal may write objects in its own tenant. The
+      // tenant-mismatch guard above already denied cross-tenant attempts.
+      // App-level policy hooks can tighten further (per-type ownership,
+      // immutable fields, etc.).
+      return ALLOW;
+    }
     case "stream.read":
     case "stream.append": {
       if (resource.name !== "MessageStream") {
@@ -392,6 +399,27 @@ export function assertCanAppend(
         allow: false;
       },
     );
+  }
+}
+
+export function assertCanWriteObject(
+  principal: Principal,
+  objectType: string,
+  objectId: string,
+  memberships: MembershipReader,
+  hooks?: readonly FrickPolicyHook[],
+): void {
+  const decision = decideWithHooks(
+    {
+      principal,
+      action: "object.write",
+      resource: { kind: "object", name: objectType, key: objectId, tenantId: principal.tenantId },
+    },
+    memberships,
+    hooks,
+  );
+  if (!decision.allow) {
+    throw new AuthorizationError(decision);
   }
 }
 
