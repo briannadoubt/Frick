@@ -10,6 +10,7 @@ import {
   SessionExpiredError,
   assertBlobOwnership,
   assertCanAppend,
+  assertCanReadBlob,
   assertCanReadInbox,
   assertCanSignal,
   assertCanSubscribe,
@@ -392,31 +393,41 @@ export function createFrickServer(options: ServerOptions = {}) {
     }
 
     if (blobContentId && request.method === "GET") {
-      const metadata = store.readBlobMetadata(blobContentId);
-      const content = store.readBlobContent(blobContentId);
-      if (!metadata || !content) {
-        sendJson(response, 404, { error: "blob_content_not_found" });
-        return;
-      }
+      try {
+        const metadata = store.readBlobMetadata(blobContentId);
+        const content = store.readBlobContent(blobContentId);
+        if (!metadata || !content) {
+          sendJson(response, 404, { error: "blob_content_not_found" });
+          return;
+        }
+        assertCanReadBlob(principal, metadata.ownerId);
 
-      response.writeHead(200, {
-        "content-type": metadata.mimeType,
-        "content-length": content.byteLength,
-        "x-frick-blob-id": metadata.blobId,
-        "x-frick-content-hash": metadata.contentHash,
-      });
-      response.end(Buffer.from(content));
+        response.writeHead(200, {
+          "content-type": metadata.mimeType,
+          "content-length": content.byteLength,
+          "x-frick-blob-id": metadata.blobId,
+          "x-frick-content-hash": metadata.contentHash,
+        });
+        response.end(Buffer.from(content));
+      } catch (error) {
+        sendError(response, error, "blob_content_rejected");
+      }
       return;
     }
 
     if (request.method === "GET" && url.pathname.startsWith("/blobs/")) {
-      const blobId = decodeURIComponent(url.pathname.slice("/blobs/".length));
-      const metadata = blobId ? store.readBlobMetadata(blobId) : undefined;
-      if (!metadata) {
-        sendJson(response, 404, { error: "blob_not_found" });
-        return;
+      try {
+        const blobId = decodeURIComponent(url.pathname.slice("/blobs/".length));
+        const metadata = blobId ? store.readBlobMetadata(blobId) : undefined;
+        if (!metadata) {
+          sendJson(response, 404, { error: "blob_not_found" });
+          return;
+        }
+        assertCanReadBlob(principal, metadata.ownerId);
+        sendJson(response, 200, metadata);
+      } catch (error) {
+        sendError(response, error, "blob_rejected");
       }
-      sendJson(response, 200, metadata);
       return;
     }
 

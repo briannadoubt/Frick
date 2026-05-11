@@ -135,7 +135,8 @@ export function decide(input: FrickPolicyInput, memberships: MembershipReader): 
       }
       return ALLOW;
     }
-    case "blob.write": {
+    case "blob.write":
+    case "blob.read": {
       if (resource.ownerId !== principal.userId) {
         return deny("ownerMismatch", "Blob ownerId must match the principal");
       }
@@ -274,6 +275,16 @@ export function assertCanReadInbox(principal: Principal, userId: string, members
   const decision = decide(
     { principal, action: "inbox.read", resource: { kind: "inbox", key: userId, ownerId: userId } },
     memberships,
+  );
+  if (!decision.allow) {
+    throw new AuthorizationError(decision);
+  }
+}
+
+export function assertCanReadBlob(principal: Principal, ownerId: string): void {
+  const decision = decide(
+    { principal, action: "blob.read", resource: { kind: "blob", ownerId } },
+    NULL_MEMBERSHIP,
   );
   if (!decision.allow) {
     throw new AuthorizationError(decision);

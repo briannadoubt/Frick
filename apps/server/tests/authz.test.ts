@@ -87,6 +87,66 @@ describe("authorization denial envelopes", () => {
     expect(body.error.details.reason).toBe("ownerMismatch");
   });
 
+  it("denies reading another user's blob content and metadata with reason ownerMismatch", async () => {
+    app = await startServer();
+    const adaLogin = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const graceLogin = await devLogin(app.httpUrl, { userId: "user-grace" });
+
+    // Grace uploads a blob she owns.
+    const blobBody = Buffer.from("grace's secret");
+    const upload = await fetch(`${app.httpUrl}/blobs/blob-grace-secret/content?ownerId=user-grace`, {
+      method: "PUT",
+      headers: { "content-type": "text/plain", ...authHeaders(graceLogin.sessionToken) },
+      body: blobBody,
+    });
+    expect(upload.status).toBe(201);
+
+    // Ada tries to fetch Grace's content.
+    const contentRead = await fetch(`${app.httpUrl}/blobs/blob-grace-secret/content`, {
+      headers: authHeaders(adaLogin.sessionToken),
+    });
+    const contentBody = await contentRead.json();
+    expect(contentRead.status).toBe(403);
+    expect(isFrickErrorEnvelope(contentBody.error)).toBe(true);
+    expect(contentBody.error.code).toBe("auth.forbidden");
+    expect(contentBody.error.details.reason).toBe("ownerMismatch");
+
+    // Ada tries to fetch Grace's metadata.
+    const metaRead = await fetch(`${app.httpUrl}/blobs/blob-grace-secret`, {
+      headers: authHeaders(adaLogin.sessionToken),
+    });
+    const metaBody = await metaRead.json();
+    expect(metaRead.status).toBe(403);
+    expect(metaBody.error.details.reason).toBe("ownerMismatch");
+  });
+
+  it("allows the owner to read their own blob content and metadata", async () => {
+    app = await startServer();
+    const graceLogin = await devLogin(app.httpUrl, { userId: "user-grace" });
+
+    const blobBody = Buffer.from("grace's own bytes");
+    const upload = await fetch(`${app.httpUrl}/blobs/blob-grace-own/content?ownerId=user-grace`, {
+      method: "PUT",
+      headers: { "content-type": "text/plain", ...authHeaders(graceLogin.sessionToken) },
+      body: blobBody,
+    });
+    expect(upload.status).toBe(201);
+
+    const contentRead = await fetch(`${app.httpUrl}/blobs/blob-grace-own/content`, {
+      headers: authHeaders(graceLogin.sessionToken),
+    });
+    expect(contentRead.status).toBe(200);
+    const bytes = Buffer.from(await contentRead.arrayBuffer());
+    expect(bytes.equals(blobBody)).toBe(true);
+
+    const metaRead = await fetch(`${app.httpUrl}/blobs/blob-grace-own`, {
+      headers: authHeaders(graceLogin.sessionToken),
+    });
+    expect(metaRead.status).toBe(200);
+    const meta = await metaRead.json();
+    expect(meta.ownerId).toBe("user-grace");
+  });
+
   it("denies non-members POSTing signals to another conversation with reason notMember", async () => {
     app = await startServer();
     app.store.upsertObject("User", "user-mallory", {
