@@ -124,14 +124,23 @@ describe("auth-flow: dev-login auto-create gating", () => {
 
   it("emits frick.auth.dev_login_auto_create when auto-creating", async () => {
     const events: { message: string; fields?: Record<string, unknown> }[] = [];
-    const logger = {
+    const buildLogger = (inherited: Record<string, unknown> = {}): {
+      debug: () => void;
+      info: (message: string, fields?: Record<string, unknown>) => void;
+      warn: () => void;
+      error: () => void;
+      child: (extra: Record<string, unknown>) => ReturnType<typeof buildLogger>;
+    } => ({
       debug: () => {},
       info: (message: string, fields?: Record<string, unknown>) => {
-        events.push({ message, ...(fields ? { fields } : {}) });
+        const merged = { ...inherited, ...(fields ?? {}) };
+        events.push({ message, ...(Object.keys(merged).length > 0 ? { fields: merged } : {}) });
       },
       warn: () => {},
       error: () => {},
-    };
+      child: (extra) => buildLogger({ ...inherited, ...extra }),
+    });
+    const logger = buildLogger();
 
     app = await startServer({ logger });
 
