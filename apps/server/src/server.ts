@@ -219,6 +219,11 @@ export function createFrickServer(options: ServerOptions = {}) {
                 },
               }
             : {}),
+          idempotencyCache: {
+            size: store.idempotencyCache.size,
+            capacity: store.idempotencyCache.capacity,
+            evictions: store.idempotencyCache.evictions,
+          },
         });
         return;
       }

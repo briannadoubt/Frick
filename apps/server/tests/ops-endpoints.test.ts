@@ -83,6 +83,43 @@ describe("operational HTTP endpoints", () => {
     });
   });
 
+  it("/_frick/inspect/db reports an empty idempotency cache initially", async () => {
+    app = await startServer();
+    const response = await fetch(`${app.httpUrl}/_frick/inspect/db`);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.idempotencyCache).toEqual({
+      size: 0,
+      capacity: 10000,
+      evictions: 0,
+    });
+  });
+
+  it("/_frick/inspect/db reflects cache growth after appends", async () => {
+    app = await startServer();
+    for (let i = 0; i < 3; i += 1) {
+      app.store.appendEvent({
+        requestId: `request-${i}`,
+        replicaId: "replica-ops-test",
+        stream: "MessageStream",
+        streamId: "conversation-ops-test",
+        event: "MessageSent",
+        payload: {
+          messageId: `message-ops-${i}`,
+          senderId: "user-ops",
+          body: "ops",
+          createdAt: "2026-05-09T00:00:00.000Z",
+        },
+      });
+    }
+    const response = await fetch(`${app.httpUrl}/_frick/inspect/db`);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.idempotencyCache.size).toBeGreaterThan(0);
+    expect(body.idempotencyCache.capacity).toBe(10000);
+    expect(body.idempotencyCache.evictions).toBe(0);
+  });
+
   it("hides inspection routes (404) when inspectionEnabled is false", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "frick-ops-"));
     const dbPath = path.join(dir, "frick.sqlite");
@@ -111,6 +148,7 @@ async function startServer(options: Parameters<typeof createFrickServer>[0] = {}
   }
   return {
     httpUrl: `http://127.0.0.1:${address.port}`,
+    store: server.store,
     close: server.close,
   };
 }
