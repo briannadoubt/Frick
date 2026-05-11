@@ -6,9 +6,12 @@ import type { DatabaseSync } from "node:sqlite";
  *
  * Each derivative is keyed by (tenantId, parentBlobId, derivativeId) and
  * carries the same content-addressing bookkeeping as the parent
- * (`content_hash`, `byte_length`, `mime_type`). Bytes themselves are stored
- * in the existing `blob_content` table under the derivative's
- * `storage_key`, reusing the framework's content-blob path resolution.
+ * (`content_hash`, `byte_length`, `mime_type`). Bytes are stored inline on
+ * the row in the `content` BLOB column — the foundation blob_content table
+ * is reserved for top-level blobs (its FK to blob_metadata makes it
+ * unsuitable for derivative storage). `storage_key` remains a logical path
+ * apps can swap out for filesystem-backed storage later without a schema
+ * change.
  */
 export interface DerivativeRow {
   parentBlobId: string;
@@ -45,6 +48,7 @@ export interface RecordDerivativeInput {
   byteLength: number;
   contentHash: string;
   storageKey: string;
+  content: Buffer;
   metadata?: Record<string, unknown>;
 }
 
@@ -75,8 +79,8 @@ export class BlobDerivativeStore {
       .prepare(
         `INSERT OR REPLACE INTO blob_derivatives
           (parent_blob_id, derivative_id, tenant_id, processor_id, mime_type,
-           byte_length, content_hash, storage_key, metadata, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           byte_length, content_hash, storage_key, content, metadata, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.parentBlobId,
@@ -87,6 +91,7 @@ export class BlobDerivativeStore {
         input.byteLength,
         input.contentHash,
         input.storageKey,
+        input.content,
         metadataJson,
         now,
       );
@@ -126,31 +131,13 @@ export class BlobDerivativeStore {
           WHERE tenant_id = ? AND parent_blob_id = ? AND derivative_id = ?
           LIMIT 1`,
       )
-      .get(tenantId, parentBlobId, derivativeId) as RawDerivativeRow | undefined;
+      .get(tenantId, parentBlobId, derivativeId) as
+        | (RawDerivativeRow & { content: Uint8Array | null })
+        | undefined;
     if (!row) return undefined;
     const mapped = mapRow(row);
-    const contentRow = this.db
-      .prepare(
-        `SELECT content FROM blob_content WHERE tenant_id = ? AND blob_id = ?`,
-      )
-      .get(tenantId, mapped.storageKey) as { content: Uint8Array } | undefined;
-    if (!contentRow) return undefined;
-    return { row: mapped, bytes: Buffer.from(contentRow.content) };
-  }
-
-  /**
-   * Persist derivative bytes via the existing blob_content table. The
-   * `storage_key` doubles as the blob_id within `blob_content` — derivative
-   * keys live under the `derivative/...` namespace and never collide with
-   * top-level blob ids.
-   */
-  writeBytes(tenantId: string, storageKey: string, bytes: Buffer): void {
-    this.db
-      .prepare(
-        `INSERT OR REPLACE INTO blob_content (blob_id, content, updated_at, tenant_id)
-          VALUES (?, ?, ?, ?)`,
-      )
-      .run(storageKey, bytes, new Date().toISOString(), tenantId);
+    const bytes = row.content ? Buffer.from(row.content) : Buffer.alloc(0);
+    return { row: mapped, bytes };
   }
 }
 

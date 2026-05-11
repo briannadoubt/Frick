@@ -79,7 +79,6 @@ function persistDerivative(
   derivative: FrickBlobDerivative,
 ): void {
   const storageKey = derivativeStorageKey(parentBlobId, derivative.derivativeId);
-  derivatives.writeBytes(tenantId, storageKey, derivative.bytes);
   derivatives.record({
     parentBlobId,
     derivativeId: derivative.derivativeId,
@@ -89,6 +88,7 @@ function persistDerivative(
     byteLength: derivative.bytes.byteLength,
     contentHash: sha256ContentHash(derivative.bytes),
     storageKey,
+    content: derivative.bytes,
     ...(derivative.metadata ? { metadata: derivative.metadata } : {}),
   });
 }

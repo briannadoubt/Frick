@@ -548,6 +548,7 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
         byte_length INTEGER NOT NULL,
         content_hash TEXT NOT NULL,
         storage_key TEXT NOT NULL,
+        content BLOB,
         metadata TEXT,
         created_at TEXT NOT NULL,
         PRIMARY KEY (tenant_id, parent_blob_id, derivative_id)

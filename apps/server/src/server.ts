@@ -1029,6 +1029,65 @@ export function createFrickServer(options: ServerOptions = {}) {
       return;
     }
 
+    // Derivative content: GET /blobs/:blobId/derivatives/:derivativeId/content
+    const derivativeContentRoute = parseDerivativeContentPath(url);
+    if (derivativeContentRoute && request.method === "GET") {
+      try {
+        const metadata = store.blobs.read(
+          principal.tenantId,
+          derivativeContentRoute.blobId,
+        );
+        if (!metadata) {
+          // Cross-tenant fetches and unknown ids share 404 semantics — we
+          // never leak the existence of a blob in another tenant.
+          sendJson(response, 404, { error: "blob_not_found" });
+          return;
+        }
+        assertCanReadBlob(principal, metadata.ownerId, policyHooks);
+        const result = store.blobDerivatives.read(
+          derivativeContentRoute.blobId,
+          derivativeContentRoute.derivativeId,
+          principal.tenantId,
+        );
+        if (!result) {
+          sendJson(response, 404, { error: "blob_derivative_not_found" });
+          return;
+        }
+        response.writeHead(200, {
+          "content-type": result.row.mimeType,
+          "content-length": result.bytes.byteLength,
+          "x-frick-blob-id": metadata.blobId,
+          "x-frick-content-hash": result.row.contentHash,
+          etag: `"${result.row.contentHash}"`,
+        });
+        response.end(result.bytes);
+      } catch (error) {
+        sendErrorWithMetrics(response, error, "blob_derivative_rejected");
+      }
+      return;
+    }
+
+    // Derivative list: GET /blobs/:blobId/derivatives
+    const derivativeListBlobId = parseDerivativeListPath(url);
+    if (derivativeListBlobId && request.method === "GET") {
+      try {
+        const metadata = store.blobs.read(principal.tenantId, derivativeListBlobId);
+        if (!metadata) {
+          sendJson(response, 404, { error: "blob_not_found" });
+          return;
+        }
+        assertCanReadBlob(principal, metadata.ownerId, policyHooks);
+        const derivatives = store.blobDerivatives.listForParent(
+          derivativeListBlobId,
+          principal.tenantId,
+        );
+        sendJson(response, 200, { derivatives });
+      } catch (error) {
+        sendErrorWithMetrics(response, error, "blob_derivative_rejected");
+      }
+      return;
+    }
+
     if (request.method === "GET" && url.pathname.startsWith("/blobs/")) {
       try {
         const blobId = decodeURIComponent(url.pathname.slice("/blobs/".length));
@@ -1603,6 +1662,25 @@ function parseBlobContentPath(url: URL): string | undefined {
   const match = /^\/blobs\/([^/]+)\/content$/.exec(url.pathname);
   const encodedBlobId = match?.[1];
   return encodedBlobId ? decodeURIComponent(encodedBlobId) : undefined;
+}
+
+function parseDerivativeListPath(url: URL): string | undefined {
+  const match = /^\/blobs\/([^/]+)\/derivatives$/.exec(url.pathname);
+  const encoded = match?.[1];
+  return encoded ? decodeURIComponent(encoded) : undefined;
+}
+
+function parseDerivativeContentPath(
+  url: URL,
+): { blobId: string; derivativeId: string } | undefined {
+  const match = /^\/blobs\/([^/]+)\/derivatives\/([^/]+)\/content$/.exec(url.pathname);
+  const encodedBlob = match?.[1];
+  const encodedDeriv = match?.[2];
+  if (!encodedBlob || !encodedDeriv) return undefined;
+  return {
+    blobId: decodeURIComponent(encodedBlob),
+    derivativeId: decodeURIComponent(encodedDeriv),
+  };
 }
 
 function parseObjectWritePath(url: URL): { type: string; id: string } | undefined {
