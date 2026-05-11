@@ -46,15 +46,19 @@ describe("framework migration runner", () => {
       supportedSchemaRevision: foundationSchema.schemaRevision,
     });
 
-    expect(result.applied).toHaveLength(1);
-    expect(result.applied[0]?.id).toBe("0001_initial_foundation_tables");
+    expect(result.applied.map((row) => row.id)).toEqual([
+      "0001_initial_foundation_tables",
+      "0002_idempotency_keys_created_at",
+    ]);
     expect(result.applied[0]?.schemaRevision).toBe(1);
     expect(result.applied[0]?.checksum).toMatch(/^sha256-[0-9a-f]{64}$/);
     expect(result.applied[0]?.durationMs).toBeGreaterThanOrEqual(0);
 
     const applied = listAppliedMigrations(db);
-    expect(applied).toHaveLength(1);
-    expect(applied[0]?.id).toBe("0001_initial_foundation_tables");
+    expect(applied.map((row) => row.id)).toEqual([
+      "0001_initial_foundation_tables",
+      "0002_idempotency_keys_created_at",
+    ]);
 
     const tables = listTables(db);
     for (const table of FOUNDATION_TABLES) {
@@ -75,10 +79,10 @@ describe("framework migration runner", () => {
       supportedSchemaRevision: foundationSchema.schemaRevision,
     });
 
-    expect(first.applied).toHaveLength(1);
+    expect(first.applied).toHaveLength(2);
     expect(second.applied).toHaveLength(0);
-    expect(second.alreadyApplied).toHaveLength(1);
-    expect(listAppliedMigrations(db)).toHaveLength(1);
+    expect(second.alreadyApplied).toHaveLength(2);
+    expect(listAppliedMigrations(db)).toHaveLength(2);
 
     db.close();
   });
@@ -201,6 +205,7 @@ describe("framework migration runner", () => {
 
     expect(result.applied.map((row) => row.id)).toEqual([
       "0001_initial_foundation_tables",
+      "0002_idempotency_keys_created_at",
       "9000_test_extra",
     ]);
     expect(listTables(db)).toContain("test_extra");

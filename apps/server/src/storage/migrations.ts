@@ -215,6 +215,21 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
       );
     `,
   },
+  {
+    // Additive: the initial migration already gave `idempotency_keys` a TEXT
+    // `created_at` column (ISO-8601 timestamps), which sort lexicographically
+    // by time and so are usable directly for range pruning. All this migration
+    // does is add an index on that column so the retention DELETE in
+    // `FrickStore.prune` can use a range scan instead of a full table scan as
+    // the table grows. Schema revision stays at 1 — no shape change.
+    id: "0002_idempotency_keys_created_at",
+    schemaRevision: 1,
+    description: "Index idempotency_keys.created_at for retention pruning",
+    sql: `
+      CREATE INDEX IF NOT EXISTS idx_idempotency_keys_created_at
+        ON idempotency_keys (created_at);
+    `,
+  },
 ];
 
 /** Names of all framework tables (and indexes) the runner manages. Used by the
