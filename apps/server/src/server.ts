@@ -36,6 +36,11 @@ import {
   type FrickExtensionRegistryInput,
 } from "./extensions.js";
 import { SyncGateway } from "./sync/gateway.js";
+import {
+  createFrickAppRegistry,
+  type FrickAppDefinition,
+  type FrickAppRegistry,
+} from "./apps/registry.js";
 import { SseRegistry } from "./sync/sse.js";
 import {
   createFrickProjectionRegistry,
@@ -188,6 +193,20 @@ export interface ServerOptions {
    * types not present in the foundation schema.
    */
   schema?: FrickSchema;
+  /**
+   * Mount multiple Frick "apps" on the same server. Each app gets a URL
+   * prefix; `GET <basePath>/schema` returns that app's schema, and Hello
+   * compatibility uses the app whose schemaId the client advertises.
+   *
+   * When omitted, the server runs in single-app mode: one root app with
+   * `basePath: ""` exposing `options.schema ?? foundationSchema`. Throws
+   * {@link FrickConfigError} on duplicate basePath or invalid basePath shape.
+   *
+   * V1 limitation: storage is server-shared. App routing affects URL
+   * dispatch and Hello handshake only; reads/writes all hit the same
+   * underlying store. See `docs/operations.md` for the partition follow-up.
+   */
+  apps?: readonly FrickAppDefinition[];
 }
 
 export function createFrickServer(options: ServerOptions = {}) {
@@ -240,6 +259,13 @@ export function createFrickServer(options: ServerOptions = {}) {
   for (const def of searchIndexes.list()) {
     store.searchAdapter.registerIndex(def);
   }
+  // App registry: in single-app mode (no `options.apps`), synthesize a root
+  // app exposing the store's schema so request resolution always succeeds.
+  const appRegistry: FrickAppRegistry = createFrickAppRegistry(
+    options.apps ?? [
+      { id: "foundation", schema: store.schema, basePath: "" },
+    ],
+  );
   const extensions = createFrickExtensionRegistry(options.extensions);
   // Precompute the admin token fingerprint once so audit-log inserts don't
   // hash on every request. SHA-256 truncated to 12 hex chars: short enough to
@@ -415,12 +441,24 @@ export function createFrickServer(options: ServerOptions = {}) {
   async function dispatchHttp(
     request: http.IncomingMessage,
     response: http.ServerResponse,
-    url: URL,
+    requestUrl: URL,
     onPrincipal: (principal: Principal) => void,
   ): Promise<void> {
     const requestOrigin = headerValue(request, "origin");
     const originAllowed = isOriginAllowed(requestOrigin, config.allowedOrigins);
     setCors(response, requestOrigin, config.allowedOrigins, originAllowed);
+
+    // Resolve which app owns this URL and rebind `url` to use the relative
+    // path. The legacy single-app default (basePath: "") makes this a no-op
+    // for existing call sites. App schema is preferred over `store.schema`
+    // for any handler that reports schema metadata back to clients.
+    const resolution = appRegistry.resolveByPath(requestUrl);
+    const url = resolution
+      ? new URL(`${requestUrl.origin}${resolution.relativePath}${requestUrl.search}`)
+      : requestUrl;
+    const activeApp: FrickAppDefinition =
+      resolution?.app ?? { id: "foundation", schema: store.schema, basePath: "" };
+    const appSchema = activeApp.schema;
 
     if (request.method === "OPTIONS") {
       if (!originAllowed) {
@@ -470,10 +508,11 @@ export function createFrickServer(options: ServerOptions = {}) {
       const sub = url.pathname.slice("/_frick/inspect/".length);
       if (sub === "server") {
         sendJson(response, 200, {
-          schemaId: store.schema.schemaId,
-          schemaVersion: store.schema.schemaVersion,
-          schemaRevision: store.schema.schemaRevision,
-          schemaHash: store.schema.hash,
+          schemaId: appSchema.schemaId,
+          schemaVersion: appSchema.schemaVersion,
+          schemaRevision: appSchema.schemaRevision,
+          schemaHash: appSchema.hash,
+          appId: activeApp.id,
           env: config.env,
           demoAuthEnabled: config.demoAuthEnabled,
           inspectionEnabled: config.inspectionEnabled,
@@ -663,7 +702,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     }
 
     if (request.method === "GET" && url.pathname === "/schema") {
-      sendJson(response, 200, store.schema);
+      sendJson(response, 200, appSchema);
       return;
     }
 
@@ -1488,6 +1527,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     close,
     notifications: notificationRouter,
     pushRegistry,
+    apps: appRegistry,
   };
 }
 

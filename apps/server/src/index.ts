@@ -2,6 +2,12 @@ import { createFrickServer } from "./server.js";
 
 export { createFrickServer, defaultDatabasePath, type ServerOptions } from "./server.js";
 export {
+  createFrickAppRegistry,
+  type FrickAppDefinition,
+  type FrickAppRegistry,
+  type FrickAppResolution,
+} from "./apps/registry.js";
+export {
   FRAMEWORK_MIGRATIONS,
   FrickMigrationChecksumError,
   FrickMigrationError,
