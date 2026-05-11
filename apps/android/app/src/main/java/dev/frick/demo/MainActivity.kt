@@ -11,6 +11,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -24,6 +25,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -165,6 +167,8 @@ fun FrickDemo() {
                     isCreatingThread = state.isCreatingThread,
                     isCreateThreadDisabled = state.isCreateThreadDisabled,
                     sync = state.sync,
+                    pushEnabled = state.pushEnabled,
+                    pushBusy = state.pushBusy,
                     onNewThreadTitleChange = viewModel::setNewThreadTitle,
                     onNewThreadKindChange = viewModel::setNewThreadKind,
                     onToggleParticipant = viewModel::toggleNewThreadParticipant,
@@ -173,6 +177,7 @@ fun FrickDemo() {
                     onReload = viewModel::reload,
                     onLogout = viewModel::logout,
                     onSyncTap = viewModel::showSyncDialog,
+                    onTogglePush = viewModel::setPushEnabled,
                 )
             },
             collectionVisible = state.threadListVisible,
@@ -357,6 +362,8 @@ private fun ThreadListScreen(
     isCreatingThread: Boolean,
     isCreateThreadDisabled: Boolean,
     sync: SyncStatusUi,
+    pushEnabled: Boolean,
+    pushBusy: Boolean,
     onNewThreadTitleChange: (String) -> Unit,
     onNewThreadKindChange: (NewThreadKind) -> Unit,
     onToggleParticipant: (String) -> Unit,
@@ -365,6 +372,7 @@ private fun ThreadListScreen(
     onReload: () -> Unit,
     onLogout: () -> Unit,
     onSyncTap: () -> Unit,
+    onTogglePush: (Boolean) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         FrickTopBar(
@@ -381,6 +389,16 @@ private fun ThreadListScreen(
                 FrickTextButton(text = "Sign out", onClick = onLogout)
             },
         )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FrickLabel(text = "Notifications")
+            Switch(checked = pushEnabled, onCheckedChange = onTogglePush, enabled = !pushBusy)
+        }
         ThreadsPanel(
             conversations = conversations,
             users = users,

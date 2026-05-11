@@ -1,6 +1,8 @@
 package dev.frick.demo
 
 import android.app.Application
+import android.content.Context
+import androidx.core.content.edit
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.frick.client.ConversationDto
@@ -31,6 +33,9 @@ internal const val DefaultConversationId = "conversation-general"
 internal const val ChatDestinationId = "chat"
 internal const val DemoBaseUrl = "http://10.0.2.2:4099"
 private const val TypingDebounceMs = 800L
+private const val PrefsName = "frick-demo-prefs"
+private const val PrefPushRegistrationId = "push.registrationId"
+private const val PrefPushEnabled = "push.enabled"
 
 internal enum class AuthMode { Login, SignUp }
 
@@ -74,6 +79,8 @@ internal data class FoundationUiState(
     val sync: SyncStatusUi = SyncStatusUi(SyncIndicator.Red, "Disconnected"),
     val syncDialogVisible: Boolean = false,
     val typingUserIds: List<String> = emptyList(),
+    val pushEnabled: Boolean = false,
+    val pushBusy: Boolean = false,
 ) {
     val selectedConversation: ConversationDto? =
         conversations.firstOrNull { conversation -> conversation.id == selectedConversationId }
@@ -111,6 +118,7 @@ internal data class FoundationUiState(
 internal class FoundationViewModel(application: Application) : AndroidViewModel(application) {
     private val storage = SQLiteFrickStorage(application)
     private val frick = FrickClient(storage = storage)
+    private val prefs = application.getSharedPreferences(PrefsName, Context.MODE_PRIVATE)
     private var streamJob: Job? = null
     private var socket: FrickSyncSocket? = null
     private var socketStatusJob: Job? = null
@@ -122,6 +130,7 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
         FoundationUiState(
             session = initialSession,
             status = if (initialSession == null) "Signed out" else "Signed in",
+            pushEnabled = prefs.getBoolean(PrefPushEnabled, false),
         ),
     )
 
@@ -187,6 +196,48 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
     fun toggleInspector() = _uiState.update { state -> state.copy(inspectorVisible = !state.inspectorVisible) }
     fun showSyncDialog() = _uiState.update { state -> state.copy(syncDialogVisible = true) }
     fun dismissSyncDialog() = _uiState.update { state -> state.copy(syncDialogVisible = false) }
+
+    fun setPushEnabled(enabled: Boolean) {
+        val session = _uiState.value.session ?: return
+        _uiState.update { state -> state.copy(pushBusy = true) }
+        viewModelScope.launch {
+            try {
+                if (enabled) {
+                    val token = UUID.randomUUID().toString()
+                    val result = FrickDemoHttp.registerPush(
+                        session = session,
+                        deviceId = DemoDeviceId,
+                        platform = "fcm",
+                        token = token,
+                    )
+                    if (result != null) {
+                        prefs.edit {
+                            putString(PrefPushRegistrationId, result.id)
+                            putBoolean(PrefPushEnabled, true)
+                        }
+                        _uiState.update { state -> state.copy(pushEnabled = true, status = "Push registered") }
+                    } else {
+                        _uiState.update { state -> state.copy(status = "Push register failed") }
+                    }
+                } else {
+                    val id = prefs.getString(PrefPushRegistrationId, null)
+                    val ok = if (id != null) FrickDemoHttp.unregisterPush(session, id) else true
+                    prefs.edit {
+                        remove(PrefPushRegistrationId)
+                        putBoolean(PrefPushEnabled, false)
+                    }
+                    _uiState.update { state ->
+                        state.copy(
+                            pushEnabled = false,
+                            status = if (ok) "Push unregistered" else "Push unregister failed",
+                        )
+                    }
+                }
+            } finally {
+                _uiState.update { state -> state.copy(pushBusy = false) }
+            }
+        }
+    }
 
     fun authenticate() {
         val state = _uiState.value
