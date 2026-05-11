@@ -554,6 +554,58 @@ export function createFrickServer(options: ServerOptions = {}) {
         });
         return;
       }
+      // DevTools event feed. `events` lists rows newest-first with optional
+      // filters; `summary` aggregates by kind over a rolling window; the
+      // per-id route lets the console drill into a single emission. All three
+      // are gated by the same `inspectionEnabled` flag as the rest of the
+      // /_frick/inspect surface — production defaults off.
+      if (sub === "devtools/events") {
+        const kindParam = url.searchParams.get("kind");
+        const tenantParam = url.searchParams.get("tenantId");
+        const sinceIdParam = url.searchParams.get("sinceId");
+        const limitParam = url.searchParams.get("limit");
+        const filter: {
+          kind?: string;
+          tenantId?: string;
+          sinceId?: number;
+          limit?: number;
+        } = {};
+        if (kindParam) filter.kind = kindParam;
+        if (tenantParam) filter.tenantId = tenantParam;
+        if (sinceIdParam) {
+          const parsed = Number(sinceIdParam);
+          if (Number.isFinite(parsed)) filter.sinceId = parsed;
+        }
+        if (limitParam) {
+          const parsed = Number(limitParam);
+          if (Number.isFinite(parsed)) filter.limit = parsed;
+        }
+        sendJson(response, 200, { events: store.devtoolsEvents.list(filter) });
+        return;
+      }
+      if (sub === "devtools/summary") {
+        const windowParam = url.searchParams.get("windowMs");
+        const windowMs = windowParam ? Number(windowParam) : 60_000;
+        sendJson(response, 200, store.devtoolsEvents.summary(
+          Number.isFinite(windowMs) && windowMs > 0 ? windowMs : 60_000,
+        ));
+        return;
+      }
+      if (sub.startsWith("devtools/events/")) {
+        const idRaw = sub.slice("devtools/events/".length);
+        const id = Number(idRaw);
+        if (!Number.isFinite(id) || id <= 0) {
+          sendJson(response, 404, { error: "not_found" });
+          return;
+        }
+        const row = store.devtoolsEvents.getById(id);
+        if (!row) {
+          sendJson(response, 404, { error: "not_found" });
+          return;
+        }
+        sendJson(response, 200, { event: row });
+        return;
+      }
       sendJson(response, 404, { error: "not_found" });
       return;
     }
