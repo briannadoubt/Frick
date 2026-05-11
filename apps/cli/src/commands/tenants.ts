@@ -1,8 +1,17 @@
 /**
  * `frick tenants list` — list rows in the `tenants` ledger.
  * `frick tenants create <id> [--display-name <name>]` — insert a tenant row.
+ * `frick tenants set-push <id> --platform apns --p8 <file> --key-id ... --team-id ... --bundle-id ...` —
+ *     wrap APNs credentials with `FRICK_PUSH_CRED_KEY` and store in `tenant_settings`.
+ * `frick tenants set-push <id> --platform fcm --service-account <file>` —
+ *     wrap FCM service-account JSON and store in `tenant_settings`.
  */
+import { readFileSync } from "node:fs";
 import { TenantAlreadyExistsError } from "../../../server/src/storage/tenant-store.js";
+import {
+  saveApnsCredentials,
+  saveFcmCredentials,
+} from "../../../server/src/push/credentials.js";
 import type { ParsedArgs } from "../argv.js";
 import { CliFailureError, CliUsageError } from "../errors.js";
 import { contextFlagsFrom, loadConfig, openStore } from "../context.js";
@@ -13,8 +22,9 @@ export async function tenantsCommand(parsed: ParsedArgs, out: OutputOptions): Pr
   const sub = parsed.positionals[0];
   if (sub === "list") return tenantsList(parsed, out);
   if (sub === "create") return tenantsCreate(parsed, out);
+  if (sub === "set-push") return tenantsSetPush(parsed, out);
   throw new CliUsageError(`Unknown tenants subcommand: ${sub ?? "<missing>"}`, {
-    expected: ["list", "create"],
+    expected: ["list", "create", "set-push"],
   });
 }
 
@@ -26,6 +36,81 @@ function tenantsList(parsed: ParsedArgs, out: OutputOptions): number {
     const rows = store.tenants.list(includeArchived);
     emit({ tenants: rows }, out);
     return 0;
+  } finally {
+    store.close();
+  }
+}
+
+function requireFlag(flags: Record<string, string | boolean>, key: string): string {
+  const value = requireString(flags, key);
+  if (!value) {
+    throw new CliUsageError(`Missing required --${key} flag`);
+  }
+  return value;
+}
+
+function tenantsSetPush(parsed: ParsedArgs, out: OutputOptions): number {
+  const tenantId = parsed.positionals[1];
+  if (!tenantId) {
+    throw new CliUsageError("frick tenants set-push requires a tenant id positional argument");
+  }
+  const platform = requireFlag(parsed.flags, "platform");
+  const config = loadConfig(contextFlagsFrom(parsed.flags));
+  const store = openStore(config);
+  try {
+    if (platform === "apns") {
+      const p8Path = requireFlag(parsed.flags, "p8");
+      const keyId = requireFlag(parsed.flags, "key-id");
+      const teamId = requireFlag(parsed.flags, "team-id");
+      const bundleId = requireFlag(parsed.flags, "bundle-id");
+      const useSandbox = parsed.flags.sandbox === true;
+      const privateKeyPem = readFileSync(p8Path, "utf8");
+      const result = saveApnsCredentials(store.tenantSettings, tenantId, {
+        keyId,
+        teamId,
+        bundleId,
+        privateKeyPem,
+        useSandbox,
+      });
+      if (!result.ok) {
+        throw new CliFailureError(result.error.code, result.error.message, { tenantId });
+      }
+      emit({ ok: true, tenantId, platform: "apns" }, out);
+      return 0;
+    }
+    if (platform === "fcm") {
+      const path = requireFlag(parsed.flags, "service-account");
+      const raw = readFileSync(path, "utf8");
+      let parsedJson: { project_id?: string; client_email?: string; private_key?: string; token_uri?: string };
+      try {
+        parsedJson = JSON.parse(raw) as typeof parsedJson;
+      } catch {
+        throw new CliFailureError(
+          "tenants.setPush.invalidServiceAccount",
+          "Service-account file is not valid JSON",
+          { path },
+        );
+      }
+      if (!parsedJson.project_id || !parsedJson.client_email || !parsedJson.private_key) {
+        throw new CliFailureError(
+          "tenants.setPush.invalidServiceAccount",
+          "Service-account file missing project_id, client_email, or private_key",
+          { path },
+        );
+      }
+      const result = saveFcmCredentials(store.tenantSettings, tenantId, {
+        projectId: parsedJson.project_id,
+        clientEmail: parsedJson.client_email,
+        privateKey: parsedJson.private_key,
+        ...(parsedJson.token_uri ? { tokenUri: parsedJson.token_uri } : {}),
+      });
+      if (!result.ok) {
+        throw new CliFailureError(result.error.code, result.error.message, { tenantId });
+      }
+      emit({ ok: true, tenantId, platform: "fcm" }, out);
+      return 0;
+    }
+    throw new CliUsageError(`Unsupported --platform: ${platform}`, { expected: ["apns", "fcm"] });
   } finally {
     store.close();
   }
