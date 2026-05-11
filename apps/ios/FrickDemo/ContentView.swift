@@ -297,6 +297,15 @@ final class FoundationModel {
         await send(body: draft)
     }
 
+    private func messagePayload(senderId: String, body: String) -> [String: String] {
+        [
+            "messageId": "message-\(UUID().uuidString)",
+            "senderId": senderId,
+            "body": body,
+            "createdAt": ISO8601DateFormatter().string(from: Date()),
+        ]
+    }
+
     func send(body rawBody: String) async {
         let body = rawBody.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else {
@@ -310,8 +319,19 @@ final class FoundationModel {
         let requestedConversationId = selectedConversationId
 
         status = "Sending"
+        let payload = messagePayload(senderId: session.userId, body: body)
         do {
-            try await client.sendMessage(conversationId: requestedConversationId, body: body)
+            if let socket, syncStatus.state == .connected {
+                try await socket.append(
+                    stream: "MessageStream",
+                    key: requestedConversationId,
+                    event: "MessageSent",
+                    payload: payload
+                )
+            } else {
+                // Fall back to the HTTP append when the socket is not live.
+                try await client.sendMessage(conversationId: requestedConversationId, body: body)
+            }
             guard currentSession?.sessionToken == sessionToken, selectedConversationId == requestedConversationId else {
                 return
             }
