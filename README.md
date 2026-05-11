@@ -1,72 +1,49 @@
 # Frick
 
-Frick is a greenfield realtime data framework: one versioned schema, compact binary protocol frames, a SQLite-backed sync server, portable client cache/runtime code, and native demo apps that prove the same data contract across web, SwiftUI, and Android Compose.
+Frick is a fullstack realtime framework: one versioned schema drives a Node sync server, a TypeScript client runtime (with React bindings), and reusable Swift and Kotlin client SDKs. Objects, streams, presence, signals, projections, jobs, and blobs are all first-class primitives; the wire format is a compact MessagePack frame protocol; and DTOs for every supported client language are generated from the same canonical schema AST.
 
-This repository is in cutover posture. The old task/project prototype is intentionally gone, and local databases can be deleted when the schema changes.
-
-## Foundation
-
-- `packages/protocol`: canonical schema AST for objects, streams, events, presence, signals, blobs, jobs, and projections; compact record/event codecs; MessagePack realtime frames; Swift/Kotlin DTO artifact generation.
-- `apps/server`: Node `node:sqlite` sync server with durable object storage, append-only stream events, presence leases, signal routing, blob/job metadata stores, REST bootstrap routes, and WebSocket sync at `/_frick/sync`.
-- `packages/core`: UI-agnostic client runtime with local cache, subscriptions, append/presence/signal commands, cursors, and sync status.
-- `packages/react`: React provider and hooks for objects, streams, presence, signals, appends, and sync status.
-- `packages/swift`: reusable Swift package with generated DTOs, schema hash checks, SQLite storage, pending append replay, and typed APIs for the demo harness.
-- `apps/android/frick`: reusable Android SDK module with generated Kotlin DTOs, Ktor Client 3.x, Android SQLite storage, pending append replay, and typed APIs for the demo harness.
-- `apps/web`, `apps/ios`, `apps/android/app`: thin conformance apps that load `conversation-general`, render `MessageStream`, and append `MessageSent` events without becoming a chat product.
-- `Tiltfile`: lightweight local dashboard for install, schema generation, server, and web.
-
-## Local Ports
-
-- Server: `http://127.0.0.1:4099`
-- Schema: `http://127.0.0.1:4099/schema`
-- Web: `http://127.0.0.1:5173`
-- Sync WebSocket: `ws://127.0.0.1:4099/_frick/sync`
-
-## Commands
+## Quickstart
 
 ```bash
 pnpm install
-pnpm schema:generate
-pnpm test
-pnpm typecheck
-pnpm server
-pnpm web
-pnpm tilt
+pnpm cli init my-app          # scaffolds package.json, schema.ts, server.ts
+cd my-app
+pnpm install                  # if you passed --no-install
+pnpm dev                      # boots the scaffolded Frick server
 ```
 
-Native checks:
+`pnpm cli init` is the development invocation; once published the same command will be `pnpm exec frick init my-app`. See [`apps/cli/README.md`](./apps/cli/README.md) for the full CLI surface.
+
+To explore the repo itself instead of scaffolding a fresh app:
 
 ```bash
-pnpm swift:test
-pnpm ios:generate
-pnpm ios:build
-pnpm android:build
+pnpm install
+pnpm schema:generate          # regenerate Swift + Kotlin DTOs from the foundation schema
+pnpm server                   # http://127.0.0.1:4099
+pnpm web                      # http://127.0.0.1:5173
 ```
 
-Native launch helpers:
+## Where to go next
 
-```bash
-pnpm android:emulator
-pnpm android:install
-```
+- [`docs/onboarding.md`](./docs/onboarding.md) — "what is Frick" plus a 15-minute hands-on tutorial.
+- [`docs/schema-author-tutorial.md`](./docs/schema-author-tutorial.md) — add an object type end-to-end, regenerate native DTOs, lint for breaking changes.
+- [`docs/authoring.md`](./docs/authoring.md) — full app authoring reference (init flags, scaffold commands, server wiring).
+- [`docs/operations.md`](./docs/operations.md) — runtime modes, environment variables, admin routes, shutdown contract.
+- [`docs/threat-model.md`](./docs/threat-model.md) — trust boundaries and the auth/permissions story.
+- [`docs/cross-platform-client-contract.md`](./docs/cross-platform-client-contract.md) — what every client SDK must implement.
+- [`docs/versioning.md`](./docs/versioning.md) — schema-identity stability, when to bump revision vs hash, breaking-change policy.
+- [`CONTRIBUTING.md`](./CONTRIBUTING.md) — how to run tests, commit conventions, PR expectations.
 
-The iOS simulator reads `http://127.0.0.1:4099`. The Android emulator reads `http://10.0.2.2:4099`.
+## Tech stack
 
-## Local Data
+- **Node 24+** and **pnpm 10+** for the workspace, server, and CLI.
+- **TypeScript 5.9+** across `packages/protocol`, `packages/core`, `packages/react`, and the apps.
+- **Swift 5.10+ / Xcode 16+** for `packages/swift` and `apps/ios/FrickDemo` (optional).
+- **JDK 17 + Android SDK 37 (AGP 9.2.x, Kotlin 2.3.x)** for `apps/android/frick` and `apps/android/app` (optional).
+- **SQLite** (via `node:sqlite` on the server, system SQLite on iOS/Android) for durable and cache storage.
 
-The server database lives at `apps/server/data/frick.sqlite` by default. Because this branch is a greenfield cutover, reset local state with:
+The TypeScript stack is required; Swift and Android tooling are only needed if you're working on the native client SDKs or demo apps.
 
-```bash
-rm -f apps/server/data/frick.sqlite
-```
+## Status
 
-Clients keep their own SQLite caches for objects, stream events, and pending appends. Those caches are development state, not migration targets.
-
-## What The Harnesses Prove
-
-- A single schema hash and DTO generation path is shared by TypeScript, Swift, and Kotlin.
-- Server object snapshots and stream events can be read from browser and native clients.
-- `MessageSent` appends flow through the same `/append` contract from web, iOS, and Android.
-- React hooks exercise realtime WebSocket subscriptions, presence, and signals.
-- Swift and Android clients use SQL-backed local state instead of toy preference storage.
-- Android builds with AGP 9.2.x, API 37, JDK 17, Kotlin 2.3.x, Compose Compiler, lint warnings as errors, and Kotlin/Java compiler warnings as errors.
+Pre-1.0. The schema identity (`schemaId`, `protocolVersion`, `schemaRevision`, `hash`) and the structured error envelope are stable — clients and servers in the wild can rely on those. Storage layout, admin/inspection routes, and the CLI surface may still shift between minor versions. Local SQLite databases should be considered disposable while the framework is in cutover posture.
