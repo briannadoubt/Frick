@@ -24,11 +24,37 @@ export interface IndexDef {
   fields: string[];
 }
 
+/**
+ * How conflicting writes to the same object are resolved on the server.
+ *
+ *  - "lastWriteWins" (default when omitted): every {@link upsertObject} call
+ *    clobbers the row unconditionally. This preserves the framework's
+ *    historical behavior and is the right policy for objects whose state is
+ *    derived from a single authoritative writer.
+ *  - "versionPrecondition": writes must declare the version they expect to
+ *    see and the server rejects the write (HTTP 409 / storage.conflict) if
+ *    the on-disk version disagrees. Use for objects mutated by multiple
+ *    independent writers.
+ *
+ * NOTE: This field is *server-only* for v1. The generated native artifacts
+ * (Swift / Kotlin) intentionally do not emit `mergePolicy` — adding it later
+ * is wire-backwards-compatible because it is optional and existing clients
+ * never read it. The artifact generator therefore does not need to be
+ * regenerated when this field is added or changed.
+ */
+export type FrickObjectMergePolicy = "lastWriteWins" | "versionPrecondition";
+
 export interface ObjectDef {
   id: number;
   name: string;
   fields: FieldDef[];
   indexes: IndexDef[];
+  /**
+   * Optional conflict-resolution policy. When omitted, the framework treats
+   * the object as "lastWriteWins" (the historical behavior). Not propagated
+   * to generated artifacts — see {@link FrickObjectMergePolicy}.
+   */
+  mergePolicy?: FrickObjectMergePolicy;
 }
 
 export interface StreamDef {
@@ -179,6 +205,20 @@ export function validateSchema(schema: FrickSchema): FrickSchema {
 
 export function objectByName(schema: FrickSchema, name: string): ObjectDef {
   return findByName(schema.objects, "object", name);
+}
+
+/**
+ * Resolve the effective merge policy for an object type. Objects whose
+ * {@link ObjectDef.mergePolicy} is omitted fall back to "lastWriteWins".
+ * Unknown object types also fall back to "lastWriteWins" — callers that
+ * want strict validation should look up the {@link ObjectDef} first.
+ */
+export function resolveObjectMergePolicy(
+  schema: FrickSchema,
+  name: string,
+): FrickObjectMergePolicy {
+  const def = schema.objects.find((candidate) => candidate.name === name);
+  return def?.mergePolicy ?? "lastWriteWins";
 }
 
 export function objectById(schema: FrickSchema, id: number): ObjectDef {

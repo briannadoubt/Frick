@@ -7,6 +7,7 @@ import {
   objectByName,
   presenceByName,
   projectionByName,
+  resolveObjectMergePolicy,
   signalByName,
   streamByName,
   validateSchema,
@@ -85,6 +86,25 @@ describe("foundation schema", () => {
       kind: "json",
       required: false,
     });
+  });
+
+  it("treats objects without an explicit mergePolicy as lastWriteWins", () => {
+    const schema = validateSchema(foundationSchema);
+    expect(objectByName(schema, "User").mergePolicy).toBeUndefined();
+    expect(resolveObjectMergePolicy(schema, "User")).toBe("lastWriteWins");
+    // Unknown types fall back to the default rather than throwing.
+    expect(resolveObjectMergePolicy(schema, "NoSuchObject")).toBe("lastWriteWins");
+  });
+
+  it("accepts schemas that declare a versionPrecondition mergePolicy", () => {
+    const customised = structuredClone(foundationSchema);
+    customised.objects[0]!.mergePolicy = "versionPrecondition";
+
+    const schema = validateSchema(customised);
+    expect(objectByName(schema, "User").mergePolicy).toBe("versionPrecondition");
+    expect(resolveObjectMergePolicy(schema, "User")).toBe("versionPrecondition");
+    // Other objects continue to default to lastWriteWins.
+    expect(resolveObjectMergePolicy(schema, "Conversation")).toBe("lastWriteWins");
   });
 
   it("rejects duplicate field ids within a type", () => {

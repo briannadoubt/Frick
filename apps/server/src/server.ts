@@ -5,7 +5,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { encode as msgpackEncode } from "@msgpack/msgpack";
-import { createFrickErrorEnvelope, foundationSchema, type FrickErrorCode } from "@frick/protocol";
+import {
+  createFrickErrorEnvelope,
+  foundationSchema,
+  type FrickErrorCode,
+  type FrickSchema,
+} from "@frick/protocol";
 import {
   AuthenticationError,
   AuthorizationError,
@@ -41,6 +46,7 @@ import type { StoredAccount } from "./storage/account-store.js";
 import type { StoredSession } from "./storage/session-store.js";
 import { TenantAlreadyExistsError } from "./storage/tenant-store.js";
 import { FrickStore } from "./store.js";
+import { FrickObjectVersionConflictError } from "./storage/object-errors.js";
 import { loadFrickConfig, type FrickConfig, type FrickConfigOverrides } from "./config.js";
 import { createConsoleLogger, createNoopLogger, type FrickLogger } from "./logger.js";
 import { FrickLimitError, mergeLimits, type FrickLimits } from "./limits.js";
@@ -107,6 +113,13 @@ export interface ServerOptions {
     workerEnabled?: boolean;
     pollIntervalMs?: number;
   };
+  /**
+   * Override the schema used by the underlying store. Defaults to
+   * {@link foundationSchema}. Primarily exposed for tests that need to
+   * exercise behaviors (e.g. {@link FrickObjectMergePolicy}) on object
+   * types not present in the foundation schema.
+   */
+  schema?: FrickSchema;
 }
 
 export function createFrickServer(options: ServerOptions = {}) {
@@ -138,7 +151,7 @@ export function createFrickServer(options: ServerOptions = {}) {
   projections.register(createConversationInboxProjection());
   const store = new FrickStore({
     path: options.dbPath ?? process.env.FRICK_DB_PATH ?? defaultDatabasePath(),
-    schema: foundationSchema,
+    schema: options.schema ?? foundationSchema,
     projections,
     logger,
     ...(options.idempotencyCacheCapacity !== undefined
@@ -601,6 +614,68 @@ export function createFrickServer(options: ServerOptions = {}) {
         type,
         data: store.listObjectsForUser(principal.tenantId, type, principal.userId),
       });
+      return;
+    }
+
+    const objectWriteRoute = parseObjectWritePath(url);
+    if (objectWriteRoute && (request.method === "POST" || request.method === "PUT")) {
+      try {
+        const value = await readJsonBody(request, limits.maxHttpBodyBytes);
+        // Inline auth check: any authenticated principal may write any object
+        // within their tenant. TODO(authz): integrate with the policy
+        // `decide()` for `object.write` once the round-3 wiring stabilizes —
+        // see docs/spec.md §11.
+        const mergePolicy = store.objectMergePolicy(objectWriteRoute.type);
+        const expectedVersion = parseIfMatchHeader(request);
+        const result = store.upsertObjectWithPolicy({
+          tenantId: principal.tenantId,
+          type: objectWriteRoute.type,
+          id: objectWriteRoute.id,
+          value,
+          ...(expectedVersion !== undefined ? { expectedVersion } : {}),
+        });
+        const written = { id: objectWriteRoute.id, ...withoutEnvelopeId(value) };
+        response.setHeader("ETag", String(result.nextVersion));
+        sendJson(response, result.created ? 201 : 200, {
+          schemaHash: store.schema.hash,
+          object: written,
+          version: result.nextVersion,
+          previousVersion: result.previousVersion,
+          mergePolicy,
+        });
+      } catch (error) {
+        if (error instanceof FrickObjectVersionConflictError) {
+          response.setHeader("ETag", String(error.actualVersion));
+          const envelope = createFrickErrorEnvelope({
+            code: "storage.conflict",
+            message: error.message,
+            requestId: "object_write_conflict",
+            retryable: false,
+            details: {
+              tenantId: error.tenantId,
+              objectType: error.objectType,
+              objectId: error.objectId,
+              ...(error.expectedVersion !== undefined
+                ? { expectedVersion: error.expectedVersion }
+                : {}),
+              actualVersion: error.actualVersion,
+              mergePolicy: store.objectMergePolicy(error.objectType),
+            },
+            schemaHash: store.schema.hash,
+            schemaRevision: store.schema.schemaRevision,
+          });
+          metrics.counter("frick.http.errors.total", { code: "storage.conflict" }).inc();
+          sendJson(response, 409, {
+            error: envelope,
+            code: envelope.code,
+            message: envelope.message,
+            requestId: envelope.requestId,
+            retryable: envelope.retryable,
+          });
+          return;
+        }
+        sendErrorWithMetrics(response, error, "object_write_rejected");
+      }
       return;
     }
 
@@ -1103,12 +1178,12 @@ function setCors(
   }
   response.setHeader(
     "Access-Control-Allow-Headers",
-    "authorization, content-type, x-frick-owner-id, x-frick-session-token",
+    "authorization, content-type, if-match, x-frick-owner-id, x-frick-session-token",
   );
   response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
   response.setHeader(
     "Access-Control-Expose-Headers",
-    "x-frick-schema-hash, x-frick-blob-id, x-frick-content-hash",
+    "etag, x-frick-schema-hash, x-frick-blob-id, x-frick-content-hash",
   );
 }
 
@@ -1283,6 +1358,47 @@ function parseBlobContentPath(url: URL): string | undefined {
   const match = /^\/blobs\/([^/]+)\/content$/.exec(url.pathname);
   const encodedBlobId = match?.[1];
   return encodedBlobId ? decodeURIComponent(encodedBlobId) : undefined;
+}
+
+function parseObjectWritePath(url: URL): { type: string; id: string } | undefined {
+  const match = /^\/objects\/([^/]+)\/([^/]+)$/.exec(url.pathname);
+  const encodedType = match?.[1];
+  const encodedId = match?.[2];
+  if (!encodedType || !encodedId) {
+    return undefined;
+  }
+  return { type: decodeURIComponent(encodedType), id: decodeURIComponent(encodedId) };
+}
+
+/**
+ * Parse an If-Match HTTP header into a version number. Returns:
+ *   - `undefined` when the header is absent or is the wildcard "*"
+ *   - a non-negative integer otherwise
+ * Throws when the header is present but malformed (non-integer, negative).
+ *
+ * Per RFC 7232 the value is a quoted ETag; we accept both `"3"` and bare
+ * `3` so curl-style callers don't have to escape quotes.
+ */
+function parseIfMatchHeader(request: http.IncomingMessage): number | undefined {
+  const raw = headerValue(request, "if-match");
+  if (raw === undefined) {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  if (trimmed === "" || trimmed === "*") {
+    return undefined;
+  }
+  const unquoted = trimmed.replace(/^W\//i, "").replace(/^"|"$/g, "");
+  const parsed = Number(unquoted);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error("If-Match must be a non-negative integer or \"*\"");
+  }
+  return parsed;
+}
+
+function withoutEnvelopeId(value: Record<string, unknown>): Record<string, unknown> {
+  const { id: _id, ...rest } = value;
+  return rest;
 }
 
 function parseSignalPath(url: URL): { name: string; key: string } | undefined {
@@ -1778,6 +1894,7 @@ function sessionTokenFromRequest(request: http.IncomingMessage, url: URL): strin
 function isProtectedPath(pathname: string): boolean {
   return (
     pathname === "/objects" ||
+    pathname.startsWith("/objects/") ||
     pathname === "/inbox" ||
     pathname === "/projections" ||
     pathname.startsWith("/projections/") ||

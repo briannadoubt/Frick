@@ -2,13 +2,20 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { encode } from "@msgpack/msgpack";
-import { foundationSchema, validateSchema, type FrickSchema, type PlainObject } from "@frick/protocol";
+import {
+  foundationSchema,
+  resolveObjectMergePolicy,
+  validateSchema,
+  type FrickObjectMergePolicy,
+  type FrickSchema,
+  type PlainObject,
+} from "@frick/protocol";
 import { AccountStore, type StoredAccount } from "./storage/account-store.js";
 import { AdminAuditStore } from "./storage/admin-audit-store.js";
 import { BlobStore, type BlobMetadata, type BlobMetadataInput } from "./storage/blob-store.js";
 import { InboxStore, type ConversationInboxRow } from "./storage/inbox-store.js";
 import { JobStore, type StoredJob } from "./storage/job-store.js";
-import { ObjectStore } from "./storage/object-store.js";
+import { ObjectStore, type ObjectUpsertResult } from "./storage/object-store.js";
 import { PresenceStore } from "./storage/presence-store.js";
 import { initializeStorage } from "./storage/schema.js";
 import { SessionStore, type StoredSession } from "./storage/session-store.js";
@@ -379,6 +386,45 @@ export class FrickStore {
       objectId: id,
       object: this.objects.read(DEFAULT_TENANT_ID, type, id) ?? value,
     });
+  }
+
+  /**
+   * Tenant-aware object write that honors the schema-declared merge policy.
+   *
+   * Resolves `mergePolicy` from the schema (defaulting to "lastWriteWins"
+   * when the {@link ObjectDef} omits the field) and delegates to the
+   * underlying {@link ObjectStore.upsertWithPolicy}. Throws
+   * {@link FrickObjectVersionConflictError} when a versionPrecondition write
+   * disagrees with the on-disk version.
+   *
+   * The legacy positional {@link upsertObject} signature still works for
+   * existing callers — that path is unconditional (lastWriteWins semantics).
+   */
+  upsertObjectWithPolicy(args: {
+    tenantId?: string;
+    type: string;
+    id: string;
+    value: PlainObject;
+    expectedVersion?: number;
+  }): ObjectUpsertResult {
+    const tenantId = args.tenantId ?? DEFAULT_TENANT_ID;
+    const mergePolicy: FrickObjectMergePolicy = resolveObjectMergePolicy(
+      this.schema,
+      args.type,
+    );
+    return this.objects.upsertWithPolicy({
+      tenantId,
+      objectType: args.type,
+      objectId: args.id,
+      value: args.value,
+      ...(args.expectedVersion !== undefined ? { expectedVersion: args.expectedVersion } : {}),
+      mergePolicy,
+    });
+  }
+
+  /** Effective merge policy for an object type, resolved from the schema. */
+  objectMergePolicy(type: string): FrickObjectMergePolicy {
+    return resolveObjectMergePolicy(this.schema, type);
   }
 
   readObject(type: string, id: string): PlainObject | undefined;
