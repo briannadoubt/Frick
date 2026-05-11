@@ -71,6 +71,18 @@ export class SessionStore {
 
     return fromRow({ ...row, last_seen_at: now });
   }
+
+  /**
+   * Look up a session by token regardless of expiry. Callers use this to
+   * distinguish "no such session" from "session expired" so the server can
+   * emit the correct {@link FrickErrorEnvelope} code.
+   */
+  readAny(sessionToken: string): StoredSession | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM auth_sessions WHERE session_token = ?")
+      .get(sessionToken) as SessionRow | undefined;
+    return row ? fromRow(row) : undefined;
+  }
 }
 
 function fromRow(row: SessionRow): StoredSession {

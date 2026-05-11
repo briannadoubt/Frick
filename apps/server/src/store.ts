@@ -282,6 +282,10 @@ export class FrickStore {
     return this.sessions.readActive(sessionToken);
   }
 
+  readAnySession(sessionToken: string): StoredSession | undefined {
+    return this.sessions.readAny(sessionToken);
+  }
+
   enqueueJob(type: string, value: PlainObject): void {
     this.jobs.enqueue(type, value);
   }

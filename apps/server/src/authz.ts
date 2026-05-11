@@ -9,17 +9,145 @@ export interface MembershipReader {
   isRoomMember(conversationId: string, userId: string): boolean;
 }
 
+/**
+ * Verbs the framework recognises for authorization. Today only a subset is
+ * wired through `decide()` — extending requires both adding the action here
+ * and a corresponding branch in the policy function.
+ */
+export type FrickAction =
+  | "object.read"
+  | "object.write"
+  | "stream.read"
+  | "stream.append"
+  | "presence.write"
+  | "signal.send"
+  | "blob.read"
+  | "blob.write"
+  | "inbox.read";
+
+/**
+ * Reasons surfaced through {@link FrickDecision}. The framework maps these to
+ * `FrickErrorEnvelope.code` + `details.reason` so clients can react in a
+ * machine-readable way ("re-auth", "request access", "schema upgrade").
+ */
+export type FrickDecisionReason =
+  | "allow"
+  | "unauthenticated"
+  | "notAuthorizedForResource"
+  | "notMember"
+  | "ownerMismatch"
+  | "schemaIncompatible";
+
+export type FrickDecision =
+  | { allow: true; reason: "allow" }
+  | { allow: false; reason: Exclude<FrickDecisionReason, "allow">; publicMessage: string };
+
+export const ALLOW: FrickDecision = { allow: true, reason: "allow" };
+
+export function deny(
+  reason: Exclude<FrickDecisionReason, "allow">,
+  publicMessage: string,
+): FrickDecision {
+  return { allow: false, reason, publicMessage };
+}
+
+/**
+ * Future extension point: apps will be able to register custom policy hooks
+ * that augment or override the framework defaults. The shape is documented
+ * here for forward compatibility, but the framework does not yet invoke any
+ * registered hooks — that wiring lands in a later slice.
+ */
+export interface FrickPolicyHook {
+  readonly id: string;
+  decide(input: FrickPolicyInput): FrickDecision | undefined;
+}
+
+export interface FrickPolicyInput {
+  principal: Principal | undefined;
+  action: FrickAction;
+  resource: { kind: string; name?: string; key?: string; ownerId?: string };
+  context?: Record<string, unknown>;
+}
+
 export class AuthorizationError extends Error {
-  constructor(message: string) {
-    super(message);
+  readonly decision: FrickDecision & { allow: false };
+  constructor(decision: FrickDecision & { allow: false }) {
+    super(decision.publicMessage);
     this.name = "AuthorizationError";
+    this.decision = decision;
   }
 }
 
 export class AuthenticationError extends Error {
-  constructor(message: string) {
-    super(message);
+  readonly decision: FrickDecision & { allow: false };
+  constructor(messageOrDecision: string | (FrickDecision & { allow: false })) {
+    const decision: FrickDecision & { allow: false } =
+      typeof messageOrDecision === "string"
+        ? { allow: false, reason: "unauthenticated", publicMessage: messageOrDecision }
+        : messageOrDecision;
+    super(decision.publicMessage);
     this.name = "AuthenticationError";
+    this.decision = decision;
+  }
+}
+
+/**
+ * Specialisation of {@link AuthenticationError} that maps to the
+ * `auth.sessionExpired` envelope code so clients can prompt re-login rather
+ * than treating it like a generic protocol bug.
+ */
+export class SessionExpiredError extends AuthenticationError {
+  constructor(message = "Session token has expired") {
+    super({ allow: false, reason: "unauthenticated", publicMessage: message });
+    this.name = "SessionExpiredError";
+  }
+}
+
+/**
+ * Core policy function. Today this is a thin dispatcher over the framework's
+ * built-in primitives; custom policy hooks (see {@link FrickPolicyHook}) will
+ * eventually layer on top.
+ */
+export function decide(input: FrickPolicyInput, memberships: MembershipReader): FrickDecision {
+  const { principal, action, resource } = input;
+
+  if (!principal) {
+    return deny("unauthenticated", "Missing session token");
+  }
+
+  switch (action) {
+    case "inbox.read": {
+      const ownerId = resource.ownerId ?? resource.key;
+      if (ownerId !== principal.userId) {
+        return deny("notAuthorizedForResource", "Inbox userId must match the principal");
+      }
+      if (!memberships.hasUser(principal.userId)) {
+        return deny("notAuthorizedForResource", `Unknown inbox principal ${principal.userId}`);
+      }
+      return ALLOW;
+    }
+    case "blob.write": {
+      if (resource.ownerId !== principal.userId) {
+        return deny("ownerMismatch", "Blob ownerId must match the principal");
+      }
+      return ALLOW;
+    }
+    case "stream.read":
+    case "stream.append": {
+      if (resource.name !== "MessageStream") {
+        return ALLOW;
+      }
+      const conversationId = resource.key;
+      if (!conversationId || !memberships.isRoomMember(conversationId, principal.userId)) {
+        return deny(
+          "notMember",
+          `${principal.userId} is not a member of ${conversationId ?? "the conversation"}`,
+        );
+      }
+      return ALLOW;
+    }
+    default:
+      return ALLOW;
   }
 }
 
@@ -46,8 +174,15 @@ export function assertCanSubscribe(
   key: string | undefined,
   memberships: MembershipReader,
 ): void {
-  if (kind === "stream" && name === "MessageStream") {
-    assertMessageStreamMember(principal, key, memberships);
+  if (kind !== "stream") {
+    return;
+  }
+  const decision = decide(
+    { principal, action: "stream.read", resource: { kind: "stream", name, ...(key !== undefined ? { key } : {}) } },
+    memberships,
+  );
+  if (!decision.allow) {
+    throw new AuthorizationError(decision);
   }
 }
 
@@ -59,35 +194,58 @@ export function assertCanAppend(
   event?: string,
   payload?: Record<string, unknown>,
 ): void {
+  const decision = decide(
+    { principal, action: "stream.append", resource: { kind: "stream", name: stream, key } },
+    memberships,
+  );
+  if (!decision.allow) {
+    throw new AuthorizationError(decision);
+  }
   if (stream !== "MessageStream") {
     return;
   }
-
-  assertMessageStreamMember(principal, key, memberships);
   if (event === "MessageSent" && payload?.senderId !== principal.userId) {
-    throw new AuthorizationError("MessageSent senderId must match the principal");
+    throw new AuthorizationError(
+      deny("ownerMismatch", "MessageSent senderId must match the principal") as FrickDecision & {
+        allow: false;
+      },
+    );
   }
   if (event === "ReceiptAdvanced" && payload?.userId !== principal.userId) {
-    throw new AuthorizationError("ReceiptAdvanced userId must match the principal");
+    throw new AuthorizationError(
+      deny("ownerMismatch", "ReceiptAdvanced userId must match the principal") as FrickDecision & {
+        allow: false;
+      },
+    );
   }
 }
 
 export function assertCanSignal(_principal: Principal, _signal: string, _key: string): void {}
 
 export function assertCanReadInbox(principal: Principal, userId: string, memberships: MembershipReader): void {
-  if (userId !== principal.userId) {
-    throw new AuthorizationError("Inbox userId must match the principal");
-  }
-  if (!memberships.hasUser(userId)) {
-    throw new AuthorizationError(`Unknown inbox principal ${userId}`);
+  const decision = decide(
+    { principal, action: "inbox.read", resource: { kind: "inbox", key: userId, ownerId: userId } },
+    memberships,
+  );
+  if (!decision.allow) {
+    throw new AuthorizationError(decision);
   }
 }
 
-function assertMessageStreamMember(principal: Principal, conversationId: string | undefined, memberships: MembershipReader): void {
-  if (!conversationId || !memberships.isRoomMember(conversationId, principal.userId)) {
-    throw new AuthorizationError(`${principal.userId} is not a member of ${conversationId ?? "the conversation"}`);
+export function assertBlobOwnership(principal: Principal, ownerId: string): void {
+  const decision = decide(
+    { principal, action: "blob.write", resource: { kind: "blob", ownerId } },
+    NULL_MEMBERSHIP,
+  );
+  if (!decision.allow) {
+    throw new AuthorizationError(decision);
   }
 }
+
+const NULL_MEMBERSHIP: MembershipReader = {
+  hasUser: () => false,
+  isRoomMember: () => false,
+};
 
 function userIdFromReplica(replicaId: string): string {
   if (replicaId.includes("grace")) {

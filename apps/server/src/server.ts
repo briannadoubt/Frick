@@ -7,6 +7,8 @@ import { createFrickErrorEnvelope, foundationSchema, type FrickErrorCode } from 
 import {
   AuthenticationError,
   AuthorizationError,
+  SessionExpiredError,
+  assertBlobOwnership,
   assertCanAppend,
   assertCanReadInbox,
   assertCanSubscribe,
@@ -127,7 +129,11 @@ export function createFrickServer(options: ServerOptions = {}) {
       if (!config.demoAuthEnabled) {
         sendError(
           response,
-          new AuthorizationError("Demo authentication is disabled in this environment"),
+          new AuthorizationError({
+            allow: false,
+            reason: "notAuthorizedForResource",
+            publicMessage: "Demo authentication is disabled in this environment",
+          }),
           "dev_login_disabled",
         );
         return;
@@ -240,7 +246,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         let responseContentHash = metadata?.contentHash ?? contentHash;
 
         if (metadata) {
-          assertBlobOwner(principal, metadata.ownerId);
+          assertBlobOwnership(principal, metadata.ownerId);
           validateBlobContent(blobContentId, metadata.byteLength, metadata.contentHash, content, contentHash);
         } else {
           responseStatus = 201;
@@ -248,7 +254,7 @@ export function createFrickServer(options: ServerOptions = {}) {
             url.searchParams.get("ownerId") ?? headerValue(request, "x-frick-owner-id"),
             "ownerId",
           );
-          assertBlobOwner(principal, ownerId);
+          assertBlobOwnership(principal, ownerId);
           const createdMetadata = {
             blobId: blobContentId,
             ownerId,
@@ -307,7 +313,7 @@ export function createFrickServer(options: ServerOptions = {}) {
       try {
         const body = await readJsonBody(request);
         const ownerId = requireString(body.ownerId, "ownerId");
-        assertBlobOwner(principal, ownerId);
+        assertBlobOwnership(principal, ownerId);
         store.createBlobMetadata({
           blobId: requireString(body.blobId, "blobId"),
           ownerId,
@@ -477,12 +483,20 @@ function sendJson(response: http.ServerResponse, status: number, body: unknown):
 
 function sendError(response: http.ServerResponse, error: unknown, requestId: string): void {
   const status = error instanceof AuthenticationError ? 401 : error instanceof AuthorizationError ? 403 : 400;
+  const details: Record<string, unknown> = { routeCode: requestId };
+  if (
+    (error instanceof AuthenticationError || error instanceof AuthorizationError) &&
+    error.decision &&
+    !error.decision.allow
+  ) {
+    details.reason = error.decision.reason;
+  }
   const envelope = createFrickErrorEnvelope({
     code: httpErrorCode(error),
     message: error instanceof Error ? error.message : "Unknown request error",
     requestId,
     retryable: false,
-    details: { routeCode: requestId },
+    details,
     schemaHash: foundationSchema.hash,
     schemaRevision: foundationSchema.schemaRevision,
   });
@@ -496,6 +510,9 @@ function sendError(response: http.ServerResponse, error: unknown, requestId: str
 }
 
 function httpErrorCode(error: unknown): FrickErrorCode {
+  if (error instanceof SessionExpiredError) {
+    return "auth.sessionExpired";
+  }
   if (error instanceof AuthenticationError) {
     return "auth.unauthenticated";
   }
@@ -605,6 +622,10 @@ function protectedHttpPrincipal(request: http.IncomingMessage, url: URL, store: 
 
   const session = store.readActiveSession(token);
   if (!session) {
+    const stale = store.readAnySession(token);
+    if (stale && Date.parse(stale.expiresAt) <= Date.now()) {
+      return new SessionExpiredError();
+    }
     return new AuthenticationError("Invalid or expired session token");
   }
 
@@ -634,12 +655,6 @@ function isProtectedPath(pathname: string): boolean {
     pathname.startsWith("/streams/") ||
     pathname === "/append"
   );
-}
-
-function assertBlobOwner(principal: Principal, ownerId: string): void {
-  if (ownerId !== principal.userId) {
-    throw new AuthorizationError("Blob ownerId must match the principal");
-  }
 }
 
 function parsePlatform(platform: string): "web" | "ios" | "android" | "server" {
