@@ -45,6 +45,12 @@ import {
   type FrickSearchProjectInput,
 } from "./search/types.js";
 import { createSqliteFtsSearchAdapter } from "./search/sqlite-fts.js";
+import {
+  DEFAULT_DEVTOOLS_EVENTS_MAX_ROWS,
+  DEFAULT_DEVTOOLS_EVENTS_PRUNE_INTERVAL_MS,
+  DEFAULT_DEVTOOLS_EVENTS_RETENTION_MS,
+  DevToolsEventStore,
+} from "./devtools/event-store.js";
 import { DEFAULT_TENANT_ID } from "./tenant.js";
 
 /**
@@ -125,6 +131,23 @@ export interface StoreOptions {
    * Defaults to a no-op logger.
    */
   logger?: FrickLogger;
+  /**
+   * Retention window (ms) for the DevTools event feed. Older rows are dropped
+   * by the prune timer. Defaults to {@link DEFAULT_DEVTOOLS_EVENTS_RETENTION_MS}
+   * (1 hour).
+   */
+  devtoolsEventsRetentionMs?: number;
+  /**
+   * Hard upper bound on the size of the `devtools_events` table, applied after
+   * the age-based sweep. Defaults to {@link DEFAULT_DEVTOOLS_EVENTS_MAX_ROWS}.
+   */
+  devtoolsEventsMaxRows?: number;
+  /**
+   * Interval between background DevTools-event prune passes. Defaults to
+   * {@link DEFAULT_DEVTOOLS_EVENTS_PRUNE_INTERVAL_MS} (60s). Set to `0` to
+   * disable the timer (prune still runs once at construction).
+   */
+  devtoolsEventsPruneIntervalMs?: number;
 }
 
 export interface CreatedConversation {
@@ -156,6 +179,7 @@ export class FrickStore {
   readonly tenantSettings: TenantSettingsStore;
   readonly adminAudit: AdminAuditStore;
   readonly pushRegistrations: PushRegistrationStore;
+  readonly devtoolsEvents: DevToolsEventStore;
   readonly projections: FrickProjectionRegistry;
   readonly searchAdapter: FrickSearchAdapter;
   readonly searchIndexes: FrickSearchIndexRegistry;
@@ -166,6 +190,7 @@ export class FrickStore {
   readonly #idempotencyKeyRetentionMs: number;
   readonly #idempotencyKeyMaxRows: number;
   #pruneTimer: ReturnType<typeof setInterval> | undefined;
+  #devtoolsPruneTimer: ReturnType<typeof setInterval> | undefined;
   #closed = false;
 
   constructor(options: StoreOptions) {
@@ -203,6 +228,11 @@ export class FrickStore {
     this.tenantSettings = new TenantSettingsStore(this.#db);
     this.adminAudit = new AdminAuditStore(this.#db);
     this.pushRegistrations = new PushRegistrationStore(this.#db);
+    this.devtoolsEvents = new DevToolsEventStore(this.#db, {
+      retentionMs:
+        options.devtoolsEventsRetentionMs ?? DEFAULT_DEVTOOLS_EVENTS_RETENTION_MS,
+      maxRows: options.devtoolsEventsMaxRows ?? DEFAULT_DEVTOOLS_EVENTS_MAX_ROWS,
+    });
     this.projections = options.projections ?? createFrickProjectionRegistry();
     this.searchAdapter = options.searchAdapter ?? createSqliteFtsSearchAdapter(this.#db);
     this.searchIndexes = options.searchIndexes ?? createFrickSearchIndexRegistry();
@@ -223,6 +253,22 @@ export class FrickStore {
       // Don't keep the event loop alive just to run a maintenance timer.
       this.#pruneTimer.unref?.();
     }
+
+    // DevTools event log retention. Same shape as the idempotency-keys prune
+    // (one shot at boot to mop up after a previous run, then on a recurring
+    // timer). The DevTools feed accumulates faster than idempotency keys —
+    // one row per HTTP request — so the default cadence is tighter (60s vs
+    // 15 min) to keep the rolling window honest.
+    this.#safeDevToolsPrune();
+    const devtoolsIntervalMs =
+      options.devtoolsEventsPruneIntervalMs ?? DEFAULT_DEVTOOLS_EVENTS_PRUNE_INTERVAL_MS;
+    if (devtoolsIntervalMs > 0) {
+      this.#devtoolsPruneTimer = setInterval(
+        () => this.#safeDevToolsPrune(),
+        devtoolsIntervalMs,
+      );
+      this.#devtoolsPruneTimer.unref?.();
+    }
   }
 
   close(): void {
@@ -234,7 +280,25 @@ export class FrickStore {
       clearInterval(this.#pruneTimer);
       this.#pruneTimer = undefined;
     }
+    if (this.#devtoolsPruneTimer) {
+      clearInterval(this.#devtoolsPruneTimer);
+      this.#devtoolsPruneTimer = undefined;
+    }
     this.#db.close();
+  }
+
+  #safeDevToolsPrune(): void {
+    if (this.#closed) return;
+    try {
+      this.devtoolsEvents.prune();
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[frick] devtools_events prune failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   /**
