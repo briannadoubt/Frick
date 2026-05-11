@@ -180,6 +180,83 @@ producing tenant. Subscribing to an unknown projection nacks with
 `auth.forbidden` + `details.reason = "projectionNotFound"`. Today this
 is an in-process broadcast; cross-process fan-out is a follow-up.
 
+## Backup and restore
+
+The framework ships a portable dump/restore format. Use it for offline
+migrations, pre-deploy snapshots, and copying data between environments.
+The format is independent of the underlying driver — today only SQLite
+is supported, but a future Postgres adapter will produce dumps the same
+shape.
+
+### Format
+
+Dumps are newline-delimited JSON (NDJSON). The first line is a header:
+
+```json
+{ "type": "header", "row": {
+    "frickFormat": 1,
+    "createdAt": "2026-05-11T00:00:00.000Z",
+    "schemaId": "frick.foundation",
+    "schemaVersion": "0.1.0",
+    "schemaRevision": 1,
+    "schemaHash": "<sha-256>",
+    "appliedMigrations": ["0001_objects", "..."],
+    "tenantId": "_default"
+} }
+```
+
+Every subsequent line is `{ "type": "<table>", "row": { ... } }`. The
+`row` shape matches the SQL column layout; binary columns are
+base64-encoded under a sibling `<col>_base64` key.
+
+The `tenantId` field is either a specific tenant (per-tenant dump) or
+`"all"` (whole-database dump). Per-tenant dumps filter rows where
+`tenant_id = <chosen>` and skip framework infra (admin audit log,
+migration ledger). Whole-database dumps include both.
+
+### CLI
+
+```
+frick backup [--tenant-id <id>|all] [--output <path>] [--db-path <path>]
+frick restore --input <path> --confirm yes \
+              [--tenant-id <id>] [--overwrite] [--force-schema-drift] \
+              [--db-path <path>]
+```
+
+`frick backup` defaults to the `_default` tenant; pass `--tenant-id all`
+for the whole database. Output goes to stdout unless `--output` is
+given. `frick restore` requires `--confirm yes` for safety and refuses
+against a production-mode config unless `FRICK_RESTORE_ALLOW_PROD=1`.
+
+### HTTP admin
+
+When `adminEnabled` is on:
+
+- `POST /_frick/admin/backup` (body `{ "tenantId"?: string }`) streams
+  NDJSON in the response body.
+- `POST /_frick/admin/restore?confirm=yes` (body: raw NDJSON) replays
+  the dump and returns a `FrickRestoreReport` JSON. Refused in
+  production mode with `auth.forbidden` and
+  `details.reason: "restoreNotAllowedInProduction"`.
+
+Both routes audit-log under `backup.dump` and `backup.restore`.
+
+### Schema drift and migration parity
+
+Restore compares the source header's `schemaHash` to the target's. A
+mismatch is refused unless `--force-schema-drift` (or
+`?forceSchemaDrift=true` over HTTP) is passed. The target's applied
+migrations must be a superset of the source's, otherwise restore
+refuses with `missingMigrations`. Run `frick migrate up` against the
+target first when restoring a dump from an older deployment.
+
+### Failure handling
+
+Rows that fail to insert (foreign-key violations, duplicate ids,
+unknown table types, parse errors) are reported in the `skipped` array
+of the returned report; restore keeps going. This lets operators
+inspect what didn't make it without aborting the entire restore.
+
 ## Known gaps
 
 - CORS is parsed (`allowedOrigins`) but not yet enforced in HTTP
