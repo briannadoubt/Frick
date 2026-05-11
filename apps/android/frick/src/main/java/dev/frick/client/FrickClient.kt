@@ -1103,6 +1103,26 @@ class FrickClient(
 
     private fun authenticatedUserId(): String =
         storage.loadSession()?.userId ?: "user-ada"
+
+    /**
+     * Open a WebSocket sync connection. The caller is responsible for calling
+     * [FrickSyncSocket.connect] to begin the handshake and [FrickSyncSocket.close]
+     * when finished. Schema/cache compatibility is verified eagerly via
+     * [verifyCacheCompatibility].
+     */
+    fun connectSync(
+        baseUrl: String,
+        config: FrickSyncSocketConfig = FrickSyncSocketConfig(replicaId = replicaId),
+        httpClient: okhttp3.OkHttpClient = FrickSyncSocket.defaultOkHttpClient(),
+    ): FrickSyncSocket {
+        verifyCacheCompatibility()
+        return FrickSyncSocket(
+            baseUrl = baseUrl,
+            sessionTokenProvider = { storage.loadSession()?.sessionToken },
+            config = config,
+            httpClient = httpClient,
+        )
+    }
 }
 
 class FrickEventStreamParser {

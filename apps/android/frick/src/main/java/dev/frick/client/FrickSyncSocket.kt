@@ -4,7 +4,10 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.URI
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -66,6 +69,11 @@ sealed class FrickInboundEvent {
 }
 
 data class ProjectionChange(val key: String, val value: Map<String, Any?>?)
+
+internal sealed class ObjectWriteResult {
+    data class Ok(val version: Int) : ObjectWriteResult()
+    data class Failed(val envelope: FrickErrorEnvelope) : ObjectWriteResult()
+}
 
 /** Mirrors `FrameKind` values from packages/protocol/src/frame.ts. Numbers are wire-stable. */
 internal object FrameKindCodes {
@@ -294,6 +302,12 @@ class FrickSyncSocket internal constructor(
     @Volatile private var helloAcked = CompletableDeferred<Unit>()
     @Volatile private var connectJob: Job? = null
 
+    // Pending appends/upserts queued before connect or replayed after reconnect.
+    private val pendingFrames: MutableList<ByteArray> = java.util.Collections.synchronizedList(mutableListOf())
+
+    // requestId -> awaitable result (Ack or Nack). Used by upsertObject().
+    private val pendingObjectWrites = ConcurrentHashMap<String, CompletableDeferred<ObjectWriteResult>>()
+
     init {
         URI(buildSyncUrl(baseUrl, sessionTokenProvider()))
     }
@@ -341,6 +355,109 @@ class FrickSyncSocket internal constructor(
         }
     }
 
+    /** Send an Append frame. Queues if the socket is not yet Ready. */
+    suspend fun append(stream: String, key: String, event: String, payload: Map<String, Any?>) {
+        val requestId = UUID.randomUUID().toString()
+        val frame = FrickMsgPack.encodeFrame(
+            FrameKindCodes.APPEND,
+            mapOf(
+                "requestId" to requestId,
+                "stream" to stream,
+                "key" to key,
+                "event" to event,
+                "payload" to payload,
+            ),
+        )
+        sendOrQueue(frame)
+    }
+
+    /** Subscribe to a stream by key. */
+    suspend fun subscribe(stream: String, key: String) {
+        val frame = FrickMsgPack.encodeFrame(
+            FrameKindCodes.SUBSCRIBE,
+            mapOf(
+                "subscriptionId" to UUID.randomUUID().toString(),
+                "kind" to "stream",
+                "name" to stream,
+                "key" to key,
+            ),
+        )
+        sendOrQueue(frame)
+    }
+
+    /** Subscribe to a projection by name. */
+    suspend fun subscribeProjection(name: String) {
+        val frame = FrickMsgPack.encodeFrame(
+            FrameKindCodes.SUBSCRIBE,
+            mapOf(
+                "subscriptionId" to UUID.randomUUID().toString(),
+                "kind" to "projection",
+                "name" to name,
+            ),
+        )
+        sendOrQueue(frame)
+    }
+
+    /**
+     * Send an ObjectUpsert frame and suspend until the server replies with an
+     * Ack (returning the new version) or a Nack (thrown as [FrickHttpException]
+     * carrying the server-supplied envelope).
+     */
+    suspend fun upsertObject(
+        type: String,
+        id: String,
+        value: Map<String, Any?>,
+        expectedVersion: Int? = null,
+    ): Int {
+        val requestId = UUID.randomUUID().toString()
+        val payload = buildMap<String, Any?> {
+            put("requestId", requestId)
+            put("objectType", type)
+            put("objectId", id)
+            put("value", value)
+            expectedVersion?.let { put("expectedVersion", it) }
+        }
+        val frame = FrickMsgPack.encodeFrame(FrameKindCodes.OBJECT_UPSERT, payload)
+        val deferred = CompletableDeferred<ObjectWriteResult>()
+        pendingObjectWrites[requestId] = deferred
+        sendOrQueue(frame)
+        val result = deferred.await()
+        return when (result) {
+            is ObjectWriteResult.Ok -> result.version
+            is ObjectWriteResult.Failed -> throw FrickHttpException(
+                statusCode = 0,
+                envelope = result.envelope,
+                responseBody = "",
+                message = result.envelope.message,
+            )
+        }
+    }
+
+    private fun sendOrQueue(frame: ByteArray) {
+        val ws = webSocket
+        val ready = _status.value is FrickSyncStatus.Ready
+        if (ws != null && ready) {
+            ws.send(frame.toByteString())
+        } else {
+            pendingFrames.add(frame)
+        }
+    }
+
+    private fun flushPending() {
+        val ws = webSocket ?: return
+        synchronized(pendingFrames) {
+            val iter = pendingFrames.iterator()
+            while (iter.hasNext()) {
+                val frame = iter.next()
+                if (ws.send(frame.toByteString())) {
+                    iter.remove()
+                } else {
+                    break
+                }
+            }
+        }
+    }
+
     override fun close() {
         if (closed) return
         closed = true
@@ -358,9 +475,28 @@ class FrickSyncSocket internal constructor(
                 val schemaRev = payload.intField("schemaRevision") ?: FRICK_SCHEMA_REVISION
                 _status.value = FrickSyncStatus.Ready(schemaHash, schemaId, schemaRev)
                 if (!helloAcked.isCompleted) helloAcked.complete(Unit)
+                flushPending()
             }
             FrameKindCodes.SCHEMA -> {
                 _events.tryEmit(FrickInboundEvent.Schema(payload))
+            }
+            FrameKindCodes.ACK -> {
+                val requestId = payload.stringField("requestId") ?: return
+                val cursor = payload.intField("cursor")
+                val version = payload.intField("version")
+                pendingObjectWrites.remove(requestId)?.complete(
+                    ObjectWriteResult.Ok(version ?: 0),
+                )
+                if (version != null) {
+                    _events.tryEmit(FrickInboundEvent.ObjectUpsertResult(requestId, version))
+                }
+                _events.tryEmit(FrickInboundEvent.Ack(requestId, cursor, version))
+            }
+            FrameKindCodes.NACK -> {
+                val requestId = payload.stringField("requestId") ?: return
+                val envelope = decodeErrorEnvelope(payload.mapField("error"), payload)
+                pendingObjectWrites.remove(requestId)?.complete(ObjectWriteResult.Failed(envelope))
+                _events.tryEmit(FrickInboundEvent.Nack(requestId, envelope))
             }
             FrameKindCodes.PING -> {
                 val sentAt = payload.intField("sentAt")?.toLong() ?: System.currentTimeMillis()
@@ -411,7 +547,7 @@ class FrickSyncSocket internal constructor(
     companion object {
         internal const val NORMAL_CLOSURE = 1000
 
-        internal fun defaultOkHttpClient(): OkHttpClient =
+        fun defaultOkHttpClient(): OkHttpClient =
             OkHttpClient.Builder()
                 .connectTimeout(10, TimeUnit.SECONDS)
                 .readTimeout(0, TimeUnit.MILLISECONDS) // long-lived
@@ -423,3 +559,20 @@ class FrickSyncSocket internal constructor(
 
 /** Thrown when the socket cannot be opened or the negotiation fails. */
 class FrickSyncSocketException(message: String, cause: Throwable? = null) : IOException(message, cause)
+
+/**
+ * Project a decoded Nack payload into [FrickErrorEnvelope]. The Nack body
+ * carries the envelope under "error" plus duplicate "code"/"message" hints.
+ */
+internal fun decodeErrorEnvelope(error: Map<String, Any?>?, outer: Map<String, Any?>): FrickErrorEnvelope {
+    val source = error ?: outer
+    return FrickErrorEnvelope(
+        code = source.stringField("code") ?: outer.stringField("code") ?: "sync.protocolError",
+        message = source.stringField("message") ?: outer.stringField("message") ?: "Sync nack",
+        requestId = source.stringField("requestId") ?: outer.stringField("requestId") ?: "",
+        retryable = (source["retryable"] as? Boolean) ?: false,
+        details = null,
+        schemaHash = source.stringField("schemaHash"),
+        schemaRevision = source.intField("schemaRevision"),
+    )
+}
