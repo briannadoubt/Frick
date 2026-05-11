@@ -162,10 +162,60 @@ class FrickSchemaMismatchException(
     "Frick schema mismatch: expected $expectedSchemaHash, received $actualSchemaHash",
 )
 
+object FrickErrorCodes {
+    const val AuthUnauthenticated = "auth.unauthenticated"
+    const val AuthForbidden = "auth.forbidden"
+    const val AuthSessionExpired = "auth.sessionExpired"
+    const val SchemaIncompatible = "schema.incompatible"
+    const val SchemaMigrationRequired = "schema.migrationRequired"
+    const val StorageConflict = "storage.conflict"
+    const val StorageNotFound = "storage.notFound"
+    const val StreamAppendRejected = "stream.appendRejected"
+    const val SyncProtocolError = "sync.protocolError"
+    const val SyncReconnectExhausted = "sync.reconnectExhausted"
+    const val BlobTooLarge = "blob.tooLarge"
+    const val BlobUnsupportedContentType = "blob.unsupportedContentType"
+    const val RateLimitExceeded = "rateLimit.exceeded"
+    const val ServerInternal = "server.internal"
+}
+
+@Serializable
+data class FrickErrorEnvelope(
+    val code: String,
+    val message: String,
+    val requestId: String,
+    val retryable: Boolean,
+    val details: Map<String, JsonElement>? = null,
+    val schemaHash: String? = null,
+    val schemaRevision: Int? = null,
+)
+
+@Serializable
+private data class FrickHttpErrorBody(
+    val error: FrickErrorEnvelope? = null,
+)
+
 class FrickHttpException(
     val statusCode: Int,
+    val envelope: FrickErrorEnvelope?,
+    val responseBody: String,
     message: String,
-) : IllegalStateException(message)
+) : IllegalStateException(message) {
+    val code: String? get() = envelope?.code
+    val requestId: String? get() = envelope?.requestId
+    val retryable: Boolean get() = envelope?.retryable ?: false
+}
+
+fun parseFrickErrorEnvelope(body: String): FrickErrorEnvelope? {
+    if (body.isBlank()) {
+        return null
+    }
+    runCatching {
+        val wrapped = frickJson.decodeFromString<FrickHttpErrorBody>(body)
+        wrapped.error?.let { return it }
+    }
+    return runCatching { frickJson.decodeFromString<FrickErrorEnvelope>(body) }.getOrNull()
+}
 
 interface FrickTransport {
     suspend fun get(path: String): String
@@ -1070,10 +1120,15 @@ fun parseSignalPayloads(responseJson: String): List<Map<String, String>> =
 
 private suspend fun requireSuccess(response: HttpResponse) {
     if (response.status.value !in 200..299) {
-        val message = response.bodyAsText()
+        val body = response.bodyAsText()
+        val envelope = parseFrickErrorEnvelope(body)
+        val message = envelope?.message
+            ?: body.ifBlank { "Request failed with HTTP ${response.status.value}" }
         throw FrickHttpException(
             statusCode = response.status.value,
-            message = message.ifBlank { "Request failed with HTTP ${response.status.value}" },
+            envelope = envelope,
+            responseBody = body,
+            message = message,
         )
     }
     requireCompatibleSchemaHeaders(response)

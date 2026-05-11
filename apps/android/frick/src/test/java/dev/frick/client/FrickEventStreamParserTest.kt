@@ -732,6 +732,110 @@ class FrickEventStreamParserTest {
         assertEquals("Live", snapshots.last().single().payload["body"])
         assertEquals(listOf("/streams/MessageStream/conversation-general/events?after=0"), transport.streamedPaths)
     }
+
+    @Test
+    fun parseFrickErrorEnvelopeDecodesWrappedAndDirectShapes() {
+        val wrapped = """
+            {
+              "error": {
+                "code": "auth.forbidden",
+                "message": "Nope",
+                "requestId": "req-1",
+                "retryable": false
+              }
+            }
+        """.trimIndent()
+        val direct = """
+            {
+              "code": "schema.incompatible",
+              "message": "Schema mismatch",
+              "requestId": "req-2",
+              "retryable": false,
+              "schemaHash": "$FRICK_SCHEMA_HASH",
+              "schemaRevision": 1
+            }
+        """.trimIndent()
+
+        val wrappedEnvelope = parseFrickErrorEnvelope(wrapped)
+        val directEnvelope = parseFrickErrorEnvelope(direct)
+
+        assertEquals(FrickErrorCodes.AuthForbidden, wrappedEnvelope?.code)
+        assertEquals("Nope", wrappedEnvelope?.message)
+        assertEquals(FrickErrorCodes.SchemaIncompatible, directEnvelope?.code)
+        assertEquals(FRICK_SCHEMA_HASH, directEnvelope?.schemaHash)
+        assertEquals(1, directEnvelope?.schemaRevision)
+    }
+
+    @Test
+    fun parseFrickErrorEnvelopeReturnsNullForBlankOrUnparseableBodies() {
+        assertEquals(null, parseFrickErrorEnvelope(""))
+        assertEquals(null, parseFrickErrorEnvelope("not json"))
+        assertEquals(null, parseFrickErrorEnvelope("{\"unrelated\":42}"))
+    }
+
+    @Test
+    fun ktorTransportThrowsFrickHttpExceptionCarryingEnvelopeOnAuthFailure() = runBlocking {
+        val server = startEnvelopeFailureServer(
+            statusCode = 401,
+            body = """
+                {
+                  "error": {
+                    "code": "auth.unauthenticated",
+                    "message": "Invalid identity or password",
+                    "requestId": "login_rejected",
+                    "retryable": false,
+                    "schemaHash": "$FRICK_SCHEMA_HASH",
+                    "schemaRevision": 1
+                  },
+                  "code": "auth.unauthenticated",
+                  "message": "Invalid identity or password",
+                  "requestId": "login_rejected",
+                  "retryable": false
+                }
+            """.trimIndent(),
+        )
+        servers += server
+        val transport = KtorFrickTransport(baseUrl = "http://127.0.0.1:${server.address.port}")
+
+        try {
+            try {
+                transport.post("/auth/login", """{"identity":"x","password":"y"}""")
+                fail("expected FrickHttpException")
+            } catch (error: FrickHttpException) {
+                assertEquals(401, error.statusCode)
+                assertEquals(FrickErrorCodes.AuthUnauthenticated, error.code)
+                assertEquals("login_rejected", error.requestId)
+                assertEquals(false, error.retryable)
+                assertEquals(FRICK_SCHEMA_HASH, error.envelope?.schemaHash)
+                assertEquals(1, error.envelope?.schemaRevision)
+                assertEquals("Invalid identity or password", error.message)
+            }
+        } finally {
+            transport.close()
+        }
+    }
+
+    @Test
+    fun ktorTransportThrowsFrickHttpExceptionWithoutEnvelopeWhenBodyIsEmpty() = runBlocking {
+        val server = startEnvelopeFailureServer(statusCode = 500, body = "")
+        servers += server
+        val transport = KtorFrickTransport(baseUrl = "http://127.0.0.1:${server.address.port}")
+
+        try {
+            try {
+                transport.get("/objects?type=User")
+                fail("expected FrickHttpException")
+            } catch (error: FrickHttpException) {
+                assertEquals(500, error.statusCode)
+                assertEquals(null, error.envelope)
+                assertEquals(null, error.code)
+                assertEquals(false, error.retryable)
+                assertEquals("Request failed with HTTP 500", error.message)
+            }
+        } finally {
+            transport.close()
+        }
+    }
 }
 
 private class FakeFrickTransport(
@@ -861,6 +965,23 @@ private class MemoryFrickStorage(
     override fun clearSession() {
         sessionBacking[0] = null
     }
+}
+
+private fun startEnvelopeFailureServer(statusCode: Int, body: String): HttpServer {
+    val server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
+    server.createContext("/") { exchange ->
+        exchange.responseHeaders.add("Content-Type", "application/json")
+        exchange.responseHeaders.add("x-frick-schema-hash", FRICK_SCHEMA_HASH)
+        val bytes = body.encodeToByteArray()
+        if (bytes.isEmpty()) {
+            exchange.sendResponseHeaders(statusCode, -1)
+        } else {
+            exchange.sendResponseHeaders(statusCode, bytes.size.toLong())
+            exchange.responseBody.use { output -> output.write(bytes) }
+        }
+    }
+    server.start()
+    return server
 }
 
 private fun startHeaderCaptureServer(observed: MutableList<Pair<String, String?>>): HttpServer {
