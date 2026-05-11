@@ -3,6 +3,9 @@ import { DatabaseSync } from "node:sqlite";
 import { foundationSchema } from "@frick/protocol";
 import {
   FRAMEWORK_MIGRATIONS,
+  FrickMigrationChecksumError,
+  FrickMigrationRevisionError,
+  computeMigrationChecksum,
   listAppliedMigrations,
   runFrameworkMigrations,
   type FrameworkMigration,
@@ -87,6 +90,78 @@ describe("framework migration runner", () => {
     // rather than throwing — that confirms the table is present.
     expect(store.listObjects("Conversation")).toEqual([]);
     store.close();
+  });
+
+  it("refuses to boot when a recorded migration checksum has drifted", () => {
+    const db = openDb();
+    runFrameworkMigrations(db, {
+      supportedSchemaRevision: foundationSchema.schemaRevision,
+    });
+
+    // Simulate someone editing the on-disk migration after it was applied.
+    db.prepare(
+      `UPDATE frick_migrations SET checksum = ? WHERE id = ?`,
+    ).run("sha256-deadbeef", "0001_initial_foundation_tables");
+
+    expect(() =>
+      runFrameworkMigrations(db, {
+        supportedSchemaRevision: foundationSchema.schemaRevision,
+      }),
+    ).toThrow(FrickMigrationChecksumError);
+
+    try {
+      runFrameworkMigrations(db, {
+        supportedSchemaRevision: foundationSchema.schemaRevision,
+      });
+    } catch (error) {
+      expect(error).toBeInstanceOf(FrickMigrationChecksumError);
+      const checksumError = error as FrickMigrationChecksumError;
+      expect(checksumError.migrationId).toBe("0001_initial_foundation_tables");
+      expect(checksumError.recordedChecksum).toBe("sha256-deadbeef");
+      expect(checksumError.currentChecksum).toBe(
+        computeMigrationChecksum(FRAMEWORK_MIGRATIONS[0]!),
+      );
+    }
+
+    db.close();
+  });
+
+  it("refuses to boot when the database records a future schema revision", () => {
+    const db = openDb();
+    runFrameworkMigrations(db, {
+      supportedSchemaRevision: foundationSchema.schemaRevision,
+    });
+
+    // Pre-seed a row claiming the database is at a far-future revision.
+    db.prepare(
+      `INSERT INTO frick_migrations (id, schema_revision, applied_at, checksum, duration_ms)
+        VALUES (?, ?, ?, ?, ?)`,
+    ).run(
+      "9999_future_migration",
+      99,
+      new Date().toISOString(),
+      "sha256-future",
+      0,
+    );
+
+    expect(() =>
+      runFrameworkMigrations(db, {
+        supportedSchemaRevision: foundationSchema.schemaRevision,
+      }),
+    ).toThrow(FrickMigrationRevisionError);
+
+    try {
+      runFrameworkMigrations(db, {
+        supportedSchemaRevision: foundationSchema.schemaRevision,
+      });
+    } catch (error) {
+      expect(error).toBeInstanceOf(FrickMigrationRevisionError);
+      const revisionError = error as FrickMigrationRevisionError;
+      expect(revisionError.databaseRevision).toBe(99);
+      expect(revisionError.supportedRevision).toBe(foundationSchema.schemaRevision);
+    }
+
+    db.close();
   });
 
   it("rolls back the ledger insert if the migration SQL fails", () => {
