@@ -111,6 +111,7 @@ export function createFrickServer(options: ServerOptions = {}) {
   const gateway = new SyncGateway(wss, store, {
     onStreamEvent: (event) => sse.publishStreamEvent(event),
     limits,
+    policyHooks,
   });
   gateway.attach();
 

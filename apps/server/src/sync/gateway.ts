@@ -28,6 +28,9 @@ import {
   assertCanAppend,
   assertCanSignal,
   assertCanSubscribe,
+  AuthenticationError,
+  AuthorizationError,
+  type FrickPolicyHook,
   type Principal,
 } from "../authz.js";
 import type { FrickStore } from "../store.js";
@@ -40,6 +43,7 @@ import { DEFAULT_FRICK_LIMITS, clampTtlSeconds, type FrickLimits } from "../limi
 export class SyncGateway {
   readonly #subscriptions = new SubscriptionRegistry();
   readonly #limits: FrickLimits;
+  readonly #policyHooks: readonly FrickPolicyHook[];
   readonly #pendingAppendCounts = new WeakMap<SyncClient, number>();
   readonly #lastSeenAt = new WeakMap<SyncClient, number>();
   readonly #heartbeatTimers = new Set<ReturnType<typeof setInterval>>();
@@ -50,9 +54,11 @@ export class SyncGateway {
     private readonly options: {
       onStreamEvent?: (event: StoredEvent) => void;
       limits?: FrickLimits;
+      policyHooks?: readonly FrickPolicyHook[];
     } = {},
   ) {
     this.#limits = options.limits ?? DEFAULT_FRICK_LIMITS;
+    this.#policyHooks = options.policyHooks ?? [];
   }
 
   attach(): void {
@@ -281,7 +287,14 @@ export class SyncGateway {
       ]);
       return;
     }
-    assertCanSubscribe(principal, payload.kind, payload.name, payload.key, this.store);
+    try {
+      assertCanSubscribe(principal, payload.kind, payload.name, payload.key, this.store, this.#policyHooks);
+    } catch (error) {
+      if (this.#sendAuthNack(client, payload.subscriptionId, error)) {
+        return;
+      }
+      throw error;
+    }
     this.#subscriptions.addSubscription(client, payload);
 
     if (payload.kind === "stream") {
@@ -365,7 +378,22 @@ export class SyncGateway {
 
     this.#pendingAppendCounts.set(client, pending + 1);
     try {
-      assertCanAppend(principal, payload.stream, payload.key, this.store, payload.event, payload.payload);
+      try {
+        assertCanAppend(
+          principal,
+          payload.stream,
+          payload.key,
+          this.store,
+          payload.event,
+          payload.payload,
+          this.#policyHooks,
+        );
+      } catch (error) {
+        if (this.#sendAuthNack(client, payload.requestId, error)) {
+          return;
+        }
+        throw error;
+      }
       const result = this.store.appendEvent({
         requestId: payload.requestId,
         replicaId: principal.replicaId,
@@ -420,10 +448,36 @@ export class SyncGateway {
 
   #handleSignal(client: SyncClient, payload: SignalPayload): void {
     const principal = requirePrincipal(client);
-    assertCanSignal(principal, payload.name, payload.key);
+    try {
+      assertCanSignal(principal, payload.name, payload.key, this.store, this.#policyHooks);
+    } catch (error) {
+      if (this.#sendAuthNack(client, payload.requestId, error)) {
+        return;
+      }
+      throw error;
+    }
     this.store.enqueueSignal(payload.name, payload.key, payload.value);
     routeSignal(this.store, this.#subscriptions, payload);
     sendFrame(client.socket, [FrameKind.Ack, { requestId: payload.requestId }]);
+  }
+
+  #sendAuthNack(client: SyncClient, requestId: string, error: unknown): boolean {
+    if (!(error instanceof AuthorizationError) && !(error instanceof AuthenticationError)) {
+      return false;
+    }
+    const code = error instanceof AuthenticationError ? "auth.unauthenticated" : "auth.forbidden";
+    const envelope = createFrickErrorEnvelope({
+      code,
+      message: error.decision.publicMessage,
+      requestId,
+      retryable: false,
+      details: { reason: error.decision.reason },
+    });
+    sendFrame(client.socket, [
+      FrameKind.Nack,
+      { requestId, error: envelope, code: envelope.code, message: envelope.message },
+    ]);
+    return true;
   }
 
   #principalFromRequest(request: IncomingMessage): Principal | undefined {
