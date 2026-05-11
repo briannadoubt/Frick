@@ -40,6 +40,11 @@ import { loadFrickConfig, type FrickConfig, type FrickConfigOverrides } from "./
 import { createConsoleLogger, createNoopLogger, type FrickLogger } from "./logger.js";
 import { FrickLimitError, mergeLimits, type FrickLimits } from "./limits.js";
 import { createInMemoryMetrics, type FrickMetrics } from "./metrics.js";
+import {
+  createFrickJobRegistry,
+  type FrickJobHandler,
+} from "./jobs/registry.js";
+import { createFrickJobWorker } from "./jobs/worker.js";
 
 export interface ServerOptions {
   port?: number;
@@ -86,6 +91,17 @@ export interface ServerOptions {
    * true. Counters and gauges only — see `apps/server/src/metrics.ts`.
    */
   metrics?: FrickMetrics;
+  /**
+   * Background-job framework configuration. Handlers are registered once at
+   * boot; the worker polls the {@link JobStore} and dispatches claimed jobs
+   * through them. Set `workerEnabled: false` in tests to keep the polling
+   * loop quiet — the default is "on outside of test runners".
+   */
+  jobs?: {
+    handlers?: Record<string, FrickJobHandler>;
+    workerEnabled?: boolean;
+    pollIntervalMs?: number;
+  };
 }
 
 export function createFrickServer(options: ServerOptions = {}) {
@@ -170,6 +186,31 @@ export function createFrickServer(options: ServerOptions = {}) {
     metrics,
   });
   gateway.attach();
+
+  const jobRegistry = createFrickJobRegistry();
+  if (options.jobs?.handlers) {
+    for (const [jobType, handler] of Object.entries(options.jobs.handlers)) {
+      jobRegistry.register(jobType, handler);
+    }
+  }
+  // Default: worker runs in non-test envs. Tests would otherwise have a
+  // polling loop ticking during every spec, complicating shutdown ordering
+  // and timer-based fixtures. Apps can flip `workerEnabled: true` per-suite
+  // when they want to exercise the loop directly.
+  const workerEnabledDefault = !inTestRunner;
+  const workerEnabled = options.jobs?.workerEnabled ?? workerEnabledDefault;
+  const worker = createFrickJobWorker({
+    store,
+    registry: jobRegistry,
+    logger,
+    metrics,
+    ...(options.jobs?.pollIntervalMs !== undefined
+      ? { pollIntervalMs: options.jobs.pollIntervalMs }
+      : {}),
+  });
+  if (workerEnabled) {
+    worker.start();
+  }
 
   async function handleHttp(request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
@@ -314,6 +355,14 @@ export function createFrickServer(options: ServerOptions = {}) {
             capacity: store.idempotencyCache.capacity,
             evictions: store.idempotencyCache.evictions,
           },
+        });
+        return;
+      }
+      if (sub === "jobs") {
+        sendJson(response, 200, {
+          registeredHandlers: jobRegistry.list(),
+          counts: store.jobs.countsByStatus(),
+          workerEnabled,
         });
         return;
       }
@@ -807,9 +856,15 @@ export function createFrickServer(options: ServerOptions = {}) {
   function close(): Promise<void> {
     if (closePromise) return closePromise;
     closing = true;
+    // Stop the job worker first so any in-flight handlers finish (or time
+    // out) before we tear down the HTTP listener and database. Worker
+    // handlers depend on `store`, which is closed below.
+    const workerStop = worker.stop();
     sse.closeAll();
     gateway.close();
-    closePromise = new Promise((resolve, reject) => {
+    closePromise = (async () => {
+      await workerStop;
+    })().then(() => new Promise<void>((resolve, reject) => {
       // Stop accepting new HTTP connections; allow in-flight requests to
       // drain. server.close()'s callback fires only once every connection
       // is idle, so this naturally waits for in-flight requests. We layer a
@@ -841,7 +896,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           }
         });
       });
-    });
+    }));
     return closePromise;
   }
 
@@ -1507,6 +1562,46 @@ async function handleAdminRoute(
         });
         return;
       }
+      throw error;
+    }
+    return;
+  }
+
+  const jobsTriggerMatch = /^jobs\/([^/]+)$/.exec(sub);
+  if (request.method === "POST" && jobsTriggerMatch) {
+    const jobType = decodeURIComponent(jobsTriggerMatch[1]!);
+    try {
+      const body = await readJsonBody(request, maxBodyBytes);
+      const tenantId = resolveAuthTenantId(body.tenantId);
+      ensureTenantAllowed(store, config, tenantId);
+      const payload =
+        body.payload !== undefined
+          ? requireRecord(body.payload, "payload")
+          : {};
+      const idempotencyKey =
+        typeof body.idempotencyKey === "string" && body.idempotencyKey.length > 0
+          ? body.idempotencyKey
+          : undefined;
+      const row = store.jobs.enqueue({
+        tenantId,
+        jobType,
+        payload,
+        ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+      });
+      audit({
+        action: "jobs.enqueue",
+        target: jobType,
+        outcome: "allow",
+        detail: { tenantId, jobId: row.id },
+      });
+      sendJson(response, 201, row);
+    } catch (error) {
+      audit({
+        action: "jobs.enqueue",
+        target: jobType,
+        outcome: "error",
+        detail: { error: error instanceof Error ? error.message : String(error) },
+      });
       throw error;
     }
     return;
