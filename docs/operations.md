@@ -257,6 +257,21 @@ unknown table types, parse errors) are reported in the `skipped` array
 of the returned report; restore keeps going. This lets operators
 inspect what didn't make it without aborting the entire restore.
 
+## Multi-app servers
+
+`createFrickServer({ apps })` mounts multiple Frick schemas on the same
+process — each app is `{ id, schema, basePath }`. HTTP requests resolve to
+the app whose `basePath` is the longest prefix of the URL (e.g.
+`GET /chat/schema` returns the `chat` app's schema). WebSocket clients
+self-identify via the schemaId they advertise in the Hello frame; the
+gateway routes the connection to the matching app's schema for
+compatibility checking and HelloAck. `/_frick/inspect/apps` lists every
+registered app and is gated by `inspectionEnabled`. Duplicate `basePath`
+throws `FrickConfigError` at construction. **V1 scopes app boundaries to
+URL routing and Hello handshake only — storage is server-shared.**
+Partitioning the SQLite layer per app (an `app_id` column on relevant
+tables and corresponding read/write scoping) is a follow-up slice.
+
 ## Known gaps
 
 - CORS is parsed (`allowedOrigins`) but not yet enforced in HTTP

@@ -315,6 +315,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     policyHooks,
     metrics,
     projections: store.projections,
+    appRegistry,
   });
   gateway.attach();
 
@@ -517,6 +518,17 @@ export function createFrickServer(options: ServerOptions = {}) {
           demoAuthEnabled: config.demoAuthEnabled,
           inspectionEnabled: config.inspectionEnabled,
           startedAt,
+        });
+        return;
+      }
+      if (sub === "apps") {
+        sendJson(response, 200, {
+          apps: appRegistry.list().map((app) => ({
+            id: app.id,
+            basePath: app.basePath,
+            schemaId: app.schema.schemaId,
+            schemaRevision: app.schema.schemaRevision,
+          })),
         });
         return;
       }
