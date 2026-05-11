@@ -14,6 +14,7 @@ import {
   assertCanReadInbox,
   assertCanSignal,
   assertCanSubscribe,
+  type FrickPolicyHook,
   type Principal,
 } from "./authz.js";
 import {
@@ -50,6 +51,12 @@ export interface ServerOptions {
    * before forcibly closing the underlying socket. Defaults to 5 seconds.
    */
   shutdownTimeoutMs?: number;
+  /**
+   * Optional ordered list of policy hooks. Each hook runs AFTER the
+   * framework's default decision and can tighten — but not loosen — the
+   * outcome. See {@link FrickPolicyHook}.
+   */
+  policyHooks?: readonly FrickPolicyHook[];
 }
 
 export function createFrickServer(options: ServerOptions = {}) {
@@ -69,6 +76,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     schema: foundationSchema,
   });
   const extensions = createFrickExtensionRegistry(options.extensions);
+  const policyHooks: readonly FrickPolicyHook[] = options.policyHooks ?? [];
   let inFlight = 0;
   let closing = false;
 
@@ -328,7 +336,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     if (request.method === "GET" && url.pathname === "/inbox") {
       const userId = url.searchParams.get("userId") ?? principal.userId;
       try {
-        assertCanReadInbox(principal, userId, store);
+        assertCanReadInbox(principal, userId, store, policyHooks);
         sendJson(response, 200, {
           schemaHash: store.schema.hash,
           userId,
@@ -358,7 +366,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         let responseContentHash = metadata?.contentHash ?? contentHash;
 
         if (metadata) {
-          assertBlobOwnership(principal, metadata.ownerId);
+          assertBlobOwnership(principal, metadata.ownerId, policyHooks);
           validateBlobContent(blobContentId, metadata.byteLength, metadata.contentHash, content, contentHash);
         } else {
           responseStatus = 201;
@@ -366,7 +374,7 @@ export function createFrickServer(options: ServerOptions = {}) {
             url.searchParams.get("ownerId") ?? headerValue(request, "x-frick-owner-id"),
             "ownerId",
           );
-          assertBlobOwnership(principal, ownerId);
+          assertBlobOwnership(principal, ownerId, policyHooks);
           const createdMetadata = {
             blobId: blobContentId,
             ownerId,
@@ -400,7 +408,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           sendJson(response, 404, { error: "blob_content_not_found" });
           return;
         }
-        assertCanReadBlob(principal, metadata.ownerId);
+        assertCanReadBlob(principal, metadata.ownerId, policyHooks);
 
         response.writeHead(200, {
           "content-type": metadata.mimeType,
@@ -423,7 +431,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           sendJson(response, 404, { error: "blob_not_found" });
           return;
         }
-        assertCanReadBlob(principal, metadata.ownerId);
+        assertCanReadBlob(principal, metadata.ownerId, policyHooks);
         sendJson(response, 200, metadata);
       } catch (error) {
         sendError(response, error, "blob_rejected");
@@ -435,7 +443,7 @@ export function createFrickServer(options: ServerOptions = {}) {
       try {
         const body = await readJsonBody(request);
         const ownerId = requireString(body.ownerId, "ownerId");
-        assertBlobOwnership(principal, ownerId);
+        assertBlobOwnership(principal, ownerId, policyHooks);
         store.createBlobMetadata({
           blobId: requireString(body.blobId, "blobId"),
           ownerId,
@@ -454,7 +462,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     const signalRoute = parseSignalPath(url);
     if (signalRoute && request.method === "POST") {
       try {
-        assertCanSignal(principal, signalRoute.name, signalRoute.key, store);
+        assertCanSignal(principal, signalRoute.name, signalRoute.key, store, policyHooks);
         const value = await readJsonBody(request);
         store.enqueueSignal(signalRoute.name, signalRoute.key, value);
         gateway.publishSignal(signalRoute.name, signalRoute.key, value);
@@ -488,7 +496,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         return;
       }
       try {
-        assertCanSubscribe(principal, "stream", stream, key, store);
+        assertCanSubscribe(principal, "stream", stream, key, store, policyHooks);
         const after = Number(url.searchParams.get("after") ?? "0");
         const events = store.readEvents(stream, key, Number.isFinite(after) ? after : 0);
         if (parts[4] === "events") {
@@ -519,7 +527,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         const key = requireString(body.key, "key");
         const event = requireString(body.event, "event");
         const payload = requireRecord(body.payload, "payload");
-        assertCanAppend(principal, stream, key, store, event, payload);
+        assertCanAppend(principal, stream, key, store, event, payload, policyHooks);
         const result = store.appendEvent({
           requestId: requireString(body.requestId, "requestId"),
           replicaId: principal.replicaId,

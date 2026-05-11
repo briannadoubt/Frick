@@ -61,15 +61,20 @@ export function deny(
 }
 
 /**
- * Future extension point: apps will be able to register custom policy hooks
- * that augment or override the framework defaults. The shape is documented
- * here for forward compatibility, but the framework does not yet invoke any
- * registered hooks — that wiring lands in a later slice.
+ * Apps can register policy hooks via `createFrickServer({ policyHooks })`.
+ * Hooks run AFTER the framework's default decision and can only tighten
+ * policy:
+ *  - If the framework allowed, registered hooks run in registration order.
+ *    The first hook returning a deny decision wins.
+ *  - If the framework denied, hooks are skipped — apps cannot override
+ *    framework denials.
+ *  - Returning `null` means "no opinion" and lets the next hook (or the
+ *    framework's allow) stand.
+ *
+ * Hooks are intentionally synchronous in v1 — async policy will be a
+ * separate extension once we have a use case that needs it.
  */
-export interface FrickPolicyHook {
-  readonly id: string;
-  decide(input: FrickPolicyInput): FrickDecision | undefined;
-}
+export type FrickPolicyHook = (input: FrickPolicyInput) => FrickDecision | null;
 
 export interface FrickPolicyInput {
   principal: Principal | undefined;
@@ -180,6 +185,35 @@ export function decide(input: FrickPolicyInput, memberships: MembershipReader): 
   }
 }
 
+/**
+ * Runs registered policy hooks after the framework's default decision. See
+ * {@link FrickPolicyHook} for the semantics.
+ */
+export function applyPolicyHooks(
+  baseline: FrickDecision,
+  input: FrickPolicyInput,
+  hooks: readonly FrickPolicyHook[] | undefined,
+): FrickDecision {
+  if (!baseline.allow || !hooks || hooks.length === 0) {
+    return baseline;
+  }
+  for (const hook of hooks) {
+    const verdict = hook(input);
+    if (verdict && !verdict.allow) {
+      return verdict;
+    }
+  }
+  return baseline;
+}
+
+function decideWithHooks(
+  input: FrickPolicyInput,
+  memberships: MembershipReader,
+  hooks: readonly FrickPolicyHook[] | undefined,
+): FrickDecision {
+  return applyPolicyHooks(decide(input, memberships), input, hooks);
+}
+
 export function principalFromHello(replicaId: string, deviceId: string): Principal {
   return {
     userId: userIdFromReplica(replicaId),
@@ -202,13 +236,15 @@ export function assertCanSubscribe(
   name: string,
   key: string | undefined,
   memberships: MembershipReader,
+  hooks?: readonly FrickPolicyHook[],
 ): void {
   if (kind !== "stream") {
     return;
   }
-  const decision = decide(
+  const decision = decideWithHooks(
     { principal, action: "stream.read", resource: { kind: "stream", name, ...(key !== undefined ? { key } : {}) } },
     memberships,
+    hooks,
   );
   if (!decision.allow) {
     throw new AuthorizationError(decision);
@@ -222,10 +258,12 @@ export function assertCanAppend(
   memberships: MembershipReader,
   event?: string,
   payload?: Record<string, unknown>,
+  hooks?: readonly FrickPolicyHook[],
 ): void {
-  const decision = decide(
+  const decision = decideWithHooks(
     { principal, action: "stream.append", resource: { kind: "stream", name: stream, key } },
     memberships,
+    hooks,
   );
   if (!decision.allow) {
     throw new AuthorizationError(decision);
@@ -254,6 +292,7 @@ export function assertCanSignal(
   signal: string,
   key: string,
   memberships?: MembershipReader,
+  hooks?: readonly FrickPolicyHook[],
 ): void {
   // Without a membership reader we can't tell whether the signal key is
   // a conversation we should gate on. This is the legacy code path
@@ -262,39 +301,56 @@ export function assertCanSignal(
   if (!memberships) {
     return;
   }
-  const decision = decide(
+  const decision = decideWithHooks(
     { principal, action: "signal.send", resource: { kind: "signal", name: signal, key } },
     memberships,
+    hooks,
   );
   if (!decision.allow) {
     throw new AuthorizationError(decision);
   }
 }
 
-export function assertCanReadInbox(principal: Principal, userId: string, memberships: MembershipReader): void {
-  const decision = decide(
+export function assertCanReadInbox(
+  principal: Principal,
+  userId: string,
+  memberships: MembershipReader,
+  hooks?: readonly FrickPolicyHook[],
+): void {
+  const decision = decideWithHooks(
     { principal, action: "inbox.read", resource: { kind: "inbox", key: userId, ownerId: userId } },
     memberships,
+    hooks,
   );
   if (!decision.allow) {
     throw new AuthorizationError(decision);
   }
 }
 
-export function assertCanReadBlob(principal: Principal, ownerId: string): void {
-  const decision = decide(
+export function assertCanReadBlob(
+  principal: Principal,
+  ownerId: string,
+  hooks?: readonly FrickPolicyHook[],
+): void {
+  const decision = decideWithHooks(
     { principal, action: "blob.read", resource: { kind: "blob", ownerId } },
     NULL_MEMBERSHIP,
+    hooks,
   );
   if (!decision.allow) {
     throw new AuthorizationError(decision);
   }
 }
 
-export function assertBlobOwnership(principal: Principal, ownerId: string): void {
-  const decision = decide(
+export function assertBlobOwnership(
+  principal: Principal,
+  ownerId: string,
+  hooks?: readonly FrickPolicyHook[],
+): void {
+  const decision = decideWithHooks(
     { principal, action: "blob.write", resource: { kind: "blob", ownerId } },
     NULL_MEMBERSHIP,
+    hooks,
   );
   if (!decision.allow) {
     throw new AuthorizationError(decision);

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { isFrickErrorEnvelope } from "@frick/protocol";
 import { createFrickServer } from "../src/server.js";
+import type { FrickPolicyHook } from "../src/authz.js";
 
 let app: Awaited<ReturnType<typeof startServer>> | undefined;
 
@@ -172,6 +173,76 @@ describe("authorization denial envelopes", () => {
     expect(body.error.details.reason).toBe("notMember");
   });
 
+  it("invokes registered policy hooks after an allow and lets them deny", async () => {
+    const denySignals: FrickPolicyHook = (input) => {
+      if (input.action === "signal.send") {
+        return {
+          allow: false,
+          reason: "notAuthorizedForResource",
+          publicMessage: "Signals disabled by app policy",
+        };
+      }
+      return null;
+    };
+    app = await startServer({ policyHooks: [denySignals] });
+    const adaLogin = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    // Ada is a member of conversation-general, so the framework would allow.
+    // The hook denies.
+    const response = await fetch(`${app.httpUrl}/signals/WebRTCSignal/conversation-general`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders(adaLogin.sessionToken) },
+      body: JSON.stringify({
+        senderDeviceId: "device-ada",
+        kind: "offer",
+        payload: "sdp-hooked",
+      }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body.error.code).toBe("auth.forbidden");
+    expect(body.error.details.reason).toBe("notAuthorizedForResource");
+    expect(body.error.message).toBe("Signals disabled by app policy");
+  });
+
+  it("treats a policy hook returning null as no-opinion", async () => {
+    const noOpinion: FrickPolicyHook = () => null;
+    app = await startServer({ policyHooks: [noOpinion] });
+    const adaLogin = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    // Reading own inbox would be allowed by the framework; the hook abstains.
+    const response = await fetch(`${app.httpUrl}/inbox`, {
+      headers: authHeaders(adaLogin.sessionToken),
+    });
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.userId).toBe("user-ada");
+  });
+
+  it("does not consult policy hooks once the framework has denied", async () => {
+    let hookCalls = 0;
+    const allowEverything: FrickPolicyHook = () => {
+      hookCalls += 1;
+      return { allow: true, reason: "allow" };
+    };
+    app = await startServer({ policyHooks: [allowEverything] });
+    const adaLogin = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    // Framework denies (ownerMismatch); the hook must not be invoked and
+    // certainly must not be able to override the deny.
+    const response = await fetch(`${app.httpUrl}/blobs/blob-hook-skipped/content?ownerId=user-grace`, {
+      method: "PUT",
+      headers: { "content-type": "text/plain", ...authHeaders(adaLogin.sessionToken) },
+      body: Buffer.from("nope"),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body.error.details.reason).toBe("ownerMismatch");
+    expect(hookCalls).toBe(0);
+  });
+
   it("denies reading another user's inbox with notAuthorizedForResource", async () => {
     app = await startServer();
     const adaLogin = await devLogin(app.httpUrl, { userId: "user-ada" });
@@ -187,8 +258,12 @@ describe("authorization denial envelopes", () => {
   });
 });
 
-async function startServer() {
-  const server = createFrickServer({ port: 0, dbPath: ":memory:" });
+async function startServer(options: { policyHooks?: readonly FrickPolicyHook[] } = {}) {
+  const server = createFrickServer({
+    port: 0,
+    dbPath: ":memory:",
+    ...(options.policyHooks ? { policyHooks: options.policyHooks } : {}),
+  });
   await server.listen();
   const address = server.server.address();
   if (!address || typeof address === "string") {
