@@ -1,21 +1,42 @@
 package dev.frick.client
 
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.URI
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
+import okio.ByteString.Companion.toByteString
+import org.msgpack.core.MessagePack
+import org.msgpack.core.MessagePacker
+import org.msgpack.core.MessageUnpacker
+import org.msgpack.value.ValueType
 
 // FrickSyncSocket: WebSocket transport for the Android SDK.
 //
-// Scaffolding only: connection plumbing, codec choice (org.msgpack:msgpack-core
-// direct encode/decode of the [FrameKind, payload] 2-tuple), and public type
-// surface. Hello handshake, send paths, inbound handling, reconnect, and tests
-// arrive in follow-up commits per the implementation plan.
+// Codec choice: org.msgpack:msgpack-core (low-level packer/unpacker). The wire
+// payloads use the [FrameKind, payload] 2-tuple shape from
+// packages/protocol/src/frame.ts; manual encode/decode of plain Map/List/Number
+// values is straightforward and avoids pulling in jackson-dataformat-msgpack.
 
 /** Public-facing connection status of [FrickSyncSocket]. */
 sealed class FrickSyncStatus {
@@ -119,37 +140,272 @@ internal fun buildSyncUrl(baseUrl: String, sessionToken: String?): String {
     return "$withScheme/_frick/sync$query"
 }
 
+// ----- msgpack encode/decode helpers -----
+
+internal object FrickMsgPack {
+    fun encodeFrame(kind: Int, payload: Map<String, Any?>): ByteArray {
+        val out = ByteArrayOutputStream()
+        MessagePack.newDefaultPacker(out).use { packer ->
+            packer.packArrayHeader(2)
+            packer.packInt(kind)
+            packMap(packer, payload)
+        }
+        return out.toByteArray()
+    }
+
+    fun decodeFrame(bytes: ByteArray): Pair<Int, Map<String, Any?>>? {
+        MessagePack.newDefaultUnpacker(ByteArrayInputStream(bytes)).use { unpacker ->
+            if (!unpacker.hasNext()) return null
+            val arity = unpacker.unpackArrayHeader()
+            if (arity < 2) return null
+            val kind = unpacker.unpackInt()
+            @Suppress("UNCHECKED_CAST")
+            val map = (unpackAny(unpacker) as? Map<String, Any?>) ?: emptyMap()
+            return kind to map
+        }
+    }
+
+    private fun packMap(packer: MessagePacker, value: Map<String, Any?>) {
+        packer.packMapHeader(value.size)
+        for ((k, v) in value) {
+            packer.packString(k)
+            packValue(packer, v)
+        }
+    }
+
+    private fun packValue(packer: MessagePacker, value: Any?) {
+        when (value) {
+            null -> packer.packNil()
+            is Boolean -> packer.packBoolean(value)
+            is Byte -> packer.packByte(value)
+            is Short -> packer.packShort(value)
+            is Int -> packer.packInt(value)
+            is Long -> packer.packLong(value)
+            is Float -> packer.packFloat(value)
+            is Double -> packer.packDouble(value)
+            is String -> packer.packString(value)
+            is ByteArray -> {
+                packer.packBinaryHeader(value.size)
+                packer.writePayload(value)
+            }
+            is Map<*, *> -> {
+                packer.packMapHeader(value.size)
+                for ((k, v) in value) {
+                    packer.packString(k?.toString() ?: "")
+                    packValue(packer, v)
+                }
+            }
+            is List<*> -> {
+                packer.packArrayHeader(value.size)
+                for (item in value) packValue(packer, item)
+            }
+            is Array<*> -> {
+                packer.packArrayHeader(value.size)
+                for (item in value) packValue(packer, item)
+            }
+            else -> packer.packString(value.toString())
+        }
+    }
+
+    private fun unpackAny(unpacker: MessageUnpacker): Any? {
+        if (!unpacker.hasNext()) return null
+        val format = unpacker.nextFormat
+        return when (format.valueType) {
+            ValueType.NIL -> { unpacker.unpackNil(); null }
+            ValueType.BOOLEAN -> unpacker.unpackBoolean()
+            ValueType.INTEGER -> unpacker.unpackLong()
+            ValueType.FLOAT -> unpacker.unpackDouble()
+            ValueType.STRING -> unpacker.unpackString()
+            ValueType.BINARY -> {
+                val len = unpacker.unpackBinaryHeader()
+                unpacker.readPayload(len)
+            }
+            ValueType.ARRAY -> {
+                val len = unpacker.unpackArrayHeader()
+                buildList(len) { repeat(len) { add(unpackAny(unpacker)) } }
+            }
+            ValueType.MAP -> {
+                val len = unpacker.unpackMapHeader()
+                buildMap<String, Any?>(len) {
+                    repeat(len) {
+                        val key = unpackAny(unpacker)?.toString() ?: ""
+                        val value = unpackAny(unpacker)
+                        put(key, value)
+                    }
+                }
+            }
+            ValueType.EXTENSION -> {
+                // Skip extension types — protocol does not use them today.
+                unpacker.skipValue()
+                null
+            }
+            else -> { unpacker.skipValue(); null }
+        }
+    }
+}
+
+// ----- payload extraction helpers -----
+
+internal fun Map<String, Any?>.intField(name: String): Int? =
+    when (val v = this[name]) {
+        is Number -> v.toInt()
+        is String -> v.toIntOrNull()
+        else -> null
+    }
+
+internal fun Map<String, Any?>.stringField(name: String): String? =
+    this[name]?.toString()
+
+@Suppress("UNCHECKED_CAST")
+internal fun Map<String, Any?>.mapField(name: String): Map<String, Any?>? =
+    this[name] as? Map<String, Any?>
+
+@Suppress("UNCHECKED_CAST")
+internal fun Map<String, Any?>.listField(name: String): List<Any?>? =
+    this[name] as? List<Any?>
+
+// ----- the socket -----
+
 /**
- * The WebSocket sync transport. Public APIs (connect, append, subscribe,
- * subscribeProjection, upsertObject, close, status, events) land in
- * subsequent commits. This scaffolding declares the type so callers compile.
+ * The WebSocket sync transport. Use [FrickClient.connectSync] to construct.
+ *
+ * The socket opens lazily; [status] transitions to [FrickSyncStatus.Ready] once
+ * the HelloAck arrives. Send-path APIs may be called before Ready: they queue
+ * in-memory and flush on (re)connect.
  */
 class FrickSyncSocket internal constructor(
     private val baseUrl: String,
     private val sessionTokenProvider: () -> String?,
     private val config: FrickSyncSocketConfig,
     private val httpClient: OkHttpClient,
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) : AutoCloseable {
+    private val _status = MutableStateFlow<FrickSyncStatus>(FrickSyncStatus.Disconnected)
+    val status: StateFlow<FrickSyncStatus> = _status.asStateFlow()
+
+    private val _events = MutableSharedFlow<FrickInboundEvent>(
+        replay = 0,
+        extraBufferCapacity = 64,
+    )
+    val events: SharedFlow<FrickInboundEvent> = _events.asSharedFlow()
+
     @Volatile private var closed = false
     @Volatile private var webSocket: WebSocket? = null
+    @Volatile private var helloAcked = CompletableDeferred<Unit>()
+    @Volatile private var connectJob: Job? = null
 
     init {
-        // URI() validates the base URL early; subsequent commits will open the socket.
         URI(buildSyncUrl(baseUrl, sessionTokenProvider()))
     }
 
-    /** Closes the socket. Subsequent commits flesh out lifecycle. */
+    /** Begin connecting if not already in flight. Idempotent. */
+    fun connect() {
+        if (closed) return
+        if (connectJob?.isActive == true) return
+        connectJob = scope.launch { openSocket() }
+    }
+
+    private suspend fun openSocket() {
+        if (closed) return
+        _status.value = FrickSyncStatus.Connecting
+        val url = buildSyncUrl(baseUrl, sessionTokenProvider())
+        val request = Request.Builder().url(url.replace("ws://", "http://").replace("wss://", "https://")).build()
+        val listener = Listener()
+        val ws = httpClient.newWebSocket(request, listener)
+        webSocket = ws
+    }
+
+    private fun sendHello() {
+        val payload = mapOf(
+            "replicaId" to config.replicaId,
+            "deviceId" to config.deviceId,
+            "schemaHash" to FRICK_SCHEMA_HASH,
+            "knownCursors" to emptyMap<String, Int>(),
+            "clientCapabilities" to defaultAndroidCapabilities(config.sdkVersion),
+        )
+        val bytes = FrickMsgPack.encodeFrame(FrameKindCodes.HELLO, payload)
+        if (webSocket?.send(bytes.toByteString()) == true) {
+            _status.value = FrickSyncStatus.HelloSent
+        }
+    }
+
+    /**
+     * Suspend until the socket reaches Ready (HelloAck) or the timeout in the
+     * config elapses. Returns the Ready status, or `null` on timeout.
+     */
+    suspend fun awaitReady(): FrickSyncStatus.Ready? {
+        if (_status.value is FrickSyncStatus.Ready) return _status.value as FrickSyncStatus.Ready
+        return withTimeoutOrNull(config.helloAckTimeoutMs) {
+            helloAcked.await()
+            _status.value as? FrickSyncStatus.Ready
+        }
+    }
+
     override fun close() {
+        if (closed) return
         closed = true
         webSocket?.close(NORMAL_CLOSURE, "client.close")
         webSocket = null
+        _status.value = FrickSyncStatus.Disconnected
+        scope.cancel()
     }
 
-    /** Marker for tests; subsequent commits replace with a real listener. */
-    internal class NoopListener : WebSocketListener() {
-        override fun onOpen(webSocket: WebSocket, response: Response) = Unit
-        override fun onMessage(webSocket: WebSocket, bytes: ByteString) = Unit
-        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = Unit
+    private fun handleFrame(kind: Int, payload: Map<String, Any?>) {
+        when (kind) {
+            FrameKindCodes.HELLO_ACK -> {
+                val schemaHash = payload.stringField("schemaHash") ?: FRICK_SCHEMA_HASH
+                val schemaId = payload.stringField("schemaId") ?: FRICK_SCHEMA_ID
+                val schemaRev = payload.intField("schemaRevision") ?: FRICK_SCHEMA_REVISION
+                _status.value = FrickSyncStatus.Ready(schemaHash, schemaId, schemaRev)
+                if (!helloAcked.isCompleted) helloAcked.complete(Unit)
+            }
+            FrameKindCodes.SCHEMA -> {
+                _events.tryEmit(FrickInboundEvent.Schema(payload))
+            }
+            FrameKindCodes.PING -> {
+                val sentAt = payload.intField("sentAt")?.toLong() ?: System.currentTimeMillis()
+                val pong = FrickMsgPack.encodeFrame(
+                    FrameKindCodes.PONG,
+                    mapOf("sentAt" to sentAt, "receivedAt" to System.currentTimeMillis()),
+                )
+                webSocket?.send(pong.toByteString())
+            }
+            // Other kinds handled in follow-up commits.
+        }
+    }
+
+    private inner class Listener : WebSocketListener() {
+        override fun onOpen(webSocket: WebSocket, response: Response) {
+            sendHello()
+        }
+
+        override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+            val decoded = try {
+                FrickMsgPack.decodeFrame(bytes.toByteArray())
+            } catch (e: Throwable) {
+                _status.value = FrickSyncStatus.Failed("decode: ${e.message}")
+                return
+            } ?: return
+            handleFrame(decoded.first, decoded.second)
+        }
+
+        override fun onMessage(webSocket: WebSocket, text: String) {
+            // Sync uses binary msgpack — ignore text payloads.
+        }
+
+        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+            webSocket.close(code, reason)
+        }
+
+        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+            _events.tryEmit(FrickInboundEvent.Disconnected)
+            _status.value = FrickSyncStatus.Disconnected
+        }
+
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            _events.tryEmit(FrickInboundEvent.Disconnected)
+            _status.value = FrickSyncStatus.Failed(t.message ?: "socket failure")
+        }
     }
 
     companion object {
