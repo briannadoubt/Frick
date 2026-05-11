@@ -24,6 +24,7 @@ import type { StoredAccount } from "./storage/account-store.js";
 import type { StoredSession } from "./storage/session-store.js";
 import { FrickStore } from "./store.js";
 import { loadFrickConfig, type FrickConfig, type FrickConfigOverrides } from "./config.js";
+import { createConsoleLogger, createNoopLogger, type FrickLogger } from "./logger.js";
 
 export interface ServerOptions {
   port?: number;
@@ -36,18 +37,53 @@ export interface ServerOptions {
    * {@link loadFrickConfig}. Omit to load entirely from env vars.
    */
   config?: FrickConfig | FrickConfigOverrides;
+  /**
+   * Logger to use for startup and shutdown events. Defaults to a no-op
+   * logger in tests (when `config.env === "test"`) and a structured console
+   * logger otherwise.
+   */
+  logger?: FrickLogger;
+  /**
+   * Maximum time `close()` waits for in-flight HTTP handlers to settle
+   * before forcibly closing the underlying socket. Defaults to 5 seconds.
+   */
+  shutdownTimeoutMs?: number;
 }
 
 export function createFrickServer(options: ServerOptions = {}) {
-  const port = options.port ?? Number(process.env.PORT ?? 4099);
   const config = resolveConfig(options.config);
+  const port = options.port ?? Number(process.env.PORT ?? config.port);
+  const host = config.host;
+  const startedAt = new Date().toISOString();
+  const shutdownTimeoutMs = options.shutdownTimeoutMs ?? 5000;
+  const inTestRunner =
+    config.env === "test" ||
+    process.env.NODE_ENV === "test" ||
+    process.env.VITEST !== undefined;
+  const logger =
+    options.logger ?? (inTestRunner ? createNoopLogger() : createConsoleLogger(config));
   const store = new FrickStore({
     path: options.dbPath ?? process.env.FRICK_DB_PATH ?? defaultDatabasePath(),
     schema: foundationSchema,
   });
   const extensions = createFrickExtensionRegistry(options.extensions);
+  let inFlight = 0;
+  let closing = false;
+  const drainWaiters: Array<() => void> = [];
+
+  function noteRequestStart(): void {
+    inFlight += 1;
+  }
+  function noteRequestEnd(): void {
+    inFlight = Math.max(0, inFlight - 1);
+    if (inFlight === 0 && closing) {
+      for (const w of drainWaiters.splice(0)) w();
+    }
+  }
 
   const server = http.createServer((request, response) => {
+    noteRequestStart();
+    response.on("close", noteRequestEnd);
     void handleHttp(request, response);
   });
   const wss = new WebSocketServer({ server, path: "/_frick/sync" });
@@ -71,7 +107,82 @@ export function createFrickServer(options: ServerOptions = {}) {
     }
 
     if (request.method === "GET" && url.pathname === "/health") {
-      sendJson(response, 200, { ok: true, service: "frick-server" });
+      sendJson(response, 200, { ok: true, service: "frick-server", status: "ok" });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/ready") {
+      const applied = safeListAppliedMigrations(store);
+      const dbReady = store.pingDatabase();
+      const migrationsReady = applied !== undefined;
+      if (!dbReady || !migrationsReady) {
+        sendJson(response, 503, {
+          status: "not-ready",
+          reason: !dbReady ? "database_unresponsive" : "migrations_unavailable",
+          schemaId: store.schema.schemaId,
+          schemaRevision: store.schema.schemaRevision,
+          schemaHash: store.schema.hash,
+          appliedMigrations: applied?.length ?? 0,
+        });
+        return;
+      }
+      sendJson(response, 200, {
+        status: "ready",
+        schemaId: store.schema.schemaId,
+        schemaRevision: store.schema.schemaRevision,
+        schemaHash: store.schema.hash,
+        appliedMigrations: applied.length,
+      });
+      return;
+    }
+
+    if (config.inspectionEnabled && request.method === "GET" && url.pathname.startsWith("/_frick/inspect/")) {
+      const sub = url.pathname.slice("/_frick/inspect/".length);
+      if (sub === "server") {
+        sendJson(response, 200, {
+          schemaId: store.schema.schemaId,
+          schemaVersion: store.schema.schemaVersion,
+          schemaRevision: store.schema.schemaRevision,
+          schemaHash: store.schema.hash,
+          env: config.env,
+          demoAuthEnabled: config.demoAuthEnabled,
+          inspectionEnabled: config.inspectionEnabled,
+          startedAt,
+        });
+        return;
+      }
+      if (sub === "migrations") {
+        const applied = safeListAppliedMigrations(store) ?? [];
+        sendJson(response, 200, {
+          applied: applied.map((row) => ({
+            id: row.id,
+            schemaRevision: row.schemaRevision,
+            appliedAt: row.appliedAt,
+            checksum: row.checksum,
+            durationMs: row.durationMs,
+          })),
+        });
+        return;
+      }
+      if (sub === "db") {
+        const applied = safeListAppliedMigrations(store) ?? [];
+        const last = applied[applied.length - 1];
+        sendJson(response, 200, {
+          ready: store.pingDatabase(),
+          applied: applied.length,
+          ...(last
+            ? {
+                lastApplied: {
+                  id: last.id,
+                  schemaRevision: last.schemaRevision,
+                  appliedAt: last.appliedAt,
+                },
+              }
+            : {}),
+        });
+        return;
+      }
+      sendJson(response, 404, { error: "not_found" });
       return;
     }
 
@@ -421,29 +532,81 @@ export function createFrickServer(options: ServerOptions = {}) {
 
   function listen(): Promise<void> {
     return new Promise((resolve) => {
-      server.listen(port, "127.0.0.1", resolve);
+      server.listen(port, host, () => {
+        const address = server.address();
+        const boundPort = address && typeof address !== "string" ? address.port : port;
+        logger.info("frick.server.listen", {
+          event: "frick.server.listen",
+          schemaId: store.schema.schemaId,
+          schemaRevision: store.schema.schemaRevision,
+          schemaHash: store.schema.hash,
+          env: config.env,
+          host,
+          port: boundPort,
+          publicUrl: config.publicUrl,
+          demoAuthEnabled: config.demoAuthEnabled,
+          dbPath: options.dbPath ?? process.env.FRICK_DB_PATH ?? config.dbPath,
+          inspectionEnabled: config.inspectionEnabled,
+        });
+        resolve();
+      });
+    });
+  }
+
+  function waitForDrain(timeoutMs: number): Promise<void> {
+    if (inFlight === 0) return Promise.resolve();
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        const idx = drainWaiters.indexOf(done);
+        if (idx >= 0) drainWaiters.splice(idx, 1);
+        resolve();
+      }, timeoutMs);
+      const done = (): void => {
+        clearTimeout(timer);
+        resolve();
+      };
+      drainWaiters.push(done);
     });
   }
 
   function close(): Promise<void> {
+    if (closing) {
+      return new Promise((resolve) => drainWaiters.push(resolve));
+    }
+    closing = true;
     sse.closeAll();
     gateway.close();
     return new Promise((resolve, reject) => {
       wss.close((wsError) => {
-        store.close();
+        // Stop accepting new connections; existing requests still drain.
         server.close((serverError) => {
+          try {
+            store.close();
+          } catch {
+            // Already closed — fine during shutdown.
+          }
+          logger.info("frick.server.closed", { event: "frick.server.closed" });
           const error = wsError ?? serverError;
-          if (error) {
+          if (error && !/Server is not running/i.test(error.message)) {
             reject(error);
           } else {
             resolve();
           }
         });
+        void waitForDrain(shutdownTimeoutMs);
       });
     });
   }
 
-  return { port, server, store, extensions, config, listen, close };
+  return { port, server, store, extensions, config, logger, startedAt, listen, close };
+}
+
+function safeListAppliedMigrations(store: FrickStore) {
+  try {
+    return store.listAppliedMigrations();
+  } catch {
+    return undefined;
+  }
 }
 
 function resolveConfig(input: FrickConfig | FrickConfigOverrides | undefined): FrickConfig {
@@ -457,10 +620,15 @@ function resolveConfig(input: FrickConfig | FrickConfigOverrides | undefined): F
 }
 
 function isFrickConfig(value: FrickConfig | FrickConfigOverrides): value is FrickConfig {
+  const v = value as FrickConfig;
   return (
-    typeof (value as FrickConfig).env === "string" &&
-    typeof (value as FrickConfig).demoAuthEnabled === "boolean" &&
-    typeof (value as FrickConfig).sessionTtlSeconds === "number"
+    typeof v.env === "string" &&
+    typeof v.demoAuthEnabled === "boolean" &&
+    typeof v.sessionTtlSeconds === "number" &&
+    typeof v.host === "string" &&
+    typeof v.port === "number" &&
+    typeof v.dbPath === "string" &&
+    typeof v.logLevel === "string"
   );
 }
 

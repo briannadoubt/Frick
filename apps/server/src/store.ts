@@ -13,6 +13,7 @@ import { initializeStorage } from "./storage/schema.js";
 import { SessionStore, type StoredSession } from "./storage/session-store.js";
 import { SignalStore } from "./storage/signal-store.js";
 import { StreamStore, type AppendInput, type AppendResult, type StoredEvent } from "./storage/stream-store.js";
+import { listAppliedMigrations, type AppliedMigrationRow } from "./storage/migrations.js";
 
 export interface StoreOptions {
   path: string;
@@ -68,6 +69,25 @@ export class FrickStore {
 
   close(): void {
     this.#db.close();
+  }
+
+  /**
+   * Cheap liveness probe used by the `/ready` endpoint. Returns true if the
+   * database responds to a trivial `SELECT 1`. Surfaced here rather than
+   * exposing the DatabaseSync handle directly.
+   */
+  pingDatabase(): boolean {
+    try {
+      const row = this.#db.prepare("SELECT 1 AS ok").get() as { ok?: number } | undefined;
+      return row?.ok === 1;
+    } catch {
+      return false;
+    }
+  }
+
+  /** List applied migrations recorded in the `frick_migrations` ledger. */
+  listAppliedMigrations(): AppliedMigrationRow[] {
+    return listAppliedMigrations(this.#db);
   }
 
   seedFoundation(): void {
