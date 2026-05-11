@@ -5,8 +5,10 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.frick.client.ConversationDto
 import dev.frick.client.FrickClient
+import dev.frick.client.FrickInboundEvent
 import dev.frick.client.FrickSession
 import dev.frick.client.FrickStreamEvent
+import dev.frick.client.FrickSyncSocket
 import dev.frick.client.RoomMemberDto
 import dev.frick.client.SQLiteFrickStorage
 import dev.frick.client.UserDto
@@ -23,11 +25,9 @@ internal const val DemoReplicaId = "android-demo"
 internal const val DemoPlatform = "android"
 internal const val DefaultConversationId = "conversation-general"
 internal const val ChatDestinationId = "chat"
+internal const val DemoBaseUrl = "http://10.0.2.2:4099"
 
-internal enum class AuthMode {
-    Login,
-    SignUp,
-}
+internal enum class AuthMode { Login, SignUp }
 
 internal enum class NewThreadKind(val label: String, val wireKind: String) {
     Direct(label = "Direct", wireKind = "dm"),
@@ -95,6 +95,10 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
     private val storage = SQLiteFrickStorage(application)
     private val frick = FrickClient(storage = storage)
     private var streamJob: Job? = null
+    private var socket: FrickSyncSocket? = null
+    private var socketStatusJob: Job? = null
+    private var socketEventsJob: Job? = null
+
     private val initialSession = storage.loadSession()
     private val _uiState = MutableStateFlow(
         FoundationUiState(
@@ -107,33 +111,17 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
 
     init {
         if (initialSession != null) {
+            connectSocket()
             startMessageStream()
         }
     }
 
-    fun setAuthMode(mode: AuthMode) {
-        _uiState.update { state -> state.copy(authMode = mode, authError = null) }
-    }
-
-    fun setDisplayName(displayName: String) {
-        _uiState.update { state -> state.copy(displayName = displayName) }
-    }
-
-    fun setHandle(handle: String) {
-        _uiState.update { state -> state.copy(handle = handle) }
-    }
-
-    fun setPassword(password: String) {
-        _uiState.update { state -> state.copy(password = password) }
-    }
-
-    fun setDraft(draft: String) {
-        _uiState.update { state -> state.copy(draft = draft) }
-    }
-
-    fun setNewThreadTitle(title: String) {
-        _uiState.update { state -> state.copy(newThreadTitle = title, threadError = null) }
-    }
+    fun setAuthMode(mode: AuthMode) = _uiState.update { state -> state.copy(authMode = mode, authError = null) }
+    fun setDisplayName(displayName: String) = _uiState.update { state -> state.copy(displayName = displayName) }
+    fun setHandle(handle: String) = _uiState.update { state -> state.copy(handle = handle) }
+    fun setPassword(password: String) = _uiState.update { state -> state.copy(password = password) }
+    fun setDraft(draft: String) = _uiState.update { state -> state.copy(draft = draft) }
+    fun setNewThreadTitle(title: String) = _uiState.update { state -> state.copy(newThreadTitle = title, threadError = null) }
 
     fun setNewThreadKind(kind: NewThreadKind) {
         _uiState.update { state ->
@@ -170,26 +158,12 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
         }
     }
 
-    fun setThreadListVisible(visible: Boolean) {
-        _uiState.update { state ->
-            state.copy(
-                threadListVisible = visible,
-                inspectorVisible = if (visible) false else state.inspectorVisible,
-            )
-        }
-    }
+    fun setThreadListVisible(visible: Boolean) =
+        _uiState.update { state -> state.copy(threadListVisible = visible, inspectorVisible = if (visible) false else state.inspectorVisible) }
 
-    fun backToThreads() {
-        _uiState.update { state -> state.copy(threadListVisible = true, inspectorVisible = false) }
-    }
-
-    fun setInspectorVisible(visible: Boolean) {
-        _uiState.update { state -> state.copy(inspectorVisible = visible) }
-    }
-
-    fun toggleInspector() {
-        _uiState.update { state -> state.copy(inspectorVisible = !state.inspectorVisible) }
-    }
+    fun backToThreads() = _uiState.update { state -> state.copy(threadListVisible = true, inspectorVisible = false) }
+    fun setInspectorVisible(visible: Boolean) = _uiState.update { state -> state.copy(inspectorVisible = visible) }
+    fun toggleInspector() = _uiState.update { state -> state.copy(inspectorVisible = !state.inspectorVisible) }
 
     fun authenticate() {
         val state = _uiState.value
@@ -206,14 +180,8 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
         val demoName = "New Frick Person"
         val demoHandle = "person$suffix"
         val demoPassword = "foundation$suffix"
-
         _uiState.update { state ->
-            state.copy(
-                authMode = AuthMode.SignUp,
-                displayName = demoName,
-                handle = demoHandle,
-                password = demoPassword,
-            )
+            state.copy(authMode = AuthMode.SignUp, displayName = demoName, handle = demoHandle, password = demoPassword)
         }
         authenticate(
             requestedMode = AuthMode.SignUp,
@@ -224,17 +192,12 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
     }
 
     fun reload() {
-        viewModelScope.launch {
-            reloadMessages()
-        }
+        viewModelScope.launch { reloadMessages() }
     }
 
     fun send() {
         val body = _uiState.value.draft.trim()
-        if (body.isEmpty()) {
-            return
-        }
-
+        if (body.isEmpty()) return
         _uiState.update { state -> state.copy(draft = "", status = "Sending") }
         viewModelScope.launch {
             try {
@@ -251,24 +214,11 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
         val title = state.newThreadTitle.trim()
         if (state.isCreateThreadDisabled) {
             _uiState.update { current ->
-                current.copy(
-                    threadError = if (current.newThreadKind == NewThreadKind.Direct) {
-                        "Choose one person."
-                    } else {
-                        "Choose people and a title."
-                    },
-                )
+                current.copy(threadError = if (current.newThreadKind == NewThreadKind.Direct) "Choose one person." else "Choose people and a title.")
             }
             return
         }
-
-        _uiState.update { state ->
-            state.copy(
-                isCreatingThread = true,
-                threadError = null,
-                status = "Creating thread",
-            )
-        }
+        _uiState.update { it.copy(isCreatingThread = true, threadError = null, status = "Creating thread") }
         viewModelScope.launch {
             try {
                 val created = frick.createConversation(
@@ -276,10 +226,10 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
                     kind = state.newThreadKind.wireKind,
                     participantUserIds = state.newThreadParticipantIds,
                 )
-                _uiState.update { state ->
-                    state.copy(
-                        conversations = mergeConversations(state.conversations, created.conversation),
-                        roomMembers = mergeRoomMembers(state.roomMembers, created.members),
+                _uiState.update { current ->
+                    current.copy(
+                        conversations = mergeConversations(current.conversations, created.conversation),
+                        roomMembers = mergeRoomMembers(current.roomMembers, created.members),
                         selectedConversationId = created.conversation.id,
                         newThreadTitle = "",
                         newThreadParticipantIds = emptyList(),
@@ -289,17 +239,18 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
                         status = "Thread created",
                     )
                 }
+                subscribeStreamSocket(created.conversation.id)
                 startMessageStream()
             } catch (error: Exception) {
-                _uiState.update { state ->
-                    state.copy(
+                _uiState.update { current ->
+                    current.copy(
                         newThreadTitle = title,
                         threadError = "Could not create thread.",
                         status = error.localizedMessage ?: "Thread create failed",
                     )
                 }
             } finally {
-                _uiState.update { state -> state.copy(isCreatingThread = false) }
+                _uiState.update { current -> current.copy(isCreatingThread = false) }
             }
         }
     }
@@ -317,13 +268,14 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
             )
         }
         if (conversationId != previousConversationId) {
+            subscribeStreamSocket(conversationId)
             startMessageStream()
         }
     }
 
     fun logout() {
-        streamJob?.cancel()
-        streamJob = null
+        streamJob?.cancel(); streamJob = null
+        closeSocket()
         frick.signOut()
         _uiState.value = FoundationUiState()
     }
@@ -344,7 +296,6 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
             _uiState.update { state -> state.copy(authError = "Enter a display name.") }
             return
         }
-
         _uiState.update { state ->
             state.copy(
                 isAuthenticating = true,
@@ -356,29 +307,18 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
             try {
                 val nextSession = when (requestedMode) {
                     AuthMode.Login -> frick.login(
-                        identity = normalizedHandle,
-                        password = requestedPassword,
-                        deviceId = DemoDeviceId,
-                        replicaId = DemoReplicaId,
-                        platform = DemoPlatform,
+                        identity = normalizedHandle, password = requestedPassword,
+                        deviceId = DemoDeviceId, replicaId = DemoReplicaId, platform = DemoPlatform,
                     )
                     AuthMode.SignUp -> frick.signUp(
-                        displayName = normalizedDisplayName,
-                        handle = normalizedHandle,
-                        password = requestedPassword,
-                        deviceId = DemoDeviceId,
-                        replicaId = DemoReplicaId,
-                        platform = DemoPlatform,
+                        displayName = normalizedDisplayName, handle = normalizedHandle, password = requestedPassword,
+                        deviceId = DemoDeviceId, replicaId = DemoReplicaId, platform = DemoPlatform,
                     )
                 }
                 _uiState.update { state ->
-                    state.copy(
-                        session = nextSession,
-                        password = "",
-                        status = "Signed in",
-                        threadListVisible = true,
-                    )
+                    state.copy(session = nextSession, password = "", status = "Signed in", threadListVisible = true)
                 }
+                connectSocket()
                 startMessageStream()
             } catch (error: Exception) {
                 _uiState.update { state ->
@@ -407,16 +347,79 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
             val messages = frick.fetchMessages(conversationId = selectedConversationId, readUserId = active.userId)
             _uiState.update { state ->
                 state.copy(
-                    users = users,
-                    conversations = conversations,
-                    roomMembers = roomMembers,
-                    selectedConversationId = selectedConversationId,
-                    messages = messages,
-                    status = "Loaded",
+                    users = users, conversations = conversations, roomMembers = roomMembers,
+                    selectedConversationId = selectedConversationId, messages = messages, status = "Loaded",
                 )
             }
+            subscribeStreamSocket(selectedConversationId)
         } catch (error: Exception) {
             _uiState.update { state -> state.copy(status = error.localizedMessage ?: "Load failed") }
+        }
+    }
+
+    // WebSocket sync socket lifecycle. Round-10b added FrickSyncSocket which
+    // negotiates a HelloAck and then exposes subscribe/append/upsert plus an
+    // events flow. The existing SSE streamMessages() path stays around for
+    // initial cold-start and for live updates as a belt-and-braces fallback,
+    // because the SDK's Delta decoder currently only emits Map-shaped events
+    // — wire stream events arrive as PackedStreamEvent tuples and the
+    // inbound Delta filter drops them.
+    private fun connectSocket() {
+        val session = _uiState.value.session ?: return
+        if (socket != null) return
+        val newSocket = frick.connectSync(baseUrl = DemoBaseUrl)
+        socket = newSocket
+        newSocket.connect()
+        socketStatusJob = viewModelScope.launch {
+            newSocket.status.collect { /* surfaced to UI in a follow-up commit */ }
+        }
+        socketEventsJob = viewModelScope.launch {
+            newSocket.events.collect { event -> handleInboundEvent(event) }
+        }
+        viewModelScope.launch { subscribeStreamSocket(_uiState.value.selectedConversationId) }
+        @Suppress("UNUSED_VARIABLE") val ref = session
+    }
+
+    private fun closeSocket() {
+        socketStatusJob?.cancel(); socketStatusJob = null
+        socketEventsJob?.cancel(); socketEventsJob = null
+        socket?.close(); socket = null
+    }
+
+    private fun handleInboundEvent(event: FrickInboundEvent) {
+        when (event) {
+            is FrickInboundEvent.Delta -> {
+                val convoId = _uiState.value.selectedConversationId
+                val merged = event.events.mapNotNull { decodeStreamEvent(it, convoId) }
+                if (merged.isEmpty()) return
+                _uiState.update { state ->
+                    val combined = (state.messages + merged)
+                        .distinctBy { e -> e.eventId }
+                        .sortedBy { e -> e.sequence }
+                    state.copy(messages = combined, status = "Live")
+                }
+            }
+            else -> Unit
+        }
+    }
+
+    private fun decodeStreamEvent(raw: Map<String, Any?>, fallbackKey: String): FrickStreamEvent? {
+        val stream = raw["stream"]?.toString() ?: return null
+        val streamId = raw["streamId"]?.toString() ?: fallbackKey
+        val sequence = (raw["sequence"] as? Number)?.toInt() ?: return null
+        val eventId = raw["eventId"]?.toString() ?: return null
+        val eventName = raw["event"]?.toString() ?: return null
+        @Suppress("UNCHECKED_CAST")
+        val payloadRaw = raw["payload"] as? Map<String, Any?> ?: emptyMap()
+        val payload = payloadRaw.mapValues { entry -> entry.value?.toString().orEmpty() }
+        return FrickStreamEvent(stream, streamId, sequence, eventId, eventName, payload)
+    }
+
+    private fun subscribeStreamSocket(conversationId: String) {
+        val current = socket ?: return
+        viewModelScope.launch {
+            try { current.subscribe(stream = "MessageStream", key = conversationId) }
+            catch (_: Exception) { /* queued by socket when not Ready */ }
         }
     }
 
@@ -434,17 +437,9 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
                     conversations = conversations,
                 )
                 _uiState.update { state ->
-                    state.copy(
-                        users = users,
-                        conversations = conversations,
-                        roomMembers = roomMembers,
-                        selectedConversationId = selectedConversationId,
-                    )
+                    state.copy(users = users, conversations = conversations, roomMembers = roomMembers, selectedConversationId = selectedConversationId)
                 }
-                frick.streamMessages(
-                    conversationId = selectedConversationId,
-                    readUserId = connectedSession.userId,
-                ).collect { nextMessages ->
+                frick.streamMessages(conversationId = selectedConversationId, readUserId = connectedSession.userId).collect { nextMessages ->
                     _uiState.update { state -> state.copy(messages = nextMessages, status = "Live") }
                 }
             } catch (error: CancellationException) {
@@ -457,6 +452,7 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
 
     override fun onCleared() {
         streamJob?.cancel()
+        closeSocket()
         super.onCleared()
     }
 }
