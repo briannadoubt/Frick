@@ -8,7 +8,7 @@ import {
   foundationSchema,
   packStreamEvent,
 } from "@frick/protocol";
-import { FrickClient, MemoryFrickCache } from "../src/index.js";
+import { FrickCacheIncompatibleError, FrickClient, MemoryFrickCache } from "../src/index.js";
 
 const HELLO_ACK_FRAME_KIND = (FrameKind as typeof FrameKind & { HelloAck?: number }).HelloAck ?? 18;
 
@@ -226,6 +226,112 @@ describe("foundation runtime", () => {
     expect(client.syncStatus.value.pendingMutations).toBe(0);
     expect(cache.load(foundationSchema).pendingAppends).toHaveLength(0);
     expect(client.syncStatus.value.lastError).toEqual(error);
+  });
+});
+
+describe("memory cache schema compatibility", () => {
+  it("records schema identity metadata after the first save and exposes it on load", () => {
+    const cache = new MemoryFrickCache();
+    cache.saveObject(foundationSchema, "User", "user-ada", { displayName: "Ada" }, 1);
+
+    const state = cache.load(foundationSchema);
+
+    expect(state.metadata).toEqual({
+      schemaId: foundationSchema.schemaId,
+      schemaVersion: foundationSchema.schemaVersion,
+      schemaRevision: foundationSchema.schemaRevision,
+      schemaHash: foundationSchema.hash,
+    });
+  });
+
+  it("throws FrickCacheIncompatibleError when cached schema id differs", () => {
+    const cache = new MemoryFrickCache({
+      metadata: {
+        schemaId: "legacy-app",
+        schemaVersion: "0.1.0",
+        schemaRevision: 1,
+        schemaHash: "legacy-hash",
+      },
+    });
+
+    expect(() => cache.load(foundationSchema)).toThrowError(FrickCacheIncompatibleError);
+    try {
+      cache.load(foundationSchema);
+    } catch (error) {
+      if (!(error instanceof FrickCacheIncompatibleError)) {
+        throw error;
+      }
+      expect(error.reason).toBe("schemaIdMismatch");
+      expect(error.cachedMetadata.schemaId).toBe("legacy-app");
+      expect(error.currentMetadata.schemaId).toBe(foundationSchema.schemaId);
+    }
+  });
+
+  it("throws FrickCacheIncompatibleError when cache revision falls below the minimum", () => {
+    const cache = new MemoryFrickCache({
+      metadata: {
+        schemaId: foundationSchema.schemaId,
+        schemaVersion: "0.0.9",
+        schemaRevision: 1,
+        schemaHash: "obsolete-hash",
+      },
+      pendingAppends: [
+        {
+          requestId: "request-1",
+          stream: "MessageStream",
+          key: "conversation-general",
+          event: "MessageSent",
+          payload: {},
+        },
+      ],
+    });
+    const upgradedSchema = { ...foundationSchema, schemaRevision: 5, minimumClientRevision: 5 };
+
+    try {
+      cache.load(upgradedSchema);
+      throw new Error("expected throw");
+    } catch (error) {
+      if (!(error instanceof FrickCacheIncompatibleError)) {
+        throw error;
+      }
+      expect(error.reason).toBe("cacheTooOld");
+      expect(error.minimumClientRevision).toBe(5);
+      expect(error.pendingAppendCount).toBe(1);
+    }
+  });
+
+  it("allows load when cached hash differs but revision is still compatible", () => {
+    const cache = new MemoryFrickCache({
+      metadata: {
+        schemaId: foundationSchema.schemaId,
+        schemaVersion: foundationSchema.schemaVersion,
+        schemaRevision: foundationSchema.schemaRevision,
+        schemaHash: "old-but-compatible-hash",
+      },
+      objects: [
+        { type: "User", id: "user-ada", value: { id: "user-ada", displayName: "Ada" }, version: 1 },
+      ],
+    });
+
+    const state = cache.load(foundationSchema);
+
+    expect(state.metadata?.schemaHash).toBe("old-but-compatible-hash");
+    expect(state.objects).toHaveLength(1);
+  });
+
+  it("clears all state including metadata", () => {
+    const cache = new MemoryFrickCache();
+    cache.saveObject(foundationSchema, "User", "user-ada", { displayName: "Ada" }, 1);
+    expect(cache.load(foundationSchema).metadata).toBeDefined();
+
+    cache.clear();
+
+    expect(cache.load(foundationSchema)).toEqual({
+      objects: [],
+      streamEvents: [],
+      cursors: {},
+      pendingAppends: [],
+    });
   });
 });
 
