@@ -69,4 +69,50 @@ describe("createConsoleLogger", () => {
       logger.error("ignored too");
     }).not.toThrow();
   });
+
+  it("redacts Authorization-header field values", () => {
+    const { logger, lines } = capture("debug");
+    logger.info("req", { Authorization: "Bearer abc", authorization: "Bearer xyz" });
+    expect(lines[0].parsed).toMatchObject({
+      Authorization: "<redacted>",
+      authorization: "<redacted>",
+    });
+  });
+
+  describe("child", () => {
+    it("inherits parent fields on every emission", () => {
+      const { logger, lines } = capture("debug");
+      logger.child({ requestId: "r-1" }).info("hi", { foo: "bar" });
+      expect(lines[0].parsed).toMatchObject({
+        msg: "hi",
+        requestId: "r-1",
+        foo: "bar",
+      });
+    });
+
+    it("cascades through nested children", () => {
+      const { logger, lines } = capture("debug");
+      logger.child({ a: 1 }).child({ b: 2 }).info("hi");
+      expect(lines[0].parsed).toMatchObject({ msg: "hi", a: 1, b: 2 });
+    });
+
+    it("per-emission fields override inherited ones", () => {
+      const { logger, lines } = capture("debug");
+      logger.child({ status: 200 }).info("done", { status: 500 });
+      expect((lines[0].parsed as { status: number }).status).toBe(500);
+    });
+
+    it("redacts inherited sensitive fields", () => {
+      const { logger, lines } = capture("debug");
+      logger.child({ password: "supersecret" }).info("nope");
+      expect((lines[0].parsed as { password: string }).password).toBe("<redacted>");
+    });
+
+    it("createNoopLogger.child returns a no-op logger", () => {
+      const logger = createNoopLogger();
+      expect(() => {
+        logger.child({ a: 1 }).info("hi");
+      }).not.toThrow();
+    });
+  });
 });

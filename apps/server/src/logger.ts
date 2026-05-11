@@ -15,6 +15,13 @@ export interface FrickLogger {
   info(message: string, fields?: Record<string, unknown>): void;
   warn(message: string, fields?: Record<string, unknown>): void;
   error(message: string, fields?: Record<string, unknown>): void;
+  /**
+   * Return a logger that includes `fields` in every emission. Cascades:
+   * a child of a child carries both ancestors' fields. Per-emission fields
+   * override inherited fields with the same name. Redaction applies to the
+   * merged field set.
+   */
+  child(fields: Record<string, unknown>): FrickLogger;
 }
 
 const LEVEL_PRIORITY: Record<FrickLogLevel, number> = {
@@ -28,6 +35,8 @@ const REDACTED_FIELDS: ReadonlySet<string> = new Set([
   "sessionToken",
   "password",
   "passwordHash",
+  "Authorization",
+  "authorization",
 ]);
 
 export interface ConsoleLoggerOptions {
@@ -44,40 +53,46 @@ export function createConsoleLogger(
   const out = options.out ?? ((line: string) => process.stdout.write(`${line}\n`));
   const err = options.err ?? ((line: string) => process.stderr.write(`${line}\n`));
 
-  function emit(level: FrickLogLevel, message: string, fields?: Record<string, unknown>): void {
-    if (LEVEL_PRIORITY[level] < threshold) return;
-    const record: Record<string, unknown> = {
-      ts: new Date().toISOString(),
-      level,
-      msg: message,
-    };
-    if (fields) {
-      for (const [key, value] of Object.entries(fields)) {
+  function build(inherited: Record<string, unknown>): FrickLogger {
+    function emit(level: FrickLogLevel, message: string, fields?: Record<string, unknown>): void {
+      if (LEVEL_PRIORITY[level] < threshold) return;
+      const record: Record<string, unknown> = {
+        ts: new Date().toISOString(),
+        level,
+        msg: message,
+      };
+      const merged: Record<string, unknown> = { ...inherited, ...(fields ?? {}) };
+      for (const [key, value] of Object.entries(merged)) {
         record[key] = REDACTED_FIELDS.has(key) ? "<redacted>" : value;
       }
+      const line = JSON.stringify(record);
+      if (level === "error" || level === "warn") {
+        err(line);
+      } else {
+        out(line);
+      }
     }
-    const line = JSON.stringify(record);
-    if (level === "error" || level === "warn") {
-      err(line);
-    } else {
-      out(line);
-    }
+
+    return {
+      debug: (message, fields) => emit("debug", message, fields),
+      info: (message, fields) => emit("info", message, fields),
+      warn: (message, fields) => emit("warn", message, fields),
+      error: (message, fields) => emit("error", message, fields),
+      child: (childFields) => build({ ...inherited, ...childFields }),
+    };
   }
 
-  return {
-    debug: (message, fields) => emit("debug", message, fields),
-    info: (message, fields) => emit("info", message, fields),
-    warn: (message, fields) => emit("warn", message, fields),
-    error: (message, fields) => emit("error", message, fields),
-  };
+  return build({});
 }
 
 /** Logger that discards every event. Useful in tests where output is noise. */
 export function createNoopLogger(): FrickLogger {
-  return {
+  const logger: FrickLogger = {
     debug: () => {},
     info: () => {},
     warn: () => {},
     error: () => {},
+    child: () => logger,
   };
+  return logger;
 }
