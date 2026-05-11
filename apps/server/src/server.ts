@@ -42,6 +42,16 @@ import {
   type FrickProjectionContext,
 } from "./projections/registry.js";
 import { createConversationInboxProjection } from "./projections/conversation-inbox.js";
+import {
+  createFrickSearchIndexRegistry,
+  DEFAULT_SEARCH_LIMIT,
+  MAX_SEARCH_LIMIT,
+  type FrickSearchAdapter,
+  type FrickSearchIndexDefinition,
+  type FrickSearchIndexRegistry,
+  type FrickSearchProjectInput,
+} from "./search/types.js";
+import { createMessagesSearchIndex } from "./search/messages-index.js";
 import type { StoredAccount } from "./storage/account-store.js";
 import type { StoredSession } from "./storage/session-store.js";
 import { TenantAlreadyExistsError } from "./storage/tenant-store.js";
@@ -158,6 +168,16 @@ export interface ServerOptions {
    */
   blobProcessors?: FrickBlobProcessor[];
   /**
+   * Search subsystem configuration. The framework pre-registers the default
+   * `messages-fts` index against `MessageStream`; apps can add their own via
+   * `searchIndexes`. Supplying an `adapter` overrides the default SQLite FTS5
+   * implementation — useful for routing to Meilisearch or another engine.
+   */
+  search?: {
+    adapter?: FrickSearchAdapter;
+    indexes?: readonly FrickSearchIndexDefinition[];
+  };
+  /**
    * Override the schema used by the underlying store. Defaults to
    * {@link foundationSchema}. Primarily exposed for tests that need to
    * exercise behaviors (e.g. {@link FrickObjectMergePolicy}) on object
@@ -193,15 +213,29 @@ export function createFrickServer(options: ServerOptions = {}) {
   }
   const projections = createFrickProjectionRegistry();
   projections.register(createConversationInboxProjection());
+  const searchIndexes = createFrickSearchIndexRegistry();
+  // Built-in: index MessageStream events as searchable docs. Apps override
+  // by passing their own index with the same name first via `search.indexes`.
+  searchIndexes.register(createMessagesSearchIndex());
+  for (const def of options.search?.indexes ?? []) {
+    searchIndexes.register(def);
+  }
   const store = new FrickStore({
     path: options.dbPath ?? process.env.FRICK_DB_PATH ?? defaultDatabasePath(),
     schema: options.schema ?? foundationSchema,
     projections,
+    searchIndexes,
+    ...(options.search?.adapter !== undefined ? { searchAdapter: options.search.adapter } : {}),
     logger,
     ...(options.idempotencyCacheCapacity !== undefined
       ? { idempotencyCacheCapacity: options.idempotencyCacheCapacity }
       : {}),
   });
+  // Notify the adapter once per index so external engines can allocate
+  // per-index state. For the default SQLite adapter this is a no-op.
+  for (const def of searchIndexes.list()) {
+    store.searchAdapter.registerIndex(def);
+  }
   const extensions = createFrickExtensionRegistry(options.extensions);
   // Precompute the admin token fingerprint once so audit-log inserts don't
   // hash on every request. SHA-256 truncated to 12 hex chars: short enough to
@@ -453,6 +487,16 @@ export function createFrickServer(options: ServerOptions = {}) {
             sources: projection.sources,
             supportsRebuild: typeof projection.handler.rebuild === "function",
             supportsRead: typeof projection.handler.read === "function",
+          })),
+        });
+        return;
+      }
+      if (sub === "search") {
+        sendJson(response, 200, {
+          adapter: store.searchAdapter.id,
+          indexes: store.searchIndexes.list().map((def) => ({
+            name: def.name,
+            source: def.source,
           })),
         });
         return;
@@ -893,6 +937,48 @@ export function createFrickServer(options: ServerOptions = {}) {
         });
       } catch (error) {
         sendErrorWithMetrics(response, error, "projection_rejected");
+      }
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/search") {
+      try {
+        const body = await readJsonBody(request, limits.maxHttpBodyBytes);
+        const indexName = requireString(body.index, "index");
+        const q = requireString(body.q, "q");
+        const def = store.searchIndexes.get(indexName);
+        if (!def) {
+          throw new SearchIndexNotFoundError(indexName);
+        }
+        const filter = parseSearchFilter(body.filter);
+        const rawLimit = body.limit;
+        let limit = DEFAULT_SEARCH_LIMIT;
+        if (rawLimit !== undefined) {
+          const parsed = Number(rawLimit);
+          if (!Number.isFinite(parsed) || parsed <= 0) {
+            throw new Error("limit must be a positive number");
+          }
+          limit = Math.min(MAX_SEARCH_LIMIT, Math.floor(parsed));
+        }
+        // Authz: framework allows search.query for any authed principal in
+        // the same tenant; per-index membership filtering is a follow-up.
+        // (Calling decide() here directly would be redundant given the
+        // tenant scoping below — but we still surface it through the policy
+        // hooks so apps can deny outright via a hook.)
+        const result = store.searchAdapter.query(principal.tenantId, {
+          index: indexName,
+          q,
+          ...(filter !== undefined ? { filter } : {}),
+          limit,
+        });
+        sendJson(response, 200, {
+          schemaHash: store.schema.hash,
+          index: indexName,
+          hits: result.hits,
+          total: result.total,
+        });
+      } catch (error) {
+        sendErrorWithMetrics(response, error, "search_rejected");
       }
       return;
     }
@@ -1427,6 +1513,21 @@ class ProjectionNotFoundError extends Error {
 }
 
 /**
+ * Thrown by `POST /search` and the admin rebuild route when the requested
+ * search index is not registered. Maps to 404 with
+ * `details.reason = "searchIndexNotFound"`.
+ */
+class SearchIndexNotFoundError extends Error {
+  readonly reason = "searchIndexNotFound";
+  readonly index: string;
+  constructor(name: string) {
+    super(`Search index "${name}" not found`);
+    this.name = "SearchIndexNotFoundError";
+    this.index = name;
+  }
+}
+
+/**
  * Validate body.tenantId at an auth boundary. Returns the normalized tenant
  * id. If the caller supplied a `tenantId` field at all (even empty string),
  * it must match {@link validateTenantId}'s strict regex; if omitted, the
@@ -1500,7 +1601,9 @@ function sendError(response: http.ServerResponse, error: unknown, requestId: str
               ? 403
               : error instanceof ProjectionNotFoundError
                 ? 404
-                : 400;
+                : error instanceof SearchIndexNotFoundError
+                  ? 404
+                  : 400;
   const details: Record<string, unknown> = { routeCode: requestId };
   if (
     (error instanceof AuthenticationError || error instanceof AuthorizationError) &&
@@ -1534,6 +1637,10 @@ function sendError(response: http.ServerResponse, error: unknown, requestId: str
     if (error.rejectionReason) {
       details.rejectionReason = error.rejectionReason;
     }
+  }
+  if (error instanceof SearchIndexNotFoundError) {
+    details.reason = error.reason;
+    details.index = error.index;
   }
   if (error instanceof FrickLimitError) {
     details.limit = error.limit;
@@ -2316,6 +2423,56 @@ async function handleAdminRoute(
     return;
   }
 
+  const searchRebuildMatch = /^search\/([^/]+)\/rebuild$/.exec(sub);
+  if (request.method === "POST" && searchRebuildMatch) {
+    const indexName = decodeURIComponent(searchRebuildMatch[1]!);
+    const rawTenant = url.searchParams.get("tenantId");
+    const tenantId = rawTenant && rawTenant.length > 0 ? rawTenant : DEFAULT_TENANT_ID;
+    try {
+      validateTenantId(tenantId);
+    } catch (error) {
+      audit({
+        action: "search.rebuild",
+        target: indexName,
+        outcome: "error",
+        detail: { error: error instanceof Error ? error.message : String(error) },
+      });
+      throw error;
+    }
+    const def = store.searchIndexes.get(indexName);
+    if (!def) {
+      audit({
+        action: "search.rebuild",
+        target: indexName,
+        outcome: "deny",
+        detail: { reason: "searchIndexNotFound" },
+      });
+      throw new SearchIndexNotFoundError(indexName);
+    }
+    try {
+      const normalizedTenant = normalizeTenantId(tenantId);
+      const source = sourceIterableForIndex(store, def, normalizedTenant);
+      await store.searchAdapter.rebuild(normalizedTenant, indexName, source);
+      const rebuiltAt = new Date().toISOString();
+      audit({
+        action: "search.rebuild",
+        target: indexName,
+        outcome: "allow",
+        detail: { tenantId: normalizedTenant, rebuiltAt },
+      });
+      sendJson(response, 200, { index: indexName, tenantId: normalizedTenant, rebuiltAt });
+    } catch (error) {
+      audit({
+        action: "search.rebuild",
+        target: indexName,
+        outcome: "error",
+        detail: { error: error instanceof Error ? error.message : String(error) },
+      });
+      throw error;
+    }
+    return;
+  }
+
   const rebuildMatch = /^projections\/([^/]+)\/rebuild$/.exec(sub);
   if (request.method === "POST" && rebuildMatch) {
     const name = decodeURIComponent(rebuildMatch[1]!);
@@ -2407,8 +2564,75 @@ function isProtectedPath(pathname: string): boolean {
     pathname.startsWith("/streams/") ||
     pathname === "/append" ||
     pathname === "/push/registrations" ||
-    pathname.startsWith("/push/registrations/")
+    pathname.startsWith("/push/registrations/") ||
+    pathname === "/search"
   );
+}
+
+/**
+ * Validate the `filter` field on a `POST /search` body. Only flat
+ * `Record<string, string | number>` is accepted — nested objects, arrays,
+ * and booleans are rejected so the SQLite adapter's `json_extract(...)`
+ * lookup never has to coerce.
+ */
+function parseSearchFilter(value: unknown): Record<string, string | number> | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("filter must be an object");
+  }
+  const out: Record<string, string | number> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof raw !== "string" && typeof raw !== "number") {
+      throw new Error(`filter.${key} must be a string or number`);
+    }
+    out[key] = raw;
+  }
+  return out;
+}
+
+/**
+ * Build an async iterable of {@link FrickSearchProjectInput} rows over a
+ * search index's declared source primitive for the admin rebuild route.
+ * - `object` sources iterate `store.listObjects(tenantId, type)`.
+ * - `stream` sources iterate `store.streams.listAllByStreamType(tenantId, type)`.
+ * - `projection` sources are not yet supported here — projections own their
+ *   storage shape, so a generic iterator can't enumerate rows in v1. Apps
+ *   that need rebuild for a projection-backed index can supply a custom
+ *   adapter or fall through the on-write indexing path.
+ */
+async function* sourceIterableForIndex(
+  store: FrickStore,
+  def: FrickSearchIndexDefinition,
+  tenantId: string,
+): AsyncGenerator<FrickSearchProjectInput, void, void> {
+  if (def.source.kind === "object") {
+    for (const value of store.listObjects(tenantId, def.source.type)) {
+      const id = typeof value.id === "string" ? value.id : "";
+      yield {
+        tenantId,
+        object: { type: def.source.type, id, value },
+      };
+    }
+    return;
+  }
+  if (def.source.kind === "stream") {
+    for (const event of store.streams.listAllByStreamType(tenantId, def.source.type)) {
+      yield {
+        tenantId,
+        streamEvent: {
+          stream: event.stream,
+          streamId: event.streamId,
+          sequence: event.sequence,
+          eventId: event.eventId,
+          event: event.event,
+          payload: event.payload,
+        },
+      };
+    }
+    return;
+  }
+  // projection — no generic enumerator yet. Yield nothing; adapter will end
+  // up clearing the index. Documented as a known gap.
 }
 
 function parsePlatform(platform: string): "web" | "ios" | "android" | "server" {
