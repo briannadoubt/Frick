@@ -11,6 +11,8 @@
     "schema:generate": "tsx packages/protocol/scripts/generate-native-artifacts.ts",
     "fixtures:generate": "tsx packages/protocol/scripts/generate-fixtures.ts",
     "verify:generated": "tsx scripts/check-generated-artifacts.ts",
+    "changelog": "tsx scripts/changelog.ts",
+    "bump": "tsx scripts/bump-version.ts",
     "design:check": "pnpm --filter @frick/design check",
     "design:generate": "pnpm --filter @frick/design generate",
     "server": "pnpm --filter @frick/server dev",
