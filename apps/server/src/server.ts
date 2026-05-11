@@ -1409,6 +1409,27 @@ async function handleAdminRoute(
     return;
   }
 
+  if (request.method === "GET" && sub === "accounts") {
+    const rawTenant = url.searchParams.get("tenantId");
+    if (rawTenant === null || rawTenant.length === 0) {
+      throw new Error("tenantId query parameter is required");
+    }
+    validateTenantId(rawTenant);
+    const tenantId = normalizeTenantId(rawTenant);
+    const rawLimit = url.searchParams.get("limit");
+    let limit = 100;
+    if (rawLimit !== null) {
+      const parsed = Number(rawLimit);
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        throw new Error("limit must be a positive number");
+      }
+      limit = Math.min(1000, Math.floor(parsed));
+    }
+    const accounts = store.accounts.list(tenantId, limit);
+    sendJson(response, 200, { accounts });
+    return;
+  }
+
   if (request.method === "POST" && sub === "accounts") {
     const body = await readJsonBody(request, maxBodyBytes);
     const tenantId = resolveAuthTenantId(body.tenantId);

@@ -67,6 +67,18 @@ export class AccountStore {
     };
   }
 
+  list(tenantId: string, limit = 100): StoredAccount[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM auth_accounts
+          WHERE tenant_id = ?
+          ORDER BY created_at ASC, handle ASC
+          LIMIT ?`,
+      )
+      .all(tenantId, limit) as unknown as AccountRow[];
+    return rows.map(fromRow);
+  }
+
   readByIdentity(tenantId: string, identity: string): StoredAccount | undefined {
     const row = this.readRowByIdentity(tenantId, identity);
     return row ? fromRow(row) : undefined;

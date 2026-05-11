@@ -211,6 +211,73 @@ describe("/_frick/admin/accounts POST", () => {
   });
 });
 
+describe("/_frick/admin/accounts GET", () => {
+  it("returns only the tenant's accounts when tenantId query is supplied", async () => {
+    app = await startServer({ adminToken: ADMIN_TOKEN });
+    const headers = { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" };
+    await fetch(`${app.httpUrl}/_frick/admin/tenants`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ tenantId: "tenant-x" }),
+    });
+    // Two accounts in tenant-x
+    await fetch(`${app.httpUrl}/_frick/admin/accounts`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        tenantId: "tenant-x",
+        handle: "xfirst",
+        displayName: "X First",
+        password: "supersecret",
+      }),
+    });
+    await fetch(`${app.httpUrl}/_frick/admin/accounts`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        tenantId: "tenant-x",
+        handle: "xsecond",
+        displayName: "X Second",
+        password: "supersecret",
+      }),
+    });
+    // One in _default
+    await fetch(`${app.httpUrl}/_frick/admin/accounts`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        handle: "defacct",
+        displayName: "Default Acct",
+        password: "supersecret",
+      }),
+    });
+
+    const list = await fetch(
+      `${app.httpUrl}/_frick/admin/accounts?tenantId=tenant-x`,
+      { headers: { authorization: `Bearer ${ADMIN_TOKEN}` } },
+    );
+    expect(list.status).toBe(200);
+    const body = (await list.json()) as {
+      accounts: Array<{ tenantId: string; handle: string }>;
+    };
+    expect(body.accounts.map((a) => a.handle).sort()).toEqual(["xfirst", "xsecond"]);
+    for (const account of body.accounts) {
+      expect(account.tenantId).toBe("tenant-x");
+    }
+  });
+
+  it("returns 400 with envelope when tenantId query is absent", async () => {
+    app = await startServer({ adminToken: ADMIN_TOKEN });
+    const response = await fetch(`${app.httpUrl}/_frick/admin/accounts`, {
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+    });
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(isFrickErrorEnvelope(body.error)).toBe(true);
+    expect(body.error.code).toBe("sync.protocolError");
+  });
+});
+
 async function startServer(overrides: { adminToken?: string } = {}) {
   const server = createFrickServer({
     port: 0,
