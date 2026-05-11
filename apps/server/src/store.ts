@@ -17,6 +17,13 @@ import { SignalStore } from "./storage/signal-store.js";
 import { StreamStore, type AppendInput, type AppendResult, type StoredEvent } from "./storage/stream-store.js";
 import { BoundedIdempotencyCache } from "./storage/idempotency-cache.js";
 import { listAppliedMigrations, type AppliedMigrationRow } from "./storage/migrations.js";
+import { createNoopLogger, type FrickLogger } from "./logger.js";
+import {
+  createFrickProjectionRegistry,
+  type FrickProjectionContext,
+  type FrickProjectionRegistry,
+  type FrickProjectionWriteEvent,
+} from "./projections/registry.js";
 import { DEFAULT_TENANT_ID } from "./tenant.js";
 
 /**
@@ -70,6 +77,20 @@ export interface StoreOptions {
    * `0` to disable the timer (prune still runs once during construction).
    */
   idempotencyKeyPruneIntervalMs?: number;
+  /**
+   * Projection registry that receives notify(...) calls after every
+   * object/stream write through this FrickStore facade. When omitted, the
+   * store constructs an empty registry — callers (typically
+   * `createFrickServer`) can register projections via `store.projections`
+   * before issuing writes.
+   */
+  projections?: FrickProjectionRegistry;
+  /**
+   * Logger threaded into projection contexts so handler failures surface
+   * through the same structured-logging pipeline as the rest of the server.
+   * Defaults to a no-op logger.
+   */
+  logger?: FrickLogger;
 }
 
 export interface CreatedConversation {
@@ -97,6 +118,8 @@ export class FrickStore {
   readonly accounts: AccountStore;
   readonly tenants: TenantStore;
   readonly adminAudit: AdminAuditStore;
+  readonly projections: FrickProjectionRegistry;
+  readonly #logger: FrickLogger;
 
   readonly #db: DatabaseSync;
   readonly #idempotencyCacheCapacity: number;
@@ -136,6 +159,8 @@ export class FrickStore {
     this.accounts = new AccountStore(this.#db);
     this.tenants = new TenantStore(this.#db);
     this.adminAudit = new AdminAuditStore(this.#db);
+    this.projections = options.projections ?? createFrickProjectionRegistry();
+    this.#logger = options.logger ?? createNoopLogger();
     this.inbox.repairInvalidReadCursors();
 
     if (options.seed ?? true) {
@@ -332,6 +357,13 @@ export class FrickStore {
       const value = d as PlainObject;
       const version = (e as number | undefined) ?? 0;
       this.objects.upsert(tenantId, type, id, value, version);
+      this.#notifyProjections({
+        kind: "objectUpsert",
+        tenantId,
+        objectType: type,
+        objectId: id,
+        object: this.objects.read(tenantId, type, id) ?? value,
+      });
       return;
     }
     // 4-arg form: (type, id, value, version?)
@@ -340,6 +372,13 @@ export class FrickStore {
     const value = c as PlainObject;
     const version = (d as number | undefined) ?? 0;
     this.objects.upsert(DEFAULT_TENANT_ID, type, id, value, version);
+    this.#notifyProjections({
+      kind: "objectUpsert",
+      tenantId: DEFAULT_TENANT_ID,
+      objectType: type,
+      objectId: id,
+      object: this.objects.read(DEFAULT_TENANT_ID, type, id) ?? value,
+    });
   }
 
   readObject(type: string, id: string): PlainObject | undefined;
@@ -406,9 +445,30 @@ export class FrickStore {
       tenantId: input.tenantId ?? DEFAULT_TENANT_ID,
     });
     if (result.created) {
-      this.projectStreamEvent(result.event);
+      this.#notifyProjections({
+        kind: "streamEvent",
+        tenantId: result.event.tenantId,
+        streamType: result.event.stream,
+        streamId: result.event.streamId,
+        streamEvent: result.event,
+      });
     }
     return result;
+  }
+
+  /**
+   * Fire a projection-notify event with the FrickStore-level context.
+   * Wrapped in a private method so each write path stays a one-liner and
+   * the construction of {@link FrickProjectionContext} lives in a single
+   * spot — easier to extend (e.g. attach request-scoped logger fields) later.
+   */
+  #notifyProjections(event: FrickProjectionWriteEvent): void {
+    const ctx: FrickProjectionContext = {
+      tenantId: event.tenantId,
+      store: this,
+      logger: this.#logger,
+    };
+    this.projections.notify(event, ctx);
   }
 
   readEvents(stream: string, streamId: string, after: number): StoredEvent[];
@@ -736,90 +796,6 @@ export class FrickStore {
       .run(this.schema.hash, Buffer.from(encode(this.schema)), new Date().toISOString());
   }
 
-  private projectStreamEvent(event: StoredEvent): void {
-    if (event.stream !== "MessageStream") {
-      return;
-    }
-
-    if (event.event === "MessageSent") {
-      this.projectMessageSent(event);
-      return;
-    }
-
-    if (event.event === "ReceiptAdvanced") {
-      this.projectReceiptAdvanced(event);
-    }
-  }
-
-  private projectMessageSent(event: StoredEvent): void {
-    const tenantId = event.tenantId;
-    const conversationId = event.streamId;
-    const senderId = stringField(event.payload.senderId);
-    const body = stringField(event.payload.body);
-    const createdAt = stringField(event.payload.createdAt);
-    const members = this.listRoomMembers(tenantId, conversationId);
-    const conversation = this.readConversation(tenantId, conversationId);
-    const updatedAt = new Date().toISOString();
-
-    for (const member of members) {
-      const current = this.inbox.read(tenantId, conversationId, member.userId);
-      const requestedReadSequence = current?.readSequence ?? (member.userId === senderId ? event.sequence : 0);
-      const readSequence = Math.min(requestedReadSequence, event.sequence);
-      this.inbox.upsert(tenantId, {
-        conversationId,
-        userId: member.userId,
-        kind: conversation.kind,
-        lastSequence: event.sequence,
-        readSequence,
-        unreadCount: this.countUnread(tenantId, conversationId, member.userId, readSequence),
-        updatedAt,
-        ...(conversation.title !== undefined ? { title: conversation.title } : {}),
-        ...(body !== undefined ? { lastMessageBody: body } : {}),
-        ...(createdAt !== undefined ? { lastMessageAt: createdAt } : {}),
-        ...(senderId !== undefined ? { lastMessageSenderId: senderId } : {}),
-      });
-    }
-  }
-
-  private projectReceiptAdvanced(event: StoredEvent): void {
-    const tenantId = event.tenantId;
-    const conversationId = event.streamId;
-    const userId = stringField(event.payload.userId);
-    const requestedReadSequence = numberField(event.payload.sequence);
-    if (!userId) {
-      return;
-    }
-    if (!this.isRoomMember(tenantId, conversationId, userId)) {
-      return;
-    }
-
-    const current = this.inbox.read(tenantId, conversationId, userId);
-    const latestMessage = this.latestMessage(tenantId, conversationId);
-    const conversation = this.readConversation(tenantId, conversationId);
-    const latestSequence = Math.max(current?.lastSequence ?? 0, latestMessage?.sequence ?? 0);
-    if (latestSequence === 0 && !current) {
-      return;
-    }
-    const readSequence = Math.min(Math.max(current?.readSequence ?? 0, requestedReadSequence), latestSequence);
-    const lastMessageBody = current?.lastMessageBody ?? latestMessage?.body;
-    const lastMessageAt = current?.lastMessageAt ?? latestMessage?.createdAt;
-    const lastMessageSenderId = current?.lastMessageSenderId ?? latestMessage?.senderId;
-
-    this.inbox.upsert(tenantId, {
-      conversationId,
-      userId,
-      kind: conversation.kind,
-      lastSequence: latestSequence,
-      readSequence,
-      unreadCount: this.countUnread(tenantId, conversationId, userId, readSequence),
-      updatedAt: new Date().toISOString(),
-      ...(conversation.title !== undefined ? { title: conversation.title } : {}),
-      ...(lastMessageBody !== undefined ? { lastMessageBody } : {}),
-      ...(lastMessageAt !== undefined ? { lastMessageAt } : {}),
-      ...(lastMessageSenderId !== undefined ? { lastMessageSenderId } : {}),
-    });
-  }
-
   private listRoomMembers(
     tenantId: string,
     conversationId: string,
@@ -833,48 +809,6 @@ export class FrickStore {
         role: typeof member.role === "string" ? member.role : "member",
       }));
   }
-
-  private readConversation(tenantId: string, conversationId: string): { kind: string; title?: string } {
-    const conversation = this.readObject(tenantId, "Conversation", conversationId);
-    return {
-      kind: typeof conversation?.kind === "string" ? conversation.kind : "channel",
-      ...(typeof conversation?.title === "string" ? { title: conversation.title } : {}),
-    };
-  }
-
-  private latestMessage(
-    tenantId: string,
-    conversationId: string,
-  ): { sequence: number; body?: string; createdAt?: string; senderId?: string } | undefined {
-    return this.readEvents(tenantId, "MessageStream", conversationId, 0)
-      .filter((candidate) => candidate.event === "MessageSent")
-      .map((candidate) => ({
-        sequence: candidate.sequence,
-        ...(typeof candidate.payload.body === "string" ? { body: candidate.payload.body } : {}),
-        ...(typeof candidate.payload.createdAt === "string" ? { createdAt: candidate.payload.createdAt } : {}),
-        ...(typeof candidate.payload.senderId === "string" ? { senderId: candidate.payload.senderId } : {}),
-      }))
-      .at(-1);
-  }
-
-  private countUnread(
-    tenantId: string,
-    conversationId: string,
-    userId: string,
-    readSequence: number,
-  ): number {
-    return this.readEvents(tenantId, "MessageStream", conversationId, readSequence).filter(
-      (event) => event.event === "MessageSent" && event.payload.senderId !== userId,
-    ).length;
-  }
-}
-
-function stringField(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
-function numberField(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function memberIdFor(conversationId: string, userId: string): string {
