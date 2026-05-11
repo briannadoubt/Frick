@@ -467,6 +467,50 @@ describe("foundation runtime", () => {
     expect(delays[2]).toBeGreaterThanOrEqual(delays[1]!);
     expect(Math.max(...delays)).toBeLessThanOrEqual(5_000);
   });
+
+  it("merges optimistic stream events into the signal before server ack", async () => {
+    const socket = TestWebSocket.prepare();
+    const client = new FrickClient({
+      endpoint: "ws://test",
+      schema: foundationSchema,
+      WebSocketImpl: TestWebSocket as never,
+    });
+
+    const stream = client.stream("MessageStream", "conversation-general");
+    client.connect();
+    socket.emit("open", {});
+    // Drain the Hello / Schema handshake noise; we don't need it for the
+    // optimistic-overlay assertion since the overlay merges client-side
+    // independent of the socket state.
+
+    const ack = client.append(
+      "MessageStream",
+      "conversation-general",
+      "MessageSent",
+      { messageId: "m1", senderId: "user-ada", body: "hello", createdAt: "2026-05-09T00:00:00.000Z" },
+      { optimistic: { messageId: "m1", senderId: "user-ada", body: "hello", createdAt: "2026-05-09T00:00:00.000Z" } },
+    );
+
+    expect(stream.value).toHaveLength(1);
+    expect(stream.value[0]!.eventId).toMatch(/^optimistic-/);
+
+    // Simulate server Ack — overlay should drop, leaving the cached real
+    // events (still empty here since we didn't deliver a Delta). The test
+    // socket records Hello + Append in order; pick the Append by frame kind.
+    const sentAppend = socket.sent
+      .map((bytes) => decodeFrame(bytes as Uint8Array))
+      .find((frame) => frame[0] === FrameKind.Append) as
+      | [number, { requestId: string }]
+      | undefined;
+    expect(sentAppend).toBeDefined();
+    const requestId = sentAppend![1].requestId;
+    socket.emit("message", {
+      data: encodeFrame([FrameKind.Ack, { requestId, cursor: 1, version: 1 }]),
+    });
+
+    await ack;
+    expect(stream.value).toHaveLength(0);
+  });
 });
 
 describe("memory cache schema compatibility", () => {

@@ -24,6 +24,7 @@ import {
 } from "./cache.js";
 import { Signal, objectKey, streamKey } from "./subscriptions.js";
 import { resolveHttpEndpoint } from "./http.js";
+import { OptimisticConflictError, OptimisticOverlay } from "./optimistic.js";
 
 const SOCKET_OPEN = 1;
 const HELLO_ACK_FRAME_KIND = (FrameKind as typeof FrameKind & { HelloAck?: number }).HelloAck ?? 18;
@@ -153,6 +154,22 @@ export class FrickClient {
   #projectionRows = new Map<string, Map<string, PlainObject>>();
   #projectionSignals = new Map<string, Signal<Map<string, PlainObject>>>();
 
+  /**
+   * Per-mutation resolve/reject hooks. `append()` returns a Promise that the
+   * runtime settles when the corresponding Ack or Nack arrives. Keeps the
+   * existing fire-and-forget behavior as the default — callers that don't
+   * await the returned Promise behave identically.
+   */
+  #appendResolvers = new Map<string, { resolve: () => void; reject: (err: unknown) => void }>();
+  /** Optimistic overlay merged into stream + object signals at publish time. */
+  readonly #overlay = new OptimisticOverlay();
+  /**
+   * Per-stream cleanups for overlay subscriptions. Keyed the same way as
+   * `#streamSignals`; removed when a consumer drops their last reference
+   * (not implemented yet — Signal has no unsubscribe API today).
+   */
+  #overlayDisposers = new Map<string, () => void>();
+
   constructor(options: FrickClientOptions) {
     this.#endpoint = options.endpoint;
     this.schema = options.schema ?? foundationSchema;
@@ -265,8 +282,10 @@ export class FrickClient {
     if (existing) {
       return existing;
     }
-    const signal = new Signal(this.#selectObjects(type));
+    const signal = new Signal(this.#composeObjects(type));
     this.#objectListSignals.set(type, signal);
+    // Re-emit whenever an optimistic upsert is added or removed.
+    this.#overlay.subscribeObjectType(type, () => signal.set(this.#composeObjects(type)));
     if (this.syncStatus.value.connected) {
       this.#sendSubscribe({ kind: "object", name: type });
     }
@@ -279,12 +298,42 @@ export class FrickClient {
     if (existing) {
       return existing;
     }
-    const signal = new Signal([...(this.#streams.get(id) ?? [])]);
+    const signal = new Signal(this.#composeStream(stream, key));
     this.#streamSignals.set(id, signal);
+    // Re-emit whenever an optimistic event for this (stream, key) is added or removed.
+    const dispose = this.#overlay.subscribeStream(stream, key, () =>
+      signal.set(this.#composeStream(stream, key)),
+    );
+    this.#overlayDisposers.set(id, dispose);
     if (this.syncStatus.value.connected) {
       this.#sendSubscribe({ kind: "stream", name: stream, key });
     }
     return signal;
+  }
+
+  /** Merge cached objects with optimistic upserts for a given type. */
+  #composeObjects(type: string): PlainObject[] {
+    const base = this.#selectObjects(type);
+    const overlay = this.#overlay.forObjectType(type);
+    if (overlay.size === 0) return base;
+    const byId = new Map<string, PlainObject>();
+    for (const value of base) {
+      const id = (value as { id?: string }).id;
+      if (id) byId.set(id, value);
+    }
+    for (const [id, value] of overlay) {
+      byId.set(id, { ...value, id });
+    }
+    return Array.from(byId.values());
+  }
+
+  /** Merge cached stream events with pending optimistic events. */
+  #composeStream(stream: string, key: string): StreamEventInput[] {
+    const id = streamKey(stream, key);
+    const base = this.#streams.get(id) ?? [];
+    const overlay = this.#overlay.forStream(stream, key);
+    if (overlay.length === 0) return [...base];
+    return [...base, ...overlay];
   }
 
   presence(name: string, key: string): Signal<PlainObject | undefined> {
@@ -336,7 +385,25 @@ export class FrickClient {
     return signal;
   }
 
-  async append(stream: string, key: string, event: string, payload: PlainObject): Promise<void> {
+  /**
+   * Append a stream event. Returns a Promise that resolves when the server
+   * Acks the write and rejects when it Nacks. Pre-existing callers that
+   * ignore the Promise behave identically to the original fire-and-forget
+   * surface — the resolver is created either way but garbage-collected if
+   * unobserved.
+   *
+   * Pass `options.optimistic` (a partial event payload) to surface the
+   * write in `client.stream(...)` immediately, before the server ack. The
+   * overlay event is removed on Ack (the real Delta takes over) or on Nack
+   * (the Promise also rejects so the UI can roll back).
+   */
+  append(
+    stream: string,
+    key: string,
+    event: string,
+    payload: PlainObject,
+    options?: { optimistic?: PlainObject },
+  ): Promise<void> {
     if (this.#pendingAppends.size >= this.#maxPendingAppends) {
       const envelope: FrickErrorEnvelope = {
         code: "rateLimit.exceeded",
@@ -349,7 +416,7 @@ export class FrickClient {
         },
       };
       this.#setStatus({ lastError: envelope });
-      throw new FrickClientLimitError(envelope);
+      return Promise.reject(new FrickClientLimitError(envelope));
     }
     const append: PendingAppend = {
       requestId: randomId(),
@@ -358,8 +425,38 @@ export class FrickClient {
       event,
       payload: { ...payload },
     };
+    // Optimistic overlay: synthesize a display-only event so the consumer's
+    // signal updates immediately. The overlay drops on Ack/Nack.
+    const optimisticRequested = options?.optimistic !== undefined;
+    if (optimisticRequested) {
+      this.#overlay.addStreamEvent(append.requestId, {
+        stream,
+        key,
+        event: {
+          stream,
+          streamId: key,
+          sequence: Number.MAX_SAFE_INTEGER,
+          eventId: `optimistic-${append.requestId}`,
+          event,
+          payload: { ...(options!.optimistic as PlainObject) },
+        },
+      });
+    }
+    // Resolve immediately by default — preserves the fire-and-forget surface
+    // every existing caller depends on. When the consumer opts into
+    // `optimistic`, the Promise instead settles on Ack/Nack so they can
+    // await ack and catch typed `OptimisticConflictError`.
+    if (!optimisticRequested) {
+      this.#trackPendingAppend(append);
+      this.#sendAppend(append);
+      return Promise.resolve();
+    }
+    const promise = new Promise<void>((resolve, reject) => {
+      this.#appendResolvers.set(append.requestId, { resolve, reject });
+    });
     this.#trackPendingAppend(append);
     this.#sendAppend(append);
+    return promise;
   }
 
   async setPresence(name: string, key: string, value: PlainObject): Promise<void> {
@@ -387,6 +484,7 @@ export class FrickClient {
     objectId: string,
     value: T,
     expectedVersion?: number,
+    options?: { optimistic?: boolean },
   ): Promise<{ version: number }> {
     if (this.#pendingUpserts.size + this.#pendingAppends.size >= this.#maxPendingAppends) {
       const envelope: FrickErrorEnvelope = {
@@ -413,6 +511,16 @@ export class FrickClient {
         reject,
       };
       this.#pendingUpserts.set(pending.requestId, pending);
+      if (options?.optimistic) {
+        // Display the upserted value immediately. Real Delta on ack will
+        // overwrite. On nack the overlay drops and an OptimisticConflictError
+        // surfaces via the reject above.
+        this.#overlay.addObjectUpsert(pending.requestId, {
+          type: objectType,
+          id: objectId,
+          value: { ...value },
+        });
+      }
       this.#setStatus({ pendingMutations: this.#pendingAppends.size + this.#pendingUpserts.size });
       this.#sendUpsert(pending);
     });
@@ -513,7 +621,13 @@ export class FrickClient {
         } else {
           this.#pendingAppends.delete(requestId);
           this.#cache.removePendingAppend(this.schema, requestId);
+          const resolver = this.#appendResolvers.get(requestId);
+          if (resolver) {
+            this.#appendResolvers.delete(requestId);
+            resolver.resolve();
+          }
         }
+        this.#overlay.remove(requestId);
         this.#setStatus({ pendingMutations: this.#pendingAppends.size + this.#pendingUpserts.size });
         return;
       }
@@ -529,13 +643,20 @@ export class FrickClient {
               actualVersion?: number;
               mergePolicy?: FrickObjectMergePolicy;
             };
+            const conflictInput = {
+              envelope,
+              actualVersion: details.actualVersion ?? 0,
+              mergePolicy: details.mergePolicy ?? "lastWriteWins",
+              expectedVersion: details.expectedVersion,
+            };
+            // If this upsert was registered with an optimistic overlay,
+            // surface the typed `OptimisticConflictError` so consumers can
+            // pattern-match for rollback.
+            const hadOverlay = this.#overlay.forObjectType(pendingUpsert.objectType).has(pendingUpsert.objectId);
             pendingUpsert.reject(
-              new FrickObjectConflictError({
-                envelope,
-                expectedVersion: details.expectedVersion,
-                actualVersion: details.actualVersion ?? 0,
-                mergePolicy: details.mergePolicy ?? "lastWriteWins",
-              }),
+              hadOverlay
+                ? new OptimisticConflictError({ ...conflictInput, rolledBack: true })
+                : new FrickObjectConflictError(conflictInput),
             );
           } else {
             pendingUpsert.reject(new FrickClientLimitError(envelope));
@@ -543,7 +664,13 @@ export class FrickClient {
         } else {
           this.#pendingAppends.delete(requestId);
           this.#cache.removePendingAppend(this.schema, requestId);
+          const resolver = this.#appendResolvers.get(requestId);
+          if (resolver) {
+            this.#appendResolvers.delete(requestId);
+            resolver.reject(new FrickClientLimitError(frame[1].error));
+          }
         }
+        this.#overlay.remove(requestId);
         this.#setStatus({
           pendingMutations: this.#pendingAppends.size + this.#pendingUpserts.size,
           lastError: frame[1].error,
