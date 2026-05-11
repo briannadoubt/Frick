@@ -604,11 +604,43 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
                 }
                 frick.streamMessages(conversationId = selectedConversationId, readUserId = connectedSession.userId).collect { nextMessages ->
                     _uiState.update { state -> state.copy(messages = nextMessages, status = "Live") }
+                    advanceReceiptOverSocket(selectedConversationId, connectedSession.userId, nextMessages)
                 }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
                 _uiState.update { state -> state.copy(status = error.localizedMessage ?: "Sync failed") }
+            }
+        }
+    }
+
+    private var lastReceiptSequence: Int = 0
+
+    private fun advanceReceiptOverSocket(
+        conversationId: String,
+        userId: String,
+        messages: List<FrickStreamEvent>,
+    ) {
+        val current = socket ?: return
+        if (current.status.value !is FrickSyncStatus.Ready) return
+        val sequence = messages
+            .filterNot { event -> event.event == "ReceiptAdvanced" }
+            .maxOfOrNull { event -> event.sequence } ?: 0
+        if (sequence <= lastReceiptSequence) return
+        lastReceiptSequence = sequence
+        viewModelScope.launch {
+            try {
+                current.append(
+                    stream = "MessageStream",
+                    key = conversationId,
+                    event = "ReceiptAdvanced",
+                    payload = mapOf(
+                        "userId" to userId,
+                        "sequence" to sequence,
+                    ),
+                )
+            } catch (_: Exception) {
+                // best-effort — FrickClient.streamMessages already issues an HTTP receipt
             }
         }
     }
