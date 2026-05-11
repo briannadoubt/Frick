@@ -312,6 +312,21 @@ export class FrickStore {
     return listAppliedMigrations(this.#db);
   }
 
+  /**
+   * Internal escape hatch used by the backup/restore subsystem. The dump
+   * format needs to read every row of every framework table in a fixed
+   * order, and the restore needs to insert rows directly without going
+   * through the higher-level typed APIs (which apply seeding semantics, fire
+   * projection notifications, etc.). Both modules accept a raw
+   * {@link DatabaseSync} handle so they can stream rows efficiently.
+   *
+   * NOT part of the public store API — `apps/server/src/backup/*` is the
+   * only consumer. Treat it like a `package private` member.
+   */
+  rawDatabase(): DatabaseSync {
+    return this.#db;
+  }
+
   seedFoundation(): void {
     // Default tenant only — the seed exists to give a fresh dev database
     // something to read.

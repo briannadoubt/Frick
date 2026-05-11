@@ -1,0 +1,105 @@
+import { describe, expect, it } from "vitest";
+import { dumpFrickDatabase, type FrickDumpHeader } from "../src/backup/dump.js";
+import { FrickStore } from "../src/store.js";
+
+async function collect(iter: AsyncIterable<string>): Promise<string[]> {
+  const out: string[] = [];
+  for await (const line of iter) out.push(line);
+  return out;
+}
+
+describe("dumpFrickDatabase", () => {
+  it("emits a valid header line followed by row lines", async () => {
+    const store = new FrickStore({ path: ":memory:" });
+    try {
+      const lines = await collect(dumpFrickDatabase(store, { tenantId: "_default" }));
+      expect(lines.length).toBeGreaterThan(1);
+      const header = JSON.parse(lines[0]!) as { type: string; row: FrickDumpHeader };
+      expect(header.type).toBe("header");
+      expect(header.row.frickFormat).toBe(1);
+      expect(header.row.tenantId).toBe("_default");
+      expect(header.row.schemaHash).toBe(store.schema.hash);
+      expect(Array.isArray(header.row.appliedMigrations)).toBe(true);
+      for (const line of lines.slice(1)) {
+        const parsed = JSON.parse(line) as { type: string; row: unknown };
+        expect(typeof parsed.type).toBe("string");
+        expect(parsed.row).toBeTypeOf("object");
+      }
+      const types = lines.slice(1).map((l) => (JSON.parse(l) as { type: string }).type);
+      expect(types).toContain("objects");
+      // Per-tenant dump must NOT include admin_audit_log or frick_migrations.
+      expect(types).not.toContain("admin_audit_log");
+      expect(types).not.toContain("frick_migrations");
+    } finally {
+      store.close();
+    }
+  });
+
+  it("per-tenant dump only includes rows for the chosen tenant", async () => {
+    const store = new FrickStore({ path: ":memory:" });
+    try {
+      store.tenants.create("tenant-alpha");
+      store.tenants.create("tenant-beta");
+      store.upsertObject("tenant-alpha", "User", "user-alpha-1", { displayName: "Alpha" });
+      store.upsertObject("tenant-beta", "User", "user-beta-1", { displayName: "Beta" });
+
+      const alphaLines = await collect(
+        dumpFrickDatabase(store, { tenantId: "tenant-alpha" }),
+      );
+      const objectRows = alphaLines
+        .slice(1)
+        .map((l) => JSON.parse(l) as { type: string; row: Record<string, unknown> })
+        .filter((r) => r.type === "objects");
+      expect(objectRows.length).toBe(1);
+      expect(objectRows[0]!.row.tenant_id).toBe("tenant-alpha");
+      expect(objectRows[0]!.row.object_id).toBe("user-alpha-1");
+    } finally {
+      store.close();
+    }
+  });
+
+  it("includes blob_content with base64-encoded bytes inline", async () => {
+    const store = new FrickStore({ path: ":memory:" });
+    try {
+      store.createBlobMetadata({
+        blobId: "blob-1",
+        ownerId: "user-ada",
+        contentHash: "deadbeef",
+        byteLength: 5,
+        mimeType: "application/octet-stream",
+      });
+      store.writeBlobContent("blob-1", new Uint8Array([1, 2, 3, 4, 5]));
+      const lines = await collect(dumpFrickDatabase(store, { tenantId: "_default" }));
+      const blobRows = lines
+        .slice(1)
+        .map((l) => JSON.parse(l) as { type: string; row: Record<string, unknown> })
+        .filter((r) => r.type === "blob_content");
+      expect(blobRows.length).toBe(1);
+      const row = blobRows[0]!.row;
+      expect(typeof row.content_base64).toBe("string");
+      const decoded = Buffer.from(row.content_base64 as string, "base64");
+      expect(Array.from(decoded)).toEqual([1, 2, 3, 4, 5]);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("whole-database dump includes admin_audit_log and frick_migrations", async () => {
+    const store = new FrickStore({ path: ":memory:" });
+    try {
+      store.adminAudit.record({
+        adminTokenFingerprint: "abc123def456",
+        action: "tenants.create",
+        outcome: "allow",
+      });
+      const lines = await collect(dumpFrickDatabase(store, { tenantId: "all" }));
+      const types = new Set(
+        lines.slice(1).map((l) => (JSON.parse(l) as { type: string }).type),
+      );
+      expect(types.has("frick_migrations")).toBe(true);
+      expect(types.has("admin_audit_log")).toBe(true);
+    } finally {
+      store.close();
+    }
+  });
+});
