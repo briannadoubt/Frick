@@ -6,4 +6,5 @@ export * from "./errors.js";
 export * from "./fixtures.js";
 export * from "./frame.js";
 export * from "./foundation.js";
+export * from "./lint.js";
 export * from "./schema.js";
