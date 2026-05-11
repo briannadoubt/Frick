@@ -230,6 +230,180 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
         ON idempotency_keys (created_at);
     `,
   },
+  {
+    // Tenant boundary: every framework-managed table gains a non-null
+    // `tenant_id` column defaulting to '_default', so legacy single-tenant
+    // rows are mapped to the implicit default tenant. Parallel
+    // `(tenant_id, …)` indexes replace, in spirit, the per-content-key
+    // indexes for queries that now filter by tenant.
+    //
+    // `auth_accounts.handle` was globally UNIQUE; per-tenant uniqueness is
+    // achieved by rebuilding the table without the old constraint and adding
+    // a compound `UNIQUE (tenant_id, handle)` index. SQLite cannot ALTER an
+    // existing UNIQUE constraint in place — the copy-and-rename below is the
+    // standard idiom.
+    //
+    // `idempotency_keys.PRIMARY KEY` was `(replica_id, request_id)`; under
+    // the tenant boundary it becomes `(tenant_id, replica_id, request_id)`,
+    // also via copy-and-rename.
+    //
+    // The `frick_migrations` and `schema_versions` tables are framework-
+    // infrastructure shared across all tenants and intentionally NOT tenant-
+    // scoped.
+    //
+    // Schema revision stays at 1: the wire protocol is unchanged.
+    id: "0003_tenant_boundary",
+    schemaRevision: 1,
+    description:
+      "Add tenant_id columns to framework tables, rescope handle uniqueness, and rescope idempotency keys per-tenant",
+    sql: `
+      -- objects: rebuild so the primary key includes tenant_id. Two tenants
+      -- writing the same (object_type, object_id) must not collide.
+      CREATE TABLE objects_new (
+        tenant_id TEXT NOT NULL DEFAULT '_default',
+        object_type TEXT NOT NULL,
+        object_id TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        packed BLOB NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, object_type, object_id)
+      );
+      INSERT INTO objects_new
+        (tenant_id, object_type, object_id, version, packed, updated_at)
+        SELECT '_default', object_type, object_id, version, packed, updated_at FROM objects;
+      DROP TABLE objects;
+      ALTER TABLE objects_new RENAME TO objects;
+
+      -- stream_events: rebuild so the primary key and event_id uniqueness
+      -- are tenant-scoped.
+      CREATE TABLE stream_events_new (
+        tenant_id TEXT NOT NULL DEFAULT '_default',
+        stream_type TEXT NOT NULL,
+        stream_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        event_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        packed BLOB NOT NULL,
+        replica_id TEXT,
+        request_id TEXT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, stream_type, stream_id, sequence)
+      );
+      INSERT INTO stream_events_new
+        (tenant_id, stream_type, stream_id, sequence, event_id, event_type, packed, replica_id, request_id, created_at)
+        SELECT '_default', stream_type, stream_id, sequence, event_id, event_type, packed, replica_id, request_id, created_at FROM stream_events;
+      DROP TABLE stream_events;
+      ALTER TABLE stream_events_new RENAME TO stream_events;
+      CREATE UNIQUE INDEX idx_stream_events_tenant_event_id
+        ON stream_events (tenant_id, event_id);
+
+      -- presence_leases: rebuild so the primary key includes tenant_id.
+      CREATE TABLE presence_leases_new (
+        tenant_id TEXT NOT NULL DEFAULT '_default',
+        presence_type TEXT NOT NULL,
+        presence_key TEXT NOT NULL,
+        packed BLOB NOT NULL,
+        expires_at INTEGER NOT NULL,
+        PRIMARY KEY (tenant_id, presence_type, presence_key)
+      );
+      INSERT INTO presence_leases_new
+        (tenant_id, presence_type, presence_key, packed, expires_at)
+        SELECT '_default', presence_type, presence_key, packed, expires_at FROM presence_leases;
+      DROP TABLE presence_leases;
+      ALTER TABLE presence_leases_new RENAME TO presence_leases;
+
+      ALTER TABLE signal_outbox ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '_default';
+      CREATE INDEX IF NOT EXISTS idx_signal_outbox_tenant
+        ON signal_outbox (tenant_id, signal_type, signal_key, expires_at);
+
+      ALTER TABLE blob_metadata ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '_default';
+      CREATE INDEX IF NOT EXISTS idx_blob_metadata_tenant
+        ON blob_metadata (tenant_id, blob_id);
+      CREATE INDEX IF NOT EXISTS idx_blob_metadata_tenant_owner
+        ON blob_metadata (tenant_id, owner_id, created_at DESC);
+
+      ALTER TABLE blob_content ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '_default';
+      CREATE INDEX IF NOT EXISTS idx_blob_content_tenant
+        ON blob_content (tenant_id, blob_id);
+
+      -- conversation_inbox: rebuild so the primary key is tenant-scoped.
+      CREATE TABLE conversation_inbox_new (
+        tenant_id TEXT NOT NULL DEFAULT '_default',
+        conversation_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        title TEXT,
+        kind TEXT NOT NULL,
+        last_sequence INTEGER NOT NULL,
+        last_message_body TEXT,
+        last_message_at TEXT,
+        last_message_sender_id TEXT,
+        read_sequence INTEGER NOT NULL,
+        unread_count INTEGER NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, conversation_id, user_id)
+      );
+      INSERT INTO conversation_inbox_new
+        (tenant_id, conversation_id, user_id, title, kind, last_sequence,
+         last_message_body, last_message_at, last_message_sender_id,
+         read_sequence, unread_count, updated_at)
+        SELECT '_default', conversation_id, user_id, title, kind, last_sequence,
+               last_message_body, last_message_at, last_message_sender_id,
+               read_sequence, unread_count, updated_at FROM conversation_inbox;
+      DROP TABLE conversation_inbox;
+      ALTER TABLE conversation_inbox_new RENAME TO conversation_inbox;
+      CREATE INDEX idx_conversation_inbox_tenant_user
+        ON conversation_inbox (tenant_id, user_id, updated_at DESC);
+
+      ALTER TABLE jobs ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '_default';
+      CREATE INDEX IF NOT EXISTS idx_jobs_tenant
+        ON jobs (tenant_id, job_type, status, id);
+
+      ALTER TABLE auth_sessions ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '_default';
+      CREATE INDEX IF NOT EXISTS idx_auth_sessions_tenant_user
+        ON auth_sessions (tenant_id, user_id, expires_at DESC);
+
+      -- auth_accounts: rebuild to rescope handle uniqueness per tenant. The
+      -- user_id PK stays global so two tenants must still pick distinct
+      -- user ids (server.ts derives user-id from handle, which is tenant-
+      -- scoped, so this only collides if an app deliberately reuses ids
+      -- across tenants).
+      CREATE TABLE auth_accounts_new (
+        user_id TEXT PRIMARY KEY,
+        handle TEXT NOT NULL COLLATE NOCASE,
+        display_name TEXT NOT NULL,
+        password_salt TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        tenant_id TEXT NOT NULL DEFAULT '_default'
+      );
+      INSERT INTO auth_accounts_new
+        (user_id, handle, display_name, password_salt, password_hash, created_at, tenant_id)
+        SELECT user_id, handle, display_name, password_salt, password_hash, created_at, '_default'
+          FROM auth_accounts;
+      DROP TABLE auth_accounts;
+      ALTER TABLE auth_accounts_new RENAME TO auth_accounts;
+      CREATE UNIQUE INDEX idx_auth_accounts_tenant_handle
+        ON auth_accounts (tenant_id, handle COLLATE NOCASE);
+
+      -- idempotency_keys: rebuild so the primary key includes tenant_id.
+      CREATE TABLE idempotency_keys_new (
+        tenant_id TEXT NOT NULL DEFAULT '_default',
+        replica_id TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        result_event_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, replica_id, request_id)
+      );
+      INSERT INTO idempotency_keys_new
+        (tenant_id, replica_id, request_id, result_event_id, created_at)
+        SELECT '_default', replica_id, request_id, result_event_id, created_at
+          FROM idempotency_keys;
+      DROP TABLE idempotency_keys;
+      ALTER TABLE idempotency_keys_new RENAME TO idempotency_keys;
+      CREATE INDEX idx_idempotency_keys_created_at
+        ON idempotency_keys (created_at);
+    `,
+  },
 ];
 
 /** Names of all framework tables (and indexes) the runner manages. Used by the
