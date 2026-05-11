@@ -9,6 +9,7 @@ import dev.frick.client.FrickInboundEvent
 import dev.frick.client.FrickSession
 import dev.frick.client.FrickStreamEvent
 import dev.frick.client.FrickSyncSocket
+import dev.frick.client.FrickSyncStatus
 import dev.frick.client.RoomMemberDto
 import dev.frick.client.SQLiteFrickStorage
 import dev.frick.client.UserDto
@@ -34,6 +35,15 @@ internal enum class NewThreadKind(val label: String, val wireKind: String) {
     Group(label = "Group", wireKind = "group"),
 }
 
+internal enum class SyncIndicator { Green, Yellow, Red }
+
+internal data class SyncStatusUi(
+    val indicator: SyncIndicator,
+    val description: String,
+    val lastErrorCode: String? = null,
+    val lastErrorMessage: String? = null,
+)
+
 internal data class FoundationUiState(
     val users: List<UserDto> = emptyList(),
     val conversations: List<ConversationDto> = emptyList(),
@@ -57,6 +67,8 @@ internal data class FoundationUiState(
     val selectedDestination: String = ChatDestinationId,
     val inspectorVisible: Boolean = false,
     val threadListVisible: Boolean = true,
+    val sync: SyncStatusUi = SyncStatusUi(SyncIndicator.Red, "Disconnected"),
+    val syncDialogVisible: Boolean = false,
 ) {
     val selectedConversation: ConversationDto? =
         conversations.firstOrNull { conversation -> conversation.id == selectedConversationId }
@@ -164,6 +176,8 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
     fun backToThreads() = _uiState.update { state -> state.copy(threadListVisible = true, inspectorVisible = false) }
     fun setInspectorVisible(visible: Boolean) = _uiState.update { state -> state.copy(inspectorVisible = visible) }
     fun toggleInspector() = _uiState.update { state -> state.copy(inspectorVisible = !state.inspectorVisible) }
+    fun showSyncDialog() = _uiState.update { state -> state.copy(syncDialogVisible = true) }
+    fun dismissSyncDialog() = _uiState.update { state -> state.copy(syncDialogVisible = false) }
 
     fun authenticate() {
         val state = _uiState.value
@@ -371,7 +385,10 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
         socket = newSocket
         newSocket.connect()
         socketStatusJob = viewModelScope.launch {
-            newSocket.status.collect { /* surfaced to UI in a follow-up commit */ }
+            newSocket.status.collect { status ->
+                val ui = mapSyncStatus(status)
+                _uiState.update { state -> state.copy(sync = ui) }
+            }
         }
         socketEventsJob = viewModelScope.launch {
             newSocket.events.collect { event -> handleInboundEvent(event) }
@@ -384,7 +401,22 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
         socketStatusJob?.cancel(); socketStatusJob = null
         socketEventsJob?.cancel(); socketEventsJob = null
         socket?.close(); socket = null
+        _uiState.update { state -> state.copy(sync = SyncStatusUi(SyncIndicator.Red, "Disconnected")) }
     }
+
+    private fun mapSyncStatus(status: FrickSyncStatus): SyncStatusUi =
+        when (status) {
+            is FrickSyncStatus.Ready -> SyncStatusUi(SyncIndicator.Green, "Connected")
+            FrickSyncStatus.Connecting, FrickSyncStatus.HelloSent ->
+                SyncStatusUi(SyncIndicator.Yellow, "Connecting")
+            FrickSyncStatus.Disconnected -> SyncStatusUi(SyncIndicator.Red, "Disconnected")
+            is FrickSyncStatus.Failed -> SyncStatusUi(
+                indicator = SyncIndicator.Red,
+                description = "Failed",
+                lastErrorCode = "sync.failure",
+                lastErrorMessage = status.reason,
+            )
+        }
 
     private fun handleInboundEvent(event: FrickInboundEvent) {
         when (event) {
@@ -397,6 +429,16 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
                         .distinctBy { e -> e.eventId }
                         .sortedBy { e -> e.sequence }
                     state.copy(messages = combined, status = "Live")
+                }
+            }
+            is FrickInboundEvent.Nack -> {
+                _uiState.update { state ->
+                    state.copy(
+                        sync = state.sync.copy(
+                            lastErrorCode = event.error.code,
+                            lastErrorMessage = event.error.message,
+                        ),
+                    )
                 }
             }
             else -> Unit

@@ -6,6 +6,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,14 +16,18 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.graphics.Color as ComposeColor
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.ImeAction
@@ -159,6 +164,7 @@ fun FrickDemo() {
                     threadError = state.threadError,
                     isCreatingThread = state.isCreatingThread,
                     isCreateThreadDisabled = state.isCreateThreadDisabled,
+                    sync = state.sync,
                     onNewThreadTitleChange = viewModel::setNewThreadTitle,
                     onNewThreadKindChange = viewModel::setNewThreadKind,
                     onToggleParticipant = viewModel::toggleNewThreadParticipant,
@@ -166,6 +172,7 @@ fun FrickDemo() {
                     onSelectConversation = viewModel::selectConversation,
                     onReload = viewModel::reload,
                     onLogout = viewModel::logout,
+                    onSyncTap = viewModel::showSyncDialog,
                 )
             },
             collectionVisible = state.threadListVisible,
@@ -189,12 +196,14 @@ fun FrickDemo() {
                     messages = state.messages,
                     localUserId = activeSession.userId,
                     draft = state.draft,
+                    sync = state.sync,
                     onDraftChange = viewModel::setDraft,
                     onSend = viewModel::send,
                     onBackToThreads = viewModel::backToThreads,
                     onReload = viewModel::reload,
                     onToggleInspector = viewModel::toggleInspector,
                     onLogout = viewModel::logout,
+                    onSyncTap = viewModel::showSyncDialog,
                 )
             } else {
                 val destinationLabel = WorkspaceDestinations
@@ -205,6 +214,46 @@ fun FrickDemo() {
             }
         }
     }
+
+    if (state.syncDialogVisible) {
+        SyncStatusDialog(sync = state.sync, onDismiss = viewModel::dismissSyncDialog)
+    }
+}
+
+@Composable
+private fun SyncStatusDialog(sync: SyncStatusUi, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { FrickHeading(text = "Sync status") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                FrickLabel(text = sync.description)
+                if (sync.lastErrorCode != null) {
+                    FrickText(text = sync.lastErrorCode)
+                }
+                if (sync.lastErrorMessage != null) {
+                    FrickText(text = sync.lastErrorMessage)
+                }
+            }
+        },
+        confirmButton = { FrickTextButton(text = "Close", onClick = onDismiss) },
+    )
+}
+
+@Composable
+private fun SyncDot(sync: SyncStatusUi, onClick: () -> Unit) {
+    val color = when (sync.indicator) {
+        SyncIndicator.Green -> ComposeColor(0xFF22C55E)
+        SyncIndicator.Yellow -> ComposeColor(0xFFFACC15)
+        SyncIndicator.Red -> ComposeColor(0xFFEF4444)
+    }
+    Box(
+        modifier = Modifier
+            .padding(horizontal = 8.dp)
+            .size(12.dp)
+            .background(color = color, shape = CircleShape)
+            .clickable(onClick = onClick),
+    )
 }
 
 @Composable
@@ -306,6 +355,7 @@ private fun ThreadListScreen(
     threadError: String?,
     isCreatingThread: Boolean,
     isCreateThreadDisabled: Boolean,
+    sync: SyncStatusUi,
     onNewThreadTitleChange: (String) -> Unit,
     onNewThreadKindChange: (NewThreadKind) -> Unit,
     onToggleParticipant: (String) -> Unit,
@@ -313,6 +363,7 @@ private fun ThreadListScreen(
     onSelectConversation: (String) -> Unit,
     onReload: () -> Unit,
     onLogout: () -> Unit,
+    onSyncTap: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         FrickTopBar(
@@ -325,6 +376,7 @@ private fun ThreadListScreen(
                 ),
             ),
             trailingContent = {
+                SyncDot(sync = sync, onClick = onSyncTap)
                 FrickTextButton(text = "Sign out", onClick = onLogout)
             },
         )
@@ -361,12 +413,14 @@ private fun ChatDetailScreen(
     messages: List<FrickStreamEvent>,
     localUserId: String,
     draft: String,
+    sync: SyncStatusUi,
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onBackToThreads: () -> Unit,
     onReload: () -> Unit,
     onToggleInspector: () -> Unit,
     onLogout: () -> Unit,
+    onSyncTap: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         FrickTopBar(
@@ -389,6 +443,7 @@ private fun ChatDetailScreen(
                 ),
             ),
             trailingContent = {
+                SyncDot(sync = sync, onClick = onSyncTap)
                 FrickTextButton(text = "Sign out", onClick = onLogout)
             },
         )
