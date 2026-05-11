@@ -322,6 +322,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           response,
           url,
           store,
+          config,
           limits.maxHttpBodyBytes,
           adminTokenFingerprint,
         );
@@ -1257,6 +1258,7 @@ async function handleAdminRoute(
   response: http.ServerResponse,
   url: URL,
   store: FrickStore,
+  config: FrickConfig,
   maxBodyBytes: number,
   adminTokenFingerprint: string,
 ): Promise<void> {
@@ -1404,6 +1406,51 @@ async function handleAdminRoute(
       return;
     }
     sendJson(response, 200, row);
+    return;
+  }
+
+  if (request.method === "POST" && sub === "accounts") {
+    const body = await readJsonBody(request, maxBodyBytes);
+    const tenantId = resolveAuthTenantId(body.tenantId);
+    ensureTenantAllowed(store, config, tenantId);
+    const handle = normalizeHandle(requireString(body.handle, "handle"));
+    const displayName = normalizeDisplayName(requireString(body.displayName, "displayName"));
+    const password = normalizePassword(requireString(body.password, "password"));
+    const userId =
+      typeof body.userId === "string" && body.userId.length > 0
+        ? body.userId
+        : userIdFromHandle(tenantId, handle);
+    try {
+      const account = store.createAccountUser({
+        tenantId,
+        userId,
+        handle,
+        displayName,
+        password,
+      });
+      sendJson(response, 201, { account });
+    } catch (error) {
+      if (error instanceof Error && /already taken|UNIQUE|constraint/i.test(error.message)) {
+        const envelope = createFrickErrorEnvelope({
+          code: "storage.conflict",
+          message: error.message,
+          requestId: "admin_account_conflict",
+          retryable: false,
+          details: { reason: "handleExists", tenantId, handle },
+          schemaHash: foundationSchema.hash,
+          schemaRevision: foundationSchema.schemaRevision,
+        });
+        sendJson(response, 409, {
+          error: envelope,
+          code: envelope.code,
+          message: envelope.message,
+          requestId: envelope.requestId,
+          retryable: envelope.retryable,
+        });
+        return;
+      }
+      throw error;
+    }
     return;
   }
 
