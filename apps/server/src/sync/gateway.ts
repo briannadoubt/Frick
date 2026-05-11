@@ -47,6 +47,7 @@ import { routeSignal } from "./signal-router.js";
 import { SubscriptionRegistry, type SyncClient } from "./subscriptions.js";
 import { sendFrame } from "./wire.js";
 import { DEFAULT_FRICK_LIMITS, clampTtlSeconds, type FrickLimits } from "../limits.js";
+import { resolveTenantLimits } from "../tenant-config.js";
 import type { FrickMetrics, Gauge } from "../metrics.js";
 
 export class SyncGateway {
@@ -55,6 +56,16 @@ export class SyncGateway {
   readonly #policyHooks: readonly FrickPolicyHook[];
   readonly #pendingAppendCounts = new WeakMap<SyncClient, number>();
   readonly #lastSeenAt = new WeakMap<SyncClient, number>();
+  /**
+   * Per-connection resolved {@link FrickLimits}. Populated once at attach
+   * time when we know the principal's tenant id, then re-used across every
+   * frame for the lifetime of the connection. Settings change infrequently
+   * relative to frame rate, so caching at connection lifetime is the right
+   * trade-off — operators that need a setting change to take effect
+   * immediately can disconnect the affected client. Unauthenticated clients
+   * (no principal at connect) fall back to the global limits.
+   */
+  readonly #clientLimits = new WeakMap<SyncClient, FrickLimits>();
   readonly #heartbeatTimers = new Set<ReturnType<typeof setInterval>>();
   readonly #metrics: FrickMetrics | undefined;
   readonly #connectionsGauge: Gauge | undefined;
@@ -90,6 +101,12 @@ export class SyncGateway {
       this.#subscriptions.addClient(client);
       this.#pendingAppendCounts.set(client, 0);
       this.#lastSeenAt.set(client, Date.now());
+      // Resolve per-tenant limits once per connection; fall back to global
+      // when no principal (e.g. pre-hello unauthenticated connect).
+      const resolved = principal
+        ? resolveTenantLimits(principal.tenantId, this.store, this.#limits)
+        : this.#limits;
+      this.#clientLimits.set(client, resolved);
       this.#activeConnections += 1;
       this.#connectionsGauge?.set(this.#activeConnections);
 
@@ -116,6 +133,15 @@ export class SyncGateway {
     this.#heartbeatTimers.clear();
     this.#projections?.setDeltaListener(undefined);
     this.#subscriptions.closeAll();
+  }
+
+  /**
+   * Look up the per-tenant resolved limits for this client. Falls back to
+   * the gateway-wide global limits when no per-connection resolution has
+   * been performed (defensive — every attach() path populates the map).
+   */
+  #limitsFor(client: SyncClient): FrickLimits {
+    return this.#clientLimits.get(client) ?? this.#limits;
   }
 
   publishProjectionDelta(notice: ProjectionDeltaNotice): void {
@@ -353,9 +379,10 @@ export class SyncGateway {
 
   #handleSubscribe(client: SyncClient, payload: SubscribePayload): void {
     const principal = requirePrincipal(client);
+    const clientLimits = this.#limitsFor(client);
     if (
       !client.subscriptions.has(payload.subscriptionId) &&
-      client.subscriptions.size >= this.#limits.maxSubscriptionsPerConnection
+      client.subscriptions.size >= clientLimits.maxSubscriptionsPerConnection
     ) {
       const envelope = createFrickErrorEnvelope({
         code: "rateLimit.exceeded",
@@ -364,7 +391,7 @@ export class SyncGateway {
         retryable: false,
         details: {
           limit: "maxSubscriptionsPerConnection",
-          configuredMax: this.#limits.maxSubscriptionsPerConnection,
+          configuredMax: clientLimits.maxSubscriptionsPerConnection,
         },
       });
       sendFrame(client.socket, [
@@ -451,9 +478,10 @@ export class SyncGateway {
 
   #handleAppend(client: SyncClient, payload: AppendPayload): void {
     const principal = requirePrincipal(client);
+    const clientLimits = this.#limitsFor(client);
 
     const pending = this.#pendingAppendCounts.get(client) ?? 0;
-    if (pending >= this.#limits.maxPendingAppendsPerClient) {
+    if (pending >= clientLimits.maxPendingAppendsPerClient) {
       const envelope = createFrickErrorEnvelope({
         code: "rateLimit.exceeded",
         message: "Pending append queue is full",
@@ -461,7 +489,7 @@ export class SyncGateway {
         retryable: true,
         details: {
           limit: "maxPendingAppendsPerClient",
-          configuredMax: this.#limits.maxPendingAppendsPerClient,
+          configuredMax: clientLimits.maxPendingAppendsPerClient,
         },
       });
       sendFrame(client.socket, [
@@ -472,7 +500,7 @@ export class SyncGateway {
     }
 
     const encoded = msgpackEncode(payload.payload);
-    if (encoded.byteLength > this.#limits.maxStreamAppendPayloadBytes) {
+    if (encoded.byteLength > clientLimits.maxStreamAppendPayloadBytes) {
       const envelope = createFrickErrorEnvelope({
         code: "stream.appendRejected",
         message: "Append payload exceeds maximum size",
@@ -480,7 +508,7 @@ export class SyncGateway {
         retryable: false,
         details: {
           reason: "payloadTooLarge",
-          configuredMax: this.#limits.maxStreamAppendPayloadBytes,
+          configuredMax: clientLimits.maxStreamAppendPayloadBytes,
         },
       });
       sendFrame(client.socket, [
@@ -549,8 +577,9 @@ export class SyncGateway {
     // outstanding write intents and a single combined cap matches the limits
     // round (round 5). A separate cap would let a misbehaving client double
     // its in-flight budget by mixing frame kinds.
+    const clientLimits = this.#limitsFor(client);
     const pending = this.#pendingAppendCounts.get(client) ?? 0;
-    if (pending >= this.#limits.maxPendingAppendsPerClient) {
+    if (pending >= clientLimits.maxPendingAppendsPerClient) {
       const envelope = createFrickErrorEnvelope({
         code: "rateLimit.exceeded",
         message: "Pending write queue is full",
@@ -558,7 +587,7 @@ export class SyncGateway {
         retryable: true,
         details: {
           limit: "maxPendingAppendsPerClient",
-          configuredMax: this.#limits.maxPendingAppendsPerClient,
+          configuredMax: clientLimits.maxPendingAppendsPerClient,
         },
       });
       sendFrame(client.socket, [
