@@ -1,0 +1,163 @@
+# Cross-Platform Client Contract
+
+Status: Contract baseline for Slice 11 (Client Runtime Contract Alignment).
+
+This document records the behavior every Frick client SDK (TypeScript, Swift, Android/Kotlin) is expected to share. Concrete API shapes vary per language; the semantics below do not.
+
+## Schema Identity
+
+Every generated artifact carries the same schema identity:
+
+| Field | Source | Purpose |
+| --- | --- | --- |
+| `schemaId` | `frick-foundation` for the foundation schema | Stable application schema name |
+| `schemaVersion` | Semantic version string, e.g. `0.1.0` | Human-readable version |
+| `schemaRevision` | Monotonic positive integer | Migration ordering and compatibility checks |
+| `schemaHash` | Content hash of the canonical schema | Strict equality check for "exact same schema" |
+| `minimumClientRevision` | Positive integer | Lowest generated client revision a server can accept |
+| `minimumServerRevision` | Positive integer | Lowest server revision a generated client can talk to |
+
+All four supported platforms expose these constants via generated code (`FrickSchema.schemaId` in TS, `FrickSchema.schemaId` in Swift, `FRICK_SCHEMA_ID` in Kotlin).
+
+## Shared Error Envelope
+
+Every framework-visible error carries the same shape across HTTP responses, WebSocket nacks, and client-side typed errors:
+
+```
+{
+  code: string,          // stable machine-readable code (see Error Codes)
+  message: string,       // safe human-readable summary
+  requestId: string,     // per-request or per-frame correlation id
+  retryable: boolean,    // whether the client should auto-retry
+  details?: object,      // optional structured metadata
+  schemaHash?: string,   // present when the error involves schema state
+  schemaRevision?: int,  // ditto
+}
+```
+
+HTTP errors serialize the envelope as JSON under both `error` (the canonical location) and mirrored at the top level (`code`, `message`, `requestId`, `retryable`) for legacy compatibility. Clients should prefer the `error` field when present.
+
+### Error Codes
+
+Initial code families, in stable wire form:
+
+- `auth.unauthenticated`
+- `auth.forbidden`
+- `auth.sessionExpired`
+- `schema.incompatible`
+- `schema.migrationRequired`
+- `storage.conflict`
+- `storage.notFound`
+- `stream.appendRejected`
+- `sync.protocolError`
+- `sync.reconnectExhausted`
+- `blob.tooLarge`
+- `blob.unsupportedContentType`
+- `rateLimit.exceeded`
+- `server.internal`
+
+Clients should treat unknown codes as opaque strings rather than failing decode. The TypeScript SDK uses a union type for compile-time exhaustiveness, while Swift and Kotlin use `RawRepresentable` / string constants so new codes parse without code changes.
+
+### Typed Error Surface
+
+| Platform | Type | Notes |
+| --- | --- | --- |
+| TypeScript | `FrickErrorEnvelope` (interface) | Returned in HTTP error bodies; appears on `SyncStatus.lastError`; isFrickErrorEnvelope guard for runtime checks |
+| Swift | `FrickServerError(httpStatusCode, envelope?, body)` | `validate(response, data:)` parses both wrapped and direct envelope shapes |
+| Kotlin | `FrickHttpException(statusCode, envelope?, responseBody, message)` | `parseFrickErrorEnvelope(body)` decodes both shapes |
+
+## Capability Negotiation
+
+Clients announce their capabilities during the WebSocket handshake (`Hello` frame) and the server replies with `HelloAck` before sending the schema snapshot:
+
+- Client `clientCapabilities` field on `HelloPayload` (currently optional during the rollout slice).
+- Server returns `HelloAckPayload` with the resolved `schemaCompatibility` result and the active `serverCapabilities`.
+
+Today only the TypeScript runtime opens WebSocket connections. Swift and Android clients use HTTP + SSE and so don't participate in capability negotiation yet, but the generated artifacts expose enough schema identity for that to be added in a later slice without a wire change.
+
+### Capability Names
+
+Server capabilities are reported as a flat list using these prefixes:
+
+- `transport.<name>` — `websocket`, `http`, `sse`
+- `encoding.<name>` — `msgpack`, `json`
+- `primitive.<name>` — `objects`, `streams`, `presence`, `signals`, `blobs`, `jobs`, `projections`
+- `blobUpload.<name>` — `direct`, `resumable`, `signedUrl`, `localOnly`
+- `push.<name>` — `apns`, `fcm`, `webPush`, `test`
+- `experimental.<name>` — arbitrary feature flags
+
+A client lists names it strictly *requires* in `clientCapabilities.required`. The server rejects the handshake with a `sync.protocolError` nack carrying `details.unsupportedCapabilities` if any required capability isn't supported.
+
+## Sync Diagnostics
+
+Each client runtime exposes diagnostic fields covering the same observable state. Today these live on the TypeScript `SyncStatus` object:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `connected` | boolean | Transport is live |
+| `cursors` | record<string, number> | Last seen sequence per subscription |
+| `pendingMutations` | number | Pending appends queued locally |
+| `authenticated` | boolean | Session resolved |
+| `userId` / `deviceId` | string? | Resolved identity |
+| `serverCapabilities` | object? | Last `HelloAck` payload from the server |
+| `schemaCompatibility` | object? | Result of `compareSchemaCompatibility` on `HelloAck` |
+| `lastError` | `FrickErrorEnvelope`? | Last nack envelope the server returned |
+
+Swift and Android currently expose connection state inline on each call rather than as a streamed object; they will gain matching diagnostics if/when they grow WebSocket transports.
+
+## Local Cache Compatibility
+
+Every persistent local cache stores schema identity metadata so the SDK can refuse to load incompatible state.
+
+### Stored Fields
+
+Each cache persists a single-row table (or in-memory record) of:
+
+- `schemaId`
+- `schemaVersion`
+- `schemaRevision`
+- `schemaHash`
+
+### Compatibility Rules
+
+On load (TS) or via `verifyCacheCompatibility()` (Swift / Android), the SDK compares cached metadata to the current schema:
+
+| Outcome | Reason | SDK behavior |
+| --- | --- | --- |
+| No cached metadata | (first run) | Stamp current schema, return empty state |
+| Cached id matches, hash matches | exact | Use cache as-is |
+| Cached id matches, revision ≥ minimum, hash differs | revision-compatible | Use cache; clients may surface a warning |
+| Cached id differs from current id | `schemaIdMismatch` | Throw typed incompatible-cache error |
+| Cached revision < `minimumClientRevision` | `cacheTooOld` | Throw typed incompatible-cache error |
+
+The typed error carries:
+
+- The cached `FrickCacheMetadata` snapshot
+- The current `FrickCacheMetadata` snapshot
+- The `minimumClientRevision` that was applied
+- The current `pendingAppendCount` so apps can warn before discarding queued mutations
+
+### Reset
+
+Each cache exposes a destructive `clear()` / `clearCache()` / `resetCache()` operation that wipes all framework tables (objects, stream events, pending appends, metadata) but leaves caller-owned state untouched. Apps in development mode are expected to call this in response to an incompatible-cache error; production apps surface the error and ask the user.
+
+### Pending Appends
+
+Pending appends are preserved across compatible reloads. When an incompatible-cache error is thrown, the typed error reports the queued count so apps can give the user an informed choice (drain by reset, or stay offline until a compatible build ships).
+
+## Cross-SDK Invariants
+
+| Invariant | TS | Swift | Android |
+| --- | --- | --- | --- |
+| `FrickSchema.schemaId/Version/Revision/Hash` constants | ✓ | ✓ | ✓ |
+| Parses shared HTTP error envelope (wrapped + top-level shapes) | ✓ | ✓ | ✓ |
+| Typed error surface for server-emitted errors | `FrickErrorEnvelope` | `FrickServerError` | `FrickHttpException` |
+| Distinguishes server errors from network errors in retry predicates | ✓ | ✓ | ✓ |
+| Local cache stamps schema identity on save | ✓ | ✓ (via `verifyCacheCompatibility`) | ✓ (via `verifyCacheCompatibility`) |
+| Throws typed incompatible-cache error on schema-id or revision mismatch | `FrickCacheIncompatibleError` | `FrickCacheIncompatibleError` | `FrickCacheIncompatibleException` |
+| Destructive cache reset entry point | `cache.clear()` | `FrickClient.resetCache()` | `FrickClient.resetCache()` |
+| Capability negotiation in handshake | ✓ (WebSocket) | — (HTTP-only today) | — (HTTP-only today) |
+
+## Versioning
+
+This contract document evolves alongside `packages/protocol` and is regenerated together with the schema artifacts. Any change that adds a new error code, capability prefix, sync diagnostic field, or cache state should land here in the same change as the protocol/SDK update.
