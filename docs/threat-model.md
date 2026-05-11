@@ -228,6 +228,30 @@ WebSocket inbound frames are capped at `FrickLimits.maxWebSocketFrameBytes` (def
 
 ---
 
+## Tenant boundary
+
+Frick threads an opaque `tenant_id` column through every framework-managed
+storage table (objects, stream events, presence leases, signal outbox, blob
+metadata + content, conversation inbox, jobs, auth sessions, auth accounts,
+idempotency keys) and a `tenantId` field on every `Principal`. The principal's
+tenant is derived from the session token at the start of each request and
+cannot be overridden by the body or path. Storage reads are tenant-scoped, so
+cross-tenant resource lookups return "not found" rather than leaking
+existence; an explicit `decide()` check denies remaining cross-tenant access
+with the typed reason `tenantMismatch`. Account handles are unique
+per-tenant, not globally — `dorothy` in `tenant-a` and `dorothy` in
+`tenant-b` are distinct accounts. Legacy single-tenant deployments use
+`_default` as the implicit tenant for all rows, and migration `0003` backfills
+existing rows accordingly without changing the wire protocol.
+
+**Known gap**: tenant assignment is per-session and per-account; there is no
+admin route for moving an account between tenants, no `tenants` table, and
+no admin principal that can act across tenants. A future slice can introduce
+those without breaking the boundary above, because tenant identity is
+already a first-class column on every row.
+
+---
+
 ## Password storage (current state)
 
 The framework hashes account passwords with Node's `crypto.scrypt` using a
