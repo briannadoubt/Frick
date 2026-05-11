@@ -68,6 +68,11 @@ import {
 } from "./push/router.js";
 import type { FrickNotificationIntent, FrickPushAdapter } from "./push/types.js";
 import { isPushPlatform } from "./storage/push-registration-store.js";
+import { dumpFrickDatabase, type FrickDumpOptions } from "./backup/dump.js";
+import {
+  FrickRestoreRefusedError,
+  restoreFrickDatabase,
+} from "./backup/restore.js";
 
 export interface ServerOptions {
   port?: number;
@@ -1979,6 +1984,131 @@ async function handleAdminRoute(
       audit({
         action: "push.deliver",
         ...(bodyTenant !== undefined ? { target: bodyTenant } : {}),
+        outcome: "error",
+        detail: { error: error instanceof Error ? error.message : String(error) },
+      });
+      throw error;
+    }
+    return;
+  }
+
+  if (request.method === "POST" && sub === "backup") {
+    let tenantId: string | undefined;
+    let bodyParsed: Record<string, unknown> = {};
+    try {
+      bodyParsed = await readJsonBody(request, maxBodyBytes);
+    } catch {
+      // Empty body is fine — defaults to whole-DB.
+    }
+    if (typeof bodyParsed.tenantId === "string" && bodyParsed.tenantId.length > 0) {
+      tenantId = bodyParsed.tenantId;
+      if (tenantId !== "all") {
+        validateTenantId(tenantId);
+        tenantId = normalizeTenantId(tenantId);
+      }
+    }
+    const options: FrickDumpOptions = tenantId !== undefined ? { tenantId } : {};
+    try {
+      response.writeHead(200, {
+        "content-type": "application/x-ndjson; charset=utf-8",
+        "cache-control": "no-store",
+      });
+      let rowCount = 0;
+      for await (const line of dumpFrickDatabase(store, options)) {
+        response.write(`${line}\n`);
+        rowCount += 1;
+      }
+      response.end();
+      audit({
+        action: "backup.dump",
+        ...(tenantId !== undefined ? { target: tenantId } : { target: "all" }),
+        outcome: "allow",
+        detail: { rows: rowCount },
+      });
+    } catch (error) {
+      audit({
+        action: "backup.dump",
+        ...(tenantId !== undefined ? { target: tenantId } : { target: "all" }),
+        outcome: "error",
+        detail: { error: error instanceof Error ? error.message : String(error) },
+      });
+      throw error;
+    }
+    return;
+  }
+
+  if (request.method === "POST" && sub === "restore") {
+    if (config.env === "production") {
+      audit({
+        action: "backup.restore",
+        outcome: "deny",
+        detail: { reason: "restoreNotAllowedInProduction" },
+      });
+      const envelope = createFrickErrorEnvelope({
+        code: "auth.forbidden",
+        message: "Restore is disabled in production mode",
+        requestId: "admin_restore_prod",
+        retryable: false,
+        details: { reason: "restoreNotAllowedInProduction" },
+        schemaHash: foundationSchema.hash,
+        schemaRevision: foundationSchema.schemaRevision,
+      });
+      sendJson(response, 403, {
+        error: envelope,
+        code: envelope.code,
+        message: envelope.message,
+        requestId: envelope.requestId,
+        retryable: envelope.retryable,
+      });
+      return;
+    }
+    if (url.searchParams.get("confirm") !== "yes") {
+      audit({
+        action: "backup.restore",
+        outcome: "deny",
+        detail: { reason: "missingConfirmation" },
+      });
+      sendJson(response, 400, { error: "missing_confirmation", message: "Pass ?confirm=yes" });
+      return;
+    }
+    const overwrite = url.searchParams.get("overwrite") === "true";
+    const forceSchemaDrift = url.searchParams.get("forceSchemaDrift") === "true";
+    const raw = await readBoundedRawBody(request, maxBodyBytes, "maxHttpBodyBytes");
+    const text = raw.toString("utf8");
+    async function* asLines(): AsyncIterable<string> {
+      yield text;
+    }
+    try {
+      const report = await restoreFrickDatabase({
+        target: store,
+        source: asLines(),
+        confirm: "yes",
+        overwrite,
+        forceSchemaDrift,
+      });
+      audit({
+        action: "backup.restore",
+        outcome: "allow",
+        detail: { rowCountsByType: report.rowCountsByType, skipped: report.skipped.length },
+      });
+      sendJson(response, 200, report);
+    } catch (error) {
+      if (error instanceof FrickRestoreRefusedError) {
+        audit({
+          action: "backup.restore",
+          outcome: "deny",
+          detail: { reason: error.reason, ...(error.details ?? {}) },
+        });
+        sendJson(response, 409, {
+          error: "restore_refused",
+          reason: error.reason,
+          message: error.message,
+          ...(error.details ? { details: error.details } : {}),
+        });
+        return;
+      }
+      audit({
+        action: "backup.restore",
         outcome: "error",
         detail: { error: error instanceof Error ? error.message : String(error) },
       });
