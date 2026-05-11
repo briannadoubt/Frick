@@ -1491,8 +1491,25 @@ export function createFrickServer(options: ServerOptions = {}) {
     const workerStop = worker.stop();
     sse.closeAll();
     gateway.close();
+    // Close any adapters that hold long-lived resources (e.g. APNs HTTP/2
+    // sessions). Best-effort: log and continue if an adapter throws — a
+    // misbehaving adapter must not block the rest of shutdown.
+    const adapterCloses = pushRegistry.list().map(async (adapter) => {
+      const maybeClose = (adapter as { close?: () => Promise<void> }).close;
+      if (typeof maybeClose !== "function") return;
+      try {
+        await maybeClose.call(adapter);
+      } catch (err) {
+        logger.warn("frick.push.adapter_close_failed", {
+          event: "frick.push.adapter_close_failed",
+          platform: adapter.platform,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    });
     closePromise = (async () => {
       await workerStop;
+      await Promise.all(adapterCloses);
     })().then(() => new Promise<void>((resolve, reject) => {
       // Stop accepting new HTTP connections; allow in-flight requests to
       // drain. server.close()'s callback fires only once every connection

@@ -8,7 +8,7 @@ const val FRICK_SCHEMA_VERSION: String = "0.1.0"
 const val FRICK_SCHEMA_REVISION: Int = 1
 const val FRICK_MINIMUM_CLIENT_REVISION: Int = 1
 const val FRICK_MINIMUM_SERVER_REVISION: Int = 1
-const val FRICK_SCHEMA_HASH: String = "frick-foundation-2026-05-09-dev-auth"
+const val FRICK_SCHEMA_HASH: String = "frick-foundation-0.1.0"
 
 /**
  * Type-id → name and (typeId → (fieldId → fieldName)) tables for the

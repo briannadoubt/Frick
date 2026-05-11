@@ -6,7 +6,7 @@ This document describes what `apps/server` looks like to an operator today:
 the runtime modes it supports, the environment variables it reads, the HTTP
 endpoints exposed for orchestrators, the inspection routes, and the
 shutdown contract. Anything aspirational lives in
-`docs/superpowers/framework-hardening-spec.md` — this file only describes
+`internal/framework-hardening-spec.md` — this file only describes
 what is in main right now.
 
 The framework ships a `frick` CLI for ops (`frick doctor`, `frick migrate

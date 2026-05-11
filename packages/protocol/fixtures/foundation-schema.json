@@ -8,7 +8,7 @@
   "protocol": "frick.realtime",
   "protocolVersion": 1,
   "compatibility": "greenfield-cutover",
-  "hash": "frick-foundation-2026-05-09-dev-auth",
+  "hash": "frick-foundation-0.1.0",
   "objects": [
     {
       "id": 1,

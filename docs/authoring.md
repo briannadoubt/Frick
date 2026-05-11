@@ -81,7 +81,7 @@ Once you have an app skeleton, grow it with the `scaffold` family:
 
 For schema evolution and the migration story, see
 [operations.md](./operations.md#backup-and-restore) and the framework
-hardening spec in `docs/superpowers/`.
+hardening spec in `internal/`.
 
 ## Templates evolution
 

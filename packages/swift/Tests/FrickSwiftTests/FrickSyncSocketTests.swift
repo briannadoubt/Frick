@@ -445,6 +445,110 @@ final class FrickSyncSocketTests: XCTestCase {
         await socket.close()
     }
 
+    func testDeltaFrameDecodesPackedStreamEventTuple() async throws {
+        // The production gateway always ships `events` as the packed tuple
+        // form `[streamTypeId, streamKey, sequence, eventId, eventTypeId,
+        // packedFields]` — see packages/protocol/src/codec.ts. This test
+        // pins the SDK to the same wire format the Kotlin SDK already
+        // covers in apps/android/.../FrickSyncSocketTest.kt.
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+        let socket = makeSocket(factory: factory)
+
+        let events = await socket.events
+        let receivedDelta = expectation(description: "packed delta surfaced")
+        let listener = Task {
+            for try await event in events {
+                if case .delta(_, let evs, let cursor) = event,
+                   cursor == 7,
+                   let e = evs.first,
+                   e.stream == "MessageStream",
+                   e.event == "MessageSent",
+                   e.streamId == "room",
+                   e.eventId == "evt-1",
+                   e.payload["body"] == "hi"
+                {
+                    receivedDelta.fulfill()
+                    return
+                }
+            }
+        }
+
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+        task.deliver(.data(helloAckFrame()))
+
+        // MessageStream = stream id 1, MessageSent = event id 1, body = field id 3.
+        let packedTuple: FrickMsgPackValue = .array([
+            .int(1),                                    // streamTypeId
+            .string("room"),                            // streamKey
+            .int(1),                                    // sequence
+            .string("evt-1"),                           // eventId
+            .int(1),                                    // eventTypeId
+            .array([.array([.int(3), .string("hi")])]), // packedFields
+        ])
+        let delta = FrickMsgPackCodec.encodeFrame(FrickFrame(kind: .delta, payload: .map([
+            (.string("cursor"), .int(7)),
+            (.string("objects"), .array([])),
+            (.string("events"), .array([packedTuple])),
+        ])))
+        task.deliver(.data(delta))
+
+        await fulfillment(of: [receivedDelta], timeout: 2)
+        listener.cancel()
+        await socket.close()
+    }
+
+    func testDeltaFrameSurfacesPackedObjectRecordAsObjectsDelta() async throws {
+        // Object upserts arrive as PackedObjectRecord tuples
+        // `[objectTypeId, recordId, packedFields]`. The Swift SDK surfaces
+        // them via the additive `.objectsDelta` case introduced after the
+        // initial `.delta` surface — see FrickSyncSocket.swift.
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+        let socket = makeSocket(factory: factory)
+
+        let events = await socket.events
+        let received = expectation(description: "objects delta surfaced")
+        let listener = Task {
+            for try await event in events {
+                if case .objectsDelta(let records, let cursor) = event,
+                   cursor == 11,
+                   let r = records.first,
+                   r.type == "User",
+                   r.id == "user-ada",
+                   r.value["displayName"] == "Ada"
+                {
+                    received.fulfill()
+                    return
+                }
+            }
+        }
+
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+        task.deliver(.data(helloAckFrame()))
+
+        // User = object id 1, displayName = field id 1.
+        let packedObject: FrickMsgPackValue = .array([
+            .int(1),
+            .string("user-ada"),
+            .array([.array([.int(1), .string("Ada")])]),
+        ])
+        let delta = FrickMsgPackCodec.encodeFrame(FrickFrame(kind: .delta, payload: .map([
+            (.string("cursor"), .int(11)),
+            (.string("objects"), .array([packedObject])),
+            (.string("events"), .array([])),
+        ])))
+        task.deliver(.data(delta))
+
+        await fulfillment(of: [received], timeout: 2)
+        listener.cancel()
+        await socket.close()
+    }
+
     func testProjectionDeltaIsSurfaced() async throws {
         let factory = MockWebSocketFactory()
         let task = MockWebSocketTask()

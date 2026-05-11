@@ -50,9 +50,11 @@ Companion docs:
   ```
 - [ ] Swift: tagging is the publish step. SPM consumers pin to the
   `framework-vX.Y.Z` tag; there is no separate Swift registry push.
-- [ ] Android: **GAP** — no Maven publishing pipeline yet. The AAR
-  builds locally via `pnpm android:build`, but consumers must vendor
-  it until a Maven Central / GitHub Packages flow exists.
+- [ ] Android: bump `frickVersion` in `apps/android/frick/build.gradle.kts`,
+  commit, push tag `android-vX.Y.Z`. The `Publish Android SDK` workflow
+  publishes the AAR to GitHub Packages at
+  `dev.frick:frick-client:X.Y.Z`. Local dry-run:
+  `cd apps/android && ./gradlew :frick:publishToMavenLocal`.
 
 ## Post-publish
 

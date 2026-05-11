@@ -1,0 +1,53 @@
+name: Publish Android SDK
+
+# Runs on `android-vX.Y.Z` tag pushes. The Maven publication's `version` is
+# read from the gradle file (`frickVersion`); the tag triggers the publish
+# but doesn't override the coordinate. To cut a release: bump `frickVersion`
+# in `apps/android/frick/build.gradle.kts`, commit, tag `android-vX.Y.Z`,
+# push the tag.
+on:
+  push:
+    tags:
+      - 'android-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Publish to GitHub Packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Generate schema + design artifacts
+        run: pnpm schema:generate && pnpm design:generate
+
+      - name: Publish to GitHub Packages
+        working-directory: apps/android
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./gradlew :frick:publishReleasePublicationToGitHubPackagesRepository --no-daemon

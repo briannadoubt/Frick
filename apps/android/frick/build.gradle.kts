@@ -4,7 +4,12 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.plugin.serialization")
+    `maven-publish`
 }
+
+// Single source of truth for the published Maven coordinate. Bumped in
+// lockstep with the framework version; see CHANGELOG.md.
+val frickVersion = "0.1.0"
 
 android {
     namespace = "dev.frick.client"
@@ -12,6 +17,15 @@ android {
 
     defaultConfig {
         minSdk = 26
+    }
+
+    publishing {
+        // Publish the `release` variant as a Maven AAR. AGP wires up the
+        // sources jar automatically when `withSourcesJar()` is set.
+        singleVariant("release") {
+            withSourcesJar()
+            withJavadocJar()
+        }
     }
 
     compileOptions {
@@ -60,5 +74,63 @@ tasks.withType<KotlinJvmCompile>().configureEach {
     compilerOptions {
         allWarningsAsErrors.set(true)
         jvmTarget.set(JvmTarget.JVM_17)
+    }
+}
+
+// Maven publication. Defaults to GitHub Packages, configured via env vars
+// so credentials never live in the repo:
+//
+//   GITHUB_REPOSITORY  — "owner/repo", supplied automatically by Actions.
+//   GITHUB_ACTOR       — username, supplied automatically by Actions.
+//   GITHUB_TOKEN       — token with `write:packages`, also auto-supplied.
+//
+// Local publishing for testing:
+//   ./gradlew :frick:publishToMavenLocal
+publishing {
+    publications {
+        register<MavenPublication>("release") {
+            groupId = "dev.frick"
+            artifactId = "frick-client"
+            version = frickVersion
+
+            afterEvaluate {
+                from(components["release"])
+            }
+
+            pom {
+                name.set("Frick Android client")
+                description.set("Frick realtime framework — Kotlin client SDK")
+                url.set("https://github.com/briannadoubt/Frick")
+                licenses {
+                    license {
+                        name.set("Apache License 2.0")
+                        url.set("https://www.apache.org/licenses/LICENSE-2.0")
+                    }
+                }
+                developers {
+                    developer {
+                        id.set("briannadoubt")
+                        name.set("Brianna Zamora")
+                    }
+                }
+                scm {
+                    url.set("https://github.com/briannadoubt/Frick")
+                    connection.set("scm:git:https://github.com/briannadoubt/Frick.git")
+                    developerConnection.set("scm:git:git@github.com:briannadoubt/Frick.git")
+                }
+            }
+        }
+    }
+
+    repositories {
+        maven {
+            name = "GitHubPackages"
+            val repoSlug = System.getenv("GITHUB_REPOSITORY") ?: "briannadoubt/Frick"
+            url = uri("https://maven.pkg.github.com/$repoSlug")
+            credentials {
+                username = System.getenv("GITHUB_ACTOR") ?: ""
+                password = System.getenv("GITHUB_TOKEN") ?: ""
+            }
+        }
     }
 }

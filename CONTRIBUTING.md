@@ -34,7 +34,7 @@ pnpm cli <command>         # invoke the `frick` CLI in development mode
 
 We use subagent-driven development for non-trivial changes. The short version:
 
-1. Capture the intent as a design document under `docs/superpowers/specs/` and a delivery plan under `docs/superpowers/plans/`. The plan slices the work into independent, individually-shippable pieces.
+1. Capture the intent as a design document under `internal/specs/` and a delivery plan under `internal/plans/`. The plan slices the work into independent, individually-shippable pieces.
 2. Each slice is implemented in its own worktree by a focused agent — small, scoped, verifiable.
 3. Every slice ends green on `pnpm test && pnpm typecheck && pnpm verify:generated` (plus native checks if it touched native paths). Slices that share files coordinate via the plan.
 
@@ -69,9 +69,9 @@ If you're changing the schema, read [`docs/schema-author-tutorial.md`](./docs/sc
 
 The framework hardening spec is the canonical roadmap for what Frick is becoming and why each slice exists. Read it before a non-trivial change so your work lines up with the rest of the in-flight slices:
 
-- [`docs/superpowers/specs/2026-05-10-frick-fullstack-framework-hardening-design.md`](./docs/superpowers/specs/2026-05-10-frick-fullstack-framework-hardening-design.md)
+- [`internal/specs/2026-05-10-frick-fullstack-framework-hardening-design.md`](./internal/specs/2026-05-10-frick-fullstack-framework-hardening-design.md)
 
-The matching delivery plan and other specs live alongside it under `docs/superpowers/`.
+The matching delivery plan and other specs live alongside it under `internal/`.
 
 ## Reporting issues
 

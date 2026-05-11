@@ -8,10 +8,10 @@ public enum FrickSchema {
   public static let schemaRevision = 1
   public static let minimumClientRevision = 1
   public static let minimumServerRevision = 1
-  public static let schemaHash = "frick-foundation-2026-05-09-dev-auth"
+  public static let schemaHash = "frick-foundation-0.1.0"
 }
 
-public let frickSchemaHash = "frick-foundation-2026-05-09-dev-auth"
+public let frickSchemaHash = "frick-foundation-0.1.0"
 
 /// Type-id → name and (typeId → (fieldId → fieldName)) tables for the
 /// foundation schema. Used by `FrickSyncSocket` to translate packed Delta
