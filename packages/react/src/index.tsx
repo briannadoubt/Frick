@@ -173,6 +173,22 @@ export function useProjectionRows<T extends PlainObject = PlainObject>(name: str
   return useMemo(() => Array.from(rows.values()), [rows]);
 }
 
+/**
+ * Ergonomic wrapper over `FrickClient.upsertObject`. Returns a stable callback
+ * that issues an object upsert over the sync socket. Conflict (when the schema
+ * uses `versionPrecondition`) propagates as a `FrickObjectConflictError`.
+ */
+export function useUpsertObject<T extends PlainObject = PlainObject>(
+  objectType: string,
+): (objectId: string, value: T, expectedVersion?: number) => Promise<{ version: number }> {
+  const client = useFrick();
+  return useCallback(
+    (objectId: string, value: T, expectedVersion?: number) =>
+      client.upsertObject<T>(objectType, objectId, value, expectedVersion),
+    [client, objectType],
+  );
+}
+
 export function useSyncStatus(): SyncStatus {
   const client = useFrick();
   return useSignalValue(client.syncStatus);
