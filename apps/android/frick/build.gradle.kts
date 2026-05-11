@@ -36,7 +36,7 @@ dependencies {
     val robolectricVersion = "4.16.1"
     val serializationVersion = "1.11.0"
     val okhttpVersion = "5.3.2"
-    val msgpackVersion = "0.9.8"
+    val msgpackVersion = "0.9.12"
 
     implementation("io.ktor:ktor-client-core:$ktorVersion")
     implementation("io.ktor:ktor-client-okhttp:$ktorVersion")
