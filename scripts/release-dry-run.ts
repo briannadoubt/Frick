@@ -26,6 +26,20 @@ const SUSPICIOUS_PATTERNS: { pattern: RegExp; reason: string }[] = [
   { pattern: /\.DS_Store$/, reason: "ships macOS metadata" },
 ];
 
+/**
+ * Per-package allowlist of file paths that match a suspicious pattern but
+ * are shipped intentionally. The value is a free-form note explaining why
+ * the file is intentional — surfaced in the dry-run report so reviewers can
+ * see the rationale rather than just a silenced finding.
+ */
+const INTENTIONAL_EXCEPTIONS: Record<string, Record<string, string>> = {
+  "@frick/protocol": {
+    "fixtures/error-envelope.json": "cross-platform conformance fixture",
+    "fixtures/foundation-schema.json": "cross-platform conformance fixture",
+    "fixtures/hello-frame.json": "cross-platform conformance fixture",
+  },
+};
+
 type PackFile = { path: string; size: number };
 
 type PackEntry = {
@@ -89,9 +103,15 @@ function inspect(entry: PackEntry): Finding[] {
   if (!lowerPaths.some((p) => p === "readme.md" || p === "readme" || p.startsWith("readme."))) {
     findings.push({ package: entry.name, kind: "missing-readme", detail: "no README found in pack" });
   }
+  const exceptions = INTENTIONAL_EXCEPTIONS[entry.name] ?? {};
   for (const file of entry.files) {
     for (const { pattern, reason } of SUSPICIOUS_PATTERNS) {
       if (pattern.test(file.path)) {
+        if (exceptions[file.path]) {
+          // Intentional — silently skip. The package owner has documented
+          // why this file ships in INTENTIONAL_EXCEPTIONS above.
+          continue;
+        }
         findings.push({
           package: entry.name,
           kind: "suspicious-file",
