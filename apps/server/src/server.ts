@@ -124,6 +124,14 @@ export function createFrickServer(options: ServerOptions = {}) {
     }
 
     if (request.method === "POST" && url.pathname === "/auth/dev-login") {
+      if (!config.demoAuthEnabled) {
+        sendError(
+          response,
+          new AuthorizationError("Demo authentication is disabled in this environment"),
+          "dev_login_disabled",
+        );
+        return;
+      }
       try {
         const body = await readJsonBody(request);
         const userId = requireString(body.userId, "userId");
