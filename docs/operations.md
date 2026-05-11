@@ -77,7 +77,14 @@ server exposes three additional GET endpoints under `/_frick/inspect/`:
 - `/_frick/inspect/migrations` — `{ applied: [{ id, schemaRevision,
   appliedAt, checksum, durationMs }, ...] }` read from the
   `frick_migrations` ledger.
-- `/_frick/inspect/db` — `{ ready, applied, lastApplied? }`.
+- `/_frick/inspect/db` — `{ ready, applied, lastApplied?, idempotencyCache }`.
+
+The `idempotencyCache` object reports the in-memory front cache state —
+`size` (currently held entries), `capacity` (configured maximum), and
+`evictions` (cumulative count since process start). Tune the capacity
+with `createFrickServer({ idempotencyCacheCapacity })`. Default 10,000.
+The durable `idempotency_keys` SQLite table is separately bounded (see
+retention slice).
 
 When inspection is disabled (production default), every path under
 `/_frick/inspect/` returns `404` — its existence is not advertised. To
