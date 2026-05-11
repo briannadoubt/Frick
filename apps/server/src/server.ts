@@ -32,6 +32,11 @@ import {
 } from "./extensions.js";
 import { SyncGateway } from "./sync/gateway.js";
 import { SseRegistry } from "./sync/sse.js";
+import {
+  createFrickProjectionRegistry,
+  type FrickProjectionContext,
+} from "./projections/registry.js";
+import { createConversationInboxProjection } from "./projections/conversation-inbox.js";
 import type { StoredAccount } from "./storage/account-store.js";
 import type { StoredSession } from "./storage/session-store.js";
 import { TenantAlreadyExistsError } from "./storage/tenant-store.js";
@@ -129,9 +134,13 @@ export function createFrickServer(options: ServerOptions = {}) {
     metrics.counter("frick.http.errors.total", { code }).inc();
     sendError(response, error, requestId);
   }
+  const projections = createFrickProjectionRegistry();
+  projections.register(createConversationInboxProjection());
   const store = new FrickStore({
     path: options.dbPath ?? process.env.FRICK_DB_PATH ?? defaultDatabasePath(),
     schema: foundationSchema,
+    projections,
+    logger,
     ...(options.idempotencyCacheCapacity !== undefined
       ? { idempotencyCacheCapacity: options.idempotencyCacheCapacity }
       : {}),
@@ -335,6 +344,17 @@ export function createFrickServer(options: ServerOptions = {}) {
         });
         return;
       }
+      if (sub === "projections") {
+        sendJson(response, 200, {
+          projections: store.projections.list().map((projection) => ({
+            name: projection.name,
+            sources: projection.sources,
+            supportsRebuild: typeof projection.handler.rebuild === "function",
+            supportsRead: typeof projection.handler.read === "function",
+          })),
+        });
+        return;
+      }
       if (sub === "db") {
         const applied = safeListAppliedMigrations(store) ?? [];
         const last = applied[applied.length - 1];
@@ -411,6 +431,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           config,
           limits.maxHttpBodyBytes,
           adminTokenFingerprint,
+          logger,
         );
       } catch (error) {
         sendErrorWithMetrics(response, error, "admin_rejected");
@@ -599,6 +620,56 @@ export function createFrickServer(options: ServerOptions = {}) {
         });
       } catch (error) {
         sendErrorWithMetrics(response, error, "inbox_rejected");
+      }
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/projections") {
+      sendJson(response, 200, {
+        schemaHash: store.schema.hash,
+        projections: store.projections.list().map((projection) => ({
+          name: projection.name,
+          sources: projection.sources,
+        })),
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname.startsWith("/projections/")) {
+      const name = decodeURIComponent(url.pathname.slice("/projections/".length));
+      const projection = store.projections.get(name);
+      if (!projection) {
+        sendErrorWithMetrics(response, new ProjectionNotFoundError(name), "projection_not_found");
+        return;
+      }
+      if (!projection.handler.read) {
+        // The framework can't expose a generic read for projections that
+        // don't opt in — 405 keeps the path reserved while signalling that
+        // the projection itself is registered.
+        sendJson(response, 405, {
+          error: "method_not_allowed",
+          message: `Projection "${name}" does not implement read`,
+        });
+        return;
+      }
+      try {
+        const query: Record<string, string> = {};
+        url.searchParams.forEach((value, key) => {
+          query[key] = value;
+        });
+        const ctx: FrickProjectionContext = {
+          tenantId: principal.tenantId,
+          store,
+          logger,
+        };
+        const data = projection.handler.read(ctx, query);
+        sendJson(response, 200, {
+          schemaHash: store.schema.hash,
+          projection: name,
+          data,
+        });
+      } catch (error) {
+        sendErrorWithMetrics(response, error, "projection_rejected");
       }
       return;
     }
@@ -974,6 +1045,21 @@ class AccountNotFoundError extends Error {
 }
 
 /**
+ * Thrown by `/projections/:name` and the admin rebuild route when the
+ * requested projection isn't registered. Maps to 404 with
+ * `details.reason = "projectionNotFound"`.
+ */
+class ProjectionNotFoundError extends Error {
+  readonly reason = "projectionNotFound";
+  readonly projection: string;
+  constructor(name: string) {
+    super(`Projection "${name}" not found`);
+    this.name = "ProjectionNotFoundError";
+    this.projection = name;
+  }
+}
+
+/**
  * Validate body.tenantId at an auth boundary. Returns the normalized tenant
  * id. If the caller supplied a `tenantId` field at all (even empty string),
  * it must match {@link validateTenantId}'s strict regex; if omitted, the
@@ -1043,7 +1129,9 @@ function sendError(response: http.ServerResponse, error: unknown, requestId: str
             ? 403
             : error instanceof CorsOriginRejectedError
               ? 403
-              : 400;
+              : error instanceof ProjectionNotFoundError
+                ? 404
+                : 400;
   const details: Record<string, unknown> = { routeCode: requestId };
   if (
     (error instanceof AuthenticationError || error instanceof AuthorizationError) &&
@@ -1066,6 +1154,10 @@ function sendError(response: http.ServerResponse, error: unknown, requestId: str
   }
   if (error instanceof TenantIdValidationError) {
     details.reason = error.reason;
+  }
+  if (error instanceof ProjectionNotFoundError) {
+    details.reason = error.reason;
+    details.projection = error.projection;
   }
   if (error instanceof FrickLimitError) {
     details.limit = error.limit;
@@ -1353,6 +1445,7 @@ async function handleAdminRoute(
   config: FrickConfig,
   maxBodyBytes: number,
   adminTokenFingerprint: string,
+  logger: FrickLogger,
 ): Promise<void> {
   const sub = url.pathname.slice("/_frick/admin/".length);
 
@@ -1607,6 +1700,72 @@ async function handleAdminRoute(
     return;
   }
 
+  const rebuildMatch = /^projections\/([^/]+)\/rebuild$/.exec(sub);
+  if (request.method === "POST" && rebuildMatch) {
+    const name = decodeURIComponent(rebuildMatch[1]!);
+    const rawTenant = url.searchParams.get("tenantId");
+    const tenantId = rawTenant && rawTenant.length > 0 ? rawTenant : DEFAULT_TENANT_ID;
+    try {
+      validateTenantId(tenantId);
+    } catch (error) {
+      audit({
+        action: "projections.rebuild",
+        target: name,
+        outcome: "error",
+        detail: { error: error instanceof Error ? error.message : String(error) },
+      });
+      throw error;
+    }
+    const projection = store.projections.get(name);
+    if (!projection) {
+      audit({
+        action: "projections.rebuild",
+        target: name,
+        outcome: "deny",
+        detail: { reason: "projectionNotFound" },
+      });
+      throw new ProjectionNotFoundError(name);
+    }
+    if (!projection.handler.rebuild) {
+      audit({
+        action: "projections.rebuild",
+        target: name,
+        outcome: "deny",
+        detail: { reason: "rebuildNotSupported" },
+      });
+      sendJson(response, 405, {
+        error: "method_not_allowed",
+        message: `Projection "${name}" does not support rebuild`,
+      });
+      return;
+    }
+    try {
+      const ctx: FrickProjectionContext = {
+        tenantId: normalizeTenantId(tenantId),
+        store,
+        logger,
+      };
+      projection.handler.rebuild(ctx);
+      const rebuiltAt = new Date().toISOString();
+      audit({
+        action: "projections.rebuild",
+        target: name,
+        outcome: "allow",
+        detail: { tenantId: ctx.tenantId, rebuiltAt },
+      });
+      sendJson(response, 200, { projection: name, tenantId: ctx.tenantId, rebuiltAt });
+    } catch (error) {
+      audit({
+        action: "projections.rebuild",
+        target: name,
+        outcome: "error",
+        detail: { error: error instanceof Error ? error.message : String(error) },
+      });
+      throw error;
+    }
+    return;
+  }
+
   sendJson(response, 404, { error: "not_found" });
 }
 
@@ -1620,6 +1779,8 @@ function isProtectedPath(pathname: string): boolean {
   return (
     pathname === "/objects" ||
     pathname === "/inbox" ||
+    pathname === "/projections" ||
+    pathname.startsWith("/projections/") ||
     pathname === "/conversations" ||
     pathname === "/blobs" ||
     pathname.startsWith("/blobs/") ||
