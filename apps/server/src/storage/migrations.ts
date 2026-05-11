@@ -426,6 +426,31 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
       VALUES ('_default', 'Default Tenant', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
     `,
   },
+  {
+    // Admin audit log: who-did-what-when for admin-scope mutations. The table
+    // is intentionally global (not tenant-scoped) — admin actions span all
+    // tenants and the global scope itself, so audit rows must be queryable as
+    // one stream. The fingerprint column stores a truncated SHA-256 of the
+    // admin token, never the raw token.
+    id: "0005_admin_audit_log",
+    schemaRevision: 1,
+    description: "Create admin_audit_log for admin-scope mutation auditing.",
+    sql: `
+      CREATE TABLE IF NOT EXISTS admin_audit_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        occurred_at TEXT NOT NULL,
+        admin_token_fingerprint TEXT NOT NULL,
+        action TEXT NOT NULL,
+        target TEXT,
+        outcome TEXT NOT NULL,
+        detail TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_admin_audit_log_occurred_at
+        ON admin_audit_log (occurred_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_admin_audit_log_action
+        ON admin_audit_log (action, occurred_at DESC);
+    `,
+  },
 ];
 
 /** Names of all framework tables (and indexes) the runner manages. Used by the
@@ -446,6 +471,7 @@ export const FRAMEWORK_TABLES: readonly string[] = [
   "auth_sessions",
   "auth_accounts",
   "tenants",
+  "admin_audit_log",
 ];
 
 export interface MigrationRunResult {

@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { encode } from "@msgpack/msgpack";
 import { foundationSchema, validateSchema, type FrickSchema, type PlainObject } from "@frick/protocol";
 import { AccountStore, type StoredAccount } from "./storage/account-store.js";
+import { AdminAuditStore } from "./storage/admin-audit-store.js";
 import { BlobStore, type BlobMetadata, type BlobMetadataInput } from "./storage/blob-store.js";
 import { InboxStore, type ConversationInboxRow } from "./storage/inbox-store.js";
 import { JobStore, type StoredJob } from "./storage/job-store.js";
@@ -95,6 +96,7 @@ export class FrickStore {
   readonly sessions: SessionStore;
   readonly accounts: AccountStore;
   readonly tenants: TenantStore;
+  readonly adminAudit: AdminAuditStore;
 
   readonly #db: DatabaseSync;
   readonly #idempotencyCacheCapacity: number;
@@ -133,6 +135,7 @@ export class FrickStore {
     this.sessions = new SessionStore(this.#db);
     this.accounts = new AccountStore(this.#db);
     this.tenants = new TenantStore(this.#db);
+    this.adminAudit = new AdminAuditStore(this.#db);
     this.inbox.repairInvalidReadCursors();
 
     if (options.seed ?? true) {

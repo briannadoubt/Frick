@@ -51,6 +51,7 @@ describe("framework migration runner", () => {
       "0002_idempotency_keys_created_at",
       "0003_tenant_boundary",
       "0004_tenants_ledger",
+      "0005_admin_audit_log",
     ]);
     expect(result.applied[0]?.schemaRevision).toBe(1);
     expect(result.applied[0]?.checksum).toMatch(/^sha256-[0-9a-f]{64}$/);
@@ -62,6 +63,7 @@ describe("framework migration runner", () => {
       "0002_idempotency_keys_created_at",
       "0003_tenant_boundary",
       "0004_tenants_ledger",
+      "0005_admin_audit_log",
     ]);
 
     const tables = listTables(db);
@@ -83,10 +85,10 @@ describe("framework migration runner", () => {
       supportedSchemaRevision: foundationSchema.schemaRevision,
     });
 
-    expect(first.applied).toHaveLength(4);
+    expect(first.applied).toHaveLength(5);
     expect(second.applied).toHaveLength(0);
-    expect(second.alreadyApplied).toHaveLength(4);
-    expect(listAppliedMigrations(db)).toHaveLength(4);
+    expect(second.alreadyApplied).toHaveLength(5);
+    expect(listAppliedMigrations(db)).toHaveLength(5);
 
     db.close();
   });
@@ -212,6 +214,7 @@ describe("framework migration runner", () => {
       "0002_idempotency_keys_created_at",
       "0003_tenant_boundary",
       "0004_tenants_ledger",
+      "0005_admin_audit_log",
       "9000_test_extra",
     ]);
     expect(listTables(db)).toContain("test_extra");
