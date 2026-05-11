@@ -1,3 +1,4 @@
+import type { PlainObject } from "@frick/protocol";
 import type { FrickLogger } from "../logger.js";
 import type { FrickStore } from "../store.js";
 
@@ -50,12 +51,38 @@ export interface FrickProjectionContext {
   logger: FrickLogger;
 }
 
+export interface ProjectionChange {
+  /** Projection-defined row key, e.g. `${userId}:${conversationId}`. */
+  key: string;
+  /** `null` means delete; non-null replaces the current row value. */
+  value: PlainObject | null;
+}
+
+export interface ProjectionApplyResult {
+  changes: ProjectionChange[];
+}
+
+export interface ProjectionDeltaNotice {
+  projection: string;
+  tenantId: string;
+  changes: ProjectionChange[];
+}
+
 export interface FrickProjectionHandler {
   /**
    * Called synchronously after each matching source write succeeds. Must be
    * idempotent — the framework may replay events during rebuild.
+   *
+   * May optionally return `{ changes }` to declare which projection rows
+   * were affected by this event. The registry forwards declared changes to
+   * the optional `onDelta` hook so the sync gateway can broadcast a
+   * `ProjectionDelta` frame to subscribed clients. Handlers that don't
+   * return anything (legacy shape) simply emit no deltas.
    */
-  apply(event: FrickProjectionWriteEvent, ctx: FrickProjectionContext): void;
+  apply(
+    event: FrickProjectionWriteEvent,
+    ctx: FrickProjectionContext,
+  ): void | ProjectionApplyResult;
   /**
    * Optional: rebuild the projection's state from source data for the given
    * tenant. Called by the admin `/_frick/admin/projections/:name/rebuild`
@@ -92,11 +119,27 @@ export interface FrickProjectionRegistry {
    * those without a `rebuild` method).
    */
   rebuildAll(ctx: FrickProjectionContext): { rebuilt: string[] };
+  /**
+   * Install a delta listener. The registry forwards every
+   * {@link ProjectionDeltaNotice} produced by a handler's `apply(...)` return
+   * value to this callback. Passing `undefined` clears the listener. Only one
+   * listener is supported in v1; this is intentionally narrow — the sync
+   * gateway is the only intended consumer.
+   */
+  setDeltaListener(listener: ((notice: ProjectionDeltaNotice) => void) | undefined): void;
 }
 
-export function createFrickProjectionRegistry(): FrickProjectionRegistry {
+export interface CreateFrickProjectionRegistryOptions {
+  /** Optional initial delta listener; equivalent to calling `setDeltaListener`. */
+  onDelta?: (notice: ProjectionDeltaNotice) => void;
+}
+
+export function createFrickProjectionRegistry(
+  options: CreateFrickProjectionRegistryOptions = {},
+): FrickProjectionRegistry {
   const projections: FrickProjection[] = [];
   const byName = new Map<string, FrickProjection>();
+  let deltaListener: ((notice: ProjectionDeltaNotice) => void) | undefined = options.onDelta;
 
   function register(projection: FrickProjection): void {
     if (byName.has(projection.name)) {
@@ -119,7 +162,22 @@ export function createFrickProjectionRegistry(): FrickProjectionRegistry {
     for (const projection of projections) {
       if (projection.sources.some((source) => matches(source, event))) {
         try {
-          projection.handler.apply(event, ctx);
+          const result = projection.handler.apply(event, ctx);
+          if (result && result.changes.length > 0 && deltaListener) {
+            try {
+              deltaListener({
+                projection: projection.name,
+                tenantId: ctx.tenantId,
+                changes: result.changes,
+              });
+            } catch (error) {
+              // The listener (sync gateway) should never break a write path.
+              ctx.logger.warn("frick.projection.delta_listener_failed", {
+                projection: projection.name,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          }
         } catch (error) {
           // Never let a projection failure tear down the originating write.
           ctx.logger.warn("frick.projection.apply_failed", {
@@ -148,5 +206,8 @@ export function createFrickProjectionRegistry(): FrickProjectionRegistry {
     get: (name) => byName.get(name),
     notify,
     rebuildAll,
+    setDeltaListener(listener) {
+      deltaListener = listener;
+    },
   };
 }

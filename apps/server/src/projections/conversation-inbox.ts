@@ -4,6 +4,8 @@ import type {
   FrickProjection,
   FrickProjectionContext,
   FrickProjectionWriteEvent,
+  ProjectionApplyResult,
+  ProjectionChange,
 } from "./registry.js";
 
 /**
@@ -30,12 +32,12 @@ export function createConversationInboxProjection(): FrickProjection {
     handler: {
       apply(event, ctx) {
         if (event.kind === "streamEvent" && event.streamType === "MessageStream") {
-          applyStreamEvent(event, ctx);
-          return;
+          return applyStreamEvent(event, ctx);
         }
         if (event.kind === "objectUpsert" && event.objectType === "RoomMember") {
-          applyRoomMemberUpsert(event, ctx);
+          return applyRoomMemberUpsert(event, ctx);
         }
+        return undefined;
       },
       rebuild(ctx) {
         rebuildInbox(ctx);
@@ -51,7 +53,10 @@ export function createConversationInboxProjection(): FrickProjection {
   };
 }
 
-function applyStreamEvent(event: FrickProjectionWriteEvent, ctx: FrickProjectionContext): void {
+function applyStreamEvent(
+  event: FrickProjectionWriteEvent,
+  ctx: FrickProjectionContext,
+): ProjectionApplyResult | undefined {
   const stored = event.streamEvent as
     | {
         event: string;
@@ -60,30 +65,30 @@ function applyStreamEvent(event: FrickProjectionWriteEvent, ctx: FrickProjection
         payload: Record<string, unknown>;
       }
     | undefined;
-  if (!stored) return;
+  if (!stored) return undefined;
   if (stored.event === "MessageSent") {
-    projectMessageSent(ctx, stored.streamId, stored.sequence, stored.payload);
-    return;
+    return { changes: projectMessageSent(ctx, stored.streamId, stored.sequence, stored.payload) };
   }
   if (stored.event === "ReceiptAdvanced") {
-    projectReceiptAdvanced(ctx, stored.streamId, stored.payload);
+    return { changes: projectReceiptAdvanced(ctx, stored.streamId, stored.payload) };
   }
+  return undefined;
 }
 
 function applyRoomMemberUpsert(
   event: FrickProjectionWriteEvent,
   ctx: FrickProjectionContext,
-): void {
+): ProjectionApplyResult | undefined {
   const member = event.object as PlainObject | undefined;
-  if (!member) return;
+  if (!member) return undefined;
   const conversationId = typeof member.conversationId === "string" ? member.conversationId : "";
   const userId = typeof member.userId === "string" ? member.userId : "";
-  if (!conversationId || !userId) return;
+  if (!conversationId || !userId) return undefined;
   const existing = ctx.store.inbox.read(ctx.tenantId, conversationId, userId);
-  if (existing) return;
+  if (existing) return undefined;
   const conversation = readConversation(ctx, conversationId);
   const latest = latestMessage(ctx, conversationId);
-  ctx.store.inbox.upsert(ctx.tenantId, {
+  const row: ConversationInboxRow = {
     conversationId,
     userId,
     kind: conversation.kind,
@@ -95,7 +100,9 @@ function applyRoomMemberUpsert(
     ...(latest?.body !== undefined ? { lastMessageBody: latest.body } : {}),
     ...(latest?.createdAt !== undefined ? { lastMessageAt: latest.createdAt } : {}),
     ...(latest?.senderId !== undefined ? { lastMessageSenderId: latest.senderId } : {}),
-  });
+  };
+  ctx.store.inbox.upsert(ctx.tenantId, row);
+  return { changes: [inboxChange(row)] };
 }
 
 function projectMessageSent(
@@ -103,20 +110,21 @@ function projectMessageSent(
   conversationId: string,
   sequence: number,
   payload: Record<string, unknown>,
-): void {
+): ProjectionChange[] {
   const senderId = stringField(payload.senderId);
   const body = stringField(payload.body);
   const createdAt = stringField(payload.createdAt);
   const members = listRoomMembers(ctx, conversationId);
   const conversation = readConversation(ctx, conversationId);
   const updatedAt = new Date().toISOString();
+  const changes: ProjectionChange[] = [];
 
   for (const member of members) {
     const current = ctx.store.inbox.read(ctx.tenantId, conversationId, member.userId);
     const requestedReadSequence =
       current?.readSequence ?? (member.userId === senderId ? sequence : 0);
     const readSequence = Math.min(requestedReadSequence, sequence);
-    ctx.store.inbox.upsert(ctx.tenantId, {
+    const row: ConversationInboxRow = {
       conversationId,
       userId: member.userId,
       kind: conversation.kind,
@@ -128,25 +136,28 @@ function projectMessageSent(
       ...(body !== undefined ? { lastMessageBody: body } : {}),
       ...(createdAt !== undefined ? { lastMessageAt: createdAt } : {}),
       ...(senderId !== undefined ? { lastMessageSenderId: senderId } : {}),
-    });
+    };
+    ctx.store.inbox.upsert(ctx.tenantId, row);
+    changes.push(inboxChange(row));
   }
+  return changes;
 }
 
 function projectReceiptAdvanced(
   ctx: FrickProjectionContext,
   conversationId: string,
   payload: Record<string, unknown>,
-): void {
+): ProjectionChange[] {
   const userId = stringField(payload.userId);
   const requestedReadSequence = numberField(payload.sequence);
-  if (!userId) return;
-  if (!ctx.store.isRoomMember(ctx.tenantId, conversationId, userId)) return;
+  if (!userId) return [];
+  if (!ctx.store.isRoomMember(ctx.tenantId, conversationId, userId)) return [];
 
   const current = ctx.store.inbox.read(ctx.tenantId, conversationId, userId);
   const latest = latestMessage(ctx, conversationId);
   const conversation = readConversation(ctx, conversationId);
   const latestSequence = Math.max(current?.lastSequence ?? 0, latest?.sequence ?? 0);
-  if (latestSequence === 0 && !current) return;
+  if (latestSequence === 0 && !current) return [];
   const readSequence = Math.min(
     Math.max(current?.readSequence ?? 0, requestedReadSequence),
     latestSequence,
@@ -155,7 +166,7 @@ function projectReceiptAdvanced(
   const lastMessageAt = current?.lastMessageAt ?? latest?.createdAt;
   const lastMessageSenderId = current?.lastMessageSenderId ?? latest?.senderId;
 
-  ctx.store.inbox.upsert(ctx.tenantId, {
+  const row: ConversationInboxRow = {
     conversationId,
     userId,
     kind: conversation.kind,
@@ -167,7 +178,30 @@ function projectReceiptAdvanced(
     ...(lastMessageBody !== undefined ? { lastMessageBody } : {}),
     ...(lastMessageAt !== undefined ? { lastMessageAt } : {}),
     ...(lastMessageSenderId !== undefined ? { lastMessageSenderId } : {}),
-  });
+  };
+  ctx.store.inbox.upsert(ctx.tenantId, row);
+  return [inboxChange(row)];
+}
+
+/**
+ * Canonical row key used by the conversation-inbox projection: `${userId}:${conversationId}`.
+ * Stable so subscribed clients can deterministically index/replace rows.
+ */
+export function conversationInboxRowKey(userId: string, conversationId: string): string {
+  return `${userId}:${conversationId}`;
+}
+
+function inboxChange(row: ConversationInboxRow): ProjectionChange {
+  return {
+    key: conversationInboxRowKey(row.userId, row.conversationId),
+    value: rowToPlainObject(row),
+  };
+}
+
+function rowToPlainObject(row: ConversationInboxRow): PlainObject {
+  // Spread to ensure every field is enumerable on a plain object; the row
+  // interface already uses only msgpack-friendly primitives.
+  return { ...row } as unknown as PlainObject;
 }
 
 function rebuildInbox(ctx: FrickProjectionContext): void {
