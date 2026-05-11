@@ -18,6 +18,7 @@ import type { FrickLogger } from "../logger.js";
 import type { FrickMetrics } from "../metrics.js";
 import type { FrickStore } from "../store.js";
 import type { JobRow } from "../storage/job-store.js";
+import { emitDevToolsEvent } from "../devtools/emit.js";
 import type { FrickJobHandler, FrickJobRegistry, FrickJobResult } from "./registry.js";
 
 export interface FrickJobWorker {
@@ -104,6 +105,7 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
 
   async function runJob(job: JobRow): Promise<void> {
     inFlight += 1;
+    const startedAtMs = Date.now();
     const handler = registry.resolve(job.jobType);
     const ctx = {
       tenantId: job.tenantId,
@@ -132,7 +134,7 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
           errorMessage: `No handler registered for job type "${job.jobType}"`,
           retryable: false,
         };
-        applyResult(job, result);
+        applyResult(job, result, startedAtMs);
         return;
       }
 
@@ -155,7 +157,7 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
           error: result.errorMessage,
         });
       }
-      applyResult(job, result);
+      applyResult(job, result, startedAtMs);
     } finally {
       inFlight -= 1;
       if (stopRequested && inFlight === 0 && stopResolve) {
@@ -164,10 +166,16 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
     }
   }
 
-  function applyResult(job: JobRow, result: FrickJobResult): void {
+  function applyResult(job: JobRow, result: FrickJobResult, startedAtMs: number): void {
+    const durationMs = Date.now() - startedAtMs;
     if (result.status === "completed") {
       store.jobs.complete(job.id, result.result);
       metrics?.counter("frick.jobs.completed.total", { jobType: job.jobType }).inc();
+      emitDevToolsEvent(store, {
+        kind: "job.completed",
+        tenantId: job.tenantId,
+        fields: { jobType: job.jobType, jobId: job.id, durationMs },
+      });
       return;
     }
     const retryable = result.retryable ?? false;
@@ -185,8 +193,20 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
     // keeping the store API symmetrical with `complete` is worth one extra
     // SELECT in the failure path.
     const after = store.jobs.getById(job.id);
+    const attemptCount = after?.attemptCount ?? job.attemptCount + 1;
     if (after?.status === "dead_lettered") {
       metrics?.counter("frick.jobs.dead_lettered.total", { jobType: job.jobType }).inc();
+      emitDevToolsEvent(store, {
+        kind: "job.dead_lettered",
+        tenantId: job.tenantId,
+        fields: { jobType: job.jobType, jobId: job.id, errorCode, attemptCount },
+      });
+    } else {
+      emitDevToolsEvent(store, {
+        kind: "job.failed",
+        tenantId: job.tenantId,
+        fields: { jobType: job.jobType, jobId: job.id, errorCode, attemptCount },
+      });
     }
   }
 
