@@ -12,6 +12,12 @@ status`, `frick reset --dev`, `frick tenants list`, …). See
 `apps/cli/README.md` for the full command list. The CLI reads the same
 environment variables documented below.
 
+Building a new app rather than operating an existing one? Start from the
+[Getting Started](./authoring.md#getting-started) section of the app
+authoring guide — it walks through `frick init` and the `frick scaffold`
+commands that produce a Frick application skeleton compatible with this
+runbook.
+
 ## Runtime modes
 
 The server reads `FRICK_ENV` (defaulting to `development`). Allowed values:
