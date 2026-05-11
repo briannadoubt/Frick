@@ -2,6 +2,7 @@ import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
 export interface StoredAccount {
+  tenantId: string;
   userId: string;
   handle: string;
   displayName: string;
@@ -9,6 +10,7 @@ export interface StoredAccount {
 }
 
 export interface CreateAccountInput {
+  tenantId: string;
   userId: string;
   handle: string;
   displayName: string;
@@ -17,6 +19,7 @@ export interface CreateAccountInput {
 
 interface AccountRow {
   user_id: string;
+  tenant_id: string;
   handle: string;
   display_name: string;
   password_salt: string;
@@ -36,10 +39,18 @@ export class AccountStore {
       this.db
         .prepare(
           `INSERT INTO auth_accounts
-            (user_id, handle, display_name, password_salt, password_hash, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)`,
+            (user_id, tenant_id, handle, display_name, password_salt, password_hash, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(input.userId, input.handle, input.displayName, passwordSalt, passwordHash, now);
+        .run(
+          input.userId,
+          input.tenantId,
+          input.handle,
+          input.displayName,
+          passwordSalt,
+          passwordHash,
+          now,
+        );
     } catch (error) {
       if (error instanceof Error && /constraint/i.test(error.message)) {
         throw new Error("Handle is already taken");
@@ -48,6 +59,7 @@ export class AccountStore {
     }
 
     return {
+      tenantId: input.tenantId,
       userId: input.userId,
       handle: input.handle,
       displayName: input.displayName,
@@ -55,13 +67,13 @@ export class AccountStore {
     };
   }
 
-  readByIdentity(identity: string): StoredAccount | undefined {
-    const row = this.readRowByIdentity(identity);
+  readByIdentity(tenantId: string, identity: string): StoredAccount | undefined {
+    const row = this.readRowByIdentity(tenantId, identity);
     return row ? fromRow(row) : undefined;
   }
 
-  verifyPassword(identity: string, password: string): StoredAccount | undefined {
-    const row = this.readRowByIdentity(identity);
+  verifyPassword(tenantId: string, identity: string, password: string): StoredAccount | undefined {
+    const row = this.readRowByIdentity(tenantId, identity);
     if (!row) {
       return undefined;
     }
@@ -75,14 +87,14 @@ export class AccountStore {
     return fromRow(row);
   }
 
-  private readRowByIdentity(identity: string): AccountRow | undefined {
+  private readRowByIdentity(tenantId: string, identity: string): AccountRow | undefined {
     return this.db
       .prepare(
         `SELECT * FROM auth_accounts
-          WHERE handle = ? COLLATE NOCASE OR user_id = ?
+          WHERE tenant_id = ? AND (handle = ? COLLATE NOCASE OR user_id = ?)
           LIMIT 1`,
       )
-      .get(identity, identity) as AccountRow | undefined;
+      .get(tenantId, identity, identity) as AccountRow | undefined;
   }
 }
 
@@ -92,6 +104,7 @@ function hashPassword(password: string, salt: string): string {
 
 function fromRow(row: AccountRow): StoredAccount {
   return {
+    tenantId: row.tenant_id,
     userId: row.user_id,
     handle: row.handle,
     displayName: row.display_name,

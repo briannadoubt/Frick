@@ -15,6 +15,7 @@ import { SignalStore } from "./storage/signal-store.js";
 import { StreamStore, type AppendInput, type AppendResult, type StoredEvent } from "./storage/stream-store.js";
 import { BoundedIdempotencyCache } from "./storage/idempotency-cache.js";
 import { listAppliedMigrations, type AppliedMigrationRow } from "./storage/migrations.js";
+import { DEFAULT_TENANT_ID } from "./tenant.js";
 
 /**
  * Default capacity of the in-process idempotency front-cache. Sized to absorb
@@ -80,9 +81,9 @@ export class FrickStore {
   readonly objects: ObjectStore;
   // `streams` and `idempotencyCache` are rebuilt by `prune()` when an
   // age-based sweep removes durable rows: the in-memory LRU may still hold
-  // stale `(replicaId, requestId)` mappings that — after retention — must
-  // not satisfy a retry. Rebuilding both together swaps a fresh cache into
-  // the StreamStore without violating the cache module's encapsulation.
+  // stale `(tenantId, replicaId, requestId)` mappings that — after retention
+  // — must not satisfy a retry. Rebuilding both together swaps a fresh cache
+  // into the StreamStore without violating the cache module's encapsulation.
   streams: StreamStore;
   idempotencyCache: BoundedIdempotencyCache<StoredEvent>;
   readonly presence: PresenceStore;
@@ -168,10 +169,10 @@ export class FrickStore {
    *      rows until the table is at or below the cap.
    *
    * After an age-based sweep, the in-memory LRU front cache may still hold
-   * `(replicaId, requestId)` entries whose durable backing was just deleted.
-   * Returning those from the cache would defeat retention — so on any
-   * age-driven prune we rebuild the cache (and the StreamStore that holds a
-   * reference to it). The cap-only pass is treated the same way for
+   * `(tenantId, replicaId, requestId)` entries whose durable backing was just
+   * deleted. Returning those from the cache would defeat retention — so on
+   * any age-driven prune we rebuild the cache (and the StreamStore that
+   * holds a reference to it). The cap-only pass is treated the same way for
    * simplicity; both are rare maintenance events.
    */
   prune(): PruneResult {
@@ -271,6 +272,8 @@ export class FrickStore {
   }
 
   seedFoundation(): void {
+    // Default tenant only — the seed exists to give a fresh dev database
+    // something to read.
     this.upsertObject("User", "user-ada", {
       displayName: "Ada Lovelace",
       avatarBlobId: undefined,
@@ -297,98 +300,274 @@ export class FrickStore {
     });
   }
 
-  upsertObject(type: string, id: string, value: PlainObject, version = 0): void {
-    this.objects.upsert(type, id, value, version);
+  // ---- Tenant-scoped facades --------------------------------------------
+  //
+  // The legacy API used method names like `upsertObject(type, id, value)`
+  // with no tenant argument. The framework still supports those — they
+  // implicitly target {@link DEFAULT_TENANT_ID}. For new tenant-aware code,
+  // every method also has a leading-`tenantId` variant. This keeps existing
+  // tests (which all operate in the default tenant) green while threading a
+  // tenant boundary through every public surface.
+
+  upsertObject(type: string, id: string, value: PlainObject, version?: number): void;
+  upsertObject(tenantId: string, type: string, id: string, value: PlainObject, version?: number): void;
+  upsertObject(
+    a: string,
+    b: string | PlainObject,
+    c?: string | PlainObject | number,
+    d?: PlainObject | number,
+    e?: number,
+  ): void {
+    if (typeof b === "string" && (typeof c === "string" || c === undefined)) {
+      // 5-arg form: (tenantId, type, id, value, version?)
+      const tenantId = a;
+      const type = b;
+      const id = c as string;
+      const value = d as PlainObject;
+      const version = (e as number | undefined) ?? 0;
+      this.objects.upsert(tenantId, type, id, value, version);
+      return;
+    }
+    // 4-arg form: (type, id, value, version?)
+    const type = a;
+    const id = b as string;
+    const value = c as PlainObject;
+    const version = (d as number | undefined) ?? 0;
+    this.objects.upsert(DEFAULT_TENANT_ID, type, id, value, version);
   }
 
-  readObject(type: string, id: string): PlainObject | undefined {
-    return this.objects.read(type, id);
+  readObject(type: string, id: string): PlainObject | undefined;
+  readObject(tenantId: string, type: string, id: string): PlainObject | undefined;
+  readObject(a: string, b: string, c?: string): PlainObject | undefined {
+    if (c !== undefined) {
+      return this.objects.read(a, b, c);
+    }
+    return this.objects.read(DEFAULT_TENANT_ID, a, b);
   }
 
-  listObjects(type: string): PlainObject[] {
-    return this.objects.list(type);
+  listObjects(type: string): PlainObject[];
+  listObjects(tenantId: string, type: string): PlainObject[];
+  listObjects(a: string, b?: string): PlainObject[] {
+    if (b !== undefined) {
+      return this.objects.list(a, b);
+    }
+    return this.objects.list(DEFAULT_TENANT_ID, a);
   }
 
-  listObjectsForUser(type: string, userId: string): PlainObject[] {
-    return this.listObjects(type).filter((object) => this.isObjectVisibleToUser(type, object, userId));
+  listObjectsForUser(type: string, userId: string): PlainObject[];
+  listObjectsForUser(tenantId: string, type: string, userId: string): PlainObject[];
+  listObjectsForUser(a: string, b: string, c?: string): PlainObject[] {
+    const tenantId = c !== undefined ? a : DEFAULT_TENANT_ID;
+    const type = c !== undefined ? b : a;
+    const userId = c !== undefined ? c : b;
+    return this.listObjects(tenantId, type).filter((object) =>
+      this.isObjectVisibleToUser(tenantId, type, object, userId),
+    );
   }
 
-  isObjectVisibleToUser(type: string, object: PlainObject, userId: string): boolean {
+  isObjectVisibleToUser(type: string, object: PlainObject, userId: string): boolean;
+  isObjectVisibleToUser(
+    tenantId: string,
+    type: string,
+    object: PlainObject,
+    userId: string,
+  ): boolean;
+  isObjectVisibleToUser(
+    a: string,
+    b: string | PlainObject,
+    c: PlainObject | string,
+    d?: string,
+  ): boolean {
+    const tenantId = d !== undefined ? a : DEFAULT_TENANT_ID;
+    const type = d !== undefined ? (b as string) : a;
+    const object = d !== undefined ? (c as PlainObject) : (b as PlainObject);
+    const userId = d !== undefined ? d : (c as string);
     if (type === "Conversation") {
-      return typeof object.id === "string" && this.isRoomMember(object.id, userId);
+      return typeof object.id === "string" && this.isRoomMember(tenantId, object.id, userId);
     }
     if (type === "RoomMember") {
-      return typeof object.conversationId === "string" && this.isRoomMember(object.conversationId, userId);
+      return (
+        typeof object.conversationId === "string" &&
+        this.isRoomMember(tenantId, object.conversationId, userId)
+      );
     }
     return true;
   }
 
-  appendEvent(input: AppendInput): AppendResult {
-    const result = this.streams.append(input);
+  appendEvent(input: Omit<AppendInput, "tenantId"> & { tenantId?: string }): AppendResult {
+    const result = this.streams.append({
+      ...input,
+      tenantId: input.tenantId ?? DEFAULT_TENANT_ID,
+    });
     if (result.created) {
       this.projectStreamEvent(result.event);
     }
     return result;
   }
 
-  readEvents(stream: string, streamId: string, after: number): StoredEvent[] {
-    return this.streams.read(stream, streamId, after);
+  readEvents(stream: string, streamId: string, after: number): StoredEvent[];
+  readEvents(tenantId: string, stream: string, streamId: string, after: number): StoredEvent[];
+  readEvents(a: string, b: string, c: string | number, d?: number): StoredEvent[] {
+    if (d !== undefined) {
+      return this.streams.read(a, b, c as string, d);
+    }
+    return this.streams.read(DEFAULT_TENANT_ID, a, b, c as number);
   }
 
-  setPresence(type: string, key: string, value: PlainObject, ttlMs: number): void {
-    this.presence.set(type, key, value, ttlMs);
+  setPresence(type: string, key: string, value: PlainObject, ttlMs: number): void;
+  setPresence(
+    tenantId: string,
+    type: string,
+    key: string,
+    value: PlainObject,
+    ttlMs: number,
+  ): void;
+  setPresence(
+    a: string,
+    b: string,
+    c: string | PlainObject,
+    d: PlainObject | number,
+    e?: number,
+  ): void {
+    if (e !== undefined) {
+      this.presence.set(a, b, c as string, d as PlainObject, e);
+      return;
+    }
+    this.presence.set(DEFAULT_TENANT_ID, a, b, c as PlainObject, d as number);
   }
 
-  readPresence(type: string, key: string): PlainObject | undefined {
-    return this.presence.read(type, key);
+  readPresence(type: string, key: string): PlainObject | undefined;
+  readPresence(tenantId: string, type: string, key: string): PlainObject | undefined;
+  readPresence(a: string, b: string, c?: string): PlainObject | undefined {
+    if (c !== undefined) {
+      return this.presence.read(a, b, c);
+    }
+    return this.presence.read(DEFAULT_TENANT_ID, a, b);
   }
 
-  clearPresence(type: string, key: string): void {
-    this.presence.clear(type, key);
+  clearPresence(type: string, key: string): void;
+  clearPresence(tenantId: string, type: string, key: string): void;
+  clearPresence(a: string, b: string, c?: string): void {
+    if (c !== undefined) {
+      this.presence.clear(a, b, c);
+      return;
+    }
+    this.presence.clear(DEFAULT_TENANT_ID, a, b);
   }
 
-  enqueueSignal(type: string, key: string, value: PlainObject, ttlMs = 30_000): void {
-    this.signals.enqueue(type, key, value, ttlMs);
+  enqueueSignal(type: string, key: string, value: PlainObject, ttlMs?: number): void;
+  enqueueSignal(
+    tenantId: string,
+    type: string,
+    key: string,
+    value: PlainObject,
+    ttlMs?: number,
+  ): void;
+  enqueueSignal(
+    a: string,
+    b: string,
+    c: string | PlainObject,
+    d?: PlainObject | number,
+    e?: number,
+  ): void {
+    // Disambiguate: 5-arg overload has `c: string`; 4-arg overload has `c: PlainObject`.
+    if (typeof c === "string") {
+      this.signals.enqueue(a, b, c, d as PlainObject, e ?? 30_000);
+      return;
+    }
+    this.signals.enqueue(DEFAULT_TENANT_ID, a, b, c, (d as number | undefined) ?? 30_000);
   }
 
-  drainSignals(type: string, key: string): PlainObject[] {
-    return this.signals.drain(type, key);
+  drainSignals(type: string, key: string): PlainObject[];
+  drainSignals(tenantId: string, type: string, key: string): PlainObject[];
+  drainSignals(a: string, b: string, c?: string): PlainObject[] {
+    if (c !== undefined) {
+      return this.signals.drain(a, b, c);
+    }
+    return this.signals.drain(DEFAULT_TENANT_ID, a, b);
   }
 
-  createBlobMetadata(metadata: BlobMetadataInput): void {
-    this.blobs.create(metadata);
+  createBlobMetadata(metadata: BlobMetadataInput): void;
+  createBlobMetadata(tenantId: string, metadata: BlobMetadataInput): void;
+  createBlobMetadata(a: string | BlobMetadataInput, b?: BlobMetadataInput): void {
+    if (typeof a === "string" && b) {
+      this.blobs.create(a, b);
+      return;
+    }
+    this.blobs.create(DEFAULT_TENANT_ID, a as BlobMetadataInput);
   }
 
-  readBlobMetadata(blobId: string): BlobMetadata | undefined {
-    return this.blobs.read(blobId);
+  readBlobMetadata(blobId: string): BlobMetadata | undefined;
+  readBlobMetadata(tenantId: string, blobId: string): BlobMetadata | undefined;
+  readBlobMetadata(a: string, b?: string): BlobMetadata | undefined {
+    if (b !== undefined) {
+      return this.blobs.read(a, b);
+    }
+    return this.blobs.read(DEFAULT_TENANT_ID, a);
   }
 
+  /**
+   * Legacy single-tenant facade. The single-arg form treats `ownerId` as a
+   * filter within {@link DEFAULT_TENANT_ID}. For explicit tenant scoping
+   * call `store.blobs.list(tenantId, ownerId)` directly.
+   */
   listBlobMetadata(ownerId?: string): BlobMetadata[] {
-    return this.blobs.list(ownerId);
+    return this.blobs.list(DEFAULT_TENANT_ID, ownerId);
   }
 
-  writeBlobContent(blobId: string, content: Uint8Array): void {
-    this.blobs.writeContent(blobId, content);
+  writeBlobContent(blobId: string, content: Uint8Array): void;
+  writeBlobContent(tenantId: string, blobId: string, content: Uint8Array): void;
+  writeBlobContent(a: string, b: string | Uint8Array, c?: Uint8Array): void {
+    if (c !== undefined) {
+      this.blobs.writeContent(a, b as string, c);
+      return;
+    }
+    this.blobs.writeContent(DEFAULT_TENANT_ID, a, b as Uint8Array);
   }
 
-  readBlobContent(blobId: string): Uint8Array | undefined {
-    return this.blobs.readContent(blobId);
+  readBlobContent(blobId: string): Uint8Array | undefined;
+  readBlobContent(tenantId: string, blobId: string): Uint8Array | undefined;
+  readBlobContent(a: string, b?: string): Uint8Array | undefined {
+    if (b !== undefined) {
+      return this.blobs.readContent(a, b);
+    }
+    return this.blobs.readContent(DEFAULT_TENANT_ID, a);
   }
 
-  listInbox(userId: string): ConversationInboxRow[] {
-    return this.inbox.listForUser(userId);
+  listInbox(userId: string): ConversationInboxRow[];
+  listInbox(tenantId: string, userId: string): ConversationInboxRow[];
+  listInbox(a: string, b?: string): ConversationInboxRow[] {
+    if (b !== undefined) {
+      return this.inbox.listForUser(a, b);
+    }
+    return this.inbox.listForUser(DEFAULT_TENANT_ID, a);
   }
 
-  isRoomMember(conversationId: string, userId: string): boolean {
-    return this.listRoomMembers(conversationId).some((member) => member.userId === userId);
+  isRoomMember(conversationId: string, userId: string): boolean;
+  isRoomMember(tenantId: string, conversationId: string, userId: string): boolean;
+  isRoomMember(a: string, b: string, c?: string): boolean {
+    const tenantId = c !== undefined ? a : DEFAULT_TENANT_ID;
+    const conversationId = c !== undefined ? b : a;
+    const userId = c !== undefined ? c : b;
+    return this.listRoomMembers(tenantId, conversationId).some((member) => member.userId === userId);
   }
 
-  hasConversation(conversationId: string): boolean {
-    return this.readObject("Conversation", conversationId) !== undefined;
+  hasConversation(conversationId: string): boolean;
+  hasConversation(tenantId: string, conversationId: string): boolean;
+  hasConversation(a: string, b?: string): boolean {
+    if (b !== undefined) {
+      return this.readObject(a, "Conversation", b) !== undefined;
+    }
+    return this.readObject(DEFAULT_TENANT_ID, "Conversation", a) !== undefined;
   }
 
-  hasUser(userId: string): boolean {
-    return this.readObject("User", userId) !== undefined;
+  hasUser(userId: string): boolean;
+  hasUser(tenantId: string, userId: string): boolean;
+  hasUser(a: string, b?: string): boolean {
+    if (b !== undefined) {
+      return this.readObject(a, "User", b) !== undefined;
+    }
+    return this.readObject(DEFAULT_TENANT_ID, "User", a) !== undefined;
   }
 
   createAccountUser(input: {
@@ -396,21 +575,39 @@ export class FrickStore {
     handle: string;
     displayName: string;
     password: string;
+    tenantId?: string;
   }): StoredAccount {
-    if (this.hasUser(input.userId)) {
+    const tenantId = input.tenantId ?? DEFAULT_TENANT_ID;
+    if (this.hasUser(tenantId, input.userId)) {
       throw new Error("Handle is already taken");
     }
 
-    const account = this.accounts.create(input);
-    this.upsertObject("User", input.userId, {
+    const account = this.accounts.create({
+      tenantId,
+      userId: input.userId,
+      handle: input.handle,
+      displayName: input.displayName,
+      password: input.password,
+    });
+    this.upsertObject(tenantId, "User", input.userId, {
       displayName: input.displayName,
       avatarBlobId: undefined,
     });
-    this.upsertObject("RoomMember", `member-general-${input.userId.replace(/^user-/, "")}`, {
-      conversationId: "conversation-general",
-      userId: input.userId,
-      role: "member",
-    });
+    // Auto-membership in the seeded `conversation-general` only applies in
+    // the default tenant. New tenants start empty — apps create their own
+    // conversations via /conversations.
+    if (tenantId === DEFAULT_TENANT_ID) {
+      this.upsertObject(
+        tenantId,
+        "RoomMember",
+        `member-general-${input.userId.replace(/^user-/, "")}`,
+        {
+          conversationId: "conversation-general",
+          userId: input.userId,
+          role: "member",
+        },
+      );
+    }
     return account;
   }
 
@@ -420,11 +617,13 @@ export class FrickStore {
     kind: "dm" | "group" | "channel";
     createdBy: string;
     participantUserIds: string[];
+    tenantId?: string;
   }): CreatedConversation {
-    if (!this.hasUser(input.createdBy)) {
+    const tenantId = input.tenantId ?? DEFAULT_TENANT_ID;
+    if (!this.hasUser(tenantId, input.createdBy)) {
       throw new Error(`Unknown user ${input.createdBy}`);
     }
-    if (this.readObject("Conversation", input.conversationId)) {
+    if (this.readObject(tenantId, "Conversation", input.conversationId)) {
       throw new Error(`Conversation ${input.conversationId} already exists`);
     }
     const participantUserIds = unique([input.createdBy, ...input.participantUserIds]);
@@ -435,7 +634,7 @@ export class FrickStore {
       throw new Error("conversation must have at least one participant");
     }
     for (const userId of participantUserIds) {
-      if (!this.hasUser(userId)) {
+      if (!this.hasUser(tenantId, userId)) {
         throw new Error(`Unknown user ${userId}`);
       }
     }
@@ -453,19 +652,28 @@ export class FrickStore {
       userId,
       role: userId === input.createdBy ? "owner" : "member",
     }));
-    this.upsertObject("Conversation", input.conversationId, conversation);
+    this.upsertObject(tenantId, "Conversation", input.conversationId, conversation);
     for (const member of members) {
-      this.upsertObject("RoomMember", member.id, member);
+      this.upsertObject(tenantId, "RoomMember", member.id, member);
     }
     return { conversation, member: members[0]!, members };
   }
 
-  verifyAccountPassword(identity: string, password: string): StoredAccount | undefined {
-    return this.accounts.verifyPassword(identity, password);
+  verifyAccountPassword(identity: string, password: string): StoredAccount | undefined;
+  verifyAccountPassword(
+    tenantId: string,
+    identity: string,
+    password: string,
+  ): StoredAccount | undefined;
+  verifyAccountPassword(a: string, b: string, c?: string): StoredAccount | undefined {
+    if (c !== undefined) {
+      return this.accounts.verifyPassword(a, b, c);
+    }
+    return this.accounts.verifyPassword(DEFAULT_TENANT_ID, a, b);
   }
 
-  recordUserDevice(deviceId: string, userId: string, platform: string, lastSeenAt = new Date().toISOString()): void {
-    this.upsertObject("UserDevice", deviceId, {
+  recordUserDevice(deviceId: string, userId: string, platform: string, lastSeenAt = new Date().toISOString(), tenantId: string = DEFAULT_TENANT_ID): void {
+    this.upsertObject(tenantId, "UserDevice", deviceId, {
       userId,
       platform,
       lastSeenAt,
@@ -478,8 +686,12 @@ export class FrickStore {
     deviceId: string;
     replicaId: string;
     expiresAt: string;
+    tenantId?: string;
   }): StoredSession {
-    return this.sessions.create(input);
+    return this.sessions.create({
+      ...input,
+      tenantId: input.tenantId ?? DEFAULT_TENANT_ID,
+    });
   }
 
   readActiveSession(sessionToken: string): StoredSession | undefined {
@@ -490,12 +702,23 @@ export class FrickStore {
     return this.sessions.readAny(sessionToken);
   }
 
-  enqueueJob(type: string, value: PlainObject): void {
-    this.jobs.enqueue(type, value);
+  enqueueJob(type: string, value: PlainObject): void;
+  enqueueJob(tenantId: string, type: string, value: PlainObject): void;
+  enqueueJob(a: string, b: string | PlainObject, c?: PlainObject): void {
+    if (c !== undefined) {
+      this.jobs.enqueue(a, b as string, c);
+      return;
+    }
+    this.jobs.enqueue(DEFAULT_TENANT_ID, a, b as PlainObject);
   }
 
-  nextJob(type: string): StoredJob | undefined {
-    return this.jobs.next(type);
+  nextJob(type: string): StoredJob | undefined;
+  nextJob(tenantId: string, type: string): StoredJob | undefined;
+  nextJob(a: string, b?: string): StoredJob | undefined {
+    if (b !== undefined) {
+      return this.jobs.next(a, b);
+    }
+    return this.jobs.next(DEFAULT_TENANT_ID, a);
   }
 
   #recordSchema(): void {
@@ -523,25 +746,26 @@ export class FrickStore {
   }
 
   private projectMessageSent(event: StoredEvent): void {
+    const tenantId = event.tenantId;
     const conversationId = event.streamId;
     const senderId = stringField(event.payload.senderId);
     const body = stringField(event.payload.body);
     const createdAt = stringField(event.payload.createdAt);
-    const members = this.listRoomMembers(conversationId);
-    const conversation = this.readConversation(conversationId);
+    const members = this.listRoomMembers(tenantId, conversationId);
+    const conversation = this.readConversation(tenantId, conversationId);
     const updatedAt = new Date().toISOString();
 
     for (const member of members) {
-      const current = this.inbox.read(conversationId, member.userId);
+      const current = this.inbox.read(tenantId, conversationId, member.userId);
       const requestedReadSequence = current?.readSequence ?? (member.userId === senderId ? event.sequence : 0);
       const readSequence = Math.min(requestedReadSequence, event.sequence);
-      this.inbox.upsert({
+      this.inbox.upsert(tenantId, {
         conversationId,
         userId: member.userId,
         kind: conversation.kind,
         lastSequence: event.sequence,
         readSequence,
-        unreadCount: this.countUnread(conversationId, member.userId, readSequence),
+        unreadCount: this.countUnread(tenantId, conversationId, member.userId, readSequence),
         updatedAt,
         ...(conversation.title !== undefined ? { title: conversation.title } : {}),
         ...(body !== undefined ? { lastMessageBody: body } : {}),
@@ -552,19 +776,20 @@ export class FrickStore {
   }
 
   private projectReceiptAdvanced(event: StoredEvent): void {
+    const tenantId = event.tenantId;
     const conversationId = event.streamId;
     const userId = stringField(event.payload.userId);
     const requestedReadSequence = numberField(event.payload.sequence);
     if (!userId) {
       return;
     }
-    if (!this.isRoomMember(conversationId, userId)) {
+    if (!this.isRoomMember(tenantId, conversationId, userId)) {
       return;
     }
 
-    const current = this.inbox.read(conversationId, userId);
-    const latestMessage = this.latestMessage(conversationId);
-    const conversation = this.readConversation(conversationId);
+    const current = this.inbox.read(tenantId, conversationId, userId);
+    const latestMessage = this.latestMessage(tenantId, conversationId);
+    const conversation = this.readConversation(tenantId, conversationId);
     const latestSequence = Math.max(current?.lastSequence ?? 0, latestMessage?.sequence ?? 0);
     if (latestSequence === 0 && !current) {
       return;
@@ -574,13 +799,13 @@ export class FrickStore {
     const lastMessageAt = current?.lastMessageAt ?? latestMessage?.createdAt;
     const lastMessageSenderId = current?.lastMessageSenderId ?? latestMessage?.senderId;
 
-    this.inbox.upsert({
+    this.inbox.upsert(tenantId, {
       conversationId,
       userId,
       kind: conversation.kind,
       lastSequence: latestSequence,
       readSequence,
-      unreadCount: this.countUnread(conversationId, userId, readSequence),
+      unreadCount: this.countUnread(tenantId, conversationId, userId, readSequence),
       updatedAt: new Date().toISOString(),
       ...(conversation.title !== undefined ? { title: conversation.title } : {}),
       ...(lastMessageBody !== undefined ? { lastMessageBody } : {}),
@@ -589,8 +814,11 @@ export class FrickStore {
     });
   }
 
-  private listRoomMembers(conversationId: string): Array<{ id: string; conversationId: string; userId: string; role: string }> {
-    return this.listObjects("RoomMember")
+  private listRoomMembers(
+    tenantId: string,
+    conversationId: string,
+  ): Array<{ id: string; conversationId: string; userId: string; role: string }> {
+    return this.listObjects(tenantId, "RoomMember")
       .filter((member) => member.conversationId === conversationId && typeof member.userId === "string")
       .map((member) => ({
         id: String(member.id),
@@ -600,16 +828,19 @@ export class FrickStore {
       }));
   }
 
-  private readConversation(conversationId: string): { kind: string; title?: string } {
-    const conversation = this.readObject("Conversation", conversationId);
+  private readConversation(tenantId: string, conversationId: string): { kind: string; title?: string } {
+    const conversation = this.readObject(tenantId, "Conversation", conversationId);
     return {
       kind: typeof conversation?.kind === "string" ? conversation.kind : "channel",
       ...(typeof conversation?.title === "string" ? { title: conversation.title } : {}),
     };
   }
 
-  private latestMessage(conversationId: string): { sequence: number; body?: string; createdAt?: string; senderId?: string } | undefined {
-    return this.readEvents("MessageStream", conversationId, 0)
+  private latestMessage(
+    tenantId: string,
+    conversationId: string,
+  ): { sequence: number; body?: string; createdAt?: string; senderId?: string } | undefined {
+    return this.readEvents(tenantId, "MessageStream", conversationId, 0)
       .filter((candidate) => candidate.event === "MessageSent")
       .map((candidate) => ({
         sequence: candidate.sequence,
@@ -620,8 +851,13 @@ export class FrickStore {
       .at(-1);
   }
 
-  private countUnread(conversationId: string, userId: string, readSequence: number): number {
-    return this.readEvents("MessageStream", conversationId, readSequence).filter(
+  private countUnread(
+    tenantId: string,
+    conversationId: string,
+    userId: string,
+    readSequence: number,
+  ): number {
+    return this.readEvents(tenantId, "MessageStream", conversationId, readSequence).filter(
       (event) => event.event === "MessageSent" && event.payload.senderId !== userId,
     ).length;
   }
@@ -642,3 +878,4 @@ function memberIdFor(conversationId: string, userId: string): string {
 function unique(values: string[]): string[] {
   return Array.from(new Set(values));
 }
+

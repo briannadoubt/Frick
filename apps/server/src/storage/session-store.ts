@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 export interface StoredSession {
   sessionToken: string;
+  tenantId: string;
   userId: string;
   deviceId: string;
   replicaId: string;
@@ -12,6 +13,7 @@ export interface StoredSession {
 
 export interface CreateSessionInput {
   sessionToken: string;
+  tenantId: string;
   userId: string;
   deviceId: string;
   replicaId: string;
@@ -20,6 +22,7 @@ export interface CreateSessionInput {
 
 interface SessionRow {
   session_token: string;
+  tenant_id: string;
   user_id: string;
   device_id: string;
   replica_id: string;
@@ -36,13 +39,23 @@ export class SessionStore {
     this.db
       .prepare(
         `INSERT INTO auth_sessions
-          (session_token, user_id, device_id, replica_id, expires_at, created_at, last_seen_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          (session_token, tenant_id, user_id, device_id, replica_id, expires_at, created_at, last_seen_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(input.sessionToken, input.userId, input.deviceId, input.replicaId, input.expiresAt, now, now);
+      .run(
+        input.sessionToken,
+        input.tenantId,
+        input.userId,
+        input.deviceId,
+        input.replicaId,
+        input.expiresAt,
+        now,
+        now,
+      );
 
     return {
       sessionToken: input.sessionToken,
+      tenantId: input.tenantId,
       userId: input.userId,
       deviceId: input.deviceId,
       replicaId: input.replicaId,
@@ -88,6 +101,7 @@ export class SessionStore {
 function fromRow(row: SessionRow): StoredSession {
   return {
     sessionToken: row.session_token,
+    tenantId: row.tenant_id,
     userId: row.user_id,
     deviceId: row.device_id,
     replicaId: row.replica_id,

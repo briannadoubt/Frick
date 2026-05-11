@@ -30,6 +30,7 @@ import {
   assertCanSubscribe,
   AuthenticationError,
   AuthorizationError,
+  tenantMembershipReader,
   type FrickPolicyHook,
   type Principal,
 } from "../authz.js";
@@ -115,15 +116,24 @@ export class SyncGateway {
   publishStreamEvent(event: StoredEvent): void {
     const packed = packStreamEvent(this.store.schema, event);
     for (const { client: subscriber } of this.#subscriptions.streamSubscribers(event.stream, event.streamId)) {
+      // Only deliver to subscribers in the same tenant as the event.
+      if (subscriber.principal && subscriber.principal.tenantId !== event.tenantId) {
+        continue;
+      }
       sendFrame(subscriber.socket, [FrameKind.Delta, { objects: [], events: [packed], cursor: event.sequence }]);
     }
   }
 
-  publishObjects(type: string, objects: PlainObject[]): void {
+  publishObjects(type: string, objects: PlainObject[], tenantId?: string): void {
     const cursor = Date.now();
     for (const { client: subscriber } of this.#subscriptions.objectSubscribers(type)) {
       const principal = requirePrincipal(subscriber);
-      const visibleObjects = objects.filter((object) => this.store.isObjectVisibleToUser(type, object, principal.userId));
+      if (tenantId !== undefined && principal.tenantId !== tenantId) {
+        continue;
+      }
+      const visibleObjects = objects.filter((object) =>
+        this.store.isObjectVisibleToUser(principal.tenantId, type, object, principal.userId),
+      );
       if (visibleObjects.length === 0) {
         continue;
       }
@@ -134,8 +144,8 @@ export class SyncGateway {
     }
   }
 
-  publishSignal(name: string, key: string, value: PlainObject, requestId = "http"): void {
-    routeSignal(this.store, this.#subscriptions, { requestId, name, key, value });
+  publishSignal(name: string, key: string, value: PlainObject, tenantId: string, requestId = "http"): void {
+    routeSignal(this.store, this.#subscriptions, { requestId, name, key, value }, tenantId);
   }
 
   #handleRawFrame(client: SyncClient, socket: WebSocket, payload: Buffer): void {
@@ -316,7 +326,14 @@ export class SyncGateway {
       return;
     }
     try {
-      assertCanSubscribe(principal, payload.kind, payload.name, payload.key, this.store, this.#policyHooks);
+      assertCanSubscribe(
+        principal,
+        payload.kind,
+        payload.name,
+        payload.key,
+        tenantMembershipReader(this.store, principal.tenantId),
+        this.#policyHooks,
+      );
     } catch (error) {
       if (this.#sendAuthNack(client, payload.subscriptionId, error)) {
         return;
@@ -329,7 +346,7 @@ export class SyncGateway {
       const key = requireKey(payload);
       const cursor = payload.cursor ?? 0;
       const events = this.store
-        .readEvents(payload.name, key, cursor)
+        .readEvents(principal.tenantId, payload.name, key, cursor)
         .map((event) => packStreamEvent(this.store.schema, event));
       sendFrame(client.socket, [
         FrameKind.StreamPage,
@@ -344,7 +361,11 @@ export class SyncGateway {
     }
 
     if (payload.kind === "object") {
-      const objects = packObjects(this.store, payload.name, this.store.listObjectsForUser(payload.name, principal.userId));
+      const objects = packObjects(
+        this.store,
+        payload.name,
+        this.store.listObjectsForUser(principal.tenantId, payload.name, principal.userId),
+      );
       sendFrame(client.socket, [FrameKind.Snapshot, { subscriptionId: payload.subscriptionId, objects, cursor: 0 }]);
     }
   }
@@ -411,7 +432,7 @@ export class SyncGateway {
           principal,
           payload.stream,
           payload.key,
-          this.store,
+          tenantMembershipReader(this.store, principal.tenantId),
           payload.event,
           payload.payload,
           this.#policyHooks,
@@ -423,6 +444,7 @@ export class SyncGateway {
         throw error;
       }
       const result = this.store.appendEvent({
+        tenantId: principal.tenantId,
         requestId: payload.requestId,
         replicaId: principal.replicaId,
         stream: payload.stream,
@@ -442,7 +464,7 @@ export class SyncGateway {
   }
 
   #handlePresenceSet(client: SyncClient, payload: PresenceSetPayload): void {
-    requirePrincipal(client);
+    const principal = requirePrincipal(client);
     const presence = presenceByName(this.store.schema, payload.name);
     const ttlSeconds = presence.ttlMs / 1000;
     const clampedSeconds = clampTtlSeconds(
@@ -451,9 +473,12 @@ export class SyncGateway {
       this.#limits.presenceTtlMaxSeconds,
       (from, to) => console.warn(`Clamped presence TTL for ${payload.name} from ${from}s to ${to}s`),
     );
-    this.store.setPresence(payload.name, payload.key, payload.value, clampedSeconds * 1000);
+    this.store.setPresence(principal.tenantId, payload.name, payload.key, payload.value, clampedSeconds * 1000);
     const packed = packPresenceRecord(this.store.schema, payload.name, payload.key, payload.value);
     for (const { client: subscriber, subscription } of this.#subscriptions.presenceSubscribers(payload.name, payload.key)) {
+      if (subscriber.principal && subscriber.principal.tenantId !== principal.tenantId) {
+        continue;
+      }
       sendFrame(subscriber.socket, [
         FrameKind.PresenceDelta,
         { subscriptionId: subscription.subscriptionId, records: [packed], cleared: [] },
@@ -463,9 +488,12 @@ export class SyncGateway {
   }
 
   #handlePresenceClear(client: SyncClient, payload: PresenceClearPayload): void {
-    requirePrincipal(client);
-    this.store.clearPresence(payload.name, payload.key);
+    const principal = requirePrincipal(client);
+    this.store.clearPresence(principal.tenantId, payload.name, payload.key);
     for (const { client: subscriber, subscription } of this.#subscriptions.presenceSubscribers(payload.name, payload.key)) {
+      if (subscriber.principal && subscriber.principal.tenantId !== principal.tenantId) {
+        continue;
+      }
       sendFrame(subscriber.socket, [
         FrameKind.PresenceDelta,
         { subscriptionId: subscription.subscriptionId, records: [], cleared: [payload.key] },
@@ -477,15 +505,21 @@ export class SyncGateway {
   #handleSignal(client: SyncClient, payload: SignalPayload): void {
     const principal = requirePrincipal(client);
     try {
-      assertCanSignal(principal, payload.name, payload.key, this.store, this.#policyHooks);
+      assertCanSignal(
+        principal,
+        payload.name,
+        payload.key,
+        tenantMembershipReader(this.store, principal.tenantId),
+        this.#policyHooks,
+      );
     } catch (error) {
       if (this.#sendAuthNack(client, payload.requestId, error)) {
         return;
       }
       throw error;
     }
-    this.store.enqueueSignal(payload.name, payload.key, payload.value);
-    routeSignal(this.store, this.#subscriptions, payload);
+    this.store.enqueueSignal(principal.tenantId, payload.name, payload.key, payload.value);
+    routeSignal(this.store, this.#subscriptions, payload, principal.tenantId);
     sendFrame(client.socket, [FrameKind.Ack, { requestId: payload.requestId }]);
   }
 
@@ -520,6 +554,7 @@ export class SyncGateway {
           userId: session.userId,
           deviceId: session.deviceId,
           replicaId: session.replicaId,
+          tenantId: session.tenantId,
         }
       : undefined;
   }

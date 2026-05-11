@@ -17,24 +17,24 @@ interface JobRow {
 export class JobStore {
   constructor(private readonly db: DatabaseSync) {}
 
-  enqueue(type: string, value: PlainObject): void {
+  enqueue(tenantId: string, type: string, value: PlainObject): void {
     this.db
       .prepare(
-        `INSERT INTO jobs (job_type, packed, status, created_at)
-          VALUES (?, ?, 'queued', ?)`,
+        `INSERT INTO jobs (tenant_id, job_type, packed, status, created_at)
+          VALUES (?, ?, ?, 'queued', ?)`,
       )
-      .run(type, Buffer.from(encode(value)), new Date().toISOString());
+      .run(tenantId, type, Buffer.from(encode(value)), new Date().toISOString());
   }
 
-  next(type: string): StoredJob | undefined {
+  next(tenantId: string, type: string): StoredJob | undefined {
     const row = this.db
       .prepare(
         `SELECT id, job_type, packed FROM jobs
-          WHERE job_type = ? AND status = 'queued'
+          WHERE tenant_id = ? AND job_type = ? AND status = 'queued'
           ORDER BY id ASC
           LIMIT 1`,
       )
-      .get(type) as JobRow | undefined;
+      .get(tenantId, type) as JobRow | undefined;
     if (!row) {
       return undefined;
     }

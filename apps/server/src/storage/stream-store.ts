@@ -12,6 +12,7 @@ import {
 import type { IdempotencyCache } from "./idempotency-cache.js";
 
 export interface AppendInput {
+  tenantId: string;
   requestId: string;
   replicaId: string;
   stream: string;
@@ -20,7 +21,9 @@ export interface AppendInput {
   payload: PlainObject;
 }
 
-export interface StoredEvent extends StreamEventInput {}
+export interface StoredEvent extends StreamEventInput {
+  tenantId: string;
+}
 
 export interface AppendResult {
   event: StoredEvent;
@@ -43,20 +46,20 @@ export class StreamStore {
   ) {}
 
   append(input: AppendInput): AppendResult {
-    const cacheKey = `${input.replicaId}|${input.requestId}`;
+    const cacheKey = `${input.tenantId}|${input.replicaId}|${input.requestId}`;
     const cached = this.idempotencyCache?.get(cacheKey);
     if (cached) {
       return { event: cached, created: false };
     }
-    const existing = this.readIdempotentEvent(input.replicaId, input.requestId);
+    const existing = this.readIdempotentEvent(input.tenantId, input.replicaId, input.requestId);
     if (existing) {
       this.idempotencyCache?.set(cacheKey, existing);
       return { event: existing, created: false };
     }
 
-    const sequence = this.nextSequence(input.stream, input.streamId);
+    const sequence = this.nextSequence(input.tenantId, input.stream, input.streamId);
     const eventId = `event-${randomUUID()}`;
-    const event: StoredEvent = {
+    const wireEvent: StreamEventInput = {
       stream: input.stream,
       streamId: input.streamId,
       sequence,
@@ -64,16 +67,17 @@ export class StreamStore {
       event: input.event,
       payload: input.payload,
     };
-    const packed = packStreamEvent(this.schema, event);
+    const packed = packStreamEvent(this.schema, wireEvent);
     const createdAt = new Date().toISOString();
 
     this.db
       .prepare(
         `INSERT INTO stream_events
-          (stream_type, stream_id, sequence, event_id, event_type, packed, replica_id, request_id, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (tenant_id, stream_type, stream_id, sequence, event_id, event_type, packed, replica_id, request_id, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
+        input.tenantId,
         input.stream,
         input.streamId,
         sequence,
@@ -88,47 +92,63 @@ export class StreamStore {
     this.db
       .prepare(
         `INSERT INTO idempotency_keys
-          (replica_id, request_id, result_event_id, created_at)
-          VALUES (?, ?, ?, ?)`,
+          (tenant_id, replica_id, request_id, result_event_id, created_at)
+          VALUES (?, ?, ?, ?, ?)`,
       )
-      .run(input.replicaId, input.requestId, eventId, createdAt);
+      .run(input.tenantId, input.replicaId, input.requestId, eventId, createdAt);
 
+    const event: StoredEvent = { ...wireEvent, tenantId: input.tenantId };
     this.idempotencyCache?.set(cacheKey, event);
     return { event, created: true };
   }
 
-  read(stream: string, streamId: string, after: number): StoredEvent[] {
+  read(tenantId: string, stream: string, streamId: string, after: number): StoredEvent[] {
     const rows = this.db
       .prepare(
         `SELECT packed FROM stream_events
-          WHERE stream_type = ? AND stream_id = ? AND sequence > ?
+          WHERE tenant_id = ? AND stream_type = ? AND stream_id = ? AND sequence > ?
           ORDER BY sequence ASC`,
       )
-      .all(stream, streamId, after) as unknown as EventRow[];
-    return rows.map((row) => unpackStreamEvent(this.schema, decode(row.packed) as PackedStreamEvent));
+      .all(tenantId, stream, streamId, after) as unknown as EventRow[];
+    return rows.map((row) => ({
+      ...unpackStreamEvent(this.schema, decode(row.packed) as PackedStreamEvent),
+      tenantId,
+    }));
   }
 
-  private readIdempotentEvent(replicaId: string, requestId: string): StoredEvent | undefined {
+  private readIdempotentEvent(
+    tenantId: string,
+    replicaId: string,
+    requestId: string,
+  ): StoredEvent | undefined {
     const row = this.db
-      .prepare("SELECT result_event_id FROM idempotency_keys WHERE replica_id = ? AND request_id = ?")
-      .get(replicaId, requestId) as IdempotencyRow | undefined;
-    return row ? this.readByEventId(row.result_event_id) : undefined;
+      .prepare(
+        "SELECT result_event_id FROM idempotency_keys WHERE tenant_id = ? AND replica_id = ? AND request_id = ?",
+      )
+      .get(tenantId, replicaId, requestId) as IdempotencyRow | undefined;
+    return row ? this.readByEventId(tenantId, row.result_event_id) : undefined;
   }
 
-  private readByEventId(eventId: string): StoredEvent | undefined {
+  private readByEventId(tenantId: string, eventId: string): StoredEvent | undefined {
     const row = this.db
-      .prepare("SELECT packed FROM stream_events WHERE event_id = ?")
-      .get(eventId) as EventRow | undefined;
-    return row ? unpackStreamEvent(this.schema, decode(row.packed) as PackedStreamEvent) : undefined;
+      .prepare(
+        "SELECT packed FROM stream_events WHERE tenant_id = ? AND event_id = ?",
+      )
+      .get(tenantId, eventId) as EventRow | undefined;
+    if (!row) return undefined;
+    return {
+      ...unpackStreamEvent(this.schema, decode(row.packed) as PackedStreamEvent),
+      tenantId,
+    };
   }
 
-  private nextSequence(stream: string, streamId: string): number {
+  private nextSequence(tenantId: string, stream: string, streamId: string): number {
     const row = this.db
       .prepare(
         `SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence
-          FROM stream_events WHERE stream_type = ? AND stream_id = ?`,
+          FROM stream_events WHERE tenant_id = ? AND stream_type = ? AND stream_id = ?`,
       )
-      .get(stream, streamId) as { next_sequence: number };
+      .get(tenantId, stream, streamId) as { next_sequence: number };
     return Number(row.next_sequence);
   }
 }

@@ -7,6 +7,7 @@ import {
   type PackedRecord,
   type PlainObject,
 } from "@frick/protocol";
+import { DEFAULT_TENANT_ID } from "../tenant.js";
 
 interface ObjectRow {
   packed: Uint8Array;
@@ -18,34 +19,59 @@ export class ObjectStore {
     private readonly schema: FrickSchema,
   ) {}
 
-  upsert(type: string, id: string, value: PlainObject, version: number): void {
+  upsert(
+    tenantId: string,
+    type: string,
+    id: string,
+    value: PlainObject,
+    version: number,
+  ): void {
     const packed = packObjectRecord(this.schema, type, id, withoutRecordId(value));
     this.db
       .prepare(
-        `INSERT OR REPLACE INTO objects
-          (object_type, object_id, version, packed, updated_at)
-          VALUES (?, ?, ?, ?, ?)`,
+        `INSERT INTO objects
+          (tenant_id, object_type, object_id, version, packed, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(tenant_id, object_type, object_id) DO UPDATE SET
+            version = excluded.version,
+            packed = excluded.packed,
+            updated_at = excluded.updated_at`,
       )
-      .run(type, id, version, Buffer.from(encode(packed)), new Date().toISOString());
+      .run(
+        tenantId,
+        type,
+        id,
+        version,
+        Buffer.from(encode(packed)),
+        new Date().toISOString(),
+      );
   }
 
-  read(type: string, id: string): PlainObject | undefined {
+  read(tenantId: string, type: string, id: string): PlainObject | undefined {
     const row = this.db
-      .prepare("SELECT packed FROM objects WHERE object_type = ? AND object_id = ?")
-      .get(type, id) as ObjectRow | undefined;
+      .prepare(
+        "SELECT packed FROM objects WHERE tenant_id = ? AND object_type = ? AND object_id = ?",
+      )
+      .get(tenantId, type, id) as ObjectRow | undefined;
     if (!row) {
       return undefined;
     }
     return unpackObjectRecord(this.schema, decode(row.packed) as PackedRecord).value;
   }
 
-  list(type: string): PlainObject[] {
+  list(tenantId: string, type: string): PlainObject[] {
     const rows = this.db
-      .prepare("SELECT packed FROM objects WHERE object_type = ? ORDER BY object_id ASC")
-      .all(type) as unknown as ObjectRow[];
+      .prepare(
+        "SELECT packed FROM objects WHERE tenant_id = ? AND object_type = ? ORDER BY object_id ASC",
+      )
+      .all(tenantId, type) as unknown as ObjectRow[];
     return rows.map((row) => unpackObjectRecord(this.schema, decode(row.packed) as PackedRecord).value);
   }
 }
+
+// Re-exported for the FrickStore facade and tests that want to fall back to
+// the single-tenant default explicitly.
+export { DEFAULT_TENANT_ID };
 
 function withoutRecordId(value: PlainObject): PlainObject {
   const { id: _id, ...fields } = value;

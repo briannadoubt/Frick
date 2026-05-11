@@ -31,11 +31,12 @@ interface InboxRow {
 export class InboxStore {
   constructor(private readonly db: DatabaseSync) {}
 
-  upsert(row: ConversationInboxRow): void {
+  upsert(tenantId: string, row: ConversationInboxRow): void {
     this.db
       .prepare(
         `INSERT INTO conversation_inbox
           (
+            tenant_id,
             conversation_id,
             user_id,
             title,
@@ -48,8 +49,8 @@ export class InboxStore {
             unread_count,
             updated_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(conversation_id, user_id) DO UPDATE SET
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(tenant_id, conversation_id, user_id) DO UPDATE SET
             title = excluded.title,
             kind = excluded.kind,
             last_sequence = excluded.last_sequence,
@@ -61,6 +62,7 @@ export class InboxStore {
             updated_at = excluded.updated_at`,
       )
       .run(
+        tenantId,
         row.conversationId,
         row.userId,
         row.title ?? null,
@@ -75,17 +77,21 @@ export class InboxStore {
       );
   }
 
-  read(conversationId: string, userId: string): ConversationInboxRow | undefined {
+  read(tenantId: string, conversationId: string, userId: string): ConversationInboxRow | undefined {
     const row = this.db
-      .prepare("SELECT * FROM conversation_inbox WHERE conversation_id = ? AND user_id = ?")
-      .get(conversationId, userId) as InboxRow | undefined;
+      .prepare(
+        "SELECT * FROM conversation_inbox WHERE tenant_id = ? AND conversation_id = ? AND user_id = ?",
+      )
+      .get(tenantId, conversationId, userId) as InboxRow | undefined;
     return row ? mapInboxRow(row) : undefined;
   }
 
-  listForUser(userId: string): ConversationInboxRow[] {
+  listForUser(tenantId: string, userId: string): ConversationInboxRow[] {
     const rows = this.db
-      .prepare("SELECT * FROM conversation_inbox WHERE user_id = ? ORDER BY updated_at DESC, conversation_id ASC")
-      .all(userId) as unknown as InboxRow[];
+      .prepare(
+        "SELECT * FROM conversation_inbox WHERE tenant_id = ? AND user_id = ? ORDER BY updated_at DESC, conversation_id ASC",
+      )
+      .all(tenantId, userId) as unknown as InboxRow[];
     return rows.map(mapInboxRow);
   }
 

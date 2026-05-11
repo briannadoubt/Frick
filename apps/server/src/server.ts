@@ -15,9 +15,11 @@ import {
   assertCanReadInbox,
   assertCanSignal,
   assertCanSubscribe,
+  tenantMembershipReader,
   type FrickPolicyHook,
   type Principal,
 } from "./authz.js";
+import { DEFAULT_TENANT_ID, normalizeTenantId } from "./tenant.js";
 import {
   createFrickExtensionRegistry,
   type FrickExtensionRegistryInput,
@@ -251,16 +253,18 @@ export function createFrickServer(options: ServerOptions = {}) {
         const displayName = normalizeDisplayName(requireString(body.displayName, "displayName"));
         const handle = normalizeHandle(requireString(body.handle, "handle"));
         const password = normalizePassword(requireString(body.password, "password"));
+        const tenantId = normalizeTenantId(body.tenantId);
         const platform = parsePlatform(typeof body.platform === "string" ? body.platform : "web");
         const deviceId = typeof body.deviceId === "string" && body.deviceId.length > 0 ? body.deviceId : `device-${randomToken(12)}`;
         const replicaId = typeof body.replicaId === "string" && body.replicaId.length > 0 ? body.replicaId : `replica-${randomToken(12)}`;
         const account = store.createAccountUser({
-          userId: userIdFromHandle(handle),
+          userId: userIdFromHandle(tenantId, handle),
           handle,
           displayName,
           password,
+          tenantId,
         });
-        const session = createSessionForUser(store, account.userId, deviceId, replicaId, platform, config);
+        const session = createSessionForUser(store, account.userId, deviceId, replicaId, platform, config, tenantId);
 
         sendJson(response, 201, authSessionResponse(store, session, account));
       } catch (error) {
@@ -274,14 +278,15 @@ export function createFrickServer(options: ServerOptions = {}) {
         const body = await readJsonBody(request, limits.maxHttpBodyBytes);
         const identity = requireString(body.identity, "identity").trim();
         const password = requireString(body.password, "password");
-        const account = store.verifyAccountPassword(identity, password);
+        const tenantId = normalizeTenantId(body.tenantId);
+        const account = store.verifyAccountPassword(tenantId, identity, password);
         if (!account) {
           throw new AuthenticationError("Invalid handle or password");
         }
         const platform = parsePlatform(typeof body.platform === "string" ? body.platform : "web");
         const deviceId = typeof body.deviceId === "string" && body.deviceId.length > 0 ? body.deviceId : `device-${randomToken(12)}`;
         const replicaId = typeof body.replicaId === "string" && body.replicaId.length > 0 ? body.replicaId : `replica-${randomToken(12)}`;
-        const session = createSessionForUser(store, account.userId, deviceId, replicaId, platform, config);
+        const session = createSessionForUser(store, account.userId, deviceId, replicaId, platform, config, tenantId);
 
         sendJson(response, 200, authSessionResponse(store, session, account));
       } catch (error) {
@@ -306,17 +311,29 @@ export function createFrickServer(options: ServerOptions = {}) {
       try {
         const body = await readJsonBody(request, limits.maxHttpBodyBytes);
         const userId = requireString(body.userId, "userId");
-        if (!store.hasUser(userId)) {
-          throw new Error(`Unknown user ${userId}`);
+        const tenantId = normalizeTenantId(body.tenantId);
+        // Dev-login: in the default tenant, seed users (user-ada, user-grace)
+        // exist; on first dev-login in any other tenant, create the user
+        // object on the fly so explicit-tenant tests don't need a separate
+        // signup round-trip.
+        if (!store.hasUser(tenantId, userId)) {
+          if (tenantId === DEFAULT_TENANT_ID) {
+            throw new Error(`Unknown user ${userId}`);
+          }
+          store.upsertObject(tenantId, "User", userId, {
+            displayName: userId,
+            avatarBlobId: undefined,
+          });
         }
         const platform = parsePlatform(typeof body.platform === "string" ? body.platform : "web");
         const deviceId = typeof body.deviceId === "string" && body.deviceId.length > 0 ? body.deviceId : `device-${randomToken(12)}`;
         const replicaId = typeof body.replicaId === "string" && body.replicaId.length > 0 ? body.replicaId : `replica-${randomToken(12)}`;
-        const session = createSessionForUser(store, userId, deviceId, replicaId, platform, config);
+        const session = createSessionForUser(store, userId, deviceId, replicaId, platform, config, tenantId);
 
         sendJson(response, 200, {
           schemaHash: store.schema.hash,
           sessionToken: session.sessionToken,
+          tenantId: session.tenantId,
           userId: session.userId,
           deviceId: session.deviceId,
           replicaId: session.replicaId,
@@ -346,16 +363,17 @@ export function createFrickServer(options: ServerOptions = {}) {
           throw new Error("title must be a non-empty string");
         }
         const participantUserIds = parseParticipantUserIds(body.participantUserIds);
-        const conversationId = createConversationId(store, title ?? kind);
+        const conversationId = createConversationId(store, principal.tenantId, title ?? kind);
         const created = store.createConversation({
           conversationId,
           ...(title !== undefined ? { title } : {}),
           kind,
           createdBy: principal.userId,
           participantUserIds,
+          tenantId: principal.tenantId,
         });
-        gateway.publishObjects("Conversation", [created.conversation]);
-        gateway.publishObjects("RoomMember", created.members);
+        gateway.publishObjects("Conversation", [created.conversation], principal.tenantId);
+        gateway.publishObjects("RoomMember", created.members, principal.tenantId);
         sendJson(response, 201, {
           schemaHash: store.schema.hash,
           conversation: created.conversation,
@@ -373,7 +391,7 @@ export function createFrickServer(options: ServerOptions = {}) {
       sendJson(response, 200, {
         schemaHash: store.schema.hash,
         type,
-        data: store.listObjectsForUser(type, principal.userId),
+        data: store.listObjectsForUser(principal.tenantId, type, principal.userId),
       });
       return;
     }
@@ -381,11 +399,16 @@ export function createFrickServer(options: ServerOptions = {}) {
     if (request.method === "GET" && url.pathname === "/inbox") {
       const userId = url.searchParams.get("userId") ?? principal.userId;
       try {
-        assertCanReadInbox(principal, userId, store, policyHooks);
+        assertCanReadInbox(
+          principal,
+          userId,
+          tenantMembershipReader(store, principal.tenantId),
+          policyHooks,
+        );
         sendJson(response, 200, {
           schemaHash: store.schema.hash,
           userId,
-          data: store.listInbox(userId),
+          data: store.listInbox(principal.tenantId, userId),
         });
       } catch (error) {
         sendError(response, error, "inbox_rejected");
@@ -394,9 +417,10 @@ export function createFrickServer(options: ServerOptions = {}) {
     }
 
     if (request.method === "GET" && url.pathname === "/blobs") {
+      const ownerId = url.searchParams.get("ownerId") ?? undefined;
       sendJson(response, 200, {
         schemaHash: store.schema.hash,
-        data: store.listBlobMetadata(url.searchParams.get("ownerId") ?? undefined),
+        data: store.blobs.list(principal.tenantId, ownerId),
       });
       return;
     }
@@ -405,7 +429,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     if (blobContentId && request.method === "PUT") {
       try {
         const content = await readRawBody(request, limits.maxBlobBytes, "maxBlobBytes");
-        const metadata = store.readBlobMetadata(blobContentId);
+        const metadata = store.blobs.read(principal.tenantId, blobContentId);
         const contentHash = sha256ContentHash(content);
         let responseStatus = 200;
         let responseContentHash = metadata?.contentHash ?? contentHash;
@@ -428,11 +452,11 @@ export function createFrickServer(options: ServerOptions = {}) {
             mimeType: inferMimeType(request),
             createdAt: new Date().toISOString(),
           };
-          store.createBlobMetadata(createdMetadata);
+          store.blobs.create(principal.tenantId, createdMetadata);
           responseContentHash = createdMetadata.contentHash;
         }
 
-        store.writeBlobContent(blobContentId, content);
+        store.blobs.writeContent(principal.tenantId, blobContentId, content);
         sendJson(response, responseStatus, {
           ok: true,
           blobId: blobContentId,
@@ -447,8 +471,8 @@ export function createFrickServer(options: ServerOptions = {}) {
 
     if (blobContentId && request.method === "GET") {
       try {
-        const metadata = store.readBlobMetadata(blobContentId);
-        const content = store.readBlobContent(blobContentId);
+        const metadata = store.blobs.read(principal.tenantId, blobContentId);
+        const content = store.blobs.readContent(principal.tenantId, blobContentId);
         if (!metadata || !content) {
           sendJson(response, 404, { error: "blob_content_not_found" });
           return;
@@ -471,7 +495,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     if (request.method === "GET" && url.pathname.startsWith("/blobs/")) {
       try {
         const blobId = decodeURIComponent(url.pathname.slice("/blobs/".length));
-        const metadata = blobId ? store.readBlobMetadata(blobId) : undefined;
+        const metadata = blobId ? store.blobs.read(principal.tenantId, blobId) : undefined;
         if (!metadata) {
           sendJson(response, 404, { error: "blob_not_found" });
           return;
@@ -489,7 +513,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         const body = await readJsonBody(request, limits.maxHttpBodyBytes);
         const ownerId = requireString(body.ownerId, "ownerId");
         assertBlobOwnership(principal, ownerId, policyHooks);
-        store.createBlobMetadata({
+        store.blobs.create(principal.tenantId, {
           blobId: requireString(body.blobId, "blobId"),
           ownerId,
           contentHash: requireString(body.contentHash, "contentHash"),
@@ -507,10 +531,16 @@ export function createFrickServer(options: ServerOptions = {}) {
     const signalRoute = parseSignalPath(url);
     if (signalRoute && request.method === "POST") {
       try {
-        assertCanSignal(principal, signalRoute.name, signalRoute.key, store, policyHooks);
+        assertCanSignal(
+          principal,
+          signalRoute.name,
+          signalRoute.key,
+          tenantMembershipReader(store, principal.tenantId),
+          policyHooks,
+        );
         const value = await readJsonBody(request, limits.maxHttpBodyBytes);
-        store.enqueueSignal(signalRoute.name, signalRoute.key, value);
-        gateway.publishSignal(signalRoute.name, signalRoute.key, value);
+        store.enqueueSignal(principal.tenantId, signalRoute.name, signalRoute.key, value);
+        gateway.publishSignal(signalRoute.name, signalRoute.key, value, principal.tenantId);
         sendJson(response, 200, { ok: true });
       } catch (error) {
         sendError(response, error, "signal_rejected");
@@ -524,7 +554,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           schemaHash: store.schema.hash,
           name: signalRoute.name,
           key: signalRoute.key,
-          data: store.drainSignals(signalRoute.name, signalRoute.key),
+          data: store.drainSignals(principal.tenantId, signalRoute.name, signalRoute.key),
         });
       } catch (error) {
         sendError(response, error, "signal_rejected");
@@ -541,9 +571,16 @@ export function createFrickServer(options: ServerOptions = {}) {
         return;
       }
       try {
-        assertCanSubscribe(principal, "stream", stream, key, store, policyHooks);
+        assertCanSubscribe(
+          principal,
+          "stream",
+          stream,
+          key,
+          tenantMembershipReader(store, principal.tenantId),
+          policyHooks,
+        );
         const after = Number(url.searchParams.get("after") ?? "0");
-        const events = store.readEvents(stream, key, Number.isFinite(after) ? after : 0);
+        const events = store.readEvents(principal.tenantId, stream, key, Number.isFinite(after) ? after : 0);
         if (parts[4] === "events") {
           sse.open(response, {
             stream,
@@ -573,8 +610,17 @@ export function createFrickServer(options: ServerOptions = {}) {
         const event = requireString(body.event, "event");
         const payload = requireRecord(body.payload, "payload");
         assertPayloadWithinLimit(payload, limits.maxStreamAppendPayloadBytes);
-        assertCanAppend(principal, stream, key, store, event, payload, policyHooks);
+        assertCanAppend(
+          principal,
+          stream,
+          key,
+          tenantMembershipReader(store, principal.tenantId),
+          event,
+          payload,
+          policyHooks,
+        );
         const result = store.appendEvent({
+          tenantId: principal.tenantId,
           requestId: requireString(body.requestId, "requestId"),
           replicaId: principal.replicaId,
           stream,
@@ -950,6 +996,7 @@ function protectedHttpPrincipal(request: http.IncomingMessage, url: URL, store: 
       userId: "public",
       deviceId: "public",
       replicaId: "public",
+      tenantId: DEFAULT_TENANT_ID,
     };
   }
 
@@ -971,6 +1018,7 @@ function protectedHttpPrincipal(request: http.IncomingMessage, url: URL, store: 
     userId: session.userId,
     deviceId: session.deviceId,
     replicaId: session.replicaId,
+    tenantId: session.tenantId,
   };
 }
 
@@ -1009,17 +1057,19 @@ function createSessionForUser(
   replicaId: string,
   platform: "web" | "ios" | "android" | "server",
   config: FrickConfig,
+  tenantId: string = DEFAULT_TENANT_ID,
 ): StoredSession {
   const expiresAt = new Date(Date.now() + config.sessionTtlSeconds * 1000).toISOString();
   const sessionToken = randomToken(32);
-  store.recordUserDevice(deviceId, userId, platform);
-  return store.createSession({ sessionToken, userId, deviceId, replicaId, expiresAt });
+  store.recordUserDevice(deviceId, userId, platform, new Date().toISOString(), tenantId);
+  return store.createSession({ sessionToken, userId, deviceId, replicaId, expiresAt, tenantId });
 }
 
 function authSessionResponse(store: FrickStore, session: StoredSession, account: StoredAccount): Record<string, unknown> {
   return {
     schemaHash: store.schema.hash,
     sessionToken: session.sessionToken,
+    tenantId: session.tenantId,
     userId: session.userId,
     displayName: account.displayName,
     handle: account.handle,
@@ -1060,8 +1110,12 @@ function normalizeConversationTitle(value: string): string {
   return title;
 }
 
-function userIdFromHandle(handle: string): string {
-  return `user-${handle.replace(/_/g, "-")}`;
+function userIdFromHandle(tenantId: string, handle: string): string {
+  // user-id PK is global across tenants; namespace non-default tenants so
+  // the same handle in two tenants resolves to distinct user ids without
+  // changing the auth_accounts primary key shape.
+  const base = handle.replace(/_/g, "-");
+  return tenantId === DEFAULT_TENANT_ID ? `user-${base}` : `user-${tenantId}-${base}`;
 }
 
 function parseConversationKind(value: string): "dm" | "group" | "channel" {
@@ -1091,11 +1145,11 @@ function parseParticipantUserIds(value: unknown): string[] {
   );
 }
 
-function createConversationId(store: FrickStore, seed: string): string {
+function createConversationId(store: FrickStore, tenantId: string, seed: string): string {
   const slug = slugFromTitle(seed);
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const conversationId = `conversation-${slug}-${randomBytes(3).toString("hex")}`;
-    if (!store.readObject("Conversation", conversationId)) {
+    if (!store.readObject(tenantId, "Conversation", conversationId)) {
       return conversationId;
     }
   }

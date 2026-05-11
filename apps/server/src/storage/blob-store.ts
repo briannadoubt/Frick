@@ -10,10 +10,12 @@ export interface BlobMetadataInput {
 }
 
 export interface BlobMetadata extends BlobMetadataInput {
+  tenantId: string;
   createdAt: string;
 }
 
 interface BlobRow {
+  tenant_id: string;
   blob_id: string;
   owner_id: string;
   content_hash: string;
@@ -30,14 +32,15 @@ interface BlobContentRow {
 export class BlobStore {
   constructor(private readonly db: DatabaseSync) {}
 
-  create(metadata: BlobMetadataInput): void {
+  create(tenantId: string, metadata: BlobMetadataInput): void {
     this.db
       .prepare(
         `INSERT OR REPLACE INTO blob_metadata
-          (blob_id, owner_id, content_hash, byte_length, mime_type, storage_key, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          (tenant_id, blob_id, owner_id, content_hash, byte_length, mime_type, storage_key, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
+        tenantId,
         metadata.blobId,
         metadata.ownerId,
         metadata.contentHash,
@@ -48,54 +51,57 @@ export class BlobStore {
       );
   }
 
-  read(blobId: string): BlobMetadata | undefined {
+  read(tenantId: string, blobId: string): BlobMetadata | undefined {
     const row = this.db
-      .prepare("SELECT * FROM blob_metadata WHERE blob_id = ?")
-      .get(blobId) as BlobRow | undefined;
+      .prepare("SELECT * FROM blob_metadata WHERE tenant_id = ? AND blob_id = ?")
+      .get(tenantId, blobId) as BlobRow | undefined;
     if (!row) {
       return undefined;
     }
-    return {
-      blobId: row.blob_id,
-      ownerId: row.owner_id,
-      contentHash: row.content_hash,
-      byteLength: Number(row.byte_length),
-      mimeType: row.mime_type,
-      createdAt: row.created_at,
-      ...(row.storage_key ? { storageKey: row.storage_key } : {}),
-    };
+    return mapBlobRow(row);
   }
 
-  list(ownerId?: string): BlobMetadata[] {
+  list(tenantId: string, ownerId?: string): BlobMetadata[] {
     const rows = ownerId
       ? (this.db
-          .prepare("SELECT * FROM blob_metadata WHERE owner_id = ? ORDER BY created_at DESC, blob_id ASC")
-          .all(ownerId) as unknown as BlobRow[])
-      : (this.db.prepare("SELECT * FROM blob_metadata ORDER BY created_at DESC, blob_id ASC").all() as unknown as BlobRow[]);
-    return rows.map((row) => ({
-      blobId: row.blob_id,
-      ownerId: row.owner_id,
-      contentHash: row.content_hash,
-      byteLength: Number(row.byte_length),
-      mimeType: row.mime_type,
-      createdAt: row.created_at,
-      ...(row.storage_key ? { storageKey: row.storage_key } : {}),
-    }));
+          .prepare(
+            "SELECT * FROM blob_metadata WHERE tenant_id = ? AND owner_id = ? ORDER BY created_at DESC, blob_id ASC",
+          )
+          .all(tenantId, ownerId) as unknown as BlobRow[])
+      : (this.db
+          .prepare(
+            "SELECT * FROM blob_metadata WHERE tenant_id = ? ORDER BY created_at DESC, blob_id ASC",
+          )
+          .all(tenantId) as unknown as BlobRow[]);
+    return rows.map(mapBlobRow);
   }
 
-  writeContent(blobId: string, content: Uint8Array): void {
+  writeContent(tenantId: string, blobId: string, content: Uint8Array): void {
     this.db
       .prepare(
-        `INSERT OR REPLACE INTO blob_content (blob_id, content, updated_at)
-          VALUES (?, ?, ?)`,
+        `INSERT OR REPLACE INTO blob_content (blob_id, content, updated_at, tenant_id)
+          VALUES (?, ?, ?, ?)`,
       )
-      .run(blobId, Buffer.from(content), new Date().toISOString());
+      .run(blobId, Buffer.from(content), new Date().toISOString(), tenantId);
   }
 
-  readContent(blobId: string): Uint8Array | undefined {
+  readContent(tenantId: string, blobId: string): Uint8Array | undefined {
     const row = this.db
-      .prepare("SELECT content FROM blob_content WHERE blob_id = ?")
-      .get(blobId) as BlobContentRow | undefined;
+      .prepare("SELECT content FROM blob_content WHERE tenant_id = ? AND blob_id = ?")
+      .get(tenantId, blobId) as BlobContentRow | undefined;
     return row ? Buffer.from(row.content) : undefined;
   }
+}
+
+function mapBlobRow(row: BlobRow): BlobMetadata {
+  return {
+    tenantId: row.tenant_id,
+    blobId: row.blob_id,
+    ownerId: row.owner_id,
+    contentHash: row.content_hash,
+    byteLength: Number(row.byte_length),
+    mimeType: row.mime_type,
+    createdAt: row.created_at,
+    ...(row.storage_key ? { storageKey: row.storage_key } : {}),
+  };
 }
