@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { FrameKind, encodeFrame, foundationSchema, packStreamEvent } from "@frick/protocol";
+import {
+  FrameKind,
+  decodeFrame,
+  defaultClientCapabilities,
+  defaultServerCapabilities,
+  encodeFrame,
+  foundationSchema,
+  packStreamEvent,
+} from "@frick/protocol";
 import { FrickClient, MemoryFrickCache } from "../src/index.js";
+
+const HELLO_ACK_FRAME_KIND = (FrameKind as typeof FrameKind & { HelloAck?: number }).HelloAck ?? 18;
 
 describe("foundation runtime", () => {
   it("hydrates objects and stream events from local cache", () => {
@@ -109,6 +119,113 @@ describe("foundation runtime", () => {
         deviceId: "device-web",
       }),
     );
+  });
+
+  it("sends client capabilities in the hello frame", () => {
+    const socket = TestWebSocket.prepare();
+    const client = new FrickClient({
+      endpoint: "ws://test",
+      schema: foundationSchema,
+      replicaId: "replica-web",
+      deviceId: "device-web",
+      WebSocketImpl: TestWebSocket as never,
+    });
+
+    client.connect();
+    socket.emit("open", {});
+
+    expect(decodeFrame(socket.sent[0] as Uint8Array)).toEqual([
+      FrameKind.Hello,
+      {
+        replicaId: "replica-web",
+        deviceId: "device-web",
+        schemaHash: foundationSchema.hash,
+        knownCursors: {},
+        clientCapabilities: defaultClientCapabilities({
+          platform: "web",
+          sdkVersion: "0.0.0-runtime",
+          schema: foundationSchema,
+        }),
+      },
+    ]);
+  });
+
+  it("stores server capabilities and schema compatibility from hello ack frames", () => {
+    const socket = TestWebSocket.prepare();
+    const client = new FrickClient({
+      endpoint: "ws://test",
+      schema: foundationSchema,
+      WebSocketImpl: TestWebSocket as never,
+    });
+    const schemaCompatibility = {
+      compatible: true,
+      reason: "exact",
+      clientRevision: foundationSchema.schemaRevision,
+      serverRevision: foundationSchema.schemaRevision,
+    } as const;
+    const serverCapabilities = defaultServerCapabilities(foundationSchema);
+
+    client.connect();
+    socket.emit("open", {});
+    socket.emit("message", {
+      data: encodeFrame([
+        HELLO_ACK_FRAME_KIND,
+        {
+          schemaHash: foundationSchema.hash,
+          schemaId: foundationSchema.schemaId,
+          schemaRevision: foundationSchema.schemaRevision,
+          schemaCompatibility,
+          serverCapabilities,
+        },
+      ] as never),
+    });
+
+    expect(client.syncStatus.value.serverCapabilities).toEqual(serverCapabilities);
+    expect(client.syncStatus.value.schemaCompatibility).toEqual(schemaCompatibility);
+  });
+
+  it("stores shared error envelopes from nack frames while clearing pending appends", async () => {
+    const socket = TestWebSocket.prepare();
+    const cache = new MemoryFrickCache();
+    const client = new FrickClient({
+      endpoint: "ws://test",
+      schema: foundationSchema,
+      cache,
+      WebSocketImpl: TestWebSocket as never,
+    });
+    await client.append("MessageStream", "conversation-general", "MessageSent", {
+      messageId: "message-1",
+      senderId: "user-ada",
+      body: "queued",
+      createdAt: "2026-05-09T00:00:00.000Z",
+    });
+
+    client.connect();
+    socket.emit("open", {});
+    const appendFrame = decodeFrame(socket.sent[1] as Uint8Array);
+    if (appendFrame[0] !== FrameKind.Append) {
+      throw new Error("Expected pending append to flush after hello");
+    }
+    const error = {
+      code: "stream.appendRejected",
+      message: "Append rejected",
+      requestId: appendFrame[1].requestId,
+      retryable: false,
+    } as const;
+
+    socket.emit("message", {
+      data: encodeFrame([
+        FrameKind.Nack,
+        {
+          requestId: appendFrame[1].requestId,
+          error,
+        },
+      ]),
+    });
+
+    expect(client.syncStatus.value.pendingMutations).toBe(0);
+    expect(cache.load(foundationSchema).pendingAppends).toHaveLength(0);
+    expect(client.syncStatus.value.lastError).toEqual(error);
   });
 });
 

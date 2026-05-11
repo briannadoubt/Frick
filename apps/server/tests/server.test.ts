@@ -5,10 +5,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   FrameKind,
   decodeFrame,
+  defaultClientCapabilities,
+  defaultServerCapabilities,
   encodeFrame,
   foundationSchema,
   unpackSignalEnvelope,
   type FrickFrame,
+  type HelloAckPayload,
 } from "@frick/protocol";
 import { createFrickServer, defaultDatabasePath } from "../src/server.js";
 
@@ -436,6 +439,7 @@ describe("foundation sync gateway", () => {
     });
     const socket = await connect(`${app.url}?sessionToken=${encodeURIComponent(login.sessionToken)}`);
 
+    const hello = expectHelloAckThenSchema(socket);
     socket.send(
       encodeFrame([
         FrameKind.Hello,
@@ -447,7 +451,7 @@ describe("foundation sync gateway", () => {
         },
       ]),
     );
-    await nextFrame(socket);
+    await hello;
 
     socket.send(
       encodeFrame([
@@ -485,7 +489,7 @@ describe("foundation sync gateway", () => {
     expect(response.status).toBe(403);
   });
 
-  it("hard rejects schema hash mismatch", async () => {
+  it("hard rejects schema hash mismatch for legacy hello without capabilities", async () => {
     app = await startServer();
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
     const socket = await connectWithSession(app.url, login.sessionToken);
@@ -519,11 +523,90 @@ describe("foundation sync gateway", () => {
     socket.close();
   });
 
+  it("accepts compatible client capabilities with a different schema hash", async () => {
+    app = await startServer();
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const socket = await connectWithSession(app.url, login.sessionToken);
+
+    const hello = expectHelloAckThenSchema(socket);
+    socket.send(
+      encodeFrame([
+        FrameKind.Hello,
+        {
+          replicaId: "replica-compatible",
+          deviceId: "device-compatible",
+          schemaHash: "legacy-top-level-hash-is-ignored-when-capabilities-exist",
+          knownCursors: {},
+          clientCapabilities: {
+            ...defaultClientCapabilities({
+              platform: "web",
+              sdkVersion: "0.0.0-test",
+              schema: foundationSchema,
+            }),
+            schema: {
+              schemaId: foundationSchema.schemaId,
+              schemaRevision: foundationSchema.schemaRevision,
+              schemaHash: "compatible-but-different",
+            },
+          },
+        },
+      ]),
+    );
+
+    const ack = await hello;
+    expect(ack.schemaCompatibility).toMatchObject({
+      compatible: true,
+      reason: "revisionCompatibleHashMismatch",
+      clientRevision: foundationSchema.schemaRevision,
+      serverRevision: foundationSchema.schemaRevision,
+    });
+    socket.close();
+  });
+
+  it("rejects hello with unsupported required capabilities", async () => {
+    app = await startServer();
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const socket = await connectWithSession(app.url, login.sessionToken);
+
+    socket.send(
+      encodeFrame([
+        FrameKind.Hello,
+        {
+          replicaId: "replica-unsupported",
+          deviceId: "device-unsupported",
+          schemaHash: foundationSchema.hash,
+          knownCursors: {},
+          clientCapabilities: {
+            ...defaultClientCapabilities({
+              platform: "web",
+              sdkVersion: "0.0.0-test",
+              schema: foundationSchema,
+            }),
+            required: ["transport.websocket", "primitive.telepathy", "push.apns"],
+          },
+        },
+      ]),
+    );
+
+    const frame = await nextFrame(socket);
+    expect(frame[0]).toBe(FrameKind.Nack);
+    expect(frame[1].error).toMatchObject({
+      code: "sync.protocolError",
+      requestId: "hello",
+      retryable: false,
+      details: { unsupportedCapabilities: ["primitive.telepathy", "push.apns"] },
+      schemaHash: foundationSchema.hash,
+      schemaRevision: foundationSchema.schemaRevision,
+    });
+    socket.close();
+  });
+
   it("subscribes to message stream and receives appended events", async () => {
     app = await startServer();
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
     const socket = await connectWithSession(app.url, login.sessionToken);
 
+    const hello = expectHelloAckThenSchema(socket);
     socket.send(
       encodeFrame([
         FrameKind.Hello,
@@ -535,7 +618,7 @@ describe("foundation sync gateway", () => {
         },
       ]),
     );
-    await nextFrame(socket);
+    await hello;
 
     socket.send(
       encodeFrame([
@@ -582,6 +665,7 @@ describe("foundation sync gateway", () => {
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
     const socket = await connectWithSession(app.url, login.sessionToken);
 
+    const hello = expectHelloAckThenSchema(socket);
     socket.send(
       encodeFrame([
         FrameKind.Hello,
@@ -593,7 +677,7 @@ describe("foundation sync gateway", () => {
         },
       ]),
     );
-    await nextFrame(socket);
+    await hello;
 
     socket.send(
       encodeFrame([
@@ -622,6 +706,7 @@ describe("foundation sync gateway", () => {
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
     const socket = await connectWithSession(app.url, login.sessionToken);
 
+    const hello = expectHelloAckThenSchema(socket);
     socket.send(
       encodeFrame([
         FrameKind.Hello,
@@ -633,7 +718,7 @@ describe("foundation sync gateway", () => {
         },
       ]),
     );
-    await nextFrame(socket);
+    await hello;
     socket.send(
       encodeFrame([
         FrameKind.Subscribe,
@@ -704,6 +789,7 @@ describe("foundation sync gateway", () => {
     expect((await readSseEvent(reader)).event).toBe("stream-page");
 
     const socket = await connectWithSession(app.url, login.sessionToken);
+    const hello = expectHelloAckThenSchema(socket);
     socket.send(
       encodeFrame([
         FrameKind.Hello,
@@ -715,7 +801,7 @@ describe("foundation sync gateway", () => {
         },
       ]),
     );
-    await nextFrame(socket);
+    await hello;
 
     const deltaEvent = readSseEvent(reader);
     socket.send(
@@ -1063,6 +1149,7 @@ describe("foundation sync gateway", () => {
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
     const socket = await connectWithSession(app.url, login.sessionToken);
 
+    const hello = expectHelloAckThenSchema(socket);
     socket.send(
       encodeFrame([
         FrameKind.Hello,
@@ -1074,7 +1161,7 @@ describe("foundation sync gateway", () => {
         },
       ]),
     );
-    await nextFrame(socket);
+    await hello;
 
     socket.send(
       encodeFrame([
@@ -1147,6 +1234,25 @@ async function nextFrame(socket: WebSocket): Promise<FrickFrame> {
       resolve(decodeFrame(data as Buffer));
     });
   });
+}
+
+async function expectHelloAckThenSchema(socket: WebSocket): Promise<HelloAckPayload> {
+  const [ack, schema] = await collectFrames(socket, 2);
+  expect(ack[0]).toBe(FrameKind.HelloAck);
+  expect(ack[1]).toMatchObject({
+    schemaHash: foundationSchema.hash,
+    schemaId: foundationSchema.schemaId,
+    schemaRevision: foundationSchema.schemaRevision,
+    schemaCompatibility: {
+      compatible: true,
+      clientRevision: foundationSchema.schemaRevision,
+      serverRevision: foundationSchema.schemaRevision,
+    },
+    serverCapabilities: defaultServerCapabilities(foundationSchema),
+  });
+
+  expect(schema).toEqual([FrameKind.Schema, foundationSchema]);
+  return ack[1] as HelloAckPayload;
 }
 
 async function collectFrames(socket: WebSocket, count: number): Promise<FrickFrame[]> {

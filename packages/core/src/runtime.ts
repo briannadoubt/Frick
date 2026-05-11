@@ -1,6 +1,7 @@
 import {
   FrameKind,
   decodeFrame,
+  defaultClientCapabilities,
   encodeFrame,
   foundationSchema,
   unpackObjectRecord,
@@ -8,8 +9,11 @@ import {
   unpackSignalEnvelope,
   unpackStreamEvent,
   type FrickFrame,
+  type FrickErrorEnvelope,
   type FrickSchema,
+  type FrickServerCapabilities,
   type PlainObject,
+  type SchemaCompatibilityResult,
   type StreamEventInput,
 } from "@frick/protocol";
 import {
@@ -20,6 +24,15 @@ import {
 import { Signal, objectKey, streamKey } from "./subscriptions.js";
 
 const SOCKET_OPEN = 1;
+const HELLO_ACK_FRAME_KIND = (FrameKind as typeof FrameKind & { HelloAck?: number }).HelloAck ?? 18;
+
+type HelloAckFrame = [
+  typeof HELLO_ACK_FRAME_KIND,
+  {
+    serverCapabilities: FrickServerCapabilities;
+    schemaCompatibility: SchemaCompatibilityResult;
+  },
+];
 
 export interface SyncStatus {
   connected: boolean;
@@ -28,6 +41,9 @@ export interface SyncStatus {
   authenticated: boolean;
   userId?: string | undefined;
   deviceId?: string | undefined;
+  serverCapabilities?: FrickServerCapabilities;
+  schemaCompatibility?: SchemaCompatibilityResult;
+  lastError?: FrickErrorEnvelope;
 }
 
 export interface FrickSession {
@@ -142,6 +158,11 @@ export class FrickClient {
           deviceId: this.#deviceId,
           schemaHash: this.schema.hash,
           knownCursors: this.syncStatus.value.cursors,
+          clientCapabilities: defaultClientCapabilities({
+            platform: "web",
+            sdkVersion: "0.0.0-runtime",
+            schema: this.schema,
+          }),
         },
       ]);
       this.#setStatus({ connected: true });
@@ -275,6 +296,15 @@ export class FrickClient {
   }
 
   #handleFrame(frame: FrickFrame): void {
+    if (frame[0] === HELLO_ACK_FRAME_KIND) {
+      const helloAck = frame as HelloAckFrame;
+      this.#setStatus({
+        serverCapabilities: helloAck[1].serverCapabilities,
+        schemaCompatibility: helloAck[1].schemaCompatibility,
+      });
+      return;
+    }
+
     switch (frame[0]) {
       case FrameKind.Schema:
         return;
@@ -327,7 +357,7 @@ export class FrickClient {
       case FrameKind.Nack:
         this.#pendingAppends.delete(frame[1].requestId);
         this.#cache.removePendingAppend(this.schema, frame[1].requestId);
-        this.#setStatus({ pendingMutations: this.#pendingAppends.size });
+        this.#setStatus({ pendingMutations: this.#pendingAppends.size, lastError: frame[1].error });
         return;
       default:
         return;

@@ -2,18 +2,24 @@ import type { IncomingMessage } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   FrameKind,
+  compareSchemaCompatibility,
   createFrickErrorEnvelope,
   decodeFrame,
+  defaultServerCapabilities,
   packObjectRecord,
   packPresenceRecord,
   packStreamEvent,
   presenceByName,
   rejectSchemaMismatch,
+  unsupportedRequiredCapabilities,
   type AppendPayload,
+  type FrickClientCapabilities,
   type FrickFrame,
   type PresenceClearPayload,
   type PresenceSetPayload,
   type PlainObject,
+  type FrickSchema,
+  type SchemaCompatibilityResult,
   type SignalPayload,
   type SubscribePayload,
 } from "@frick/protocol";
@@ -108,12 +114,39 @@ export class SyncGateway {
   #handleFrame(client: SyncClient, frame: FrickFrame): void {
     switch (frame[0]) {
       case FrameKind.Hello:
-        try {
-          rejectSchemaMismatch(frame[1].schemaHash, this.store.schema.hash);
-        } catch (error) {
+        if (!frame[1].clientCapabilities) {
+          try {
+            rejectSchemaMismatch(frame[1].schemaHash, this.store.schema.hash);
+          } catch (error) {
+            const envelope = createFrickErrorEnvelope({
+              code: "schema.incompatible",
+              message: error instanceof Error ? error.message : "Schema mismatch",
+              requestId: "hello",
+              retryable: false,
+              schemaHash: this.store.schema.hash,
+              schemaRevision: this.store.schema.schemaRevision,
+            });
+            sendFrame(client.socket, [
+              FrameKind.Nack,
+              {
+                requestId: "hello",
+                error: envelope,
+                code: envelope.code,
+                message: envelope.message,
+              },
+            ]);
+            return;
+          }
+          this.#sendHelloSuccess(client, compareSchemaCompatibility(this.store.schema, this.store.schema));
+          return;
+        }
+
+        const clientSchema = schemaFromClientCapabilities(frame[1].clientCapabilities, this.store.schema);
+        const compatibility = compareSchemaCompatibility(clientSchema, this.store.schema);
+        if (!compatibility.compatible) {
           const envelope = createFrickErrorEnvelope({
             code: "schema.incompatible",
-            message: error instanceof Error ? error.message : "Schema mismatch",
+            message: compatibility.message,
             requestId: "hello",
             retryable: false,
             schemaHash: this.store.schema.hash,
@@ -130,7 +163,32 @@ export class SyncGateway {
           ]);
           return;
         }
-        sendFrame(client.socket, [FrameKind.Schema, this.store.schema]);
+
+        const serverCapabilities = defaultServerCapabilities(this.store.schema);
+        const unsupportedCapabilities = unsupportedRequiredCapabilities(frame[1].clientCapabilities, serverCapabilities);
+        if (unsupportedCapabilities.length > 0) {
+          const envelope = createFrickErrorEnvelope({
+            code: "sync.protocolError",
+            message: "Client requires unsupported capabilities",
+            requestId: "hello",
+            retryable: false,
+            details: { unsupportedCapabilities },
+            schemaHash: this.store.schema.hash,
+            schemaRevision: this.store.schema.schemaRevision,
+          });
+          sendFrame(client.socket, [
+            FrameKind.Nack,
+            {
+              requestId: "hello",
+              error: envelope,
+              code: envelope.code,
+              message: envelope.message,
+            },
+          ]);
+          return;
+        }
+
+        this.#sendHelloSuccess(client, compatibility);
         return;
       case FrameKind.Subscribe:
         this.#handleSubscribe(client, frame[1]);
@@ -185,6 +243,20 @@ export class SyncGateway {
       const objects = packObjects(this.store, payload.name, this.store.listObjectsForUser(payload.name, principal.userId));
       sendFrame(client.socket, [FrameKind.Snapshot, { subscriptionId: payload.subscriptionId, objects, cursor: 0 }]);
     }
+  }
+
+  #sendHelloSuccess(client: SyncClient, schemaCompatibility: SchemaCompatibilityResult): void {
+    sendFrame(client.socket, [
+      FrameKind.HelloAck,
+      {
+        schemaHash: this.store.schema.hash,
+        schemaId: this.store.schema.schemaId,
+        schemaRevision: this.store.schema.schemaRevision,
+        schemaCompatibility,
+        serverCapabilities: defaultServerCapabilities(this.store.schema),
+      },
+    ]);
+    sendFrame(client.socket, [FrameKind.Schema, this.store.schema]);
   }
 
   #handleAppend(client: SyncClient, payload: AppendPayload): void {
@@ -280,4 +352,13 @@ function packObjects(store: FrickStore, type: string, objects: PlainObject[]) {
     const { id: _id, ...value } = object;
     return packObjectRecord(store.schema, type, id, value);
   });
+}
+
+function schemaFromClientCapabilities(client: FrickClientCapabilities, serverSchema: FrickSchema): FrickSchema {
+  return {
+    ...serverSchema,
+    schemaId: client.schema.schemaId,
+    schemaRevision: client.schema.schemaRevision,
+    hash: client.schema.schemaHash,
+  };
 }
