@@ -629,6 +629,31 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
       );
     `,
   },
+  {
+    // DevTools event log: a queryable feed of meaningful framework events
+    // (HTTP requests, WS lifecycle, job lifecycle) intended for an external
+    // developer console. Distinct from the unstructured stderr request log
+    // and the per-counter metrics module — this is a durable, time-ordered
+    // record an operator can scrub through. Retention is bounded by both
+    // age and row count (see DevToolsEventStore.prune), so the table never
+    // grows without limit. `tenant_id` is nullable so framework-wide events
+    // (e.g. a request from an unauthenticated principal) can still be
+    // recorded; the per-tenant index uses that column directly.
+    id: "0011_devtools_event_log",
+    schemaRevision: 1,
+    description: "Create devtools_events table for the developer-console event feed.",
+    sql: `
+      CREATE TABLE IF NOT EXISTS devtools_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        occurred_at TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        tenant_id TEXT,
+        fields TEXT NOT NULL
+      );
+      CREATE INDEX idx_devtools_events_kind_at ON devtools_events (kind, occurred_at DESC);
+      CREATE INDEX idx_devtools_events_tenant_at ON devtools_events (tenant_id, occurred_at DESC);
+    `,
+  },
 ];
 
 /** Names of all framework tables (and indexes) the runner manages. Used by the
@@ -655,6 +680,7 @@ export const FRAMEWORK_TABLES: readonly string[] = [
   "search_indexes",
   "search_index_fts",
   "tenant_settings",
+  "devtools_events",
 ];
 
 export interface MigrationRunResult {
