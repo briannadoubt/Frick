@@ -764,6 +764,21 @@ export class FrickStore {
     return this.streams.read(DEFAULT_TENANT_ID, a, b, c as number);
   }
 
+  /**
+   * Backwards-paginated event read for `loadOlder`-style scrollback. Forwards
+   * to {@link StreamStore.readBefore}. `before` is exclusive; `limit` is
+   * clamped server-side to `[1, 500]`.
+   */
+  readEventsBefore(
+    tenantId: string,
+    stream: string,
+    streamId: string,
+    before: number,
+    limit: number,
+  ): StoredEvent[] {
+    return this.streams.readBefore(tenantId, stream, streamId, before, limit);
+  }
+
   setPresence(type: string, key: string, value: PlainObject, ttlMs: number): void;
   setPresence(
     tenantId: string,

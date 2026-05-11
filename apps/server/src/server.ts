@@ -1396,7 +1396,24 @@ export function createFrickServer(options: ServerOptions = {}) {
           policyHooks,
         );
         const after = Number(url.searchParams.get("after") ?? "0");
-        const events = store.readEvents(principal.tenantId, stream, key, Number.isFinite(after) ? after : 0);
+        const beforeParam = url.searchParams.get("before");
+        const limitParam = url.searchParams.get("limit");
+        let events;
+        if (beforeParam !== null) {
+          // Backwards page for scrollback. `before` is exclusive; `limit`
+          // defaults to 50 and is clamped server-side to [1, 500].
+          const before = Number(beforeParam);
+          const limit = limitParam !== null ? Number(limitParam) : 50;
+          events = store.readEventsBefore(
+            principal.tenantId,
+            stream,
+            key,
+            Number.isFinite(before) ? before : Number.MAX_SAFE_INTEGER,
+            Number.isFinite(limit) ? limit : 50,
+          );
+        } else {
+          events = store.readEvents(principal.tenantId, stream, key, Number.isFinite(after) ? after : 0);
+        }
         if (parts[4] === "events") {
           sse.open(response, {
             stream,

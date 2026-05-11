@@ -1,4 +1,8 @@
 import type { FieldDef, FrickSchema } from "./schema.js";
+import {
+  generateKotlinErrorEnum,
+  generateSwiftErrorEnum,
+} from "./generators/error-enums.js";
 
 export function generateSwiftArtifact(schema: FrickSchema): string {
   const jsonSupport = schemaHasJsonFields(schema) ? [swiftJsonValueSupport(), ""] : [];
@@ -26,6 +30,8 @@ export function generateSwiftArtifact(schema: FrickSchema): string {
     `public let frickSchemaHash = ${JSON.stringify(schema.hash)}`,
     "",
     swiftSchemaDescriptor(schema),
+    "",
+    generateSwiftErrorEnum(),
     "",
     ...jsonSupport,
     ...declarations,
@@ -90,6 +96,8 @@ export function generateKotlinArtifact(schema: FrickSchema): string {
     `const val FRICK_SCHEMA_HASH: String = ${JSON.stringify(schema.hash)}`,
     "",
     kotlinSchemaDescriptor(schema),
+    "",
+    generateKotlinErrorEnum(),
     "",
     ...declarations,
   ].join("\n");

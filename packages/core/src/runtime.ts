@@ -23,6 +23,7 @@ import {
   type PendingAppend,
 } from "./cache.js";
 import { Signal, objectKey, streamKey } from "./subscriptions.js";
+import { resolveHttpEndpoint } from "./http.js";
 
 const SOCKET_OPEN = 1;
 const HELLO_ACK_FRAME_KIND = (FrameKind as typeof FrameKind & { HelloAck?: number }).HelloAck ?? 18;
@@ -699,6 +700,42 @@ export class FrickClient {
     const url = new URL(this.#endpoint);
     url.searchParams.set("sessionToken", this.#sessionToken);
     return url.toString();
+  }
+
+  /** HTTP origin derived from the WebSocket endpoint. Used by `loadOlder`. */
+  get httpEndpoint(): string {
+    return resolveHttpEndpoint(this.#endpoint);
+  }
+
+  /**
+   * Backwards-paginated read for scrollback: returns up to `count` events
+   * whose `sequence` is strictly less than `before`. Events are returned
+   * oldest-first so callers can `[...older, ...current]` without reversing.
+   * Pure HTTP — does not disturb any open WebSocket subscription.
+   */
+  async loadOlder(
+    stream: string,
+    key: string,
+    count: number,
+    before?: number,
+  ): Promise<StreamEventInput[]> {
+    const url = new URL(
+      `${this.httpEndpoint.replace(/\/$/, "")}/streams/${encodeURIComponent(stream)}/${encodeURIComponent(key)}`,
+    );
+    if (before !== undefined && before > 0) {
+      url.searchParams.set("before", String(Math.floor(before)));
+    } else {
+      url.searchParams.set("before", String(Number.MAX_SAFE_INTEGER));
+    }
+    url.searchParams.set("limit", String(Math.max(1, Math.min(500, Math.floor(count)))));
+    const headers: Record<string, string> = { accept: "application/json" };
+    if (this.#sessionToken) headers.authorization = `Bearer ${this.#sessionToken}`;
+    const response = await fetch(url.toString(), { headers });
+    if (!response.ok) {
+      throw new Error(`loadOlder failed: ${response.status}`);
+    }
+    const body = (await response.json()) as { data?: StreamEventInput[] };
+    return body.data ?? [];
   }
 
   #scheduleReconnect(): void {

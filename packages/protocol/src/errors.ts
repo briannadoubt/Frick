@@ -1,20 +1,15 @@
-export type FrickErrorCode =
-  | "auth.unauthenticated"
-  | "auth.forbidden"
-  | "auth.sessionExpired"
-  | "schema.incompatible"
-  | "schema.migrationRequired"
-  | "storage.conflict"
-  | "storage.notFound"
-  | "stream.appendRejected"
-  | "sync.protocolError"
-  | "sync.reconnectExhausted"
-  | "blob.tooLarge"
-  | "blob.unsupportedContentType"
-  | "rateLimit.exceeded"
-  | "server.internal";
-
-const FRICK_ERROR_CODES = new Set<FrickErrorCode>([
+/**
+ * Canonical list of error codes the Frick framework emits in
+ * {@link FrickErrorEnvelope}. The codegen in
+ * `packages/protocol/src/generators/error-enums.ts` imports this array and
+ * emits language-specific enums for Swift / Kotlin / generated TS clients,
+ * so adding a new code here automatically lights it up everywhere.
+ *
+ * Codes are dotted-namespace strings; the first segment is the subsystem
+ * (auth, schema, storage, stream, sync, blob, rateLimit, server) and the
+ * second segment is the specific failure (unauthenticated, conflict, …).
+ */
+export const FRICK_ERROR_CODES = [
   "auth.unauthenticated",
   "auth.forbidden",
   "auth.sessionExpired",
@@ -29,7 +24,11 @@ const FRICK_ERROR_CODES = new Set<FrickErrorCode>([
   "blob.unsupportedContentType",
   "rateLimit.exceeded",
   "server.internal",
-]);
+] as const;
+
+export type FrickErrorCode = (typeof FRICK_ERROR_CODES)[number];
+
+const FRICK_ERROR_CODE_SET = new Set<FrickErrorCode>(FRICK_ERROR_CODES);
 
 export interface FrickErrorEnvelope {
   code: FrickErrorCode;
@@ -52,7 +51,7 @@ export function isFrickErrorEnvelope(value: unknown): value is FrickErrorEnvelop
   const envelope = value as Partial<FrickErrorEnvelope>;
   if (
     typeof envelope.code !== "string" ||
-    !FRICK_ERROR_CODES.has(envelope.code as FrickErrorCode) ||
+    !FRICK_ERROR_CODE_SET.has(envelope.code as FrickErrorCode) ||
     typeof envelope.message !== "string" ||
     typeof envelope.requestId !== "string" ||
     typeof envelope.retryable !== "boolean"

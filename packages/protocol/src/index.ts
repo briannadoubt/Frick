@@ -1,4 +1,10 @@
 export * from "./artifacts.js";
+export {
+  generateSwiftErrorEnum,
+  generateKotlinErrorEnum,
+  generateTypeScriptErrorEnum,
+} from "./generators/error-enums.js";
+export { generateTypeScriptBindings } from "./generators/typescript.js";
 export * from "./capabilities.js";
 export * from "./codec.js";
 export * from "./compatibility.js";

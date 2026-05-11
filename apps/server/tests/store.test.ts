@@ -9,6 +9,60 @@ afterEach(() => {
 });
 
 describe("FrickStore foundation storage", () => {
+  it("backwards-paginates events via readEventsBefore for scrollback", () => {
+    store = new FrickStore({ path: ":memory:", seed: true });
+    const DEFAULT_TENANT_ID = "_default";
+
+    // Seed 8 message events on the same conversation.
+    for (let i = 1; i <= 8; i++) {
+      store.appendEvent({
+        requestId: `request-${i}`,
+        replicaId: "replica-1",
+        stream: "MessageStream",
+        streamId: "conversation-general",
+        event: "MessageSent",
+        payload: {
+          messageId: `message-${i}`,
+          senderId: "user-ada",
+          body: `msg ${i}`,
+          createdAt: "2026-05-09T00:00:00.000Z",
+        },
+      });
+    }
+
+    // Latest 3 events (sequence 6, 7, 8) — oldest-first ordering.
+    const latest = store.readEventsBefore(
+      DEFAULT_TENANT_ID,
+      "MessageStream",
+      "conversation-general",
+      Number.MAX_SAFE_INTEGER,
+      3,
+    );
+    // 8 inserts → sequences 1..8; latest 3 = 6, 7, 8 (oldest-first).
+    expect(latest.map((e) => e.sequence)).toEqual([6, 7, 8]);
+
+    // Scrollback older than what we just read.
+    const older = store.readEventsBefore(
+      DEFAULT_TENANT_ID,
+      "MessageStream",
+      "conversation-general",
+      latest[0]!.sequence,
+      3,
+    );
+    expect(older.map((e) => e.sequence)).toEqual([3, 4, 5]);
+    expect(older.every((e) => e.stream === "MessageStream")).toBe(true);
+
+    // Limit is clamped to >= 1.
+    const clamped = store.readEventsBefore(
+      DEFAULT_TENANT_ID,
+      "MessageStream",
+      "conversation-general",
+      5,
+      0,
+    );
+    expect(clamped).toHaveLength(1);
+  });
+
   it("stores objects and appends ordered stream events", () => {
     store = new FrickStore({ path: ":memory:", seed: true });
 

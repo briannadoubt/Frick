@@ -137,6 +137,37 @@ export class StreamStore {
     }));
   }
 
+  /**
+   * Backwards-paginated read. Returns up to `limit` events whose `sequence`
+   * is strictly less than `before`, ordered oldest-first so callers can
+   * `[...older, ...current]` without an extra reverse. `limit` is clamped to
+   * the range `[1, 500]` to keep a single page bounded.
+   */
+  readBefore(
+    tenantId: string,
+    stream: string,
+    streamId: string,
+    before: number,
+    limit: number,
+  ): StoredEvent[] {
+    const clamped = Math.max(1, Math.min(500, Math.floor(limit)));
+    const cutoff = Number.isFinite(before) && before > 0 ? before : Number.MAX_SAFE_INTEGER;
+    const rows = this.db
+      .prepare(
+        `SELECT packed FROM stream_events
+          WHERE tenant_id = ? AND stream_type = ? AND stream_id = ? AND sequence < ?
+          ORDER BY sequence DESC
+          LIMIT ?`,
+      )
+      .all(tenantId, stream, streamId, cutoff, clamped) as unknown as EventRow[];
+    return rows
+      .map((row) => ({
+        ...unpackStreamEvent(this.schema, decode(row.packed) as PackedStreamEvent),
+        tenantId,
+      }))
+      .reverse();
+  }
+
   private readIdempotentEvent(
     tenantId: string,
     replicaId: string,
