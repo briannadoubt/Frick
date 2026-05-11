@@ -122,6 +122,42 @@ describe("auth-flow: dev-login auto-create gating", () => {
     expect(body.userId).toBe("user-fresh");
   });
 
+  it("emits frick.auth.dev_login_auto_create when auto-creating", async () => {
+    const events: { message: string; fields?: Record<string, unknown> }[] = [];
+    const logger = {
+      debug: () => {},
+      info: (message: string, fields?: Record<string, unknown>) => {
+        events.push({ message, ...(fields ? { fields } : {}) });
+      },
+      warn: () => {},
+      error: () => {},
+    };
+
+    app = await startServer({ logger });
+
+    const response = await fetch(`${app.httpUrl}/auth/dev-login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        userId: "user-observed",
+        tenantId: "tenant-observed",
+      }),
+    });
+    expect(response.status).toBe(200);
+
+    const autoCreate = events.find(
+      (event) => event.fields?.event === "frick.auth.dev_login_auto_create",
+    );
+    expect(autoCreate).toBeDefined();
+    expect(autoCreate?.fields).toMatchObject({
+      tenantId: "tenant-observed",
+      userId: "user-observed",
+    });
+    // The session token must never appear in log fields.
+    const serialised = JSON.stringify(autoCreate);
+    expect(serialised).not.toMatch(/sessionToken/);
+  });
+
   it("returns auth.forbidden for dev-login when demoAuthEnabled is false (existing demo-auth gate)", async () => {
     // In production today the demo-auth gate fires first; this test pins
     // that behavior so we know the auto-create gate would only ever apply

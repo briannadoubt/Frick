@@ -375,6 +375,11 @@ export function createFrickServer(options: ServerOptions = {}) {
             displayName: userId,
             avatarBlobId: undefined,
           });
+          logger.info("frick.auth.dev_login_auto_create", {
+            event: "frick.auth.dev_login_auto_create",
+            tenantId,
+            userId,
+          });
         }
         const platform = parsePlatform(typeof body.platform === "string" ? body.platform : "web");
         const deviceId = typeof body.deviceId === "string" && body.deviceId.length > 0 ? body.deviceId : `device-${randomToken(12)}`;
