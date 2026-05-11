@@ -28,6 +28,7 @@ import { SyncGateway } from "./sync/gateway.js";
 import { SseRegistry } from "./sync/sse.js";
 import type { StoredAccount } from "./storage/account-store.js";
 import type { StoredSession } from "./storage/session-store.js";
+import { TenantAlreadyExistsError } from "./storage/tenant-store.js";
 import { FrickStore } from "./store.js";
 import { loadFrickConfig, type FrickConfig, type FrickConfigOverrides } from "./config.js";
 import { createConsoleLogger, createNoopLogger, type FrickLogger } from "./logger.js";
@@ -242,6 +243,46 @@ export function createFrickServer(options: ServerOptions = {}) {
       return;
     }
 
+    if (url.pathname.startsWith("/_frick/admin/")) {
+      if (!config.adminEnabled) {
+        sendJson(response, 404, { error: "not_found" });
+        return;
+      }
+      const adminPrincipal = adminPrincipalFromRequest(request, url, config);
+      if (!adminPrincipal) {
+        // Token is wrong or missing. Distinguish between "no auth at all" and
+        // "auth but not admin": when a request supplies a valid session token
+        // but for a tenant-scoped principal, this is `auth.forbidden` (403);
+        // otherwise it's `auth.unauthenticated` (401).
+        const token = sessionTokenFromRequest(request, url);
+        if (!token) {
+          sendError(response, new AuthenticationError("Missing admin token"), "admin_unauthorized");
+          return;
+        }
+        const session = store.readActiveSession(token);
+        if (session) {
+          sendError(
+            response,
+            new AuthorizationError({
+              allow: false,
+              reason: "notAuthorizedForResource",
+              publicMessage: "Admin scope required",
+            }),
+            "admin_forbidden",
+          );
+          return;
+        }
+        sendError(response, new AuthenticationError("Invalid admin token"), "admin_unauthorized");
+        return;
+      }
+      try {
+        await handleAdminRoute(request, response, url, store, limits.maxHttpBodyBytes);
+      } catch (error) {
+        sendError(response, error, "admin_rejected");
+      }
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/schema") {
       sendJson(response, 200, store.schema);
       return;
@@ -254,6 +295,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         const handle = normalizeHandle(requireString(body.handle, "handle"));
         const password = normalizePassword(requireString(body.password, "password"));
         const tenantId = normalizeTenantId(body.tenantId);
+        ensureTenantAllowed(store, config, tenantId);
         const platform = parsePlatform(typeof body.platform === "string" ? body.platform : "web");
         const deviceId = typeof body.deviceId === "string" && body.deviceId.length > 0 ? body.deviceId : `device-${randomToken(12)}`;
         const replicaId = typeof body.replicaId === "string" && body.replicaId.length > 0 ? body.replicaId : `replica-${randomToken(12)}`;
@@ -279,6 +321,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         const identity = requireString(body.identity, "identity").trim();
         const password = requireString(body.password, "password");
         const tenantId = normalizeTenantId(body.tenantId);
+        ensureTenantAllowed(store, config, tenantId);
         const account = store.verifyAccountPassword(tenantId, identity, password);
         if (!account) {
           throw new AuthenticationError("Invalid handle or password");
@@ -312,6 +355,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         const body = await readJsonBody(request, limits.maxHttpBodyBytes);
         const userId = requireString(body.userId, "userId");
         const tenantId = normalizeTenantId(body.tenantId);
+        ensureTenantAllowed(store, config, tenantId);
         // Dev-login: in the default tenant, seed users (user-ada, user-grace)
         // exist; on first dev-login in any other tenant, create the user
         // object on the fly so explicit-tenant tests don't need a separate
@@ -345,7 +389,7 @@ export function createFrickServer(options: ServerOptions = {}) {
       return;
     }
 
-    const principal = protectedHttpPrincipal(request, url, store);
+    const principal = protectedHttpPrincipal(request, url, store, config);
     if (principal instanceof Error) {
       sendError(response, principal, "unauthorized");
       return;
@@ -827,6 +871,12 @@ function sendError(response: http.ServerResponse, error: unknown, requestId: str
   ) {
     details.reason = error.decision.reason;
   }
+  if (error instanceof UnknownTenantError) {
+    details.reason = "unknownTenant";
+    if ((error as { tenantId?: string }).tenantId) {
+      details.tenantId = (error as { tenantId?: string }).tenantId;
+    }
+  }
   if (error instanceof CorsOriginRejectedError) {
     details.reason = error.reason;
   }
@@ -990,7 +1040,7 @@ function headerValue(request: http.IncomingMessage, name: string): string | unde
   return Array.isArray(value) ? value[0] : value;
 }
 
-function protectedHttpPrincipal(request: http.IncomingMessage, url: URL, store: FrickStore): Principal | AuthenticationError {
+function protectedHttpPrincipal(request: http.IncomingMessage, url: URL, store: FrickStore, config: FrickConfig): Principal | AuthenticationError {
   if (!isProtectedPath(url.pathname)) {
     return {
       userId: "public",
@@ -1003,6 +1053,19 @@ function protectedHttpPrincipal(request: http.IncomingMessage, url: URL, store: 
   const token = sessionTokenFromRequest(request, url);
   if (!token) {
     return new AuthenticationError("Missing session token");
+  }
+
+  // Admin bearer takes precedence over session lookup so a configured admin
+  // token can act on any path. Constant-time equality is unnecessary here:
+  // the token is operator-supplied at boot and used over TLS in production.
+  if (config.adminEnabled && config.adminToken && token === config.adminToken) {
+    return {
+      userId: "_admin",
+      deviceId: "_admin",
+      replicaId: "_admin",
+      tenantId: DEFAULT_TENANT_ID,
+      scope: "admin",
+    };
   }
 
   const session = store.readActiveSession(token);
@@ -1020,6 +1083,155 @@ function protectedHttpPrincipal(request: http.IncomingMessage, url: URL, store: 
     replicaId: session.replicaId,
     tenantId: session.tenantId,
   };
+}
+
+/**
+ * Build an admin principal from the request's bearer if it matches the
+ * configured admin token. Returns `undefined` if admin is disabled, the
+ * bearer is missing, or the bearer doesn't match. The returned principal is
+ * scoped `"admin"` so {@link decide} bypasses the cross-tenant check.
+ */
+function adminPrincipalFromRequest(
+  request: http.IncomingMessage,
+  url: URL,
+  config: FrickConfig,
+): Principal | undefined {
+  if (!config.adminEnabled || !config.adminToken) {
+    return undefined;
+  }
+  const token = sessionTokenFromRequest(request, url);
+  if (!token || token !== config.adminToken) {
+    return undefined;
+  }
+  return {
+    userId: "_admin",
+    deviceId: "_admin",
+    replicaId: "_admin",
+    tenantId: DEFAULT_TENANT_ID,
+    scope: "admin",
+  };
+}
+
+/**
+ * Thrown by {@link ensureTenantAllowed} when a non-default tenant id isn't
+ * present in the ledger and `config.implicitTenantCreation` is false. The
+ * caller surfaces this through `sendError` as `auth.forbidden` with
+ * `details.reason: "unknownTenant"`.
+ */
+class UnknownTenantError extends AuthorizationError {
+  constructor(tenantId: string) {
+    super({
+      allow: false,
+      reason: "notAuthorizedForResource",
+      publicMessage: `Unknown tenant ${tenantId}`,
+    });
+    this.name = "UnknownTenantError";
+    (this as { tenantId?: string }).tenantId = tenantId;
+  }
+}
+
+/**
+ * Pre-check called from `/auth/*` handlers: confirms the supplied tenant is
+ * either the always-allowed default tenant, already in the ledger, or — when
+ * `config.implicitTenantCreation` is true — auto-inserted into the ledger so
+ * subsequent requests resolve cleanly. Throws {@link UnknownTenantError}
+ * when the tenant is unknown and implicit creation is disabled.
+ */
+function ensureTenantAllowed(store: FrickStore, config: FrickConfig, tenantId: string): void {
+  if (tenantId === DEFAULT_TENANT_ID) {
+    return;
+  }
+  const existing = store.tenants.get(tenantId);
+  if (existing && !existing.archivedAt) {
+    return;
+  }
+  if (existing && existing.archivedAt) {
+    throw new UnknownTenantError(tenantId);
+  }
+  if (config.implicitTenantCreation) {
+    store.tenants.ensure(tenantId);
+    return;
+  }
+  throw new UnknownTenantError(tenantId);
+}
+
+async function handleAdminRoute(
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+  url: URL,
+  store: FrickStore,
+  maxBodyBytes: number,
+): Promise<void> {
+  const sub = url.pathname.slice("/_frick/admin/".length);
+
+  if (request.method === "GET" && sub === "tenants") {
+    const includeArchived = url.searchParams.get("includeArchived") === "true";
+    sendJson(response, 200, { tenants: store.tenants.list(includeArchived) });
+    return;
+  }
+
+  if (request.method === "POST" && sub === "tenants") {
+    const body = await readJsonBody(request, maxBodyBytes);
+    const tenantId = requireString(body.tenantId, "tenantId");
+    const displayName =
+      typeof body.displayName === "string" && body.displayName.length > 0
+        ? body.displayName
+        : undefined;
+    try {
+      const row = store.tenants.create(tenantId, displayName);
+      sendJson(response, 201, row);
+    } catch (error) {
+      if (error instanceof TenantAlreadyExistsError) {
+        const envelope = createFrickErrorEnvelope({
+          code: "sync.protocolError",
+          message: error.message,
+          requestId: "admin_tenant_conflict",
+          retryable: false,
+          details: { reason: "tenantExists", tenantId: error.tenantId },
+          schemaHash: foundationSchema.hash,
+          schemaRevision: foundationSchema.schemaRevision,
+        });
+        sendJson(response, 409, {
+          error: envelope,
+          code: envelope.code,
+          message: envelope.message,
+          requestId: envelope.requestId,
+          retryable: envelope.retryable,
+        });
+        return;
+      }
+      throw error;
+    }
+    return;
+  }
+
+  const archiveMatch = /^tenants\/([^/]+)\/archive$/.exec(sub);
+  if (request.method === "POST" && archiveMatch) {
+    const tenantId = decodeURIComponent(archiveMatch[1]!);
+    const existing = store.tenants.get(tenantId);
+    if (!existing) {
+      sendJson(response, 404, { error: "tenant_not_found" });
+      return;
+    }
+    store.tenants.archive(tenantId);
+    const row = store.tenants.get(tenantId);
+    sendJson(response, 200, row);
+    return;
+  }
+
+  const showMatch = /^tenants\/([^/]+)$/.exec(sub);
+  if (request.method === "GET" && showMatch) {
+    const tenantId = decodeURIComponent(showMatch[1]!);
+    const row = store.tenants.get(tenantId);
+    if (!row) {
+      sendJson(response, 404, { error: "tenant_not_found" });
+      return;
+    }
+    sendJson(response, 200, row);
+    return;
+  }
+
+  sendJson(response, 404, { error: "not_found" });
 }
 
 function sessionTokenFromRequest(request: http.IncomingMessage, url: URL): string | undefined {
