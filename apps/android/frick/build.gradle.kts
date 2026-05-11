@@ -35,7 +35,7 @@ dependencies {
     val ktorVersion = "3.4.3"
     val robolectricVersion = "4.16.1"
     val serializationVersion = "1.11.0"
-    val okhttpVersion = "4.12.0"
+    val okhttpVersion = "5.3.2"
     val msgpackVersion = "0.9.8"
 
     implementation("io.ktor:ktor-client-core:$ktorVersion")
@@ -47,7 +47,8 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:$robolectricVersion")
-    testImplementation("com.squareup.okhttp3:mockwebserver:$okhttpVersion")
+    testImplementation("com.squareup.okhttp3:mockwebserver3-junit4:$okhttpVersion")
+    testImplementation("com.squareup.okhttp3:mockwebserver3:$okhttpVersion")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
 }
 
