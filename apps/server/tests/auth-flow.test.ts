@@ -103,6 +103,63 @@ describe("auth-flow: tenant id validation", () => {
   });
 });
 
+describe("auth-flow: dev-login auto-create gating", () => {
+  it("auto-creates a new tenant user in development mode", async () => {
+    app = await startServer();
+
+    const response = await fetch(`${app.httpUrl}/auth/dev-login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        userId: "user-fresh",
+        tenantId: "tenant-x",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.tenantId).toBe("tenant-x");
+    expect(body.userId).toBe("user-fresh");
+  });
+
+  it("returns auth.forbidden for dev-login when demoAuthEnabled is false (existing demo-auth gate)", async () => {
+    // In production today the demo-auth gate fires first; this test pins
+    // that behavior so we know the auto-create gate would only ever apply
+    // if demo-auth is somehow re-enabled in production.
+    app = await startServer({
+      config: { env: "production", demoAuthEnabled: false, sessionTtlSeconds: 60 },
+    });
+
+    const response = await fetch(`${app.httpUrl}/auth/dev-login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ userId: "user-nobody", tenantId: "tenant-x" }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body.error.code).toBe("auth.forbidden");
+  });
+
+  it("returns 401 auth.unauthenticated when demo-auth is enabled but user is missing in the default tenant", async () => {
+    // Even with demoAuthEnabled=true we still keep the default-tenant rule:
+    // unknown users in the default tenant must signup explicitly.
+    app = await startServer();
+
+    const response = await fetch(`${app.httpUrl}/auth/dev-login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ userId: "user-nobody" }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(401);
+    expect(isFrickErrorEnvelope(body.error)).toBe(true);
+    expect(body.error.code).toBe("auth.unauthenticated");
+    expect(body.error.details?.reason).toBe("accountNotFound");
+  });
+});
+
 describe("auth-flow: signup then dev-login cycle", () => {
   it("allows dev-login for an account created via signup in the same tenant", async () => {
     app = await startServer();

@@ -364,10 +364,12 @@ export function createFrickServer(options: ServerOptions = {}) {
         // Dev-login: in the default tenant, seed users (user-ada, user-grace)
         // exist; on first dev-login in any other tenant, create the user
         // object on the fly so explicit-tenant tests don't need a separate
-        // signup round-trip.
+        // signup round-trip. This auto-create branch is a development
+        // convenience and is gated on `config.demoAuthEnabled` — production
+        // deployments require an explicit `/auth/signup` first.
         if (!store.hasUser(tenantId, userId)) {
-          if (tenantId === DEFAULT_TENANT_ID) {
-            throw new Error(`Unknown user ${userId}`);
+          if (!config.demoAuthEnabled || tenantId === DEFAULT_TENANT_ID) {
+            throw new AccountNotFoundError("Account not found");
           }
           store.upsertObject(tenantId, "User", userId, {
             displayName: userId,
@@ -817,6 +819,19 @@ class CorsOriginRejectedError extends Error {
 }
 
 /**
+ * Thrown by `/auth/dev-login` when demo-auth auto-create is disabled and
+ * the (tenantId, userId) pair does not yet exist. Maps to 401 +
+ * `auth.unauthenticated` with `details.reason = "accountNotFound"`.
+ */
+class AccountNotFoundError extends Error {
+  readonly reason = "accountNotFound";
+  constructor(message = "Account not found") {
+    super(message);
+    this.name = "AccountNotFoundError";
+  }
+}
+
+/**
  * Validate body.tenantId at an auth boundary. Returns the normalized tenant
  * id. If the caller supplied a `tenantId` field at all (even empty string),
  * it must match {@link validateTenantId}'s strict regex; if omitted, the
@@ -878,13 +893,15 @@ function sendError(response: http.ServerResponse, error: unknown, requestId: str
   const status =
     error instanceof FrickLimitError
       ? 413
-      : error instanceof AuthenticationError
+      : error instanceof AccountNotFoundError
         ? 401
-        : error instanceof AuthorizationError
-          ? 403
-          : error instanceof CorsOriginRejectedError
+        : error instanceof AuthenticationError
+          ? 401
+          : error instanceof AuthorizationError
             ? 403
-            : 400;
+            : error instanceof CorsOriginRejectedError
+              ? 403
+              : 400;
   const details: Record<string, unknown> = { routeCode: requestId };
   if (
     (error instanceof AuthenticationError || error instanceof AuthorizationError) &&
@@ -900,6 +917,9 @@ function sendError(response: http.ServerResponse, error: unknown, requestId: str
     }
   }
   if (error instanceof CorsOriginRejectedError) {
+    details.reason = error.reason;
+  }
+  if (error instanceof AccountNotFoundError) {
     details.reason = error.reason;
   }
   if (error instanceof TenantIdValidationError) {
@@ -931,6 +951,9 @@ function sendError(response: http.ServerResponse, error: unknown, requestId: str
 function httpErrorCode(error: unknown): FrickErrorCode {
   if (error instanceof SessionExpiredError) {
     return "auth.sessionExpired";
+  }
+  if (error instanceof AccountNotFoundError) {
+    return "auth.unauthenticated";
   }
   if (error instanceof AuthenticationError) {
     return "auth.unauthenticated";
