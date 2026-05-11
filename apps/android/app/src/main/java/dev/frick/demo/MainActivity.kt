@@ -197,6 +197,7 @@ fun FrickDemo() {
                     localUserId = activeSession.userId,
                     draft = state.draft,
                     sync = state.sync,
+                    typingUserIds = state.typingUserIds,
                     onDraftChange = viewModel::setDraft,
                     onSend = viewModel::send,
                     onBackToThreads = viewModel::backToThreads,
@@ -414,6 +415,7 @@ private fun ChatDetailScreen(
     localUserId: String,
     draft: String,
     sync: SyncStatusUi,
+    typingUserIds: List<String>,
     onDraftChange: (String) -> Unit,
     onSend: () -> Unit,
     onBackToThreads: () -> Unit,
@@ -447,6 +449,13 @@ private fun ChatDetailScreen(
                 FrickTextButton(text = "Sign out", onClick = onLogout)
             },
         )
+        if (typingUserIds.isNotEmpty()) {
+            val names = typingUserIds.map { id -> displayName(users, id) }
+            FrickLabel(
+                text = "${names.joinToString(", ")} is typing…",
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+        }
         ChatContent(
             users = users,
             messages = messages,

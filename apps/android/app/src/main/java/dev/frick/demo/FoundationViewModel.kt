@@ -17,6 +17,7 @@ import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -29,6 +30,7 @@ internal const val DemoPlatform = "android"
 internal const val DefaultConversationId = "conversation-general"
 internal const val ChatDestinationId = "chat"
 internal const val DemoBaseUrl = "http://10.0.2.2:4099"
+private const val TypingDebounceMs = 800L
 
 internal enum class AuthMode { Login, SignUp }
 
@@ -71,6 +73,7 @@ internal data class FoundationUiState(
     val threadListVisible: Boolean = true,
     val sync: SyncStatusUi = SyncStatusUi(SyncIndicator.Red, "Disconnected"),
     val syncDialogVisible: Boolean = false,
+    val typingUserIds: List<String> = emptyList(),
 ) {
     val selectedConversation: ConversationDto? =
         conversations.firstOrNull { conversation -> conversation.id == selectedConversationId }
@@ -112,6 +115,7 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
     private var socket: FrickSyncSocket? = null
     private var socketStatusJob: Job? = null
     private var socketEventsJob: Job? = null
+    private var typingJob: Job? = null
 
     private val initialSession = storage.loadSession()
     private val _uiState = MutableStateFlow(
@@ -134,7 +138,10 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
     fun setDisplayName(displayName: String) = _uiState.update { state -> state.copy(displayName = displayName) }
     fun setHandle(handle: String) = _uiState.update { state -> state.copy(handle = handle) }
     fun setPassword(password: String) = _uiState.update { state -> state.copy(password = password) }
-    fun setDraft(draft: String) = _uiState.update { state -> state.copy(draft = draft) }
+    fun setDraft(draft: String) {
+        _uiState.update { state -> state.copy(draft = draft) }
+        scheduleTypingPing(draft)
+    }
     fun setNewThreadTitle(title: String) = _uiState.update { state -> state.copy(newThreadTitle = title, threadError = null) }
 
     fun setNewThreadKind(kind: NewThreadKind) {
@@ -299,10 +306,12 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
                 threadError = null,
                 threadListVisible = false,
                 status = if (conversationId == previousConversationId) state.status else "Loading",
+                typingUserIds = if (conversationId == previousConversationId) state.typingUserIds else emptyList(),
             )
         }
         if (conversationId != previousConversationId) {
             subscribeStreamSocket(conversationId)
+            subscribeTypingSocket(conversationId)
             startMessageStream()
         }
     }
@@ -414,12 +423,14 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
             newSocket.events.collect { event -> handleInboundEvent(event) }
         }
         viewModelScope.launch { subscribeStreamSocket(_uiState.value.selectedConversationId) }
+        viewModelScope.launch { subscribeTypingSocket(_uiState.value.selectedConversationId) }
         @Suppress("UNUSED_VARIABLE") val ref = session
     }
 
     private fun closeSocket() {
         socketStatusJob?.cancel(); socketStatusJob = null
         socketEventsJob?.cancel(); socketEventsJob = null
+        typingJob?.cancel(); typingJob = null
         socket?.close(); socket = null
         _uiState.update { state -> state.copy(sync = SyncStatusUi(SyncIndicator.Red, "Disconnected")) }
     }
@@ -449,6 +460,15 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
                         .distinctBy { e -> e.eventId }
                         .sortedBy { e -> e.sequence }
                     state.copy(messages = combined, status = "Live")
+                }
+            }
+            is FrickInboundEvent.ProjectionDelta -> {
+                if (event.projection.startsWith("TypingState/")) {
+                    val typing = event.changes
+                        .filter { change -> change.value != null }
+                        .mapNotNull { change -> change.value?.get("userId")?.toString() }
+                        .filter { id -> id != _uiState.value.session?.userId }
+                    _uiState.update { state -> state.copy(typingUserIds = typing) }
                 }
             }
             is FrickInboundEvent.Nack -> {
@@ -482,6 +502,36 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
         viewModelScope.launch {
             try { current.subscribe(stream = "MessageStream", key = conversationId) }
             catch (_: Exception) { /* queued by socket when not Ready */ }
+        }
+    }
+
+    private fun subscribeTypingSocket(conversationId: String) {
+        val current = socket ?: return
+        viewModelScope.launch {
+            try { current.subscribeProjection(name = "TypingState/$conversationId") }
+            catch (_: Exception) { /* ignored */ }
+        }
+    }
+
+    private fun scheduleTypingPing(draft: String) {
+        val active = _uiState.value.session ?: return
+        if (draft.isBlank()) return
+        if (typingJob?.isActive == true) return
+        typingJob = viewModelScope.launch {
+            // FrickSyncSocket does not expose presence-write today (round-10b
+            // only added subscribe/append/upsert) and the server has no HTTP
+            // presence-write endpoint, so the demo debounces locally and
+            // leaves the wire-side ping for a follow-up round. The presence
+            // projection subscribe still surfaces typing state pushed from
+            // other clients via SDKs that DO write presence.
+            try {
+                delay(TypingDebounceMs)
+                @Suppress("UNUSED_VARIABLE") val ref = active.userId
+            } catch (_: CancellationException) {
+                throw CancellationException("typing cancelled")
+            } catch (_: Exception) {
+                // best-effort
+            }
         }
     }
 
