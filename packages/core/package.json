@@ -3,7 +3,9 @@
   "version": "0.0.0",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./chat": "./src/chat.ts",
+    "./errors": "./src/generated/errors.ts"
   },
   "types": "./src/index.ts",
   "files": [

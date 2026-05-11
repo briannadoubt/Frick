@@ -7,6 +7,10 @@
     "rootDir": "src",
     "outDir": "dist"
   },
-  "references": [{ "path": "../../packages/react" }, { "path": "../../packages/protocol" }],
+  "references": [
+    { "path": "../../packages/react" },
+    { "path": "../../packages/protocol" },
+    { "path": "../../packages/core" }
+  ],
   "include": ["src"]
 }

@@ -8,6 +8,7 @@
     "build": "vite build"
   },
   "dependencies": {
+    "@frick/core": "workspace:*",
     "@frick/design-web": "workspace:*",
     "@frick/protocol": "workspace:*",
     "@frick/react": "workspace:*",

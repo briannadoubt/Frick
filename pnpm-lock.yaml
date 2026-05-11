@@ -64,6 +64,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@frick/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@frick/design-web':
         specifier: workspace:*
         version: link:../../packages/design-web
