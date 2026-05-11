@@ -307,7 +307,10 @@ function ChatWorkspace({
   const remoteInbox = useInbox<InboxRow>(activeUserId);
   const httpEndpoint = useFrickHttpEndpoint();
   const upsertUser = useUpsertObject<User>("User");
-  const messages = useStream<ChatStreamEvent>("MessageStream", selectedConversationId);
+  // Phase 3 shape: `useStream` returns `{ events, loadOlder, hasMore, loading }`.
+  // The demo currently only consumes the live tail; `loadOlder` will hook
+  // into a scrollback button in a future iteration.
+  const { events: messages } = useStream<ChatStreamEvent>("MessageStream", selectedConversationId);
   const typingKey = `${selectedConversationId}:${activeUserId}:${activeDeviceId}`;
   const typing = usePresence<{ isTyping: boolean }>("TypingState", typingKey);
   const setTyping = useSetPresence("TypingState", typingKey);

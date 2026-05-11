@@ -106,19 +106,83 @@ export function useObjects<T extends PlainObject = PlainObject>(type: string): T
   return useSignalValue(signal) as T[];
 }
 
-export function useStream<T extends StreamEventInput = StreamEventInput>(stream: string, key: string): T[] {
+/**
+ * Subscribe to a live stream and expose backwards-pagination affordances.
+ *
+ * Returns:
+ *   - `events`: the current live tail (most recent at the end, server order).
+ *   - `loadOlder(count?)`: HTTP-paginated scrollback; events are prepended
+ *     to the live tail. Resolves with the number of events actually loaded
+ *     (0 when there's nothing older).
+ *   - `hasMore`: `true` until a `loadOlder` call returns fewer than the
+ *     requested count, at which point we've reached the start.
+ *   - `loading`: `true` while a `loadOlder` call is in flight.
+ *
+ * **Breaking shape change** vs the original `useStream`, which returned a
+ * bare `T[]`. Pre-1.0 with `greenfield-cutover` compatibility makes the
+ * one-shot bump safe; consumers migrate to destructured access.
+ */
+export function useStream<T extends StreamEventInput = StreamEventInput>(
+  stream: string,
+  key: string,
+): {
+  events: T[];
+  loadOlder: (count?: number) => Promise<number>;
+  hasMore: boolean;
+  loading: boolean;
+} {
   const client = useFrick();
   const signal = useMemo(() => client.stream(stream, key), [client, stream, key]);
-  return useSignalValue(signal) as T[];
+  const liveTail = useSignalValue(signal) as T[];
+  const [history, setHistory] = useState<T[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+
+  // Reset history when the stream/key changes; otherwise stale history
+  // bleeds across conversations.
+  useEffect(() => {
+    setHistory([]);
+    setHasMore(true);
+  }, [stream, key]);
+
+  const loadOlder = useCallback(
+    async (count = 50): Promise<number> => {
+      setLoading(true);
+      try {
+        const oldestSequence = history.at(0)?.sequence ?? liveTail.at(0)?.sequence ?? Number.MAX_SAFE_INTEGER;
+        const older = (await client.loadOlder(stream, key, count, oldestSequence)) as T[];
+        if (older.length < count) setHasMore(false);
+        if (older.length > 0) setHistory((prev) => [...older, ...prev]);
+        return older.length;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [client, stream, key, history, liveTail],
+  );
+
+  const events = useMemo(() => [...history, ...liveTail], [history, liveTail]);
+  return { events, loadOlder, hasMore, loading };
 }
 
+/**
+ * Issue a typed append. Pass `options.optimistic` (a partial payload) to
+ * surface the synthesized event in the matching `useStream` immediately,
+ * before the server Ack. On Nack the overlay rolls back and the returned
+ * Promise rejects with the typed error so the UI can recover.
+ */
 export function useAppend(
   stream: string,
   key: string,
-): (event: string, payload: PlainObject) => Promise<void> {
+): (
+  event: string,
+  payload: PlainObject,
+  options?: { optimistic?: PlainObject },
+) => Promise<void> {
   const client = useFrick();
   return useCallback(
-    (event: string, payload: PlainObject) => client.append(stream, key, event, payload),
+    (event: string, payload: PlainObject, options?: { optimistic?: PlainObject }) =>
+      client.append(stream, key, event, payload, options),
     [client, stream, key],
   );
 }
@@ -180,11 +244,16 @@ export function useProjectionRows<T extends PlainObject = PlainObject>(name: str
  */
 export function useUpsertObject<T extends PlainObject = PlainObject>(
   objectType: string,
-): (objectId: string, value: T, expectedVersion?: number) => Promise<{ version: number }> {
+): (
+  objectId: string,
+  value: T,
+  expectedVersion?: number,
+  options?: { optimistic?: boolean },
+) => Promise<{ version: number }> {
   const client = useFrick();
   return useCallback(
-    (objectId: string, value: T, expectedVersion?: number) =>
-      client.upsertObject<T>(objectType, objectId, value, expectedVersion),
+    (objectId: string, value: T, expectedVersion?: number, options?: { optimistic?: boolean }) =>
+      client.upsertObject<T>(objectType, objectId, value, expectedVersion, options),
     [client, objectType],
   );
 }
@@ -298,6 +367,11 @@ export function createAuthorizedFetchInit(
     },
   };
 }
+
+// Re-exports for the new React-layer hooks that landed in Phase 3.
+export * from "./auth.js";
+export * from "./blob.js";
+export * from "./search.js";
 
 function useSignalValue<T>(signal: { value: T; subscribe(listener: (value: T) => void): () => void }): T {
   const [value, setValue] = useState(signal.value);
