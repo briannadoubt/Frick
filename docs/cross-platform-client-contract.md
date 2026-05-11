@@ -158,6 +158,10 @@ Pending appends are preserved across compatible reloads. When an incompatible-ca
 | Destructive cache reset entry point | `cache.clear()` | `FrickClient.resetCache()` | `FrickClient.resetCache()` |
 | Capability negotiation in handshake | ✓ (WebSocket) | — (HTTP-only today) | — (HTTP-only today) |
 
+## Object Upserts Over the Sync Socket
+
+Object upserts may flow over the sync WebSocket via `FrameKind.ObjectUpsert`. The server honors the schema's `mergePolicy`: `lastWriteWins` accepts any write and increments the version, `versionPrecondition` requires `expectedVersion` to match the on-disk row and Nacks with `storage.conflict` otherwise. Successful upserts reply with an `Ack` carrying the new version. Swift and Android clients are HTTP-only for object writes today and will pick up the WS path in a future round; the TypeScript SDK exposes `FrickClient.upsertObject`, which queues while disconnected and flushes on reconnect through the shared pending-write budget.
+
 ## Versioning
 
 This contract document evolves alongside `packages/protocol` and is regenerated together with the schema artifacts. Any change that adds a new error code, capability prefix, sync diagnostic field, or cache state should land here in the same change as the protocol/SDK update.
