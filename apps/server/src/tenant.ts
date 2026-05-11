@@ -45,3 +45,42 @@ export function normalizeTenantId(value: unknown): string {
   }
   return trimmed;
 }
+
+/**
+ * Error thrown when a tenant id supplied at an auth boundary is malformed.
+ * Auth route handlers catch this and convert it to a `sync.protocolError`
+ * envelope with `details.reason = "invalidTenantId"` and HTTP 400.
+ */
+export class TenantIdValidationError extends Error {
+  readonly reason = "invalidTenantId";
+  constructor(message = "tenantId is malformed") {
+    super(message);
+    this.name = "TenantIdValidationError";
+  }
+}
+
+/**
+ * Strict tenant id validator for the auth surface. Unlike
+ * {@link normalizeTenantId} this does not collapse empty/missing values to
+ * the default tenant — every code path that calls it must have already
+ * decided whether the caller supplied a value. Used by `/auth/signup`,
+ * `/auth/login`, and `/auth/dev-login` to reject obviously malformed
+ * tenant ids before they reach the store.
+ *
+ * The regex is intentionally narrower than {@link normalizeTenantId}'s:
+ * lowercase/digit start, up to 63 chars, ASCII alphanumerics plus `-` and
+ * `_`. The default tenant (`_default`) matches and so does not require a
+ * special case.
+ */
+export function validateTenantId(value: string): void {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new TenantIdValidationError("tenantId must be a non-empty string");
+  }
+  // The default tenant id (`_default`) starts with `_`, so the leading
+  // character must permit underscore in addition to ASCII alphanumerics.
+  if (!/^[a-z0-9_][a-z0-9\-_]{0,62}$/i.test(value)) {
+    throw new TenantIdValidationError(
+      "tenantId must start with an alphanumeric and contain only letters, digits, '-', or '_' (max 63 chars)",
+    );
+  }
+}

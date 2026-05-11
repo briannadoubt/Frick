@@ -19,7 +19,12 @@ import {
   type FrickPolicyHook,
   type Principal,
 } from "./authz.js";
-import { DEFAULT_TENANT_ID, normalizeTenantId } from "./tenant.js";
+import {
+  DEFAULT_TENANT_ID,
+  TenantIdValidationError,
+  normalizeTenantId,
+  validateTenantId,
+} from "./tenant.js";
 import {
   createFrickExtensionRegistry,
   type FrickExtensionRegistryInput,
@@ -294,7 +299,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         const displayName = normalizeDisplayName(requireString(body.displayName, "displayName"));
         const handle = normalizeHandle(requireString(body.handle, "handle"));
         const password = normalizePassword(requireString(body.password, "password"));
-        const tenantId = normalizeTenantId(body.tenantId);
+        const tenantId = resolveAuthTenantId(body.tenantId);
         ensureTenantAllowed(store, config, tenantId);
         const platform = parsePlatform(typeof body.platform === "string" ? body.platform : "web");
         const deviceId = typeof body.deviceId === "string" && body.deviceId.length > 0 ? body.deviceId : `device-${randomToken(12)}`;
@@ -320,7 +325,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         const body = await readJsonBody(request, limits.maxHttpBodyBytes);
         const identity = requireString(body.identity, "identity").trim();
         const password = requireString(body.password, "password");
-        const tenantId = normalizeTenantId(body.tenantId);
+        const tenantId = resolveAuthTenantId(body.tenantId);
         ensureTenantAllowed(store, config, tenantId);
         const account = store.verifyAccountPassword(tenantId, identity, password);
         if (!account) {
@@ -354,7 +359,7 @@ export function createFrickServer(options: ServerOptions = {}) {
       try {
         const body = await readJsonBody(request, limits.maxHttpBodyBytes);
         const userId = requireString(body.userId, "userId");
-        const tenantId = normalizeTenantId(body.tenantId);
+        const tenantId = resolveAuthTenantId(body.tenantId);
         ensureTenantAllowed(store, config, tenantId);
         // Dev-login: in the default tenant, seed users (user-ada, user-grace)
         // exist; on first dev-login in any other tenant, create the user
@@ -811,6 +816,23 @@ class CorsOriginRejectedError extends Error {
   }
 }
 
+/**
+ * Validate body.tenantId at an auth boundary. Returns the normalized tenant
+ * id. If the caller supplied a `tenantId` field at all (even empty string),
+ * it must match {@link validateTenantId}'s strict regex; if omitted, the
+ * default tenant is used.
+ */
+function resolveAuthTenantId(rawValue: unknown): string {
+  if (rawValue === undefined || rawValue === null) {
+    return DEFAULT_TENANT_ID;
+  }
+  if (typeof rawValue !== "string") {
+    throw new TenantIdValidationError("tenantId must be a string");
+  }
+  validateTenantId(rawValue);
+  return normalizeTenantId(rawValue);
+}
+
 function setCors(
   response: http.ServerResponse,
   requestOrigin: string | undefined,
@@ -878,6 +900,9 @@ function sendError(response: http.ServerResponse, error: unknown, requestId: str
     }
   }
   if (error instanceof CorsOriginRejectedError) {
+    details.reason = error.reason;
+  }
+  if (error instanceof TenantIdValidationError) {
     details.reason = error.reason;
   }
   if (error instanceof FrickLimitError) {
