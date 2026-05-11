@@ -26,6 +26,7 @@ import { PushRegistrationStore } from "./storage/push-registration-store.js";
 import { initializeStorage } from "./storage/schema.js";
 import { SessionStore, type StoredSession } from "./storage/session-store.js";
 import { TenantStore } from "./storage/tenant-store.js";
+import { TenantSettingsStore } from "./storage/tenant-settings-store.js";
 import { SignalStore } from "./storage/signal-store.js";
 import { StreamStore, type AppendInput, type AppendResult, type StoredEvent } from "./storage/stream-store.js";
 import { BoundedIdempotencyCache } from "./storage/idempotency-cache.js";
@@ -152,6 +153,7 @@ export class FrickStore {
   readonly sessions: SessionStore;
   readonly accounts: AccountStore;
   readonly tenants: TenantStore;
+  readonly tenantSettings: TenantSettingsStore;
   readonly adminAudit: AdminAuditStore;
   readonly pushRegistrations: PushRegistrationStore;
   readonly projections: FrickProjectionRegistry;
@@ -198,6 +200,7 @@ export class FrickStore {
     this.sessions = new SessionStore(this.#db);
     this.accounts = new AccountStore(this.#db);
     this.tenants = new TenantStore(this.#db);
+    this.tenantSettings = new TenantSettingsStore(this.#db);
     this.adminAudit = new AdminAuditStore(this.#db);
     this.pushRegistrations = new PushRegistrationStore(this.#db);
     this.projections = options.projections ?? createFrickProjectionRegistry();
@@ -253,15 +256,59 @@ export class FrickStore {
     if (this.#closed) {
       return { prunedByAge: 0, prunedByCap: 0 };
     }
-    const cutoffIso = new Date(Date.now() - this.#idempotencyKeyRetentionMs).toISOString();
+    const now = Date.now();
+    const globalCutoffIso = new Date(now - this.#idempotencyKeyRetentionMs).toISOString();
+    // Per-tenant retention overrides: any tenant with a `retentionMs` row in
+    // tenant_settings uses its own cutoff instead of the global one.
+    const overrides = this.#db
+      .prepare(
+        `SELECT tenant_id, setting_value FROM tenant_settings
+          WHERE setting_key = 'retentionMs'`,
+      )
+      .all() as Array<{ tenant_id: string; setting_value: string }>;
+    const tenantCutoffs = new Map<string, string>();
+    for (const row of overrides) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(row.setting_value);
+      } catch {
+        continue;
+      }
+      if (typeof parsed !== "number" || !Number.isFinite(parsed) || parsed < 0) {
+        continue;
+      }
+      tenantCutoffs.set(row.tenant_id, new Date(now - parsed).toISOString());
+    }
     this.#db.exec("BEGIN IMMEDIATE");
     let prunedByAge = 0;
     let prunedByCap = 0;
     try {
-      const ageResult = this.#db
-        .prepare("DELETE FROM idempotency_keys WHERE created_at < ?")
-        .run(cutoffIso);
-      prunedByAge = Number(ageResult.changes ?? 0);
+      for (const [tenantId, cutoffIso] of tenantCutoffs) {
+        const r = this.#db
+          .prepare(
+            "DELETE FROM idempotency_keys WHERE tenant_id = ? AND created_at < ?",
+          )
+          .run(tenantId, cutoffIso);
+        prunedByAge += Number(r.changes ?? 0);
+      }
+      // Remaining tenants use the global cutoff. Build an `NOT IN (...)`
+      // clause; with no overrides this collapses to a plain WHERE clause.
+      let ageResult;
+      if (tenantCutoffs.size === 0) {
+        ageResult = this.#db
+          .prepare("DELETE FROM idempotency_keys WHERE created_at < ?")
+          .run(globalCutoffIso);
+      } else {
+        const placeholders = Array.from(tenantCutoffs.keys()).map(() => "?").join(",");
+        ageResult = this.#db
+          .prepare(
+            `DELETE FROM idempotency_keys
+              WHERE created_at < ?
+                AND tenant_id NOT IN (${placeholders})`,
+          )
+          .run(globalCutoffIso, ...tenantCutoffs.keys());
+      }
+      prunedByAge += Number(ageResult.changes ?? 0);
 
       const remaining = this.#db
         .prepare("SELECT COUNT(*) AS count FROM idempotency_keys")
