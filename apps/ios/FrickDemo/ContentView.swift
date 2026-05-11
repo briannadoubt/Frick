@@ -846,6 +846,9 @@ private struct ThreadListToolbar: ToolbarContent {
             }
         }
         ToolbarItem(placement: .topBarTrailing) {
+            SyncStatusIndicator(status: model.syncStatus)
+        }
+        ToolbarItem(placement: .topBarTrailing) {
             AccountMenu(model: model)
         }
     }
@@ -866,8 +869,70 @@ private struct ChatDetailToolbar: ToolbarContent {
             }
         }
         ToolbarItem(placement: .topBarTrailing) {
+            SyncStatusIndicator(status: model.syncStatus)
+        }
+        ToolbarItem(placement: .topBarTrailing) {
             AccountMenu(model: model)
         }
+    }
+}
+
+/// Small colored dot reflecting `FrickSyncStatus`. Tap to surface the last
+/// error envelope (when present).
+struct SyncStatusIndicator: View {
+    let status: FrickSyncStatus
+    @State private var isPresentingDetails = false
+
+    private var color: Color {
+        if status.lastError != nil { return .red }
+        switch status.state {
+        case .connected: return .green
+        case .connecting, .reconnecting: return .yellow
+        case .closed, .idle: return .red
+        }
+    }
+
+    private var label: String {
+        switch status.state {
+        case .idle: return "Idle"
+        case .connecting: return "Connecting"
+        case .connected: return "Connected"
+        case .reconnecting: return "Reconnecting"
+        case .closed: return "Disconnected"
+        }
+    }
+
+    var body: some View {
+        Button {
+            isPresentingDetails = true
+        } label: {
+            Circle()
+                .fill(color)
+                .frame(width: 10, height: 10)
+                .overlay(
+                    Circle().stroke(Color.primary.opacity(0.15), lineWidth: 0.5)
+                )
+        }
+        .accessibilityLabel("Sync status: \(label)")
+        .alert("Sync status", isPresented: $isPresentingDetails) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(detailsMessage)
+        }
+    }
+
+    private var detailsMessage: String {
+        var lines: [String] = ["State: \(label)"]
+        if let lastError = status.lastError {
+            lines.append("Last error: \(lastError)")
+        }
+        if status.pendingAppendCount > 0 {
+            lines.append("Pending appends: \(status.pendingAppendCount)")
+        }
+        if let compat = status.schemaCompatibility {
+            lines.append("Schema: \(compat.status)")
+        }
+        return lines.joined(separator: "\n")
     }
 }
 
