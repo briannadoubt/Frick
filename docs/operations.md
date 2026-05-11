@@ -1,5 +1,7 @@
 # Operations Runbook
 
+> **New to Frick?** Start with the [onboarding guide](./onboarding.md) — it walks through the mental model and gets a local server, web demo, and WebSocket sync running in about fifteen minutes. Come back here once you need to operate a server in production.
+
 This document describes what `apps/server` looks like to an operator today:
 the runtime modes it supports, the environment variables it reads, the HTTP
 endpoints exposed for orchestrators, the inspection routes, and the
