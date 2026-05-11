@@ -873,6 +873,27 @@ public final class FrickClient: Sendable {
         try storage.clearCache()
     }
 
+    /// Open a sync WebSocket against `baseURL` (defaults to the client's
+    /// configured `baseURL`). Callers must hold a session — the active
+    /// session token is appended as a query string. Cache compatibility
+    /// is verified up-front; throws `FrickCacheIncompatibleError` if the
+    /// local cache is stale.
+    public func connectSync(baseURL: URL? = nil) throws -> FrickSyncSocket {
+        guard let session = currentSession else {
+            throw FrickSyncSocketError.notConnected
+        }
+        _ = try verifyCacheCompatibility()
+        let socket = FrickSyncSocket(
+            baseURL: baseURL ?? self.baseURL,
+            sessionToken: session.sessionToken,
+            clientCapabilities: .defaultIOS(),
+            replicaId: replicaId,
+            deviceId: session.deviceId
+        )
+        Task { await socket.connect() }
+        return socket
+    }
+
     public func signOut() {
         sessionStore.session = nil
     }
