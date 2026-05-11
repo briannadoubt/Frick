@@ -7,7 +7,7 @@
  * stream split all behave as a downstream automation script would see them.
  */
 import { execFile } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -284,6 +284,65 @@ describe("frick backup / restore", () => {
       "development",
     ]);
     expect(result.exitCode).toBe(3);
+  });
+});
+
+describe("frick lint", () => {
+  it("lints the current schema and exits 0 when clean", async () => {
+    const result = await runCli(["lint"]);
+    expect(result.exitCode).toBe(0);
+    const summary = parseLastJson(result.stdout) as { ok: boolean; breaking: number };
+    expect(summary.ok).toBe(true);
+    expect(summary.breaking).toBe(0);
+  });
+
+  it("exits 1 with breaking findings when --against drops an object", async () => {
+    // Spawn schema check to harvest the live foundation schema, then mutate
+    // a hand-rolled "previous" snapshot that includes an extra object the
+    // current schema is missing — that's a removal from previous → breaking.
+    const previousPath = join(tmpRoot, "previous.json");
+    const previous = {
+      name: "frick-foundation",
+      schemaId: "frick-foundation",
+      schemaVersion: "0.1.0",
+      schemaRevision: 1,
+      minimumClientRevision: 1,
+      minimumServerRevision: 1,
+      protocol: "frick.realtime",
+      protocolVersion: 1,
+      compatibility: "greenfield-cutover",
+      hash: "frick-foundation-fake",
+      objects: [
+        {
+          id: 9999,
+          name: "DroppedType",
+          fields: [{ id: 1, name: "value", kind: "string", required: true }],
+          indexes: [],
+        },
+      ],
+      streams: [],
+      events: [],
+      presences: [],
+      signals: [],
+      blobs: [],
+      jobs: [],
+      projections: [],
+    };
+    writeFileSync(previousPath, JSON.stringify(previous));
+    const result = await runCli(["lint", "--against", previousPath]);
+    expect(result.exitCode).toBe(1);
+    const lines = result.stdout.split("\n").filter((l) => l.trim().length > 0);
+    const findings = lines.slice(0, -1).map((l) => JSON.parse(l)) as Array<{
+      ruleId: string;
+      severity: string;
+    }>;
+    expect(findings.some((f) => f.ruleId === "object.removed")).toBe(true);
+    const summary = JSON.parse(lines[lines.length - 1]!) as {
+      ok: boolean;
+      breaking: number;
+    };
+    expect(summary.ok).toBe(false);
+    expect(summary.breaking).toBeGreaterThanOrEqual(1);
   });
 });
 

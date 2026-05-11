@@ -11,6 +11,7 @@
 import { parseArgs } from "./argv.js";
 import { emit, emitError, resolveOutputMode, type OutputOptions } from "./output.js";
 import { toErrorShape, EXIT_USAGE } from "./errors.js";
+import { lintCommand } from "./commands/lint.js";
 import { schemaCommand } from "./commands/schema.js";
 import { migrateCommand } from "./commands/migrate.js";
 import { doctorCommand } from "./commands/doctor.js";
@@ -29,6 +30,7 @@ interface CommandSpec {
 
 const COMMANDS: readonly CommandSpec[] = [
   { name: "schema", summary: "Validate or regenerate the schema", subcommands: ["check", "generate"] },
+  { name: "lint", summary: "Lint the current schema or compare it to a previous snapshot" },
   { name: "migrate", summary: "Manage framework migrations", subcommands: ["status", "up"] },
   { name: "doctor", summary: "Composite health check (schema, db, migrations, config)" },
   { name: "inspect", summary: "Inspect runtime state from the local DB", subcommands: ["server", "db", "jobs"] },
@@ -69,6 +71,8 @@ export async function run(opts: RunOptions): Promise<number> {
     switch (command) {
       case "schema":
         return await schemaCommand(childParsed, out);
+      case "lint":
+        return await lintCommand(childParsed, out);
       case "migrate":
         return await migrateCommand(childParsed, out);
       case "doctor":
