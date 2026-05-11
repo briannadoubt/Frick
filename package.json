@@ -6,7 +6,7 @@
   "packageManager": "pnpm@10.0.0",
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc -b packages/protocol packages/core packages/react packages/design packages/design-web apps/server apps/web apps/cli",
+    "typecheck": "tsc -b packages/protocol packages/core packages/react packages/devtools packages/design packages/design-web apps/server apps/web apps/cli",
     "cli": "tsx apps/cli/src/index.ts",
     "schema:generate": "tsx packages/protocol/scripts/generate-native-artifacts.ts",
     "fixtures:generate": "tsx packages/protocol/scripts/generate-fixtures.ts",
