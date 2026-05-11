@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createFrickServer } from "../src/server.js";
 import { FrickStore } from "../src/store.js";
 import { exportDataSubject } from "../src/compliance/data-subject-export.js";
+import { eraseDataSubject } from "../src/compliance/data-subject-erase.js";
 
 const ADMIN_TOKEN = "test-admin-token-1234567890ABCDEF1234567890ABCDEF";
 const TENANT = "tenant-ds";
@@ -50,6 +51,66 @@ describe("data-subject export", () => {
     };
     expect(body.account?.handle).toBe("erase-me");
     expect(body.messages).toHaveLength(1);
+  });
+
+  it("erase pseudonymizes account, blanks message bodies, deletes session & push", () => {
+    const store = seedStore();
+    const report = eraseDataSubject(store, TENANT, USER);
+
+    expect(report.deleted.auth_sessions).toBe(1);
+    expect(report.deleted.push_device_registrations).toBe(1);
+    expect(report.pseudonymized.auth_accounts).toBe(1);
+    expect(report.pseudonymized.stream_events).toBe(1);
+
+    const account = store.db
+      .prepare(`SELECT handle, display_name, password_hash FROM auth_accounts WHERE user_id = ?`)
+      .get(USER) as { handle: string; display_name: string; password_hash: string };
+    expect(account.handle).toBe(`erased-${USER}`);
+    expect(account.display_name).toBe("Erased user");
+    expect(account.password_hash).toBe("");
+
+    expect(
+      store.db
+        .prepare(`SELECT COUNT(*) AS n FROM auth_sessions WHERE user_id = ?`)
+        .get(USER),
+    ).toEqual({ n: 0 });
+    expect(
+      store.db
+        .prepare(`SELECT COUNT(*) AS n FROM push_device_registrations WHERE user_id = ?`)
+        .get(USER),
+    ).toEqual({ n: 0 });
+
+    const events = store.streams.read(TENANT, "MessageStream", "conv-1", 0);
+    const senderMap = events.map((e) => ({
+      senderId: (e.payload as { senderId: unknown }).senderId,
+      body: (e.payload as { body: unknown }).body,
+    }));
+    expect(senderMap).toContainEqual({ senderId: null, body: null });
+    expect(senderMap).toContainEqual({ senderId: OTHER, body: "hi from other" });
+    store.close();
+  });
+
+  it("HTTP erase refuses in production without ?confirm=yes", async () => {
+    app = await startServer({ env: "production" });
+    const response = await fetch(
+      `${app.httpUrl}/_frick/admin/data-subject/erase?tenantId=${TENANT}&userId=${USER}`,
+      { method: "POST", headers: { authorization: `Bearer ${ADMIN_TOKEN}` } },
+    );
+    expect(response.status).toBe(412);
+    const body = await response.json();
+    expect(body.error).toBe("confirmation_required");
+  });
+
+  it("HTTP erase allowed in production with ?confirm=yes", async () => {
+    app = await startServer({ env: "production" });
+    seedRowsInto(app.store);
+    const response = await fetch(
+      `${app.httpUrl}/_frick/admin/data-subject/erase?tenantId=${TENANT}&userId=${USER}&confirm=yes`,
+      { method: "POST", headers: { authorization: `Bearer ${ADMIN_TOKEN}` } },
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { deleted: Record<string, number> };
+    expect(body.deleted.auth_sessions).toBe(1);
   });
 
   it("HTTP export requires tenantId + userId", async () => {

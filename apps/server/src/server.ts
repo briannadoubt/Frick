@@ -57,6 +57,7 @@ import type { StoredSession } from "./storage/session-store.js";
 import { TenantAlreadyExistsError } from "./storage/tenant-store.js";
 import { FrickStore } from "./store.js";
 import { exportDataSubject } from "./compliance/data-subject-export.js";
+import { eraseDataSubject } from "./compliance/data-subject-erase.js";
 import { FrickObjectVersionConflictError } from "./storage/object-errors.js";
 import { loadFrickConfig, type FrickConfig, type FrickConfigOverrides } from "./config.js";
 import { createConsoleLogger, createNoopLogger, type FrickLogger } from "./logger.js";
@@ -2708,6 +2709,63 @@ async function handleAdminRoute(
     } catch (error) {
       audit({
         action: "compliance.dataSubject.export",
+        target: userId,
+        outcome: "error",
+        detail: { error: error instanceof Error ? error.message : String(error) },
+      });
+      throw error;
+    }
+    return;
+  }
+
+  if (request.method === "POST" && sub === "data-subject/erase") {
+    const rawTenant = url.searchParams.get("tenantId");
+    const userId = url.searchParams.get("userId");
+    const confirm = url.searchParams.get("confirm");
+    if (!rawTenant || !userId) {
+      audit({
+        action: "compliance.dataSubject.erase",
+        outcome: "deny",
+        detail: { reason: "missingParameters" },
+      });
+      sendJson(response, 400, {
+        error: "bad_request",
+        message: "tenantId and userId query parameters are required",
+      });
+      return;
+    }
+    if (config.env === "production" && confirm !== "yes") {
+      audit({
+        action: "compliance.dataSubject.erase",
+        target: userId,
+        outcome: "deny",
+        detail: { reason: "confirmRequired" },
+      });
+      sendJson(response, 412, {
+        error: "confirmation_required",
+        message:
+          "Erase requires ?confirm=yes in production. Add the query parameter and retry.",
+      });
+      return;
+    }
+    validateTenantId(rawTenant);
+    const tenantId = normalizeTenantId(rawTenant);
+    try {
+      const report = eraseDataSubject(store, tenantId, userId);
+      audit({
+        action: "compliance.dataSubject.erase",
+        target: userId,
+        outcome: "allow",
+        detail: {
+          tenantId,
+          deleted: report.deleted,
+          pseudonymized: report.pseudonymized,
+        },
+      });
+      sendJson(response, 200, report);
+    } catch (error) {
+      audit({
+        action: "compliance.dataSubject.erase",
         target: userId,
         outcome: "error",
         detail: { error: error instanceof Error ? error.message : String(error) },
