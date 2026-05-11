@@ -15,11 +15,13 @@ import {
   useInbox,
   useObjects,
   usePresence,
+  useProjection,
   useSendSignal,
   useSetPresence,
   useSignalChannel,
   useStream,
   useSyncStatus,
+  useUpsertObject,
 } from "@frick/react";
 import {
   Avatar,
@@ -40,20 +42,30 @@ import {
 import { resolveInitialTheme, type ThemePreference } from "./theme.js";
 import {
   appendAttachmentMarker,
+  blobDerivativeUrl,
   buildDemoAttachment,
   createConversation,
   deriveInboxItems,
   login,
   nextReadReceiptPayload,
+  projectionInboxRowsForUser,
+  readReceiptsForConversation,
+  registerPushDevice,
+  revokePushDevice,
+  searchMessages,
   sentMessageEvents,
   signUp,
   syncDemoAttachment,
+  uploadImageAttachment,
   type AuthSession,
   type AttachmentMetadata,
+  type ChatMessageEvent,
   type ChatStreamEvent,
   type Conversation,
   type InboxRow,
+  type PushRegistration,
   type RoomMember,
+  type SearchHit,
   type User,
 } from "./chat-foundation.js";
 
@@ -269,13 +281,32 @@ function ChatWorkspace({
   const [selectedDestination, setSelectedDestination] = useState("chat");
   const [compactThreadsOpen, setCompactThreadsOpen] = useState(() => window.matchMedia("(max-width: 640px)").matches);
   const [inspectorOpen, setInspectorOpen] = useState(() => window.matchMedia("(min-width: 1041px)").matches);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchHit[]>([]);
+  const [searchError, setSearchError] = useState<string | undefined>();
+  const [isSearching, setIsSearching] = useState(false);
+  const [pushRegistration, setPushRegistration] = useState<PushRegistration | undefined>(
+    () => readStoredPushRegistration(),
+  );
+  const [pushError, setPushError] = useState<string | undefined>();
+  const [isTogglingPush, setIsTogglingPush] = useState(false);
+  const [displayNameDraft, setDisplayNameDraft] = useState("");
+  const [displayNameError, setDisplayNameError] = useState<string | undefined>();
+  const [displayNameStatus, setDisplayNameStatus] = useState<string | undefined>();
+  const [isSavingDisplayName, setIsSavingDisplayName] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
   const activeUserId = session.userId;
   const activeDeviceId = session.deviceId;
   const users = useObjects<User>("User");
   const conversations = useObjects<Conversation>("Conversation");
   const members = useObjects<RoomMember>("RoomMember");
+  // Live inbox: subscribe to the conversation-inbox projection, filtered
+  // client-side to the active user. useInbox stays around as a cold-start
+  // fallback so the first paint isn't empty before the WS connects.
+  const projectionInbox = useProjection<InboxRow>("conversation-inbox");
   const remoteInbox = useInbox<InboxRow>(activeUserId);
   const httpEndpoint = useFrickHttpEndpoint();
+  const upsertUser = useUpsertObject<User>("User");
   const messages = useStream<ChatStreamEvent>("MessageStream", selectedConversationId);
   const typingKey = `${selectedConversationId}:${activeUserId}:${activeDeviceId}`;
   const typing = usePresence<{ isTyping: boolean }>("TypingState", typingKey);
@@ -306,7 +337,15 @@ function ChatWorkspace({
     () => sortedMessages.filter((message) => message.streamId === selectedConversationId),
     [selectedConversationId, sortedMessages],
   );
-  const inboxRows = useMemo(() => normalizeInboxRows(remoteInbox.data), [remoteInbox.data]);
+  const liveInboxRows = useMemo(
+    () => projectionInboxRowsForUser(projectionInbox, activeUserId),
+    [projectionInbox, activeUserId],
+  );
+  const fallbackInboxRows = useMemo(() => normalizeInboxRows(remoteInbox.data), [remoteInbox.data]);
+  // Prefer the live projection deltas; only fall back to the HTTP snapshot
+  // before the WS subscription has produced any rows.
+  const inboxRows: InboxRow[] =
+    liveInboxRows.length > 0 ? liveInboxRows : fallbackInboxRows ?? [];
   const inboxItems = useMemo(
     () =>
       deriveInboxItems({
@@ -338,6 +377,16 @@ function ChatWorkspace({
     (threadKind === "dm"
       ? selectedParticipantIds.length === 1
       : threadTitle.trim().length > 0 && selectedParticipantIds.length > 0);
+  const readReceipts = useMemo(
+    () =>
+      readReceiptsForConversation({
+        conversationId: selectedConversationId,
+        members: visibleMembers,
+        inboxRows,
+        activeUserId,
+      }),
+    [activeUserId, inboxRows, selectedConversationId, visibleMembers],
+  );
   const latestMessageSequence = selectedMessages.at(-1)?.sequence ?? 0;
   const lastCursor = Math.max(0, ...Object.values(status.cursors));
   const workspaceDestinations = useMemo(
@@ -488,6 +537,124 @@ function ChatWorkspace({
     setAttachmentError(undefined);
   }
 
+  async function attachImage(file: File) {
+    setIsUploadingAttachment(true);
+    setAttachmentStatus(`Uploading ${file.name}...`);
+    setAttachmentError(undefined);
+    try {
+      const attachment = await uploadImageAttachment({
+        httpEndpoint,
+        file,
+        ownerId: activeUserId,
+        sessionToken: session.sessionToken,
+      });
+      setDraftAttachments((current) => [...current, attachment]);
+      setAttachmentStatus(`Attached ${attachment.name} (${formatByteCount(attachment.byteLength)})`);
+    } catch (error) {
+      setAttachmentStatus(undefined);
+      setAttachmentError(error instanceof Error ? error.message : "Image upload failed");
+    } finally {
+      setIsUploadingAttachment(false);
+      if (imageInputRef.current) {
+        imageInputRef.current.value = "";
+      }
+    }
+  }
+
+  async function runSearch(query: string) {
+    const trimmed = query.trim();
+    if (!trimmed) {
+      setSearchResults([]);
+      setSearchError(undefined);
+      return;
+    }
+    setIsSearching(true);
+    setSearchError(undefined);
+    try {
+      const response = await searchMessages({
+        httpEndpoint,
+        q: trimmed,
+        ...(selectedConversationId ? { conversationId: selectedConversationId } : {}),
+        sessionToken: session.sessionToken,
+        limit: 50,
+      });
+      setSearchResults(response.hits);
+    } catch (error) {
+      setSearchError(error instanceof Error ? error.message : "Search failed");
+      setSearchResults([]);
+    } finally {
+      setIsSearching(false);
+    }
+  }
+
+  function jumpToSearchHit(hit: SearchHit) {
+    const conversationId =
+      typeof hit.fields.conversationId === "string" ? hit.fields.conversationId : undefined;
+    if (conversationId) {
+      selectConversation(conversationId);
+    }
+    // The MessageList is keyed by eventId; scroll once the conversation hydrates.
+    window.setTimeout(() => {
+      const target = document.querySelector(`[data-event-id="${cssEscape(hit.docId)}"]`);
+      if (target && "scrollIntoView" in target) {
+        (target as HTMLElement).scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }, 120);
+  }
+
+  async function togglePushRegistration() {
+    setIsTogglingPush(true);
+    setPushError(undefined);
+    try {
+      if (pushRegistration) {
+        await revokePushDevice({
+          httpEndpoint,
+          registrationId: pushRegistration.id,
+          sessionToken: session.sessionToken,
+        });
+        setPushRegistration(undefined);
+        clearStoredPushRegistration();
+      } else {
+        const registration = await registerPushDevice({
+          httpEndpoint,
+          deviceId: activeDeviceId,
+          token: `web-test-${crypto.randomUUID()}`,
+          platform: "test",
+          environment: "production",
+          sessionToken: session.sessionToken,
+        });
+        setPushRegistration(registration);
+        writeStoredPushRegistration(registration);
+      }
+    } catch (error) {
+      setPushError(error instanceof Error ? error.message : "Push toggle failed");
+    } finally {
+      setIsTogglingPush(false);
+    }
+  }
+
+  async function saveDisplayName() {
+    const trimmed = displayNameDraft.trim();
+    if (!trimmed) {
+      setDisplayNameError("Display name cannot be empty");
+      return;
+    }
+    setIsSavingDisplayName(true);
+    setDisplayNameError(undefined);
+    setDisplayNameStatus(undefined);
+    try {
+      const existing = users.find((user) => user.id === activeUserId);
+      await upsertUser(activeUserId, { ...(existing ?? {}), id: activeUserId, displayName: trimmed });
+      setDisplayNameStatus(`Saved as "${trimmed}"`);
+    } catch (error) {
+      setDisplayNameError(
+        error instanceof Error ? error.message : "Could not update display name",
+      );
+    } finally {
+      setIsSavingDisplayName(false);
+    }
+  }
+
   function advanceReadCursor() {
     const payload = nextReadReceiptPayload({
       userId: activeUserId,
@@ -540,6 +707,13 @@ function ChatWorkspace({
         <StatusChip className="status" data-connected={status.connected} icon="live" tone={status.connected ? "success" : "muted"}>
           {status.connected ? "Live" : "Offline"}
         </StatusChip>
+        <span
+          aria-label={syncStatusLabel(status)}
+          className="sync-status-dot"
+          data-tone={syncStatusTone(status)}
+          role="img"
+          title={syncStatusTooltip(status)}
+        />
         <IconButton
           className="icon-button"
           icon="details"
@@ -648,16 +822,43 @@ function ChatWorkspace({
         </div>
 
         <MessageList className="messages" onScroll={advanceReadCursor}>
-          {selectedMessages.map((message) => (
-            <ChatBubble
-              author={displayName(users, message.payload.senderId)}
-              key={message.eventId}
-              timestamp={new Date(message.payload.createdAt).toLocaleTimeString()}
-              variant={message.payload.senderId === activeUserId ? "outgoing" : "incoming"}
-            >
-              {message.payload.body}
-            </ChatBubble>
-          ))}
+          {selectedMessages.map((message, index) => {
+            const isLatest = index === selectedMessages.length - 1;
+            const readBy = isLatest
+              ? readReceipts.filter((r) => r.readSequence >= message.sequence)
+              : [];
+            const attachmentBlobIds = readAttachmentBlobIds(message);
+            return (
+              <div className="message-row" data-event-id={message.eventId} key={message.eventId}>
+                <ChatBubble
+                  author={displayName(users, message.payload.senderId)}
+                  timestamp={new Date(message.payload.createdAt).toLocaleTimeString()}
+                  variant={message.payload.senderId === activeUserId ? "outgoing" : "incoming"}
+                >
+                  {message.payload.body}
+                </ChatBubble>
+                {attachmentBlobIds.length > 0 ? (
+                  <div className="message-attachments" aria-label="Attachments">
+                    {attachmentBlobIds.map((blobId) => (
+                      <AttachmentThumbnail
+                        blobId={blobId}
+                        httpEndpoint={httpEndpoint}
+                        key={blobId}
+                        sessionToken={session.sessionToken}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+                {isLatest && message.payload.senderId === activeUserId && readBy.length > 0 ? (
+                  <p className="message-read-receipt" aria-label="Read receipts">
+                    Read by {readBy.length === 1
+                      ? displayName(users, readBy[0]!.userId)
+                      : `${readBy.length} others`}
+                  </p>
+                ) : null}
+              </div>
+            );
+          })}
           {selectedMessages.length === 0 ? <p className="empty">No messages yet</p> : null}
           <div aria-hidden="true" ref={messagesEndRef} />
         </MessageList>
@@ -713,14 +914,159 @@ function ChatWorkspace({
           disabled={isUploadingAttachment}
           onClick={() => void addDemoAttachment()}
         />
+        <input
+          accept="image/*"
+          aria-label="Upload image attachment"
+          className="image-attach-input"
+          hidden
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) {
+              void attachImage(file);
+            }
+          }}
+          ref={imageInputRef}
+          type="file"
+        />
+        <IconButton
+          className="attach-button image-attach-button"
+          icon="paperclip"
+          label={isUploadingAttachment ? "Uploading image" : "Attach image"}
+          disabled={isUploadingAttachment}
+          onClick={() => imageInputRef.current?.click()}
+        />
         <IconButton type="submit" icon="send" label="Send message" tone="primary" />
       </form>
+    );
+  }
+
+  function renderSearchPanel() {
+    return (
+      <section className="panel search-panel">
+        <PanelTitle icon={<MessageCircle size={18} />} title="Search" />
+        <form
+          className="search-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void runSearch(searchQuery);
+          }}
+        >
+          <TextField
+            aria-label="Search messages"
+            className="search-field"
+            placeholder="Search messages..."
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+          />
+          <Button className="secondary-action" type="submit" disabled={isSearching}>
+            {isSearching ? "Searching..." : "Search"}
+          </Button>
+        </form>
+        {searchError ? (
+          <p className="search-error" role="alert">{searchError}</p>
+        ) : null}
+        <div className="search-results" aria-label="Search results">
+          {searchResults.map((hit) => {
+            const conversationId =
+              typeof hit.fields.conversationId === "string" ? hit.fields.conversationId : undefined;
+            const conversationLabel = conversationId
+              ? conversationDisplayTitle({
+                  activeUserId,
+                  conversation: visibleConversations.find((c) => c.id === conversationId),
+                  conversationId,
+                  members: visibleMembers.filter((m) => m.conversationId === conversationId),
+                  users,
+                })
+              : "Unknown thread";
+            return (
+              <button
+                className="search-hit"
+                key={hit.docId}
+                onClick={() => jumpToSearchHit(hit)}
+                type="button"
+              >
+                <strong>{conversationLabel}</strong>
+                <small>{hit.docId}</small>
+              </button>
+            );
+          })}
+          {searchResults.length === 0 && !isSearching && !searchError ? (
+            <p className="empty">No results</p>
+          ) : null}
+        </div>
+      </section>
+    );
+  }
+
+  function renderSettingsPanel() {
+    const currentDisplayName = session.displayName ?? displayName(users, activeUserId);
+    return (
+      <section className="panel settings-panel">
+        <PanelTitle icon={<Users size={18} />} title="Settings" />
+        <form
+          className="settings-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void saveDisplayName();
+          }}
+        >
+          <TextField
+            aria-label="Display name"
+            label="Display name"
+            placeholder={currentDisplayName}
+            value={displayNameDraft}
+            onChange={(event) => {
+              setDisplayNameDraft(event.target.value);
+              setDisplayNameError(undefined);
+              setDisplayNameStatus(undefined);
+            }}
+          />
+          <Button
+            className="secondary-action"
+            disabled={isSavingDisplayName || displayNameDraft.trim().length === 0}
+            type="submit"
+          >
+            {isSavingDisplayName ? "Saving..." : "Save display name"}
+          </Button>
+          {displayNameError ? (
+            <p className="settings-error" role="alert">{displayNameError}</p>
+          ) : null}
+          {displayNameStatus ? (
+            <p className="settings-status" role="status">{displayNameStatus}</p>
+          ) : null}
+        </form>
+        <div className="settings-divider" aria-hidden="true" />
+        <div className="push-toggle">
+          <strong>Notifications</strong>
+          <small>
+            {pushRegistration
+              ? `Registered (${pushRegistration.platform})`
+              : "Not registered"}
+          </small>
+          <Button
+            className="secondary-action"
+            disabled={isTogglingPush}
+            onClick={() => void togglePushRegistration()}
+          >
+            {isTogglingPush
+              ? "Working..."
+              : pushRegistration
+                ? "Disable notifications"
+                : "Enable notifications"}
+          </Button>
+          {pushError ? (
+            <p className="settings-error" role="alert">{pushError}</p>
+          ) : null}
+        </div>
+      </section>
     );
   }
 
   function renderChatInspector() {
     return (
       <div className="inspector-stack">
+        {renderSearchPanel()}
+        {renderSettingsPanel()}
         <section className="metrics compact-metrics" aria-label="Runtime metrics">
           <Metric icon={<Database size={20} />} label="Schema" value="foundation" />
           <Metric icon={<Activity size={20} />} label="Cursor" value={`#${lastCursor}`} />
@@ -878,6 +1224,131 @@ function mergeById<T extends { id: string }>(base: T[], overlay: T[]): T[] {
 
 function formatByteCount(byteLength: number): string {
   return byteLength < 1024 ? `${byteLength} B` : `${Math.round(byteLength / 1024)} KB`;
+}
+
+function syncStatusTone(
+  status: { connected: boolean; authenticated: boolean },
+): "green" | "yellow" | "red" {
+  if (!status.connected) return "red";
+  if (status.connected && !status.authenticated) return "yellow";
+  return "green";
+}
+
+function syncStatusLabel(
+  status: { connected: boolean; authenticated: boolean },
+): string {
+  if (!status.connected) return "Disconnected";
+  if (!status.authenticated) return "Connected, awaiting auth";
+  return "Connected and authenticated";
+}
+
+function syncStatusTooltip(
+  status: { connected: boolean; authenticated: boolean; lastError?: { code?: string } },
+): string {
+  const base = syncStatusLabel(status);
+  if (status.lastError?.code) {
+    return `${base} (last error: ${status.lastError.code})`;
+  }
+  return base;
+}
+
+function readAttachmentBlobIds(message: ChatMessageEvent): string[] {
+  const ids = (message.payload as { attachmentBlobIds?: unknown }).attachmentBlobIds;
+  if (!Array.isArray(ids)) return [];
+  return ids.filter((value): value is string => typeof value === "string");
+}
+
+function cssEscape(value: string): string {
+  if (typeof window !== "undefined" && typeof window.CSS?.escape === "function") {
+    return window.CSS.escape(value);
+  }
+  return value.replace(/["\\]/g, "\\$&");
+}
+
+function AttachmentThumbnail({
+  blobId,
+  httpEndpoint,
+  sessionToken,
+}: {
+  blobId: string;
+  httpEndpoint: string;
+  sessionToken: string;
+}) {
+  const [objectUrl, setObjectUrl] = useState<string | undefined>();
+  const [errored, setErrored] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let createdUrl: string | undefined;
+    setErrored(false);
+    setObjectUrl(undefined);
+
+    async function load() {
+      // Try the thumbnail derivative first, fall back to the original blob.
+      const candidates = [
+        blobDerivativeUrl(httpEndpoint, blobId, "thumb"),
+        `${httpEndpoint.replace(/\/$/, "")}/blobs/${encodeURIComponent(blobId)}/content`,
+      ];
+      for (const url of candidates) {
+        try {
+          const response = await fetch(url, {
+            headers: sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {},
+          });
+          if (!response.ok) continue;
+          const blob = await response.blob();
+          if (cancelled) return;
+          createdUrl = URL.createObjectURL(blob);
+          setObjectUrl(createdUrl);
+          return;
+        } catch {
+          // Try the next candidate.
+        }
+      }
+      if (!cancelled) {
+        setErrored(true);
+      }
+    }
+
+    void load();
+    return () => {
+      cancelled = true;
+      if (createdUrl) {
+        URL.revokeObjectURL(createdUrl);
+      }
+    };
+  }, [blobId, httpEndpoint, sessionToken]);
+
+  if (errored) {
+    return <span className="attachment-thumb attachment-thumb-error">[attachment]</span>;
+  }
+  if (!objectUrl) {
+    return <span className="attachment-thumb attachment-thumb-pending" aria-label="Loading attachment" />;
+  }
+  return <img alt={`Attachment ${blobId}`} className="attachment-thumb" src={objectUrl} />;
+}
+
+const pushRegistrationStorageKey = "frick-web-push-registration";
+
+function readStoredPushRegistration(): PushRegistration | undefined {
+  const raw = window.localStorage.getItem(pushRegistrationStorageKey);
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as Partial<PushRegistration>;
+    if (typeof parsed.id === "string" && typeof parsed.deviceId === "string" && typeof parsed.platform === "string") {
+      return parsed as PushRegistration;
+    }
+  } catch {
+    window.localStorage.removeItem(pushRegistrationStorageKey);
+  }
+  return undefined;
+}
+
+function writeStoredPushRegistration(registration: PushRegistration): void {
+  window.localStorage.setItem(pushRegistrationStorageKey, JSON.stringify(registration));
+}
+
+function clearStoredPushRegistration(): void {
+  window.localStorage.removeItem(pushRegistrationStorageKey);
 }
 
 function readStoredSession(): AuthSession | undefined {

@@ -924,3 +924,118 @@ h1 {
     block-size: 100%;
   }
 }
+
+/* Round 6a additions ---------------------------------------------------- */
+
+.sync-status-dot {
+  display: inline-block;
+  block-size: 10px;
+  inline-size: 10px;
+  border-radius: 999px;
+  margin-inline: 4px;
+}
+.sync-status-dot[data-tone="green"] { background-color: #22c55e; }
+.sync-status-dot[data-tone="yellow"] { background-color: #f59e0b; }
+.sync-status-dot[data-tone="red"] { background-color: #ef4444; }
+
+.message-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-block-end: 8px;
+}
+
+.message-read-receipt {
+  align-self: flex-end;
+  font-size: 0.75rem;
+  color: var(--frick-text-muted, #64748b);
+  margin: 0;
+}
+
+.message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.attachment-thumb {
+  max-block-size: 120px;
+  max-inline-size: 160px;
+  border-radius: 8px;
+  object-fit: cover;
+  display: inline-block;
+}
+.attachment-thumb-pending {
+  background: var(--frick-surface-muted, #e2e8f0);
+  min-block-size: 80px;
+  min-inline-size: 80px;
+}
+.attachment-thumb-error {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: var(--frick-surface-muted, #e2e8f0);
+  font-size: 0.75rem;
+  color: var(--frick-text-muted, #64748b);
+}
+
+.search-panel,
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.search-form,
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-block-size: 240px;
+  overflow-y: auto;
+}
+
+.search-hit {
+  text-align: start;
+  background: transparent;
+  border: 1px solid var(--frick-border, rgba(0,0,0,0.08));
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: inherit;
+}
+.search-hit:hover {
+  background: var(--frick-surface-muted, rgba(0,0,0,0.04));
+}
+
+.push-toggle {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-divider {
+  border-block-end: 1px solid var(--frick-border, rgba(0,0,0,0.08));
+  margin-block: 6px;
+}
+
+.search-error,
+.settings-error {
+  color: var(--frick-error, #dc2626);
+  font-size: 0.85rem;
+  margin: 0;
+}
+.settings-status {
+  color: var(--frick-text-muted, #64748b);
+  font-size: 0.85rem;
+  margin: 0;
+}
