@@ -604,7 +604,6 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
     `,
   },
   {
-<<<<<<< HEAD
     // Per-tenant settings: a small key/value table for runtime config knobs
     // applied on a per-tenant basis. Values are JSON-encoded so the table
     // shape stays uniform across knob types (numbers, strings, structured

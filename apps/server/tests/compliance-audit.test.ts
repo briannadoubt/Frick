@@ -1,8 +1,17 @@
 import { DatabaseSync } from "node:sqlite";
 import { foundationSchema } from "@frick/protocol";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { createFrickServer } from "../src/server.js";
 import { AdminAuditStore } from "../src/storage/admin-audit-store.js";
 import { runFrameworkMigrations } from "../src/storage/migrations.js";
+
+const ADMIN_TOKEN = "test-admin-token-1234567890ABCDEF1234567890ABCDEF";
+let app: Awaited<ReturnType<typeof startServer>> | undefined;
+
+afterEach(async () => {
+  await app?.close();
+  app = undefined;
+});
 
 function openDb(): DatabaseSync {
   const db = new DatabaseSync(":memory:");
@@ -88,6 +97,52 @@ describe("admin audit chain", () => {
     db.close();
   });
 
+  it("compliance manifest endpoint describes the available evidence", async () => {
+    app = await startServer();
+    const response = await fetch(`${app.httpUrl}/_frick/admin/compliance/manifest`, {
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as Record<string, Record<string, unknown>>;
+    expect(body.audit?.hashChained).toBe(true);
+    expect(body.audit?.table).toBe("admin_audit_log");
+    expect(body.dataSubject?.exportEndpoint).toBe("/_frick/admin/data-subject");
+    expect(body.dataSubject?.eraseEndpoint).toBe("/_frick/admin/data-subject/erase");
+    expect(typeof body.retention?.idempotencyKeysDefaultMs).toBe("number");
+  });
+
+  it("audit verify endpoint returns 200 valid on intact chain, 409 broken on tamper", async () => {
+    app = await startServer();
+    // Trigger a couple admin actions to populate the chain.
+    await fetch(`${app.httpUrl}/_frick/admin/tenants`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${ADMIN_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ tenantId: "tenant-verify-1" }),
+    });
+
+    let response = await fetch(`${app.httpUrl}/_frick/admin/compliance/audit/verify`, {
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ valid: true });
+
+    // Tamper.
+    app.store.db
+      .prepare("UPDATE admin_audit_log SET action = 'tampered' WHERE id = 1")
+      .run();
+
+    response = await fetch(`${app.httpUrl}/_frick/admin/compliance/audit/verify`, {
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+    });
+    expect(response.status).toBe(409);
+    const body = (await response.json()) as { valid: boolean; brokenAt?: number };
+    expect(body.valid).toBe(false);
+    expect(body.brokenAt).toBe(1);
+  });
+
   it("verifyChain detects tampering with entry_hash itself", () => {
     const db = openDb();
     const store = new AdminAuditStore(db);
@@ -107,3 +162,21 @@ describe("admin audit chain", () => {
     db.close();
   });
 });
+
+async function startServer() {
+  const server = createFrickServer({
+    port: 0,
+    dbPath: ":memory:",
+    config: { adminToken: ADMIN_TOKEN },
+  });
+  await server.listen();
+  const address = server.server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("No server address");
+  }
+  return {
+    httpUrl: `http://127.0.0.1:${address.port}`,
+    store: server.store,
+    close: server.close,
+  };
+}

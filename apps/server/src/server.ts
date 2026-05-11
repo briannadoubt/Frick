@@ -55,7 +55,7 @@ import { createMessagesSearchIndex } from "./search/messages-index.js";
 import type { StoredAccount } from "./storage/account-store.js";
 import type { StoredSession } from "./storage/session-store.js";
 import { TenantAlreadyExistsError } from "./storage/tenant-store.js";
-import { FrickStore } from "./store.js";
+import { DEFAULT_IDEMPOTENCY_KEY_RETENTION_MS, FrickStore } from "./store.js";
 import { exportDataSubject } from "./compliance/data-subject-export.js";
 import { eraseDataSubject } from "./compliance/data-subject-erase.js";
 import { FrickObjectVersionConflictError } from "./storage/object-errors.js";
@@ -2772,6 +2772,32 @@ async function handleAdminRoute(
       });
       throw error;
     }
+    return;
+  }
+
+  if (request.method === "GET" && sub === "compliance/manifest") {
+    sendJson(response, 200, {
+      audit: {
+        table: "admin_audit_log",
+        hashChained: true,
+        verifyEndpoint: "/_frick/admin/compliance/audit/verify",
+      },
+      dataSubject: {
+        exportEndpoint: "/_frick/admin/data-subject",
+        eraseEndpoint: "/_frick/admin/data-subject/erase",
+      },
+      retention: {
+        idempotencyKeysDefaultMs: DEFAULT_IDEMPOTENCY_KEY_RETENTION_MS,
+        perTenantOverrides: "via tenant_settings (see per-tenant slice)",
+      },
+    });
+    return;
+  }
+
+  if (request.method === "GET" && sub === "compliance/audit/verify") {
+    const result = store.adminAudit.verifyChain();
+    const status = result.valid ? 200 : 409;
+    sendJson(response, status, result);
     return;
   }
 
