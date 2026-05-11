@@ -618,6 +618,12 @@ public struct FrickProjectionChange: Sendable, Equatable {
 public enum FrickInboundEvent: Sendable {
     case status(FrickSyncStatus)
     case delta(stream: String?, events: [FrickStreamEvent], cursor: Int)
+    /// Inbound object-upsert delta. Surfaced when the gateway broadcasts
+    /// `PackedObjectRecord` entries (e.g. via `publishObjects`). `records`
+    /// is keyed by the object's declared field names, resolved through
+    /// `FrickSchemaDescriptor`. Carried separately from `.delta` so existing
+    /// stream-event consumers don't need to change.
+    case objectsDelta(records: [FrickObjectRecord], cursor: Int)
     case projectionDelta(projection: String, changes: [FrickProjectionChange])
     case ack(requestId: String, version: Int?, cursor: Int?)
     case nack(envelope: FrickErrorEnvelope?, requestId: String)
@@ -626,6 +632,22 @@ public enum FrickInboundEvent: Sendable {
     /// Inbound presence delta. `records` carry the live presence rows for the
     /// subscription key, `cleared` lists keys whose leases were revoked.
     case presenceDelta(name: String, records: [FrickPresenceRecord], cleared: [String])
+}
+
+/// Single object row delivered in an `objectsDelta` frame. `value` is the
+/// object's full state keyed by the declared field names (resolved via
+/// `FrickSchemaDescriptor`). Unknown field ids round-trip as `"#<id>"`
+/// keys so a forward-incompatible schema bump still surfaces data.
+public struct FrickObjectRecord: Sendable, Equatable {
+    public let type: String
+    public let id: String
+    public let value: [String: String]
+
+    public init(type: String, id: String, value: [String: String]) {
+        self.type = type
+        self.id = id
+        self.value = value
+    }
 }
 
 /// Single presence row delivered in a `presenceDelta` frame.
@@ -1051,6 +1073,16 @@ public actor FrickSyncSocket {
     private func handleDelta(payload: FrickMsgPackValue) {
         guard let map = payload.mapValue else { return }
         let cursor = map["cursor"]?.intValue ?? 0
+        let objectArray = map["objects"]?.arrayValue ?? []
+        var objectRecords: [FrickObjectRecord] = []
+        for o in objectArray {
+            if let decoded = Self.decodePackedObjectRecord(o) {
+                objectRecords.append(decoded)
+            }
+        }
+        if !objectRecords.isEmpty {
+            eventContinuation?.yield(.objectsDelta(records: objectRecords, cursor: cursor))
+        }
         let eventArray = map["events"]?.arrayValue ?? []
         var streamEvents: [FrickStreamEvent] = []
         for e in eventArray {
@@ -1082,6 +1114,29 @@ public actor FrickSyncSocket {
         }
         let streamName = streamEvents.first?.stream
         eventContinuation?.yield(.delta(stream: streamName, events: streamEvents, cursor: cursor))
+    }
+
+    /// Decode a `PackedObjectRecord` tuple
+    /// `[objectTypeId, recordId, packedFields]` into a `FrickObjectRecord`,
+    /// resolving type and field ids via `FrickSchemaDescriptor`. Returns
+    /// `nil` for malformed tuples or unknown object type ids.
+    private static func decodePackedObjectRecord(_ value: FrickMsgPackValue) -> FrickObjectRecord? {
+        guard let tuple = value.arrayValue, tuple.count >= 3 else { return nil }
+        guard let typeId = tuple[0].intValue,
+              let id = tuple[1].stringValue
+        else { return nil }
+        guard let typeName = FrickSchemaDescriptor.objectNames[typeId] else { return nil }
+        let fieldTable = FrickSchemaDescriptor.objectFields[typeId] ?? [:]
+        let packedFields = tuple[2].arrayValue ?? []
+        var fields: [String: String] = [:]
+        for entry in packedFields {
+            guard let pair = entry.arrayValue, pair.count >= 2,
+                  let fieldId = pair[0].intValue else { continue }
+            let name = fieldTable[fieldId] ?? "#\(fieldId)"
+            fields[name] = Self.stringify(pair[1])
+        }
+        fields["id"] = id
+        return FrickObjectRecord(type: typeName, id: id, value: fields)
     }
 
     /// Decode a `PackedStreamEvent` tuple
