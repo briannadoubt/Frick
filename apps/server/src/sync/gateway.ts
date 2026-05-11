@@ -36,6 +36,10 @@ import {
 } from "../authz.js";
 import type { FrickStore } from "../store.js";
 import type { StoredEvent } from "../storage/stream-store.js";
+import type {
+  FrickProjectionRegistry,
+  ProjectionDeltaNotice,
+} from "../projections/registry.js";
 import { routeSignal } from "./signal-router.js";
 import { SubscriptionRegistry, type SyncClient } from "./subscriptions.js";
 import { sendFrame } from "./wire.js";
@@ -53,6 +57,8 @@ export class SyncGateway {
   readonly #connectionsGauge: Gauge | undefined;
   #activeConnections = 0;
 
+  readonly #projections: FrickProjectionRegistry | undefined;
+
   constructor(
     private readonly wss: WebSocketServer,
     private readonly store: FrickStore,
@@ -61,12 +67,17 @@ export class SyncGateway {
       limits?: FrickLimits;
       policyHooks?: readonly FrickPolicyHook[];
       metrics?: FrickMetrics;
+      projections?: FrickProjectionRegistry;
     } = {},
   ) {
     this.#limits = options.limits ?? DEFAULT_FRICK_LIMITS;
     this.#policyHooks = options.policyHooks ?? [];
     this.#metrics = options.metrics;
     this.#connectionsGauge = this.#metrics?.gauge("frick.ws.connections.current");
+    this.#projections = options.projections;
+    if (this.#projections) {
+      this.#projections.setDeltaListener((notice) => this.publishProjectionDelta(notice));
+    }
   }
 
   attach(): void {
@@ -100,7 +111,21 @@ export class SyncGateway {
       clearInterval(timer);
     }
     this.#heartbeatTimers.clear();
+    this.#projections?.setDeltaListener(undefined);
     this.#subscriptions.closeAll();
+  }
+
+  publishProjectionDelta(notice: ProjectionDeltaNotice): void {
+    for (const { client: subscriber } of this.#subscriptions.projectionSubscribers(notice.projection)) {
+      // Only deliver to subscribers in the same tenant as the producing write.
+      if (subscriber.principal && subscriber.principal.tenantId !== notice.tenantId) {
+        continue;
+      }
+      sendFrame(subscriber.socket, [
+        FrameKind.ProjectionDelta,
+        { projection: notice.projection, changes: notice.changes },
+      ]);
+    }
   }
 
   #startHeartbeat(client: SyncClient, socket: WebSocket): ReturnType<typeof setInterval> {
@@ -341,6 +366,23 @@ export class SyncGateway {
         { requestId: payload.subscriptionId, error: envelope, code: envelope.code, message: envelope.message },
       ]);
       return;
+    }
+    if (payload.kind === "projection") {
+      const projection = this.#projections?.get(payload.name);
+      if (!projection) {
+        const envelope = createFrickErrorEnvelope({
+          code: "auth.forbidden",
+          message: `Unknown projection ${payload.name}`,
+          requestId: payload.subscriptionId,
+          retryable: false,
+          details: { reason: "projectionNotFound", projection: payload.name },
+        });
+        sendFrame(client.socket, [
+          FrameKind.Nack,
+          { requestId: payload.subscriptionId, error: envelope, code: envelope.code, message: envelope.message },
+        ]);
+        return;
+      }
     }
     try {
       assertCanSubscribe(

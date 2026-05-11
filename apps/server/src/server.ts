@@ -228,6 +228,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     limits,
     policyHooks,
     metrics,
+    projections: store.projections,
   });
   gateway.attach();
 

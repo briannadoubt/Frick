@@ -76,7 +76,8 @@ export type FrickAction =
   | "signal.send"
   | "blob.read"
   | "blob.write"
-  | "inbox.read";
+  | "inbox.read"
+  | "projection.read";
 
 /**
  * Reasons surfaced through {@link FrickDecision}. The framework maps these to
@@ -241,6 +242,12 @@ export function decide(input: FrickPolicyInput, memberships: MembershipReader): 
       }
       return ALLOW;
     }
+    case "projection.read": {
+      // Projection subscribe is allowed for any authenticated principal in
+      // the same tenant. Per-projection app-level policy can tighten this
+      // via a registered FrickPolicyHook.
+      return ALLOW;
+    }
     case "stream.read":
     case "stream.append": {
       if (resource.name !== "MessageStream") {
@@ -324,6 +331,21 @@ export function assertCanSubscribe(
   memberships: MembershipReader,
   hooks?: readonly FrickPolicyHook[],
 ): void {
+  if (kind === "projection") {
+    const decision = decideWithHooks(
+      {
+        principal,
+        action: "projection.read",
+        resource: { kind: "projection", name, ...(key !== undefined ? { key } : {}) },
+      },
+      memberships,
+      hooks,
+    );
+    if (!decision.allow) {
+      throw new AuthorizationError(decision);
+    }
+    return;
+  }
   if (kind !== "stream") {
     return;
   }
