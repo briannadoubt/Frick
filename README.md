@@ -30,6 +30,7 @@ pnpm web                      # http://127.0.0.1:5173
 - [`docs/authoring.md`](./docs/authoring.md) — full app authoring reference (init flags, scaffold commands, server wiring).
 - [`docs/operations.md`](./docs/operations.md) — runtime modes, environment variables, admin routes, shutdown contract.
 - [`docs/threat-model.md`](./docs/threat-model.md) — trust boundaries and the auth/permissions story.
+- [`docs/push-adapters.md`](./docs/push-adapters.md) — wire up the APNs and FCM adapters, set per-tenant credentials via the CLI, and read back delivery telemetry.
 - [`docs/cross-platform-client-contract.md`](./docs/cross-platform-client-contract.md) — what every client SDK must implement.
 - [`docs/versioning.md`](./docs/versioning.md) — schema-identity stability, when to bump revision vs hash, breaking-change policy.
 - [`CONTRIBUTING.md`](./CONTRIBUTING.md) — how to run tests, commit conventions, PR expectations.
@@ -47,3 +48,7 @@ The TypeScript stack is required; Swift and Android tooling are only needed if y
 ## Status
 
 Pre-1.0. The schema identity (`schemaId`, `protocolVersion`, `schemaRevision`, `hash`) and the structured error envelope are stable — clients and servers in the wild can rely on those. Storage layout, admin/inspection routes, and the CLI surface may still shift between minor versions. Local SQLite databases should be considered disposable while the framework is in cutover posture.
+
+## License
+
+Apache License 2.0 — see [`LICENSE`](./LICENSE).

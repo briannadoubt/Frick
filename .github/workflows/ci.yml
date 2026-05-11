@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel superseded runs on the same ref. Lets PRs reuse runner capacity
+# instead of queueing every push.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ts:
+    name: TypeScript (test, typecheck, generated artifacts, release dry-run)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          # Pin to the same major as `packageManager` in package.json.
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          # node:sqlite shipped stably in Node 24; the workspace requires it.
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Generated artifacts in sync
+        run: pnpm verify:generated
+
+      - name: Release dry-run (pack hygiene)
+        run: pnpm release:dry-run
+
+      - name: End-to-end smoke
+        run: pnpm e2e:smoke
+
+  swift:
+    name: Swift (FrickSwift + FrickDesign)
+    runs-on: macos-15
+    timeout-minutes: 15
+    # Swift tests only re-run when something they depend on changes. The
+    # paths list intentionally over-includes (e.g. all of protocol/) to
+    # keep the rules simple at the cost of an extra macOS run now and then.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Swift test (generates schema first)
+        run: pnpm swift:test
+
+  android:
+    name: Android (frick + design + app)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            apps/android/.gradle
+          key: gradle-${{ runner.os }}-${{ hashFiles('apps/android/**/*.gradle*', 'apps/android/**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Generate schema and design artifacts
+        run: pnpm schema:generate && pnpm design:generate
+
+      - name: Android tests, lint, debug assemble
+        working-directory: apps/android
+        env:
+          # The script `pnpm android:build` hard-codes /opt/homebrew paths
+          # for a macOS dev workstation. On Linux CI we invoke gradlew
+          # directly with the runner's pre-installed JDK + SDK so we don't
+          # have to fork that script.
+          JAVA_HOME: ${{ env.JAVA_HOME_17_X64 }}
+        run: |
+          ./gradlew \
+            :frick:testDebugUnitTest :frick:lintDebug :frick:assembleDebug \
+            :design:testDebugUnitTest :design:lintDebug :design:assembleDebug \
+            :app:lintDebug :app:assembleDebug

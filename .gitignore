@@ -23,3 +23,15 @@ packages/design-swift/.swiftpm/
 .worktrees/
 .superpowers/
 .claude/
+
+# Credentials — never commit. The push adapters read APNs `.p8` and FCM
+# service-account JSON via the CLI's `tenants set-push` command, which
+# wraps the file with AES-256-GCM and stores the ciphertext in SQLite.
+# The plaintext files should stay on the operator's workstation only.
+*.p8
+*.pem
+*-service-account.json
+service-account*.json
+.env
+.env.*
+!.env.example

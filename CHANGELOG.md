@@ -6,7 +6,36 @@ Each package version is independent — a release header documents which package
 
 ## Unreleased
 
-_Nothing yet._
+### Protocol
+
+- Generator now emits a `FrickSchemaDescriptor` (Swift `enum`) and `FRICK_*` constant tables (Kotlin `internal val`s) alongside the existing DTOs: type-id → name and (typeId → fieldId → fieldName) for objects, streams, and events. Used by the native SDKs to decode packed Delta tuples back into named-field shapes.
+
+### Server (`@frick/server`)
+
+- **APNs push adapter** — HTTP/2 over `node:http2`, persistent per-tenant sessions, ES256 JWT signed from the tenant's stored `.p8` PEM and cached for ~50 minutes. Maps `Unregistered` / `BadDeviceToken` / `ExpiredProviderToken` onto the framework's revocation codes so the router tombstones the dead registration. Wire via `createFrickApnsAdapter()` in `ServerOptions.push.adapters`.
+- **FCM v1 push adapter** — `fcm.googleapis.com/v1/projects/{projectId}/messages:send` via `fetch`; service-account JWT exchanged for an OAuth2 access token and cached for `expires_in`. Maps `UNREGISTERED` / `INVALID_ARGUMENT` / `SENDER_ID_MISMATCH` onto revocation codes; preserves quota and server errors with stable codes. Wire via `createFrickFcmAdapter()`.
+- **Per-tenant push credentials** — stored in `tenant_settings` wrapped with AES-256-GCM. The encryption key comes from `FRICK_PUSH_CRED_KEY` (base64-encoded 32 bytes); when unset the adapters return a `push.credentials.disabled` skipped-delivery rather than running without encryption.
+- **`frick.push.delivery` DevTools events** — every fan-out attempt records intent, platform, status, error code, and receipt id so operators can read back exactly what landed where.
+
+### CLI (`@frick/cli`)
+
+- New `frick tenants set-push` subcommand:
+  - `--platform apns --p8 <file> --key-id ... --team-id ... --bundle-id ... [--sandbox]` encrypts and stores APNs credentials.
+  - `--platform fcm --service-account <google-svc-account.json>` encrypts and stores FCM service-account credentials.
+
+### Swift SDK (`packages/swift`)
+
+- `FrickSyncSocket.handleDelta` now decodes the wire's `PackedStreamEvent` tuples into named-field `FrickStreamEvent` values via the new `FrickSchemaDescriptor`. Legacy map-shaped event fixtures continue to decode as before.
+- New `FrickInboundEvent.objectsDelta(records:cursor:)` case surfaces `PackedObjectRecord` entries from the gateway's `publishObjects` channel as typed `FrickObjectRecord` values. Additive — existing `.delta` consumers are unchanged.
+
+### Android SDK (`apps/android/frick`)
+
+- `FrickSyncSocket` now decodes `PackedObjectRecord` and `PackedStreamEvent` tuples into named-field maps using the generated `FRICK_OBJECT_NAMES` / `FRICK_STREAM_NAMES` / `FRICK_EVENT_NAMES` / `FRICK_OBJECT_FIELDS` / `FRICK_EVENT_FIELDS` tables. Fixes a regression where every WS Delta event was silently dropped because the decoder cast the tuple form as a map. Unknown field ids round-trip as `"#<id>"` keys so a forward-incompatible schema bump degrades gracefully rather than dropping fields.
+
+### Repository
+
+- Apache License 2.0 (`LICENSE`).
+- `.gitignore` now excludes `*.p8`, `*.pem`, `*-service-account.json`, and `.env*` so credential files can't be committed by accident.
 
 ## 0.1.0 - 2026-05-11
 
