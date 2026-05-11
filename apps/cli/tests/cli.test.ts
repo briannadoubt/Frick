@@ -231,6 +231,62 @@ describe("frick inspect", () => {
   });
 });
 
+describe("frick backup / restore", () => {
+  it("backup --output writes valid NDJSON that restore can consume", async () => {
+    await runCli(["migrate", "up", "--db-path", dbPath, "--env", "development"]);
+    const backupPath = join(tmpRoot, "backup.ndjson");
+    const backup = await runCli([
+      "backup",
+      "--tenant-id",
+      "_default",
+      "--output",
+      backupPath,
+      "--db-path",
+      dbPath,
+      "--env",
+      "development",
+    ]);
+    expect(backup.exitCode).toBe(0);
+    const body = parseLastJson(backup.stdout) as { ok: boolean; rows: number };
+    expect(body.ok).toBe(true);
+    expect(body.rows).toBeGreaterThan(0);
+
+    const restoreDbPath = join(tmpRoot, "restore.sqlite");
+    await runCli(["migrate", "up", "--db-path", restoreDbPath, "--env", "development"]);
+    const restore = await runCli([
+      "restore",
+      "--input",
+      backupPath,
+      "--confirm",
+      "yes",
+      "--overwrite",
+      "--db-path",
+      restoreDbPath,
+      "--env",
+      "development",
+    ]);
+    expect(restore.exitCode).toBe(0);
+    const report = parseLastJson(restore.stdout) as {
+      schemaCompatibility: { matched: boolean };
+    };
+    expect(report.schemaCompatibility.matched).toBe(true);
+  });
+
+  it("restore without --confirm yes is refused with exit 3", async () => {
+    await runCli(["migrate", "up", "--db-path", dbPath, "--env", "development"]);
+    const result = await runCli([
+      "restore",
+      "--input",
+      join(tmpRoot, "missing.ndjson"),
+      "--db-path",
+      dbPath,
+      "--env",
+      "development",
+    ]);
+    expect(result.exitCode).toBe(3);
+  });
+});
+
 describe("unknown command", () => {
   it("returns exit 2 and a JSON error on stderr", async () => {
     const result = await runCli(["nope"]);

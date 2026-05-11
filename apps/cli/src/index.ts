@@ -18,6 +18,8 @@ import { inspectCommand } from "./commands/inspect.js";
 import { resetCommand } from "./commands/reset.js";
 import { tenantsCommand } from "./commands/tenants.js";
 import { verifyCommand } from "./commands/verify.js";
+import { backupCommand } from "./commands/backup.js";
+import { restoreCommand } from "./commands/restore.js";
 
 interface CommandSpec {
   name: string;
@@ -33,6 +35,8 @@ const COMMANDS: readonly CommandSpec[] = [
   { name: "reset", summary: "Drop framework tables (development only, requires --dev)" },
   { name: "tenants", summary: "Manage the tenants ledger", subcommands: ["list", "create"] },
   { name: "verify", summary: "Run `pnpm verify:generated` end-to-end" },
+  { name: "backup", summary: "Stream a framework database dump as NDJSON" },
+  { name: "restore", summary: "Restore a framework database from NDJSON (requires --confirm yes)" },
 ];
 
 export interface RunOptions {
@@ -77,6 +81,10 @@ export async function run(opts: RunOptions): Promise<number> {
         return await tenantsCommand(childParsed, out);
       case "verify":
         return await verifyCommand(childParsed, out);
+      case "backup":
+        return await backupCommand(childParsed, out);
+      case "restore":
+        return await restoreCommand(childParsed, out);
       default: {
         emitError(
           {
