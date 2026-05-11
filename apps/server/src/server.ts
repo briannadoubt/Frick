@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
+import { encode as msgpackEncode } from "@msgpack/msgpack";
 import { createFrickErrorEnvelope, foundationSchema, type FrickErrorCode } from "@frick/protocol";
 import {
   AuthenticationError,
@@ -28,6 +29,7 @@ import type { StoredSession } from "./storage/session-store.js";
 import { FrickStore } from "./store.js";
 import { loadFrickConfig, type FrickConfig, type FrickConfigOverrides } from "./config.js";
 import { createConsoleLogger, createNoopLogger, type FrickLogger } from "./logger.js";
+import { FrickLimitError, mergeLimits, type FrickLimits } from "./limits.js";
 
 export interface ServerOptions {
   port?: number;
@@ -57,6 +59,11 @@ export interface ServerOptions {
    * outcome. See {@link FrickPolicyHook}.
    */
   policyHooks?: readonly FrickPolicyHook[];
+  /**
+   * Bounded runtime limits. Partial — missing fields fall back to
+   * {@link DEFAULT_FRICK_LIMITS}.
+   */
+  limits?: Partial<FrickLimits>;
 }
 
 export function createFrickServer(options: ServerOptions = {}) {
@@ -71,6 +78,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     process.env.VITEST !== undefined;
   const logger =
     options.logger ?? (inTestRunner ? createNoopLogger() : createConsoleLogger(config));
+  const limits = mergeLimits(options.limits);
   const store = new FrickStore({
     path: options.dbPath ?? process.env.FRICK_DB_PATH ?? defaultDatabasePath(),
     schema: foundationSchema,
@@ -102,6 +110,7 @@ export function createFrickServer(options: ServerOptions = {}) {
   );
   const gateway = new SyncGateway(wss, store, {
     onStreamEvent: (event) => sse.publishStreamEvent(event),
+    limits,
   });
   gateway.attach();
 
@@ -202,7 +211,7 @@ export function createFrickServer(options: ServerOptions = {}) {
 
     if (request.method === "POST" && url.pathname === "/auth/signup") {
       try {
-        const body = await readJsonBody(request);
+        const body = await readJsonBody(request, limits.maxHttpBodyBytes);
         const displayName = normalizeDisplayName(requireString(body.displayName, "displayName"));
         const handle = normalizeHandle(requireString(body.handle, "handle"));
         const password = normalizePassword(requireString(body.password, "password"));
@@ -226,7 +235,7 @@ export function createFrickServer(options: ServerOptions = {}) {
 
     if (request.method === "POST" && url.pathname === "/auth/login") {
       try {
-        const body = await readJsonBody(request);
+        const body = await readJsonBody(request, limits.maxHttpBodyBytes);
         const identity = requireString(body.identity, "identity").trim();
         const password = requireString(body.password, "password");
         const account = store.verifyAccountPassword(identity, password);
@@ -259,7 +268,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         return;
       }
       try {
-        const body = await readJsonBody(request);
+        const body = await readJsonBody(request, limits.maxHttpBodyBytes);
         const userId = requireString(body.userId, "userId");
         if (!store.hasUser(userId)) {
           throw new Error(`Unknown user ${userId}`);
@@ -291,7 +300,7 @@ export function createFrickServer(options: ServerOptions = {}) {
 
     if (request.method === "POST" && url.pathname === "/conversations") {
       try {
-        const body = await readJsonBody(request);
+        const body = await readJsonBody(request, limits.maxHttpBodyBytes);
         const kind = parseConversationKind(typeof body.kind === "string" ? body.kind : "group");
         const title =
           typeof body.title === "string" && body.title.trim().length > 0
@@ -359,7 +368,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     const blobContentId = parseBlobContentPath(url);
     if (blobContentId && request.method === "PUT") {
       try {
-        const content = await readRawBody(request);
+        const content = await readRawBody(request, limits.maxBlobBytes, "maxBlobBytes");
         const metadata = store.readBlobMetadata(blobContentId);
         const contentHash = sha256ContentHash(content);
         let responseStatus = 200;
@@ -441,7 +450,7 @@ export function createFrickServer(options: ServerOptions = {}) {
 
     if (request.method === "POST" && url.pathname === "/blobs") {
       try {
-        const body = await readJsonBody(request);
+        const body = await readJsonBody(request, limits.maxHttpBodyBytes);
         const ownerId = requireString(body.ownerId, "ownerId");
         assertBlobOwnership(principal, ownerId, policyHooks);
         store.createBlobMetadata({
@@ -463,7 +472,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     if (signalRoute && request.method === "POST") {
       try {
         assertCanSignal(principal, signalRoute.name, signalRoute.key, store, policyHooks);
-        const value = await readJsonBody(request);
+        const value = await readJsonBody(request, limits.maxHttpBodyBytes);
         store.enqueueSignal(signalRoute.name, signalRoute.key, value);
         gateway.publishSignal(signalRoute.name, signalRoute.key, value);
         sendJson(response, 200, { ok: true });
@@ -522,11 +531,12 @@ export function createFrickServer(options: ServerOptions = {}) {
 
     if (request.method === "POST" && url.pathname === "/append") {
       try {
-        const body = await readJsonBody(request);
+        const body = await readJsonBody(request, limits.maxHttpBodyBytes);
         const stream = requireString(body.stream, "stream");
         const key = requireString(body.key, "key");
         const event = requireString(body.event, "event");
         const payload = requireRecord(body.payload, "payload");
+        assertPayloadWithinLimit(payload, limits.maxStreamAppendPayloadBytes);
         assertCanAppend(principal, stream, key, store, event, payload, policyHooks);
         const result = store.appendEvent({
           requestId: requireString(body.requestId, "requestId"),
@@ -667,7 +677,14 @@ function sendJson(response: http.ServerResponse, status: number, body: unknown):
 }
 
 function sendError(response: http.ServerResponse, error: unknown, requestId: string): void {
-  const status = error instanceof AuthenticationError ? 401 : error instanceof AuthorizationError ? 403 : 400;
+  const status =
+    error instanceof FrickLimitError
+      ? 413
+      : error instanceof AuthenticationError
+        ? 401
+        : error instanceof AuthorizationError
+          ? 403
+          : 400;
   const details: Record<string, unknown> = { routeCode: requestId };
   if (
     (error instanceof AuthenticationError || error instanceof AuthorizationError) &&
@@ -675,6 +692,11 @@ function sendError(response: http.ServerResponse, error: unknown, requestId: str
     !error.decision.allow
   ) {
     details.reason = error.decision.reason;
+  }
+  if (error instanceof FrickLimitError) {
+    details.limit = error.limit;
+    details.configuredMax = error.configuredMax;
+    details.actualValue = error.actualValue;
   }
   const envelope = createFrickErrorEnvelope({
     code: httpErrorCode(error),
@@ -704,27 +726,64 @@ function httpErrorCode(error: unknown): FrickErrorCode {
   if (error instanceof AuthorizationError) {
     return "auth.forbidden";
   }
+  if (error instanceof FrickLimitError) {
+    if (error.limit === "maxBlobBytes") {
+      return "blob.tooLarge";
+    }
+    if (error.limit === "maxStreamAppendPayloadBytes") {
+      return "stream.appendRejected";
+    }
+    return "rateLimit.exceeded";
+  }
   return "sync.protocolError";
 }
 
-async function readJsonBody(request: http.IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  if (chunks.length === 0) {
+async function readJsonBody(
+  request: http.IncomingMessage,
+  maxBytes: number,
+): Promise<Record<string, unknown>> {
+  const buffer = await readBoundedRawBody(request, maxBytes, "maxHttpBodyBytes");
+  if (buffer.byteLength === 0) {
     return {};
   }
-  const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
+  const parsed = JSON.parse(buffer.toString("utf8")) as unknown;
   return requireRecord(parsed, "body");
 }
 
-async function readRawBody(request: http.IncomingMessage): Promise<Buffer> {
+async function readRawBody(request: http.IncomingMessage, maxBytes: number, limit: "maxBlobBytes" | "maxHttpBodyBytes"): Promise<Buffer> {
+  return readBoundedRawBody(request, maxBytes, limit);
+}
+
+async function readBoundedRawBody(
+  request: http.IncomingMessage,
+  maxBytes: number,
+  limit: "maxHttpBodyBytes" | "maxBlobBytes",
+): Promise<Buffer> {
   const chunks: Buffer[] = [];
+  let total = 0;
   for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buf.byteLength;
+    if (total > maxBytes) {
+      // Stop consuming further chunks but don't tear down the socket — we
+      // still need to write a 413 response.
+      request.pause();
+      throw new FrickLimitError({ limit, actualValue: total, configuredMax: maxBytes });
+    }
+    chunks.push(buf);
   }
   return Buffer.concat(chunks);
+}
+
+function assertPayloadWithinLimit(payload: Record<string, unknown>, maxBytes: number): void {
+  const encoded = msgpackEncode(payload);
+  if (encoded.byteLength > maxBytes) {
+    throw new FrickLimitError({
+      limit: "maxStreamAppendPayloadBytes",
+      actualValue: encoded.byteLength,
+      configuredMax: maxBytes,
+    });
+  }
 }
 
 function requireRecord(value: unknown, name: string): Record<string, unknown> {
