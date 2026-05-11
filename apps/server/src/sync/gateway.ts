@@ -1,4 +1,5 @@
 import type { IncomingMessage } from "node:http";
+import { randomUUID } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import { encode as msgpackEncode } from "@msgpack/msgpack";
 import {
@@ -49,6 +50,20 @@ import { sendFrame } from "./wire.js";
 import { DEFAULT_FRICK_LIMITS, clampTtlSeconds, type FrickLimits } from "../limits.js";
 import { resolveTenantLimits } from "../tenant-config.js";
 import type { FrickMetrics, Gauge } from "../metrics.js";
+import { emitDevToolsEvent } from "../devtools/emit.js";
+
+/**
+ * Per-connection tracking for the DevTools `ws.disconnect` event. We synth a
+ * `clientId` (the WS protocol doesn't define one) so the connect/disconnect
+ * pair can be correlated in the developer console. `frameCounts` is keyed by
+ * `FrameKind` enum name to match the existing `frick.ws.frames.total` metric
+ * labels.
+ */
+interface DevToolsConnectionContext {
+  readonly clientId: string;
+  readonly connectedAtMs: number;
+  readonly frameCounts: Record<string, number>;
+}
 
 export class SyncGateway {
   readonly #subscriptions = new SubscriptionRegistry();
@@ -66,6 +81,7 @@ export class SyncGateway {
    * (no principal at connect) fall back to the global limits.
    */
   readonly #clientLimits = new WeakMap<SyncClient, FrickLimits>();
+  readonly #devtoolsContexts = new WeakMap<SyncClient, DevToolsConnectionContext>();
   readonly #heartbeatTimers = new Set<ReturnType<typeof setInterval>>();
   readonly #metrics: FrickMetrics | undefined;
   readonly #connectionsGauge: Gauge | undefined;
@@ -110,6 +126,24 @@ export class SyncGateway {
       this.#activeConnections += 1;
       this.#connectionsGauge?.set(this.#activeConnections);
 
+      // Record connect/disconnect into the DevTools feed. Synthesizing a
+      // clientId here keeps the gateway the single source of truth for
+      // connection identity — the protocol itself does not assign one.
+      const devtoolsCtx: DevToolsConnectionContext = {
+        clientId: randomUUID(),
+        connectedAtMs: Date.now(),
+        frameCounts: {},
+      };
+      this.#devtoolsContexts.set(client, devtoolsCtx);
+      emitDevToolsEvent(this.store, {
+        kind: "ws.connect",
+        ...(principal ? { tenantId: principal.tenantId } : {}),
+        fields: {
+          clientId: devtoolsCtx.clientId,
+          ...(principal ? { tenantId: principal.tenantId, userId: principal.userId } : {}),
+        },
+      });
+
       const heartbeat = this.#startHeartbeat(client, socket);
 
       socket.on("message", (payload) => {
@@ -122,6 +156,15 @@ export class SyncGateway {
         this.#subscriptions.removeClient(client);
         this.#activeConnections = Math.max(0, this.#activeConnections - 1);
         this.#connectionsGauge?.set(this.#activeConnections);
+        emitDevToolsEvent(this.store, {
+          kind: "ws.disconnect",
+          ...(client.principal ? { tenantId: client.principal.tenantId } : {}),
+          fields: {
+            clientId: devtoolsCtx.clientId,
+            durationMs: Date.now() - devtoolsCtx.connectedAtMs,
+            frameCounts: devtoolsCtx.frameCounts,
+          },
+        });
       });
     });
   }
@@ -244,10 +287,17 @@ export class SyncGateway {
     }
     try {
       const decoded = decodeFrame(payload);
+      const kindLabel = FrameKind[decoded[0]] ?? String(decoded[0]);
       if (this.#metrics) {
         this.#metrics
-          .counter("frick.ws.frames.total", { kind: FrameKind[decoded[0]] ?? String(decoded[0]) })
+          .counter("frick.ws.frames.total", { kind: kindLabel })
           .inc();
+      }
+      // Track for the DevTools ws.disconnect event. Same label as the
+      // metrics counter so an operator can correlate the two views.
+      const devtoolsCtx = this.#devtoolsContexts.get(client);
+      if (devtoolsCtx) {
+        devtoolsCtx.frameCounts[kindLabel] = (devtoolsCtx.frameCounts[kindLabel] ?? 0) + 1;
       }
       this.#handleFrame(client, decoded);
     } catch (error) {
