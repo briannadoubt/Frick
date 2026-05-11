@@ -5,6 +5,14 @@
   "exports": {
     ".": "./src/index.tsx"
   },
+  "types": "./src/index.tsx",
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@frick/core": "workspace:*",
     "@frick/protocol": "workspace:*",

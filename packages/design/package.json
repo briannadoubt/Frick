@@ -5,6 +5,14 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "types": "./src/index.ts",
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "check": "tsx src/scripts/check.ts",
     "generate": "tsx src/scripts/generate.ts",

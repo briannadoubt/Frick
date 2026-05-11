@@ -5,6 +5,14 @@
   "exports": {
     ".": "./src/index.tsx"
   },
+  "types": "./src/index.tsx",
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "lucide-react": "^0.556.0",
     "react": "^19.2.0",
