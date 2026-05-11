@@ -16,6 +16,9 @@ describe("loadFrickConfig", () => {
       blobStoragePath: "./frick-blobs/",
       logLevel: "info",
       inspectionEnabled: true,
+      adminToken: undefined,
+      adminEnabled: false,
+      implicitTenantCreation: true,
     });
   });
 

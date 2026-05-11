@@ -60,6 +60,28 @@ export interface FrickConfig {
    * `FRICK_INSPECTION_ENABLED=true` to force them on in production.
    */
   inspectionEnabled: boolean;
+  /**
+   * Static bearer token that, when supplied in the `Authorization: Bearer`
+   * header, authenticates the request as a cross-tenant admin principal
+   * (see {@link Principal.scope}). Sourced from `FRICK_ADMIN_TOKEN`. When
+   * unset, admin functionality is completely disabled — admin routes return
+   * 404 and the bearer is never matched against this value.
+   */
+  adminToken: string | undefined;
+  /**
+   * Derived from {@link FrickConfig.adminToken}: true when an admin token is
+   * configured, false otherwise. The admin routes block under
+   * `/_frick/admin/*` is gated on this flag.
+   */
+  adminEnabled: boolean;
+  /**
+   * When true (the default in development/test), the `/auth/*` handlers
+   * implicitly add unknown `tenantId` values to the tenants ledger so apps
+   * don't need an explicit admin step before signing up. When false, the
+   * handlers reject unknown tenants with `auth.forbidden` + `details.reason:
+   * "unknownTenant"` so an admin must pre-create the tenant.
+   */
+  implicitTenantCreation: boolean;
 }
 
 export class FrickConfigError extends Error {
@@ -123,6 +145,17 @@ export function loadFrickConfig(
   const inspectionEnabled =
     overrides.inspectionEnabled ??
     parseBoolean(env.FRICK_INSPECTION_ENABLED, inspectionDefault, "FRICK_INSPECTION_ENABLED");
+  const adminToken =
+    "adminToken" in overrides ? overrides.adminToken : parseString(env.FRICK_ADMIN_TOKEN);
+  const adminEnabled = overrides.adminEnabled ?? !!adminToken;
+  const implicitTenantDefault = runtimeEnv !== "production";
+  const implicitTenantCreation =
+    overrides.implicitTenantCreation ??
+    parseBoolean(
+      env.FRICK_IMPLICIT_TENANT_CREATION,
+      implicitTenantDefault,
+      "FRICK_IMPLICIT_TENANT_CREATION",
+    );
 
   if (runtimeEnv === "production" && demoAuthEnabled) {
     warn("[frick.config] demoAuthEnabled=true in production — /auth/dev-login is exposed");
@@ -134,6 +167,13 @@ export function loadFrickConfig(
   }
   if (runtimeEnv === "production" && inspectionEnabled) {
     warn("[frick.config] inspectionEnabled=true in production — /_frick/inspect/* is exposed");
+  }
+  if (runtimeEnv === "production" && adminEnabled) {
+    if (!adminToken || adminToken.length < 32) {
+      throw new FrickConfigError(
+        "FRICK_ADMIN_TOKEN must be at least 32 characters in production when admin is enabled",
+      );
+    }
   }
 
   return {
@@ -148,6 +188,9 @@ export function loadFrickConfig(
     blobStoragePath,
     logLevel,
     inspectionEnabled,
+    adminToken,
+    adminEnabled,
+    implicitTenantCreation,
   };
 }
 
