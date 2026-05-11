@@ -92,6 +92,7 @@ import {
   createBlobProcessorJobHandler,
   encodeBlobProcessPayload,
 } from "./blobs/processor-job.js";
+import { emitDevToolsEvent } from "./devtools/emit.js";
 
 export interface ServerOptions {
   port?: number;
@@ -367,8 +368,13 @@ export function createFrickServer(options: ServerOptions = {}) {
       method: request.method ?? "",
       path: url.pathname,
     });
+    // Capture the principal's tenant for the DevTools event row alongside
+    // the existing log/metric emissions. We don't widen the logger callback
+    // signature — we just stash the tenant in a local.
+    let observedTenantId: string | undefined;
     try {
       await dispatchHttp(request, response, url, (principal) => {
+        observedTenantId = principal.tenantId;
         requestLogger = requestLogger.child({
           tenantId: principal.tenantId,
           userId: principal.userId,
@@ -376,9 +382,10 @@ export function createFrickServer(options: ServerOptions = {}) {
       });
     } finally {
       const status = response.statusCode;
+      const durationMs = Math.round(performance.now() - startedAt);
       requestLogger.info("frick.http.request", {
         status,
-        durationMs: Math.round(performance.now() - startedAt),
+        durationMs,
       });
       metrics
         .counter("frick.http.requests.total", {
@@ -386,6 +393,20 @@ export function createFrickServer(options: ServerOptions = {}) {
           status: String(status),
         })
         .inc();
+      // Durable structured event for the DevTools console. Additive — the
+      // log line above remains the canonical stderr trace and the metric
+      // counter above remains the canonical aggregate.
+      emitDevToolsEvent(store, {
+        kind: "http.request",
+        ...(observedTenantId !== undefined ? { tenantId: observedTenantId } : {}),
+        fields: {
+          requestId,
+          method: request.method ?? "",
+          path: url.pathname,
+          status,
+          durationMs,
+        },
+      });
     }
   }
 

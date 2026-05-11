@@ -105,7 +105,7 @@ export class DevToolsEventStore {
 
   list(filter: DevToolsEventListFilter = {}): DevToolsEventRow[] {
     const clauses: string[] = [];
-    const params: unknown[] = [];
+    const params: Array<string | number | null> = [];
     if (filter.kind !== undefined) {
       clauses.push("kind = ?");
       params.push(filter.kind);
