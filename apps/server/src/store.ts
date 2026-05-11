@@ -13,6 +13,11 @@ import {
 import { AccountStore, type StoredAccount } from "./storage/account-store.js";
 import { AdminAuditStore } from "./storage/admin-audit-store.js";
 import { BlobStore, type BlobMetadata, type BlobMetadataInput } from "./storage/blob-store.js";
+import { BlobDerivativeStore } from "./storage/blob-derivative-store.js";
+import {
+  createFrickBlobProcessorRegistry,
+  type FrickBlobProcessorRegistry,
+} from "./blobs/processor.js";
 import { InboxStore, type ConversationInboxRow } from "./storage/inbox-store.js";
 import { JobStore, type StoredJob } from "./storage/job-store.js";
 import { ObjectStore, type ObjectUpsertResult } from "./storage/object-store.js";
@@ -120,6 +125,8 @@ export class FrickStore {
   readonly presence: PresenceStore;
   readonly signals: SignalStore;
   readonly blobs: BlobStore;
+  readonly blobDerivatives: BlobDerivativeStore;
+  readonly blobProcessors: FrickBlobProcessorRegistry;
   readonly inbox: InboxStore;
   readonly jobs: JobStore;
   readonly sessions: SessionStore;
@@ -162,6 +169,8 @@ export class FrickStore {
     this.presence = new PresenceStore(this.#db, this.schema);
     this.signals = new SignalStore(this.#db, this.schema);
     this.blobs = new BlobStore(this.#db);
+    this.blobDerivatives = new BlobDerivativeStore(this.#db);
+    this.blobProcessors = createFrickBlobProcessorRegistry();
     this.inbox = new InboxStore(this.#db);
     this.jobs = new JobStore(this.#db);
     this.sessions = new SessionStore(this.#db);

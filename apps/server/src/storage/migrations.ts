@@ -525,6 +525,37 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
         ON push_device_registrations (tenant_id, user_id) WHERE revoked_at IS NULL;
     `,
   },
+  {
+    // Blob derivatives: child blobs produced by the blob processor pipeline
+    // (thumbnails, transcoded variants, extracted-metadata sidecars). The
+    // primary key is (tenant_id, parent_blob_id, derivative_id) so two
+    // tenants can produce derivatives with the same local id, and so a
+    // processor can emit multiple derivatives per parent without colliding.
+    //
+    // `storage_key` points into the same blob_content table as the parent
+    // (we reuse the existing path-resolution helper). `metadata` is JSON for
+    // structured per-derivative annotations (image dimensions, exif, etc.).
+    id: "0008_blob_derivatives",
+    schemaRevision: 1,
+    description: "Create blob_derivatives table for blob processor pipeline outputs.",
+    sql: `
+      CREATE TABLE IF NOT EXISTS blob_derivatives (
+        parent_blob_id TEXT NOT NULL,
+        derivative_id TEXT NOT NULL,
+        tenant_id TEXT NOT NULL DEFAULT '_default',
+        processor_id TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        byte_length INTEGER NOT NULL,
+        content_hash TEXT NOT NULL,
+        storage_key TEXT NOT NULL,
+        metadata TEXT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, parent_blob_id, derivative_id)
+      );
+      CREATE INDEX idx_blob_derivatives_processor
+        ON blob_derivatives (tenant_id, processor_id, created_at DESC);
+    `,
+  },
 ];
 
 /** Names of all framework tables (and indexes) the runner manages. Used by the
@@ -547,6 +578,7 @@ export const FRAMEWORK_TABLES: readonly string[] = [
   "tenants",
   "admin_audit_log",
   "push_device_registrations",
+  "blob_derivatives",
 ];
 
 export interface MigrationRunResult {

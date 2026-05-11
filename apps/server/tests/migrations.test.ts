@@ -54,6 +54,7 @@ describe("framework migration runner", () => {
       "0005_admin_audit_log",
       "0006_jobs_lifecycle",
       "0007_push_registrations",
+      "0008_blob_derivatives",
     ]);
     expect(result.applied[0]?.schemaRevision).toBe(1);
     expect(result.applied[0]?.checksum).toMatch(/^sha256-[0-9a-f]{64}$/);
@@ -68,6 +69,7 @@ describe("framework migration runner", () => {
       "0005_admin_audit_log",
       "0006_jobs_lifecycle",
       "0007_push_registrations",
+      "0008_blob_derivatives",
     ]);
 
     const tables = listTables(db);
@@ -89,10 +91,10 @@ describe("framework migration runner", () => {
       supportedSchemaRevision: foundationSchema.schemaRevision,
     });
 
-    expect(first.applied).toHaveLength(7);
+    expect(first.applied).toHaveLength(8);
     expect(second.applied).toHaveLength(0);
-    expect(second.alreadyApplied).toHaveLength(7);
-    expect(listAppliedMigrations(db)).toHaveLength(7);
+    expect(second.alreadyApplied).toHaveLength(8);
+    expect(listAppliedMigrations(db)).toHaveLength(8);
 
     db.close();
   });
@@ -221,6 +223,7 @@ describe("framework migration runner", () => {
       "0005_admin_audit_log",
       "0006_jobs_lifecycle",
       "0007_push_registrations",
+      "0008_blob_derivatives",
       "9000_test_extra",
     ]);
     expect(listTables(db)).toContain("test_extra");
