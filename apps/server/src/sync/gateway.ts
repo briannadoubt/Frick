@@ -16,6 +16,7 @@ import {
   type AppendPayload,
   type FrickClientCapabilities,
   type FrickFrame,
+  type ObjectUpsertPayload,
   type PresenceClearPayload,
   type PresenceSetPayload,
   type PlainObject,
@@ -28,12 +29,14 @@ import {
   assertCanAppend,
   assertCanSignal,
   assertCanSubscribe,
+  assertCanWriteObject,
   AuthenticationError,
   AuthorizationError,
   tenantMembershipReader,
   type FrickPolicyHook,
   type Principal,
 } from "../authz.js";
+import { FrickObjectVersionConflictError } from "../storage/object-errors.js";
 import type { FrickStore } from "../store.js";
 import type { StoredEvent } from "../storage/stream-store.js";
 import type {
@@ -325,6 +328,9 @@ export class SyncGateway {
       case FrameKind.Append:
         this.#handleAppend(client, frame[1]);
         return;
+      case FrameKind.ObjectUpsert:
+        this.#handleObjectUpsert(client, frame[1]);
+        return;
       case FrameKind.PresenceSet:
         this.#handlePresenceSet(client, frame[1]);
         return;
@@ -522,6 +528,106 @@ export class SyncGateway {
     }
   }
 
+  #handleObjectUpsert(client: SyncClient, payload: ObjectUpsertPayload): void {
+    if (!client.principal) {
+      const envelope = createFrickErrorEnvelope({
+        code: "auth.unauthenticated",
+        message: "Missing session token",
+        requestId: payload.requestId,
+        retryable: false,
+        details: { reason: "unauthenticated" },
+      });
+      sendFrame(client.socket, [
+        FrameKind.Nack,
+        { requestId: payload.requestId, error: envelope, code: envelope.code, message: envelope.message },
+      ]);
+      return;
+    }
+    const principal = client.principal;
+
+    // Object upserts share the pending-append counter intentionally: both are
+    // outstanding write intents and a single combined cap matches the limits
+    // round (round 5). A separate cap would let a misbehaving client double
+    // its in-flight budget by mixing frame kinds.
+    const pending = this.#pendingAppendCounts.get(client) ?? 0;
+    if (pending >= this.#limits.maxPendingAppendsPerClient) {
+      const envelope = createFrickErrorEnvelope({
+        code: "rateLimit.exceeded",
+        message: "Pending write queue is full",
+        requestId: payload.requestId,
+        retryable: true,
+        details: {
+          limit: "maxPendingAppendsPerClient",
+          configuredMax: this.#limits.maxPendingAppendsPerClient,
+        },
+      });
+      sendFrame(client.socket, [
+        FrameKind.Nack,
+        { requestId: payload.requestId, error: envelope, code: envelope.code, message: envelope.message },
+      ]);
+      return;
+    }
+
+    this.#pendingAppendCounts.set(client, pending + 1);
+    try {
+      try {
+        assertCanWriteObject(
+          principal,
+          payload.objectType,
+          payload.objectId,
+          tenantMembershipReader(this.store, principal.tenantId),
+          this.#policyHooks,
+        );
+      } catch (error) {
+        if (this.#sendAuthNack(client, payload.requestId, error)) {
+          return;
+        }
+        throw error;
+      }
+
+      const mergePolicy = this.store.objectMergePolicy(payload.objectType);
+      try {
+        const result = this.store.upsertObjectWithPolicy({
+          tenantId: principal.tenantId,
+          type: payload.objectType,
+          id: payload.objectId,
+          value: payload.value,
+          ...(payload.expectedVersion !== undefined ? { expectedVersion: payload.expectedVersion } : {}),
+        });
+        sendFrame(client.socket, [
+          FrameKind.Ack,
+          { requestId: payload.requestId, version: result.nextVersion },
+        ]);
+        const written: PlainObject = { id: payload.objectId, ...withoutEnvelopeId(payload.value) };
+        this.publishObjects(payload.objectType, [written], principal.tenantId);
+      } catch (error) {
+        if (error instanceof FrickObjectVersionConflictError) {
+          const envelope = createFrickErrorEnvelope({
+            code: "storage.conflict",
+            message: error.message,
+            requestId: payload.requestId,
+            retryable: false,
+            details: {
+              ...(error.expectedVersion !== undefined ? { expectedVersion: error.expectedVersion } : {}),
+              actualVersion: error.actualVersion,
+              mergePolicy,
+            },
+            schemaHash: this.store.schema.hash,
+            schemaRevision: this.store.schema.schemaRevision,
+          });
+          sendFrame(client.socket, [
+            FrameKind.Nack,
+            { requestId: payload.requestId, error: envelope, code: envelope.code, message: envelope.message },
+          ]);
+          return;
+        }
+        throw error;
+      }
+    } finally {
+      this.#pendingAppendCounts.set(client, Math.max(0, (this.#pendingAppendCounts.get(client) ?? 1) - 1));
+    }
+  }
+
   #handlePresenceSet(client: SyncClient, payload: PresenceSetPayload): void {
     const principal = requirePrincipal(client);
     const presence = presenceByName(this.store.schema, payload.name);
@@ -662,6 +768,11 @@ function measureByteLength(payload: unknown): number {
     return Buffer.byteLength(payload);
   }
   return 0;
+}
+
+function withoutEnvelopeId(value: PlainObject): PlainObject {
+  const { id: _id, ...rest } = value;
+  return rest;
 }
 
 function schemaFromClientCapabilities(client: FrickClientCapabilities, serverSchema: FrickSchema): FrickSchema {

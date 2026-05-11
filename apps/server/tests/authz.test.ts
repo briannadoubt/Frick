@@ -293,12 +293,27 @@ describe("decide() deny-by-default for unrecognised actions", () => {
     }
   });
 
-  it("denies object.write for an action with no explicit allow rule", () => {
+  it("allows object.write for any authenticated principal in its own tenant", () => {
     const decision = decide(
       { principal: stranger, action: "object.write", resource: { kind: "object", name: "Conversation" } },
       memberships,
     );
+    expect(decision.allow).toBe(true);
+  });
+
+  it("denies cross-tenant object.write with reason tenantMismatch", () => {
+    const decision = decide(
+      {
+        principal: stranger,
+        action: "object.write",
+        resource: { kind: "object", name: "Conversation", tenantId: "other-tenant" },
+      },
+      memberships,
+    );
     expect(decision.allow).toBe(false);
+    if (!decision.allow) {
+      expect(decision.reason).toBe("tenantMismatch");
+    }
   });
 
   it("still allows the owner's own inbox.read (regression: explicit allow rules unchanged)", () => {
