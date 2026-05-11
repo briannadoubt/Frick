@@ -77,7 +77,8 @@ export type FrickAction =
   | "blob.read"
   | "blob.write"
   | "inbox.read"
-  | "projection.read";
+  | "projection.read"
+  | "search.query";
 
 /**
  * Reasons surfaced through {@link FrickDecision}. The framework maps these to
@@ -246,6 +247,13 @@ export function decide(input: FrickPolicyInput, memberships: MembershipReader): 
       // Projection subscribe is allowed for any authenticated principal in
       // the same tenant. Per-projection app-level policy can tighten this
       // via a registered FrickPolicyHook.
+      return ALLOW;
+    }
+    case "search.query": {
+      // Search queries are allowed for any authenticated principal within
+      // their own tenant. The route layer scopes results to
+      // `principal.tenantId`; per-index app policy (e.g. membership-aware
+      // filtering of `messages-fts` hits) is a follow-up — see docs/spec.md.
       return ALLOW;
     }
     case "object.write": {
