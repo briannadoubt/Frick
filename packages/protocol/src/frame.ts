@@ -31,6 +31,7 @@ export enum FrameKind {
   Pong = 16,
   SyncStatus = 17,
   HelloAck = 18,
+  ProjectionDelta = 19,
 }
 
 export type SubscriptionKind = "object" | "stream" | "presence" | "signal" | "projection";
@@ -133,6 +134,19 @@ export interface CursorCommitPayload {
   cursor: number;
 }
 
+export interface ProjectionDeltaChange {
+  /** Projection-defined row key, e.g. `${userId}:${conversationId}`. */
+  key: string;
+  /** `null` means delete; non-null replaces the current row value. */
+  value: PlainObject | null;
+}
+
+export interface ProjectionDeltaPayload {
+  /** Registered projection name, e.g. `"conversation-inbox"`. */
+  projection: string;
+  changes: ProjectionDeltaChange[];
+}
+
 export type FrickFrame =
   | [FrameKind.Hello, HelloPayload]
   | [FrameKind.Schema, FrickSchema]
@@ -152,7 +166,8 @@ export type FrickFrame =
   | [FrameKind.Ping, { sentAt: number }]
   | [FrameKind.Pong, { sentAt: number; receivedAt: number }]
   | [FrameKind.SyncStatus, { connected: boolean; cursors: Record<string, number>; inFlight: number }]
-  | [FrameKind.HelloAck, HelloAckPayload];
+  | [FrameKind.HelloAck, HelloAckPayload]
+  | [FrameKind.ProjectionDelta, ProjectionDeltaPayload];
 
 export function encodeFrame(frame: FrickFrame): Uint8Array {
   return encode(frame);

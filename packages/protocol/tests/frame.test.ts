@@ -96,6 +96,16 @@ describe("foundation frames", () => {
         },
       ],
       [FrameKind.CursorCommit, { subscriptionId: "sub-1", cursor: 12 }],
+      [
+        FrameKind.ProjectionDelta,
+        {
+          projection: "conversation-inbox",
+          changes: [
+            { key: "user-1:conversation-1", value: { unread: 1, lastSequence: 12 } },
+            { key: "user-2:conversation-1", value: null },
+          ],
+        },
+      ],
     ];
 
     for (const frame of frames) {
