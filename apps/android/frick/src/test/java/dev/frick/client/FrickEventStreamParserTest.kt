@@ -816,6 +816,84 @@ class FrickEventStreamParserTest {
     }
 
     @Test
+    fun verifyCacheCompatibilityStampsMetadataOnFirstRun() {
+        val storage = MemoryFrickStorage()
+        val client = FrickClient(transport = FakeFrickTransport(), storage = storage)
+
+        val stamped = client.verifyCacheCompatibility()
+
+        assertEquals(FrickCacheMetadata.currentSchema, stamped)
+        assertEquals(FrickCacheMetadata.currentSchema, storage.loadCacheMetadata())
+    }
+
+    @Test
+    fun verifyCacheCompatibilityThrowsOnSchemaIdMismatch() {
+        val storage = MemoryFrickStorage().apply {
+            saveCacheMetadata(
+                FrickCacheMetadata(
+                    schemaId = "legacy-app",
+                    schemaVersion = "0.0.1",
+                    schemaRevision = 1,
+                    schemaHash = "legacy-hash",
+                ),
+            )
+            appendPendingAppend(PendingAppend(requestId = "request-1", body = "{}"))
+        }
+        val client = FrickClient(transport = FakeFrickTransport(), storage = storage)
+
+        try {
+            client.verifyCacheCompatibility()
+            fail("expected FrickCacheIncompatibleException")
+        } catch (error: FrickCacheIncompatibleException) {
+            assertEquals(FrickCacheIncompatibilityReason.SCHEMA_ID_MISMATCH, error.reason)
+            assertEquals("legacy-app", error.cachedMetadata.schemaId)
+            assertEquals(FRICK_SCHEMA_ID, error.currentMetadata.schemaId)
+            assertEquals(1, error.pendingAppendCount)
+        }
+    }
+
+    @Test
+    fun verifyCacheCompatibilityThrowsWhenCacheRevisionTooOld() {
+        val storage = MemoryFrickStorage().apply {
+            saveCacheMetadata(
+                FrickCacheMetadata(
+                    schemaId = FRICK_SCHEMA_ID,
+                    schemaVersion = "0.0.1",
+                    schemaRevision = 1,
+                    schemaHash = "old-hash",
+                ),
+            )
+        }
+        val client = FrickClient(transport = FakeFrickTransport(), storage = storage)
+
+        try {
+            client.verifyCacheCompatibility(minimumClientRevision = 5)
+            fail("expected FrickCacheIncompatibleException")
+        } catch (error: FrickCacheIncompatibleException) {
+            assertEquals(FrickCacheIncompatibilityReason.CACHE_TOO_OLD, error.reason)
+            assertEquals(5, error.minimumClientRevision)
+        }
+    }
+
+    @Test
+    fun resetCacheClearsObjectsStreamsPendingAppendsAndMetadata() {
+        val storage = MemoryFrickStorage().apply {
+            saveObjectJson(type = "User", id = "user-ada", json = """{"id":"user-ada"}""", version = 1)
+            saveStreamEvent(streamEvent(sequence = 1, eventId = "event-1", body = "kept"))
+            appendPendingAppend(PendingAppend(requestId = "request-1", body = "{}"))
+            saveCacheMetadata(FrickCacheMetadata.currentSchema)
+        }
+        val client = FrickClient(transport = FakeFrickTransport(), storage = storage)
+
+        client.resetCache()
+
+        assertEquals(null, storage.loadObjectJson(type = "User", id = "user-ada"))
+        assertEquals(emptyList<FrickStreamEvent>(), storage.loadStreamEvents(stream = "MessageStream", key = "conversation-general"))
+        assertEquals(emptyList<PendingAppend>(), storage.loadPendingAppends())
+        assertEquals(null, storage.loadCacheMetadata())
+    }
+
+    @Test
     fun ktorTransportThrowsFrickHttpExceptionWithoutEnvelopeWhenBodyIsEmpty() = runBlocking {
         val server = startEnvelopeFailureServer(statusCode = 500, body = "")
         servers += server
@@ -964,6 +1042,22 @@ private class MemoryFrickStorage(
 
     override fun clearSession() {
         sessionBacking[0] = null
+    }
+
+    var cacheMetadata: FrickCacheMetadata? = null
+        private set
+
+    override fun loadCacheMetadata(): FrickCacheMetadata? = cacheMetadata
+
+    override fun saveCacheMetadata(metadata: FrickCacheMetadata) {
+        cacheMetadata = metadata
+    }
+
+    override fun clearCache() {
+        objectJson.clear()
+        streamEvents = emptyList()
+        pendingAppends = emptyList()
+        cacheMetadata = null
     }
 }
 

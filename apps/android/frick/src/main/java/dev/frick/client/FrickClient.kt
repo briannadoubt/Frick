@@ -217,6 +217,54 @@ fun parseFrickErrorEnvelope(body: String): FrickErrorEnvelope? {
     return runCatching { frickJson.decodeFromString<FrickErrorEnvelope>(body) }.getOrNull()
 }
 
+@Serializable
+data class FrickCacheMetadata(
+    val schemaId: String,
+    val schemaVersion: String,
+    val schemaRevision: Int,
+    val schemaHash: String,
+) {
+    companion object {
+        val currentSchema: FrickCacheMetadata =
+            FrickCacheMetadata(
+                schemaId = FRICK_SCHEMA_ID,
+                schemaVersion = FRICK_SCHEMA_VERSION,
+                schemaRevision = FRICK_SCHEMA_REVISION,
+                schemaHash = FRICK_SCHEMA_HASH,
+            )
+    }
+}
+
+enum class FrickCacheIncompatibilityReason {
+    SCHEMA_ID_MISMATCH,
+    CACHE_TOO_OLD,
+}
+
+class FrickCacheIncompatibleException(
+    val reason: FrickCacheIncompatibilityReason,
+    val cachedMetadata: FrickCacheMetadata,
+    val currentMetadata: FrickCacheMetadata,
+    val minimumClientRevision: Int,
+    val pendingAppendCount: Int,
+    message: String,
+) : IllegalStateException(message)
+
+object FrickCacheCompatibility {
+    fun reason(
+        cached: FrickCacheMetadata,
+        current: FrickCacheMetadata,
+        minimumClientRevision: Int,
+    ): FrickCacheIncompatibilityReason? {
+        if (cached.schemaId != current.schemaId) {
+            return FrickCacheIncompatibilityReason.SCHEMA_ID_MISMATCH
+        }
+        if (cached.schemaRevision < minimumClientRevision) {
+            return FrickCacheIncompatibilityReason.CACHE_TOO_OLD
+        }
+        return null
+    }
+}
+
 interface FrickTransport {
     suspend fun get(path: String): String
     suspend fun getBytes(path: String): ByteArray
@@ -236,6 +284,9 @@ interface FrickStorage {
     fun loadSession(): FrickSession?
     fun saveSession(session: FrickSession)
     fun clearSession()
+    fun loadCacheMetadata(): FrickCacheMetadata?
+    fun saveCacheMetadata(metadata: FrickCacheMetadata)
+    fun clearCache()
 }
 
 object NoopFrickStorage : FrickStorage {
@@ -249,6 +300,9 @@ object NoopFrickStorage : FrickStorage {
     override fun loadSession(): FrickSession? = null
     override fun saveSession(session: FrickSession) = Unit
     override fun clearSession() = Unit
+    override fun loadCacheMetadata(): FrickCacheMetadata? = null
+    override fun saveCacheMetadata(metadata: FrickCacheMetadata) = Unit
+    override fun clearCache() = Unit
 }
 
 class SQLiteFrickStorage(
@@ -423,6 +477,57 @@ class SQLiteFrickStorage(
         }
     }
 
+    override fun loadCacheMetadata(): FrickCacheMetadata? =
+        synchronized(lock) {
+            readableDatabase.query(
+                CACHE_METADATA_TABLE,
+                arrayOf(METADATA_SCHEMA_ID, METADATA_SCHEMA_VERSION, METADATA_SCHEMA_REVISION, METADATA_SCHEMA_HASH),
+                "$METADATA_ID = ?",
+                arrayOf(CURRENT_METADATA_ID),
+                null,
+                null,
+                null,
+                "1",
+            ).use { cursor ->
+                if (cursor.moveToFirst()) {
+                    FrickCacheMetadata(
+                        schemaId = cursor.getString(cursor.getColumnIndexOrThrow(METADATA_SCHEMA_ID)),
+                        schemaVersion = cursor.getString(cursor.getColumnIndexOrThrow(METADATA_SCHEMA_VERSION)),
+                        schemaRevision = cursor.getInt(cursor.getColumnIndexOrThrow(METADATA_SCHEMA_REVISION)),
+                        schemaHash = cursor.getString(cursor.getColumnIndexOrThrow(METADATA_SCHEMA_HASH)),
+                    )
+                } else {
+                    null
+                }
+            }
+        }
+
+    override fun saveCacheMetadata(metadata: FrickCacheMetadata) {
+        synchronized(lock) {
+            writableDatabase.replace(
+                CACHE_METADATA_TABLE,
+                null,
+                ContentValues().apply {
+                    put(METADATA_ID, CURRENT_METADATA_ID)
+                    put(METADATA_SCHEMA_ID, metadata.schemaId)
+                    put(METADATA_SCHEMA_VERSION, metadata.schemaVersion)
+                    put(METADATA_SCHEMA_REVISION, metadata.schemaRevision)
+                    put(METADATA_SCHEMA_HASH, metadata.schemaHash)
+                },
+            )
+        }
+    }
+
+    override fun clearCache() {
+        synchronized(lock) {
+            val database = writableDatabase
+            database.delete(OBJECTS_TABLE, null, null)
+            database.delete(STREAM_EVENTS_TABLE, null, null)
+            database.delete(PENDING_APPENDS_TABLE, null, null)
+            database.delete(CACHE_METADATA_TABLE, null, null)
+        }
+    }
+
     override fun onConfigure(database: SQLiteDatabase) {
         database.enableWriteAheadLogging()
     }
@@ -468,6 +573,17 @@ class SQLiteFrickStorage(
             )
             """.trimIndent(),
         )
+        database.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS $CACHE_METADATA_TABLE (
+              $METADATA_ID TEXT PRIMARY KEY NOT NULL,
+              $METADATA_SCHEMA_ID TEXT NOT NULL,
+              $METADATA_SCHEMA_VERSION TEXT NOT NULL,
+              $METADATA_SCHEMA_REVISION INTEGER NOT NULL,
+              $METADATA_SCHEMA_HASH TEXT NOT NULL
+            )
+            """.trimIndent(),
+        )
     }
 
     override fun onUpgrade(database: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -477,11 +593,12 @@ class SQLiteFrickStorage(
     }
 
     private companion object {
-        const val DATABASE_VERSION = 3
+        const val DATABASE_VERSION = 4
         const val OBJECTS_TABLE = "local_objects"
         const val STREAM_EVENTS_TABLE = "local_stream_events"
         const val PENDING_APPENDS_TABLE = "pending_appends"
         const val SESSION_TABLE = "auth_session"
+        const val CACHE_METADATA_TABLE = "frick_cache_metadata"
         const val OBJECT_TYPE = "object_type"
         const val OBJECT_ID = "object_id"
         const val OBJECT_JSON = "json"
@@ -497,6 +614,12 @@ class SQLiteFrickStorage(
         const val SESSION_ID = "session_id"
         const val SESSION_JSON = "json"
         const val CURRENT_SESSION_ID = "current"
+        const val METADATA_ID = "id"
+        const val METADATA_SCHEMA_ID = "schema_id"
+        const val METADATA_SCHEMA_VERSION = "schema_version"
+        const val METADATA_SCHEMA_REVISION = "schema_revision"
+        const val METADATA_SCHEMA_HASH = "schema_hash"
+        const val CURRENT_METADATA_ID = "current"
     }
 }
 
@@ -578,6 +701,36 @@ class FrickClient(
 ) {
     private val readSequenceLock = Any()
     private val readSequences = mutableMapOf<String, Int>()
+
+    fun verifyCacheCompatibility(
+        currentMetadata: FrickCacheMetadata = FrickCacheMetadata.currentSchema,
+        minimumClientRevision: Int = FRICK_MINIMUM_CLIENT_REVISION,
+    ): FrickCacheMetadata {
+        val cached = storage.loadCacheMetadata()
+        if (cached != null) {
+            val reason = FrickCacheCompatibility.reason(
+                cached = cached,
+                current = currentMetadata,
+                minimumClientRevision = minimumClientRevision,
+            )
+            if (reason != null) {
+                throw FrickCacheIncompatibleException(
+                    reason = reason,
+                    cachedMetadata = cached,
+                    currentMetadata = currentMetadata,
+                    minimumClientRevision = minimumClientRevision,
+                    pendingAppendCount = storage.loadPendingAppends().size,
+                    message = incompatibilityMessage(reason, cached, currentMetadata, minimumClientRevision),
+                )
+            }
+        }
+        storage.saveCacheMetadata(currentMetadata)
+        return currentMetadata
+    }
+
+    fun resetCache() {
+        storage.clearCache()
+    }
 
     suspend fun devLogin(
         userId: String,
@@ -1153,6 +1306,19 @@ private fun defaultHttpClient(): HttpClient = HttpClient(OkHttp) {
         }
     }
 }
+
+private fun incompatibilityMessage(
+    reason: FrickCacheIncompatibilityReason,
+    cached: FrickCacheMetadata,
+    current: FrickCacheMetadata,
+    minimumClientRevision: Int,
+): String =
+    when (reason) {
+        FrickCacheIncompatibilityReason.SCHEMA_ID_MISMATCH ->
+            "Cached schema id ${cached.schemaId} does not match current schema id ${current.schemaId}"
+        FrickCacheIncompatibilityReason.CACHE_TOO_OLD ->
+            "Cached schema revision ${cached.schemaRevision} is below current minimum client revision $minimumClientRevision"
+    }
 
 private fun shouldQueueAppend(error: Exception): Boolean =
     error !is FrickSchemaMismatchException && error !is FrickHttpException
