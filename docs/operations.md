@@ -7,6 +7,11 @@ shutdown contract. Anything aspirational lives in
 `docs/superpowers/framework-hardening-spec.md` — this file only describes
 what is in main right now.
 
+The framework ships a `frick` CLI for ops (`frick doctor`, `frick migrate
+status`, `frick reset --dev`, `frick tenants list`, …). See
+`apps/cli/README.md` for the full command list. The CLI reads the same
+environment variables documented below.
+
 ## Runtime modes
 
 The server reads `FRICK_ENV` (defaulting to `development`). Allowed values:
