@@ -21,6 +21,7 @@ import { tenantsCommand } from "./commands/tenants.js";
 import { verifyCommand } from "./commands/verify.js";
 import { backupCommand } from "./commands/backup.js";
 import { restoreCommand } from "./commands/restore.js";
+import { initCommand } from "./commands/init.js";
 
 interface CommandSpec {
   name: string;
@@ -39,6 +40,7 @@ const COMMANDS: readonly CommandSpec[] = [
   { name: "verify", summary: "Run `pnpm verify:generated` end-to-end" },
   { name: "backup", summary: "Stream a framework database dump as NDJSON" },
   { name: "restore", summary: "Restore a framework database from NDJSON (requires --confirm yes)" },
+  { name: "init", summary: "Scaffold a new Frick application at the given directory" },
 ];
 
 export interface RunOptions {
@@ -89,6 +91,8 @@ export async function run(opts: RunOptions): Promise<number> {
         return await backupCommand(childParsed, out);
       case "restore":
         return await restoreCommand(childParsed, out);
+      case "init":
+        return await initCommand(childParsed, out);
       default: {
         emitError(
           {
