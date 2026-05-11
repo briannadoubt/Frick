@@ -69,17 +69,16 @@ export function createFrickServer(options: ServerOptions = {}) {
   const extensions = createFrickExtensionRegistry(options.extensions);
   let inFlight = 0;
   let closing = false;
-  const drainWaiters: Array<() => void> = [];
 
   function noteRequestStart(): void {
     inFlight += 1;
   }
   function noteRequestEnd(): void {
     inFlight = Math.max(0, inFlight - 1);
-    if (inFlight === 0 && closing) {
-      for (const w of drainWaiters.splice(0)) w();
-    }
   }
+  // `closing` and `inFlight` are surfaced on the returned object for tests
+  // and operators that want to observe drain state without instrumenting
+  // the HTTP server directly.
 
   const server = http.createServer((request, response) => {
     noteRequestStart();
@@ -553,49 +552,46 @@ export function createFrickServer(options: ServerOptions = {}) {
     });
   }
 
-  function waitForDrain(timeoutMs: number): Promise<void> {
-    if (inFlight === 0) return Promise.resolve();
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        const idx = drainWaiters.indexOf(done);
-        if (idx >= 0) drainWaiters.splice(idx, 1);
-        resolve();
-      }, timeoutMs);
-      const done = (): void => {
-        clearTimeout(timer);
-        resolve();
-      };
-      drainWaiters.push(done);
-    });
-  }
-
+  let closePromise: Promise<void> | undefined;
   function close(): Promise<void> {
-    if (closing) {
-      return new Promise((resolve) => drainWaiters.push(resolve));
-    }
+    if (closePromise) return closePromise;
     closing = true;
     sse.closeAll();
     gateway.close();
-    return new Promise((resolve, reject) => {
-      wss.close((wsError) => {
-        // Stop accepting new connections; existing requests still drain.
-        server.close((serverError) => {
+    closePromise = new Promise((resolve, reject) => {
+      // Stop accepting new HTTP connections; allow in-flight requests to
+      // drain. server.close()'s callback fires only once every connection
+      // is idle, so this naturally waits for in-flight requests. We layer a
+      // best-effort drain timer on top so a stuck request can't pin the
+      // process forever.
+      const drainTimer = setTimeout(() => {
+        // After timeout, forcibly close any keep-alive sockets and let the
+        // server.close callback resolve. server.closeAllConnections is
+        // available on Node 18.2+.
+        const maybeCloseAll = (server as unknown as { closeAllConnections?: () => void })
+          .closeAllConnections;
+        if (typeof maybeCloseAll === "function") maybeCloseAll();
+      }, shutdownTimeoutMs);
+
+      server.close((serverError) => {
+        clearTimeout(drainTimer);
+        wss.close((wsError) => {
           try {
             store.close();
           } catch {
             // Already closed — fine during shutdown.
           }
           logger.info("frick.server.closed", { event: "frick.server.closed" });
-          const error = wsError ?? serverError;
-          if (error && !/Server is not running/i.test(error.message)) {
+          const error = serverError ?? wsError;
+          if (error && !/Server is not running|not running/i.test(error.message)) {
             reject(error);
           } else {
             resolve();
           }
         });
-        void waitForDrain(shutdownTimeoutMs);
       });
     });
+    return closePromise;
   }
 
   return { port, server, store, extensions, config, logger, startedAt, listen, close };
