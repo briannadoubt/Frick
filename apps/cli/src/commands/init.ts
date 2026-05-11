@@ -69,9 +69,12 @@ function readOptions(parsed: ParsedArgs): InitOptions {
   const versionFlag = parsed.flags.version;
   const version = typeof versionFlag === "string" && versionFlag.length > 0 ? versionFlag : "0.1.0";
 
-  // `--no-install` arrives as `install: false`. Default is to install.
+  // Our argv parser doesn't natively map `--no-foo` to `foo: false`. We
+  // accept either `--no-install` (boolean flag) or `--install=false`.
   const installFlag = parsed.flags.install;
-  const install = installFlag === false ? false : installFlag !== "false";
+  const noInstallFlag = parsed.flags["no-install"];
+  const install =
+    noInstallFlag === true || installFlag === false || installFlag === "false" ? false : true;
 
   const skipSchemaCheck = parsed.flags["skip-schema-check"] === true;
 

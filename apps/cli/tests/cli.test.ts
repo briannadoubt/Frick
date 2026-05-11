@@ -7,7 +7,7 @@
  * stream split all behave as a downstream automation script would see them.
  */
 import { execFile } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -343,6 +343,67 @@ describe("frick lint", () => {
     };
     expect(summary.ok).toBe(false);
     expect(summary.breaking).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("frick init / scaffold", () => {
+  it("init creates the expected file tree", async () => {
+    const appDir = join(tmpRoot, "app");
+    const result = await runCli(["init", appDir, "--no-install"]);
+    expect(result.exitCode).toBe(0);
+    const body = parseLastJson(result.stdout) as {
+      ok: boolean;
+      created: string[];
+      install: { skipped?: boolean };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.install.skipped).toBe(true);
+    for (const relative of [
+      "package.json",
+      "tsconfig.json",
+      "frick.config.json",
+      "src/schema.ts",
+      "src/server.ts",
+      "tests/smoke.test.ts",
+    ]) {
+      expect(existsSync(join(appDir, relative))).toBe(true);
+    }
+  });
+
+  it("scaffold object Profile adds a Profile object stub", async () => {
+    const appDir = join(tmpRoot, "app");
+    await runCli(["init", appDir, "--no-install"]);
+    const result = await runCli(["scaffold", "object", "Profile", "--directory", appDir]);
+    expect(result.exitCode).toBe(0);
+    const body = parseLastJson(result.stdout) as { ok: boolean; kind: string; name: string };
+    expect(body.ok).toBe(true);
+    expect(body.kind).toBe("object");
+    expect(body.name).toBe("Profile");
+    const schemaSource = readFileSync(join(appDir, "src/schema.ts"), "utf8");
+    expect(schemaSource).toContain("// frick:objects:id 1 Profile");
+    expect(schemaSource).toContain('name: "Profile"');
+  });
+
+  it("scaffold projection profile-index creates the projection file", async () => {
+    const appDir = join(tmpRoot, "app");
+    await runCli(["init", appDir, "--no-install"]);
+    const result = await runCli([
+      "scaffold",
+      "projection",
+      "profile-index",
+      "--directory",
+      appDir,
+    ]);
+    expect(result.exitCode).toBe(0);
+    const body = parseLastJson(result.stdout) as {
+      ok: boolean;
+      projectionPath: string;
+      serverPath: string;
+    };
+    expect(body.ok).toBe(true);
+    expect(existsSync(join(appDir, "src/projections/profile-index.ts"))).toBe(true);
+    const serverSource = readFileSync(join(appDir, "src/server.ts"), "utf8");
+    expect(serverSource).toContain("createProfileIndexProjection");
   });
 });
 

@@ -22,6 +22,7 @@ import { verifyCommand } from "./commands/verify.js";
 import { backupCommand } from "./commands/backup.js";
 import { restoreCommand } from "./commands/restore.js";
 import { initCommand } from "./commands/init.js";
+import { scaffoldCommand } from "./commands/scaffold.js";
 
 interface CommandSpec {
   name: string;
@@ -41,6 +42,7 @@ const COMMANDS: readonly CommandSpec[] = [
   { name: "backup", summary: "Stream a framework database dump as NDJSON" },
   { name: "restore", summary: "Restore a framework database from NDJSON (requires --confirm yes)" },
   { name: "init", summary: "Scaffold a new Frick application at the given directory" },
+  { name: "scaffold", summary: "Add an object, stream, or projection stub to a scaffolded app", subcommands: ["object", "stream", "projection"] },
 ];
 
 export interface RunOptions {
@@ -93,6 +95,8 @@ export async function run(opts: RunOptions): Promise<number> {
         return await restoreCommand(childParsed, out);
       case "init":
         return await initCommand(childParsed, out);
+      case "scaffold":
+        return await scaffoldCommand(childParsed, out);
       default: {
         emitError(
           {
