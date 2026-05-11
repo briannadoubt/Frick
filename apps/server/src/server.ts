@@ -56,6 +56,7 @@ import type { StoredAccount } from "./storage/account-store.js";
 import type { StoredSession } from "./storage/session-store.js";
 import { TenantAlreadyExistsError } from "./storage/tenant-store.js";
 import { FrickStore } from "./store.js";
+import { exportDataSubject } from "./compliance/data-subject-export.js";
 import { FrickObjectVersionConflictError } from "./storage/object-errors.js";
 import { loadFrickConfig, type FrickConfig, type FrickConfigOverrides } from "./config.js";
 import { createConsoleLogger, createNoopLogger, type FrickLogger } from "./logger.js";
@@ -2670,6 +2671,44 @@ async function handleAdminRoute(
       audit({
         action: "projections.rebuild",
         target: name,
+        outcome: "error",
+        detail: { error: error instanceof Error ? error.message : String(error) },
+      });
+      throw error;
+    }
+    return;
+  }
+
+  if (request.method === "GET" && sub === "data-subject") {
+    const rawTenant = url.searchParams.get("tenantId");
+    const userId = url.searchParams.get("userId");
+    if (!rawTenant || !userId) {
+      audit({
+        action: "compliance.dataSubject.export",
+        outcome: "deny",
+        detail: { reason: "missingParameters" },
+      });
+      sendJson(response, 400, {
+        error: "bad_request",
+        message: "tenantId and userId query parameters are required",
+      });
+      return;
+    }
+    validateTenantId(rawTenant);
+    const tenantId = normalizeTenantId(rawTenant);
+    try {
+      const payload = exportDataSubject(store, tenantId, userId);
+      audit({
+        action: "compliance.dataSubject.export",
+        target: userId,
+        outcome: "allow",
+        detail: { tenantId },
+      });
+      sendJson(response, 200, payload);
+    } catch (error) {
+      audit({
+        action: "compliance.dataSubject.export",
+        target: userId,
         outcome: "error",
         detail: { error: error instanceof Error ? error.message : String(error) },
       });

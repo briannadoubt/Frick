@@ -186,6 +186,18 @@ export class FrickStore {
   readonly #logger: FrickLogger;
 
   readonly #db: DatabaseSync;
+  /**
+   * Narrow accessor for the underlying SQLite handle. Exposed for the
+   * compliance module which needs raw cross-table read/write access for
+   * data-subject export and erase — building a per-table API for every
+   * GDPR-shaped query would balloon the store surface. Treat this as a
+   * private extension point: do not reach in from feature code, and never
+   * cross tenant boundaries without resolving them through the existing
+   * stores' tenant validation first.
+   */
+  get db(): DatabaseSync {
+    return this.#db;
+  }
   readonly #idempotencyCacheCapacity: number;
   readonly #idempotencyKeyRetentionMs: number;
   readonly #idempotencyKeyMaxRows: number;
