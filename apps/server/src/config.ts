@@ -1,14 +1,16 @@
 /**
  * Frick server runtime configuration.
  *
- * This module is intentionally narrow: it only covers the runtime-mode and
- * demo-auth knobs needed by slice 5 of the framework hardening spec (typed
- * authorization decisions and demo-auth gating). Storage drivers, blob
- * drivers, public URLs, ports, CORS, and other deployment-shaped config land
- * in a later slice and should be added here when they do.
+ * Slice 6 expanded this beyond the original demo-auth/session knobs to cover
+ * deployment-shaped settings: host, port, public URL, allowed origins, db and
+ * blob storage paths, and log level. Storage drivers other than the existing
+ * SQLite/local-filesystem pair, and CORS enforcement itself, still land in a
+ * later slice — this module just parses, validates, and exposes the values.
  */
 
 export type FrickEnv = "development" | "test" | "production";
+
+export type FrickLogLevel = "debug" | "info" | "warn" | "error";
 
 export interface FrickConfig {
   /** Runtime environment. Drives defaults for the rest of the config. */
@@ -27,6 +29,37 @@ export interface FrickConfig {
    * exercising the `auth.sessionExpired` envelope.
    */
   sessionTtlSeconds: number;
+  /**
+   * Host the HTTP server binds to. Defaults to `127.0.0.1` in development and
+   * test (so casual `pnpm dev` runs aren't exposed on the LAN) and `0.0.0.0`
+   * in production (the typical container/orchestrator case).
+   */
+  host: string;
+  /** TCP port the HTTP server binds to. */
+  port: number;
+  /**
+   * Externally-reachable URL of this server, when known. Logged at startup
+   * and surfaced to inspection routes; never required for the server to run.
+   */
+  publicUrl: string | undefined;
+  /**
+   * Origins allowed for CORS, parsed from a comma-separated env var. v1 just
+   * stores the parsed list — actual CORS enforcement in HTTP handlers is a
+   * known gap documented in `docs/operations.md`.
+   */
+  allowedOrigins: string[];
+  /** SQLite database path. Tests pass `":memory:"`. */
+  dbPath: string;
+  /** Filesystem directory for blob storage (current driver is local fs). */
+  blobStoragePath: string;
+  /** Threshold for the structured logger. */
+  logLevel: FrickLogLevel;
+  /**
+   * Whether inspection routes under `/_frick/inspect/*` are exposed. Defaults
+   * to true when `env !== "production"`, off otherwise. Set
+   * `FRICK_INSPECTION_ENABLED=true` to force them on in production.
+   */
+  inspectionEnabled: boolean;
 }
 
 export class FrickConfigError extends Error {
@@ -37,8 +70,17 @@ export class FrickConfigError extends Error {
 }
 
 const DEFAULT_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days
+const DEFAULT_PORT = 4099;
+const DEFAULT_DB_PATH = "./frick.sqlite";
+const DEFAULT_BLOB_STORAGE_PATH = "./frick-blobs/";
 
 const VALID_ENVS: ReadonlySet<FrickEnv> = new Set<FrickEnv>(["development", "test", "production"]);
+const VALID_LOG_LEVELS: ReadonlySet<FrickLogLevel> = new Set<FrickLogLevel>([
+  "debug",
+  "info",
+  "warn",
+  "error",
+]);
 
 export type FrickConfigOverrides = Partial<FrickConfig>;
 
@@ -68,14 +110,44 @@ export function loadFrickConfig(
     overrides.sessionTtlSeconds ??
     parseSeconds(env.FRICK_SESSION_TTL_SECONDS, DEFAULT_SESSION_TTL_SECONDS, "FRICK_SESSION_TTL_SECONDS");
 
+  const host = overrides.host ?? parseString(env.FRICK_HOST) ?? defaultHost(runtimeEnv);
+  const port = overrides.port ?? parsePort(env.FRICK_PORT, DEFAULT_PORT);
+  const publicUrl = overrides.publicUrl ?? parseString(env.FRICK_PUBLIC_URL);
+  const allowedOrigins =
+    overrides.allowedOrigins ?? parseAllowedOrigins(env.FRICK_ALLOWED_ORIGINS, runtimeEnv);
+  const dbPath = overrides.dbPath ?? parseString(env.FRICK_DB_PATH) ?? DEFAULT_DB_PATH;
+  const blobStoragePath =
+    overrides.blobStoragePath ?? parseString(env.FRICK_BLOB_STORAGE_PATH) ?? DEFAULT_BLOB_STORAGE_PATH;
+  const logLevel = overrides.logLevel ?? parseLogLevel(env.FRICK_LOG_LEVEL, "info");
+  const inspectionDefault = runtimeEnv !== "production";
+  const inspectionEnabled =
+    overrides.inspectionEnabled ??
+    parseBoolean(env.FRICK_INSPECTION_ENABLED, inspectionDefault, "FRICK_INSPECTION_ENABLED");
+
   if (runtimeEnv === "production" && demoAuthEnabled) {
     warn("[frick.config] demoAuthEnabled=true in production — /auth/dev-login is exposed");
+  }
+  if (runtimeEnv === "production" && dbPath === ":memory:") {
+    throw new FrickConfigError(
+      "dbPath ':memory:' is forbidden in production — set FRICK_DB_PATH to a durable filesystem path",
+    );
+  }
+  if (runtimeEnv === "production" && inspectionEnabled) {
+    warn("[frick.config] inspectionEnabled=true in production — /_frick/inspect/* is exposed");
   }
 
   return {
     env: runtimeEnv,
     demoAuthEnabled,
     sessionTtlSeconds,
+    host,
+    port,
+    publicUrl,
+    allowedOrigins,
+    dbPath,
+    blobStoragePath,
+    logLevel,
+    inspectionEnabled,
   };
 }
 
@@ -116,4 +188,46 @@ function parseSeconds(value: string | undefined, fallback: number, varName: stri
     throw new FrickConfigError(`${varName} must be a finite number of seconds (got ${JSON.stringify(value)})`);
   }
   return parsed;
+}
+
+function parsePort(value: string | undefined, fallback: number): number {
+  if (value === undefined || value === "") {
+    return fallback;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65535) {
+    throw new FrickConfigError(
+      `FRICK_PORT must be an integer in [0, 65535] (got ${JSON.stringify(value)})`,
+    );
+  }
+  return parsed;
+}
+
+function parseString(value: string | undefined): string | undefined {
+  if (value === undefined || value === "") return undefined;
+  return value;
+}
+
+function parseLogLevel(value: string | undefined, fallback: FrickLogLevel): FrickLogLevel {
+  if (value === undefined || value === "") return fallback;
+  if (VALID_LOG_LEVELS.has(value as FrickLogLevel)) {
+    return value as FrickLogLevel;
+  }
+  throw new FrickConfigError(
+    `FRICK_LOG_LEVEL must be one of debug, info, warn, error (got ${JSON.stringify(value)})`,
+  );
+}
+
+function parseAllowedOrigins(value: string | undefined, env: FrickEnv): string[] {
+  if (value === undefined || value === "") {
+    return env === "production" ? [] : ["*"];
+  }
+  return value
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter((origin) => origin.length > 0);
+}
+
+function defaultHost(env: FrickEnv): string {
+  return env === "production" ? "0.0.0.0" : "127.0.0.1";
 }
