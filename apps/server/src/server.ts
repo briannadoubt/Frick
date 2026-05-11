@@ -39,6 +39,7 @@ import { FrickStore } from "./store.js";
 import { loadFrickConfig, type FrickConfig, type FrickConfigOverrides } from "./config.js";
 import { createConsoleLogger, createNoopLogger, type FrickLogger } from "./logger.js";
 import { FrickLimitError, mergeLimits, type FrickLimits } from "./limits.js";
+import { createInMemoryMetrics, type FrickMetrics } from "./metrics.js";
 
 export interface ServerOptions {
   port?: number;
@@ -79,6 +80,12 @@ export interface ServerOptions {
    * higher for noisy ones. See `docs/operations.md`.
    */
   idempotencyCacheCapacity?: number;
+  /**
+   * In-process metrics registry. Defaults to {@link createInMemoryMetrics}.
+   * Exposed at `/_frick/inspect/metrics` when `config.inspectionEnabled` is
+   * true. Counters and gauges only — see `apps/server/src/metrics.ts`.
+   */
+  metrics?: FrickMetrics;
 }
 
 export function createFrickServer(options: ServerOptions = {}) {
@@ -94,6 +101,18 @@ export function createFrickServer(options: ServerOptions = {}) {
   const logger =
     options.logger ?? (inTestRunner ? createNoopLogger() : createConsoleLogger(config));
   const limits = mergeLimits(options.limits);
+  const metrics = options.metrics ?? createInMemoryMetrics();
+  const startedAtPerf = performance.now();
+
+  function sendErrorWithMetrics(
+    response: http.ServerResponse,
+    error: unknown,
+    requestId: string,
+  ): void {
+    const code = httpErrorCode(error);
+    metrics.counter("frick.http.errors.total", { code }).inc();
+    sendError(response, error, requestId);
+  }
   const store = new FrickStore({
     path: options.dbPath ?? process.env.FRICK_DB_PATH ?? defaultDatabasePath(),
     schema: foundationSchema,
@@ -148,6 +167,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     onStreamEvent: (event) => sse.publishStreamEvent(event),
     limits,
     policyHooks,
+    metrics,
   });
   gateway.attach();
 
@@ -168,10 +188,17 @@ export function createFrickServer(options: ServerOptions = {}) {
         });
       });
     } finally {
+      const status = response.statusCode;
       requestLogger.info("frick.http.request", {
-        status: response.statusCode,
+        status,
         durationMs: Math.round(performance.now() - startedAt),
       });
+      metrics
+        .counter("frick.http.requests.total", {
+          method: request.method ?? "",
+          status: String(status),
+        })
+        .inc();
     }
   }
 
@@ -187,7 +214,7 @@ export function createFrickServer(options: ServerOptions = {}) {
 
     if (request.method === "OPTIONS") {
       if (!originAllowed) {
-        sendError(
+        sendErrorWithMetrics(
           response,
           new CorsOriginRejectedError("Origin not allowed by CORS policy"),
           "cors_rejected",
@@ -257,6 +284,16 @@ export function createFrickServer(options: ServerOptions = {}) {
         });
         return;
       }
+      if (sub === "metrics") {
+        const snap = metrics.snapshot();
+        sendJson(response, 200, {
+          snapshotAt: new Date().toISOString(),
+          uptimeSeconds: (performance.now() - startedAtPerf) / 1000,
+          counters: snap.counters,
+          gauges: snap.gauges,
+        });
+        return;
+      }
       if (sub === "db") {
         const applied = safeListAppliedMigrations(store) ?? [];
         const last = applied[applied.length - 1];
@@ -297,12 +334,12 @@ export function createFrickServer(options: ServerOptions = {}) {
         // otherwise it's `auth.unauthenticated` (401).
         const token = sessionTokenFromRequest(request, url);
         if (!token) {
-          sendError(response, new AuthenticationError("Missing admin token"), "admin_unauthorized");
+          sendErrorWithMetrics(response, new AuthenticationError("Missing admin token"), "admin_unauthorized");
           return;
         }
         const session = store.readActiveSession(token);
         if (session) {
-          sendError(
+          sendErrorWithMetrics(
             response,
             new AuthorizationError({
               allow: false,
@@ -313,7 +350,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           );
           return;
         }
-        sendError(response, new AuthenticationError("Invalid admin token"), "admin_unauthorized");
+        sendErrorWithMetrics(response, new AuthenticationError("Invalid admin token"), "admin_unauthorized");
         return;
       }
       try {
@@ -327,7 +364,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           adminTokenFingerprint,
         );
       } catch (error) {
-        sendError(response, error, "admin_rejected");
+        sendErrorWithMetrics(response, error, "admin_rejected");
       }
       return;
     }
@@ -359,7 +396,7 @@ export function createFrickServer(options: ServerOptions = {}) {
 
         sendJson(response, 201, authSessionResponse(store, session, account));
       } catch (error) {
-        sendError(response, error, "signup_rejected");
+        sendErrorWithMetrics(response, error, "signup_rejected");
       }
       return;
     }
@@ -382,14 +419,14 @@ export function createFrickServer(options: ServerOptions = {}) {
 
         sendJson(response, 200, authSessionResponse(store, session, account));
       } catch (error) {
-        sendError(response, error, "login_rejected");
+        sendErrorWithMetrics(response, error, "login_rejected");
       }
       return;
     }
 
     if (request.method === "POST" && url.pathname === "/auth/dev-login") {
       if (!config.demoAuthEnabled) {
-        sendError(
+        sendErrorWithMetrics(
           response,
           new AuthorizationError({
             allow: false,
@@ -440,14 +477,14 @@ export function createFrickServer(options: ServerOptions = {}) {
           expiresAt: session.expiresAt,
         });
       } catch (error) {
-        sendError(response, error, "dev_login_rejected");
+        sendErrorWithMetrics(response, error, "dev_login_rejected");
       }
       return;
     }
 
     const principal = protectedHttpPrincipal(request, url, store, config);
     if (principal instanceof Error) {
-      sendError(response, principal, "unauthorized");
+      sendErrorWithMetrics(response, principal, "unauthorized");
       return;
     }
     onPrincipal(principal);
@@ -482,7 +519,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           members: created.members,
         });
       } catch (error) {
-        sendError(response, error, "conversation_rejected");
+        sendErrorWithMetrics(response, error, "conversation_rejected");
       }
       return;
     }
@@ -512,7 +549,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           data: store.listInbox(principal.tenantId, userId),
         });
       } catch (error) {
-        sendError(response, error, "inbox_rejected");
+        sendErrorWithMetrics(response, error, "inbox_rejected");
       }
       return;
     }
@@ -565,7 +602,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           contentHash: responseContentHash,
         });
       } catch (error) {
-        sendError(response, error, "blob_content_rejected");
+        sendErrorWithMetrics(response, error, "blob_content_rejected");
       }
       return;
     }
@@ -588,7 +625,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         });
         response.end(Buffer.from(content));
       } catch (error) {
-        sendError(response, error, "blob_content_rejected");
+        sendErrorWithMetrics(response, error, "blob_content_rejected");
       }
       return;
     }
@@ -604,7 +641,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         assertCanReadBlob(principal, metadata.ownerId, policyHooks);
         sendJson(response, 200, metadata);
       } catch (error) {
-        sendError(response, error, "blob_rejected");
+        sendErrorWithMetrics(response, error, "blob_rejected");
       }
       return;
     }
@@ -624,7 +661,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         });
         sendJson(response, 201, { ok: true, blobId: body.blobId });
       } catch (error) {
-        sendError(response, error, "blob_rejected");
+        sendErrorWithMetrics(response, error, "blob_rejected");
       }
       return;
     }
@@ -644,7 +681,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         gateway.publishSignal(signalRoute.name, signalRoute.key, value, principal.tenantId);
         sendJson(response, 200, { ok: true });
       } catch (error) {
-        sendError(response, error, "signal_rejected");
+        sendErrorWithMetrics(response, error, "signal_rejected");
       }
       return;
     }
@@ -658,7 +695,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           data: store.drainSignals(principal.tenantId, signalRoute.name, signalRoute.key),
         });
       } catch (error) {
-        sendError(response, error, "signal_rejected");
+        sendErrorWithMetrics(response, error, "signal_rejected");
       }
       return;
     }
@@ -698,7 +735,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           data: events,
         });
       } catch (error) {
-        sendError(response, error, "stream_rejected");
+        sendErrorWithMetrics(response, error, "stream_rejected");
       }
       return;
     }
@@ -735,7 +772,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         }
         sendJson(response, 200, { ok: true, event: result.event });
       } catch (error) {
-        sendError(response, error, "append_rejected");
+        sendErrorWithMetrics(response, error, "append_rejected");
       }
       return;
     }

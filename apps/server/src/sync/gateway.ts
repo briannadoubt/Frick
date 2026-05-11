@@ -40,6 +40,7 @@ import { routeSignal } from "./signal-router.js";
 import { SubscriptionRegistry, type SyncClient } from "./subscriptions.js";
 import { sendFrame } from "./wire.js";
 import { DEFAULT_FRICK_LIMITS, clampTtlSeconds, type FrickLimits } from "../limits.js";
+import type { FrickMetrics, Gauge } from "../metrics.js";
 
 export class SyncGateway {
   readonly #subscriptions = new SubscriptionRegistry();
@@ -48,6 +49,9 @@ export class SyncGateway {
   readonly #pendingAppendCounts = new WeakMap<SyncClient, number>();
   readonly #lastSeenAt = new WeakMap<SyncClient, number>();
   readonly #heartbeatTimers = new Set<ReturnType<typeof setInterval>>();
+  readonly #metrics: FrickMetrics | undefined;
+  readonly #connectionsGauge: Gauge | undefined;
+  #activeConnections = 0;
 
   constructor(
     private readonly wss: WebSocketServer,
@@ -56,10 +60,13 @@ export class SyncGateway {
       onStreamEvent?: (event: StoredEvent) => void;
       limits?: FrickLimits;
       policyHooks?: readonly FrickPolicyHook[];
+      metrics?: FrickMetrics;
     } = {},
   ) {
     this.#limits = options.limits ?? DEFAULT_FRICK_LIMITS;
     this.#policyHooks = options.policyHooks ?? [];
+    this.#metrics = options.metrics;
+    this.#connectionsGauge = this.#metrics?.gauge("frick.ws.connections.current");
   }
 
   attach(): void {
@@ -69,6 +76,8 @@ export class SyncGateway {
       this.#subscriptions.addClient(client);
       this.#pendingAppendCounts.set(client, 0);
       this.#lastSeenAt.set(client, Date.now());
+      this.#activeConnections += 1;
+      this.#connectionsGauge?.set(this.#activeConnections);
 
       const heartbeat = this.#startHeartbeat(client, socket);
 
@@ -80,6 +89,8 @@ export class SyncGateway {
         clearInterval(heartbeat);
         this.#heartbeatTimers.delete(heartbeat);
         this.#subscriptions.removeClient(client);
+        this.#activeConnections = Math.max(0, this.#activeConnections - 1);
+        this.#connectionsGauge?.set(this.#activeConnections);
       });
     });
   }
@@ -178,7 +189,13 @@ export class SyncGateway {
       return;
     }
     try {
-      this.#handleFrame(client, decodeFrame(payload));
+      const decoded = decodeFrame(payload);
+      if (this.#metrics) {
+        this.#metrics
+          .counter("frick.ws.frames.total", { kind: FrameKind[decoded[0]] ?? String(decoded[0]) })
+          .inc();
+      }
+      this.#handleFrame(client, decoded);
     } catch (error) {
       const envelope = createFrickErrorEnvelope({
         code: "sync.protocolError",
