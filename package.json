@@ -11,6 +11,7 @@
     "schema:generate": "tsx packages/protocol/scripts/generate-native-artifacts.ts",
     "fixtures:generate": "tsx packages/protocol/scripts/generate-fixtures.ts",
     "verify:generated": "tsx scripts/check-generated-artifacts.ts",
+    "e2e:smoke": "tsx scripts/e2e-smoke.ts",
     "verify:release": "tsx scripts/verify-release.ts",
     "release:dry-run": "tsx scripts/release-dry-run.ts",
     "changelog": "tsx scripts/changelog.ts",
