@@ -1207,3 +1207,111 @@ private func withTimeout<T: Sendable>(
         return result
     }
 }
+
+// MARK: - Cross-platform fixture decoding
+
+private struct FoundationSchemaIdentityFixture: Decodable {
+    let schemaId: String
+    let schemaVersion: String
+    let schemaRevision: Int
+    let minimumClientRevision: Int
+    let minimumServerRevision: Int
+    let `protocol`: String
+    let protocolVersion: Int
+    let compatibility: String
+    let hash: String
+}
+
+private struct HelloFrameClientCapabilitiesSchemaFixture: Decodable {
+    let schemaId: String
+    let schemaRevision: Int
+    let schemaHash: String
+}
+
+private struct HelloFrameClientCapabilitiesFixture: Decodable {
+    let platform: String
+    let sdkVersion: String
+    let schema: HelloFrameClientCapabilitiesSchemaFixture
+}
+
+private struct HelloFramePayloadFixture: Decodable {
+    let replicaId: String
+    let deviceId: String
+    let schemaHash: String
+    let knownCursors: [String: FrickJSONValue]
+    let clientCapabilities: HelloFrameClientCapabilitiesFixture
+}
+
+final class FrickProtocolFixturesTests: XCTestCase {
+    private func fixturesDirectory() -> URL {
+        // #filePath is .../packages/swift/Tests/FrickSwiftTests/FrickEventStreamParserTests.swift
+        let testFileURL = URL(fileURLWithPath: #filePath)
+        let repoRoot = testFileURL
+            .deletingLastPathComponent() // FrickSwiftTests
+            .deletingLastPathComponent() // Tests
+            .deletingLastPathComponent() // swift
+            .deletingLastPathComponent() // packages
+            .deletingLastPathComponent() // repo root
+        return repoRoot
+            .appendingPathComponent("packages")
+            .appendingPathComponent("protocol")
+            .appendingPathComponent("fixtures")
+    }
+
+    private func loadFixture(_ name: String) throws -> Data {
+        let url = fixturesDirectory().appendingPathComponent(name)
+        return try Data(contentsOf: url)
+    }
+
+    func testFoundationSchemaFixtureMatchesGeneratedConstants() throws {
+        let data = try loadFixture("foundation-schema.json")
+        XCTAssertFalse(data.isEmpty, "foundation-schema.json fixture should be readable from disk")
+
+        let identity = try JSONDecoder().decode(FoundationSchemaIdentityFixture.self, from: data)
+        XCTAssertEqual(identity.schemaId, FrickSchema.schemaId)
+        XCTAssertEqual(identity.schemaRevision, FrickSchema.schemaRevision)
+        XCTAssertEqual(identity.hash, FrickSchema.schemaHash)
+        XCTAssertEqual(identity.schemaVersion, FrickSchema.schemaVersion)
+        XCTAssertEqual(identity.minimumClientRevision, FrickSchema.minimumClientRevision)
+        XCTAssertEqual(identity.minimumServerRevision, FrickSchema.minimumServerRevision)
+        XCTAssertEqual(identity.protocolVersion, FrickSchema.protocolVersion)
+        XCTAssertEqual(identity.protocol, "frick.realtime")
+        XCTAssertEqual(identity.compatibility, "greenfield-cutover")
+    }
+
+    func testErrorEnvelopeFixtureMatchesGeneratedConstants() throws {
+        let data = try loadFixture("error-envelope.json")
+        let envelope = try XCTUnwrap(
+            FrickErrorEnvelopeDecoder.decode(from: data),
+            "error envelope fixture should decode through FrickErrorEnvelopeDecoder"
+        )
+        XCTAssertEqual(envelope.code, .schemaIncompatible)
+        XCTAssertEqual(envelope.requestId, "fixture-error")
+        XCTAssertFalse(envelope.retryable)
+        XCTAssertEqual(envelope.schemaHash, FrickSchema.schemaHash)
+        XCTAssertEqual(envelope.schemaRevision, FrickSchema.schemaRevision)
+    }
+
+    func testHelloFrameFixtureMatchesGeneratedConstants() throws {
+        let data = try loadFixture("hello-frame.json")
+        let raw = try JSONSerialization.jsonObject(with: data, options: [])
+        let frameArray = try XCTUnwrap(raw as? [Any], "hello-frame.json should decode as a JSON array")
+        XCTAssertEqual(frameArray.count, 2)
+        XCTAssertEqual(frameArray[0] as? Int, 0, "frame kind should be FrameKind.Hello (0)")
+
+        // Decode the payload (position 1) into a typed struct for clean assertions.
+        let payloadObject = try XCTUnwrap(frameArray[1] as? [String: Any])
+        let payloadData = try JSONSerialization.data(withJSONObject: payloadObject, options: [])
+        let payload = try JSONDecoder().decode(HelloFramePayloadFixture.self, from: payloadData)
+
+        XCTAssertEqual(payload.replicaId, "fixture-replica")
+        XCTAssertEqual(payload.deviceId, "fixture-device")
+        XCTAssertEqual(payload.schemaHash, FrickSchema.schemaHash)
+        XCTAssertTrue(payload.knownCursors.isEmpty)
+        XCTAssertEqual(payload.clientCapabilities.platform, "test")
+        XCTAssertEqual(payload.clientCapabilities.sdkVersion, "0.0.0-fixture")
+        XCTAssertEqual(payload.clientCapabilities.schema.schemaId, FrickSchema.schemaId)
+        XCTAssertEqual(payload.clientCapabilities.schema.schemaRevision, FrickSchema.schemaRevision)
+        XCTAssertEqual(payload.clientCapabilities.schema.schemaHash, FrickSchema.schemaHash)
+    }
+}
