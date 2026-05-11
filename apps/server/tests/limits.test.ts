@@ -13,6 +13,29 @@ describe("FrickLimits", () => {
     expect(limits).not.toBe(DEFAULT_FRICK_LIMITS);
   });
 
+  it("exposes the expected set of limit keys with numeric values", () => {
+    const expectedKeys: ReadonlyArray<keyof typeof DEFAULT_FRICK_LIMITS> = [
+      "maxHttpBodyBytes",
+      "maxStreamAppendPayloadBytes",
+      "maxBlobBytes",
+      "maxSubscriptionsPerConnection",
+      "maxStreamPageSize",
+      "maxPendingAppendsPerClient",
+      "maxWebSocketFrameBytes",
+      "presenceTtlMinSeconds",
+      "presenceTtlMaxSeconds",
+      "signalTtlMinSeconds",
+      "signalTtlMaxSeconds",
+      "heartbeatIntervalSeconds",
+      "heartbeatTimeoutSeconds",
+    ];
+    expect(Object.keys(DEFAULT_FRICK_LIMITS).sort()).toEqual([...expectedKeys].sort());
+    for (const key of expectedKeys) {
+      expect(typeof DEFAULT_FRICK_LIMITS[key]).toBe("number");
+    }
+    expect(DEFAULT_FRICK_LIMITS.maxWebSocketFrameBytes).toBe(524_288);
+  });
+
   it("merges partial overrides on top of defaults", () => {
     const limits = mergeLimits({ maxHttpBodyBytes: 100, presenceTtlMaxSeconds: 30 });
     expect(limits.maxHttpBodyBytes).toBe(100);

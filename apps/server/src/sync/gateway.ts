@@ -139,6 +139,34 @@ export class SyncGateway {
   }
 
   #handleRawFrame(client: SyncClient, socket: WebSocket, payload: Buffer): void {
+    const byteLength = measureByteLength(payload);
+    if (byteLength > this.#limits.maxWebSocketFrameBytes) {
+      const envelope = createFrickErrorEnvelope({
+        code: "rateLimit.exceeded",
+        message: "Inbound WebSocket frame exceeds maximum size",
+        requestId: "frame",
+        retryable: false,
+        details: {
+          limit: "maxWebSocketFrameBytes",
+          configuredMax: this.#limits.maxWebSocketFrameBytes,
+        },
+      });
+      sendFrame(socket, [
+        FrameKind.Nack,
+        {
+          requestId: "frame",
+          error: envelope,
+          code: envelope.code,
+          message: envelope.message,
+        },
+      ]);
+      try {
+        socket.close(1009, "frame too large");
+      } catch {
+        // socket already closing
+      }
+      return;
+    }
     try {
       this.#handleFrame(client, decodeFrame(payload));
     } catch (error) {
@@ -520,6 +548,26 @@ function packObjects(store: FrickStore, type: string, objects: PlainObject[]) {
     const { id: _id, ...value } = object;
     return packObjectRecord(store.schema, type, id, value);
   });
+}
+
+function measureByteLength(payload: unknown): number {
+  if (payload instanceof ArrayBuffer) {
+    return payload.byteLength;
+  }
+  if (ArrayBuffer.isView(payload)) {
+    return payload.byteLength;
+  }
+  if (Array.isArray(payload)) {
+    let total = 0;
+    for (const chunk of payload) {
+      total += measureByteLength(chunk);
+    }
+    return total;
+  }
+  if (typeof payload === "string") {
+    return Buffer.byteLength(payload);
+  }
+  return 0;
 }
 
 function schemaFromClientCapabilities(client: FrickClientCapabilities, serverSchema: FrickSchema): FrickSchema {

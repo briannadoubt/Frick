@@ -19,6 +19,8 @@ export interface FrickLimits {
   maxStreamPageSize: number;
   /** Maximum number of unacknowledged appends queued per client. */
   maxPendingAppendsPerClient: number;
+  /** Maximum bytes per inbound WebSocket frame before msgpack decode. */
+  maxWebSocketFrameBytes: number;
   /** Lower bound (inclusive) for presence record TTL, in seconds. */
   presenceTtlMinSeconds: number;
   /** Upper bound (inclusive) for presence record TTL, in seconds. */
@@ -40,6 +42,7 @@ export const DEFAULT_FRICK_LIMITS: FrickLimits = Object.freeze({
   maxSubscriptionsPerConnection: 256,
   maxStreamPageSize: 500,
   maxPendingAppendsPerClient: 1_000,
+  maxWebSocketFrameBytes: 524_288,
   presenceTtlMinSeconds: 5,
   presenceTtlMaxSeconds: 600,
   signalTtlMinSeconds: 1,
