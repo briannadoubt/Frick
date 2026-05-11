@@ -169,6 +169,17 @@ request resolves a principal) `tenantId` and `userId`. The
 or `passwordHash` are redacted before emission. Set
 `FRICK_LOG_LEVEL=info` (the default) or higher to see them.
 
+## Projection delta push
+
+Projections may emit deltas over the sync WebSocket. Clients subscribe
+with kind `"projection"` and the projection's registered name (the
+optional `key` is reserved for future per-row scoping and is ignored
+today). The server pushes `ProjectionDelta` frames whenever a registered
+projection's `apply` returns row changes; deltas are scoped to the
+producing tenant. Subscribing to an unknown projection nacks with
+`auth.forbidden` + `details.reason = "projectionNotFound"`. Today this
+is an in-process broadcast; cross-process fan-out is a follow-up.
+
 ## Known gaps
 
 - CORS is parsed (`allowedOrigins`) but not yet enforced in HTTP
