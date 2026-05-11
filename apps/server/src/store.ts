@@ -37,6 +37,13 @@ import {
   type FrickProjectionRegistry,
   type FrickProjectionWriteEvent,
 } from "./projections/registry.js";
+import {
+  createFrickSearchIndexRegistry,
+  type FrickSearchAdapter,
+  type FrickSearchIndexRegistry,
+  type FrickSearchProjectInput,
+} from "./search/types.js";
+import { createSqliteFtsSearchAdapter } from "./search/sqlite-fts.js";
 import { DEFAULT_TENANT_ID } from "./tenant.js";
 
 /**
@@ -99,6 +106,19 @@ export interface StoreOptions {
    */
   projections?: FrickProjectionRegistry;
   /**
+   * Optional search adapter. When omitted, the store constructs the default
+   * {@link createSqliteFtsSearchAdapter} bound to its own SQLite handle so
+   * the framework's built-in `messages-fts` index works out of the box.
+   */
+  searchAdapter?: FrickSearchAdapter;
+  /**
+   * Optional search-index registry. Apps register custom indexes against
+   * source primitives (objects, streams, projections); the framework
+   * pre-registers `messages-fts`. When omitted, the store creates an empty
+   * registry — `createFrickServer` registers the built-ins.
+   */
+  searchIndexes?: FrickSearchIndexRegistry;
+  /**
    * Logger threaded into projection contexts so handler failures surface
    * through the same structured-logging pipeline as the rest of the server.
    * Defaults to a no-op logger.
@@ -135,6 +155,8 @@ export class FrickStore {
   readonly adminAudit: AdminAuditStore;
   readonly pushRegistrations: PushRegistrationStore;
   readonly projections: FrickProjectionRegistry;
+  readonly searchAdapter: FrickSearchAdapter;
+  readonly searchIndexes: FrickSearchIndexRegistry;
   readonly #logger: FrickLogger;
 
   readonly #db: DatabaseSync;
@@ -179,6 +201,8 @@ export class FrickStore {
     this.adminAudit = new AdminAuditStore(this.#db);
     this.pushRegistrations = new PushRegistrationStore(this.#db);
     this.projections = options.projections ?? createFrickProjectionRegistry();
+    this.searchAdapter = options.searchAdapter ?? createSqliteFtsSearchAdapter(this.#db);
+    this.searchIndexes = options.searchIndexes ?? createFrickSearchIndexRegistry();
     this.#logger = options.logger ?? createNoopLogger();
     this.inbox.repairInvalidReadCursors();
 
@@ -391,13 +415,15 @@ export class FrickStore {
       const value = d as PlainObject;
       const version = (e as number | undefined) ?? 0;
       this.objects.upsert(tenantId, type, id, value, version);
+      const stored = this.objects.read(tenantId, type, id) ?? value;
       this.#notifyProjections({
         kind: "objectUpsert",
         tenantId,
         objectType: type,
         objectId: id,
-        object: this.objects.read(tenantId, type, id) ?? value,
+        object: stored,
       });
+      this.#notifySearchForObject(tenantId, type, id, stored);
       return;
     }
     // 4-arg form: (type, id, value, version?)
@@ -406,13 +432,23 @@ export class FrickStore {
     const value = c as PlainObject;
     const version = (d as number | undefined) ?? 0;
     this.objects.upsert(DEFAULT_TENANT_ID, type, id, value, version);
+    const stored = this.objects.read(DEFAULT_TENANT_ID, type, id) ?? value;
     this.#notifyProjections({
       kind: "objectUpsert",
       tenantId: DEFAULT_TENANT_ID,
       objectType: type,
       objectId: id,
-      object: this.objects.read(DEFAULT_TENANT_ID, type, id) ?? value,
+      object: stored,
     });
+    this.#notifySearchForObject(DEFAULT_TENANT_ID, type, id, stored);
+  }
+
+  #notifySearchForObject(tenantId: string, type: string, id: string, value: PlainObject): void {
+    this.#notifySearch(
+      (input) => input,
+      ({ source }) => source.kind === "object" && source.type === type,
+      { tenantId, object: { type, id, value } },
+    );
   }
 
   /**
@@ -525,8 +561,60 @@ export class FrickStore {
         streamId: result.event.streamId,
         streamEvent: result.event,
       });
+      this.#notifySearch(
+        (i) => i,
+        ({ source }) => source.kind === "stream" && source.type === result.event.stream,
+        {
+          tenantId: result.event.tenantId,
+          streamEvent: {
+            stream: result.event.stream,
+            streamId: result.event.streamId,
+            sequence: result.event.sequence,
+            eventId: result.event.eventId,
+            event: result.event.event,
+            payload: result.event.payload,
+          },
+        },
+      );
     }
     return result;
+  }
+
+  /**
+   * Dispatch a search-indexer notification after a write. Iterates every
+   * registered index whose `source` matches the event kind/type and, for
+   * each non-null doc returned by `project()`, calls `searchAdapter.upsert`.
+   * Adapter failures are logged and swallowed — never let an indexer hiccup
+   * tear down the originating write.
+   */
+  #notifySearch(
+    pick: (def: FrickSearchProjectInput) => FrickSearchProjectInput,
+    matches: (def: { source: { kind: string; type?: string; name?: string } }) => boolean,
+    input: FrickSearchProjectInput,
+  ): void {
+    for (const def of this.searchIndexes.list()) {
+      const source = def.source as { kind: string; type?: string; name?: string };
+      if (!matches({ source })) continue;
+      let doc: ReturnType<typeof def.project>;
+      try {
+        doc = def.project(pick(input));
+      } catch (error) {
+        this.#logger.warn("frick.search.project_failed", {
+          index: def.name,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        continue;
+      }
+      if (!doc) continue;
+      try {
+        this.searchAdapter.upsert(input.tenantId, def.name, doc);
+      } catch (error) {
+        this.#logger.warn("frick.search.upsert_failed", {
+          index: def.name,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   /**

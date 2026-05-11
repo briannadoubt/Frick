@@ -102,6 +102,27 @@ export class StreamStore {
     return { event, created: true };
   }
 
+  /**
+   * Iterate every event for a stream type within a tenant, across all
+   * `streamId`s. Exposed for rebuild paths (search-index rebuild, etc.)
+   * where the caller needs to replay history without knowing the set of
+   * stream ids up front. Returned events are tenant-scoped and ordered by
+   * `(stream_id, sequence)`.
+   */
+  listAllByStreamType(tenantId: string, stream: string): StoredEvent[] {
+    const rows = this.db
+      .prepare(
+        `SELECT packed FROM stream_events
+          WHERE tenant_id = ? AND stream_type = ?
+          ORDER BY stream_id ASC, sequence ASC`,
+      )
+      .all(tenantId, stream) as unknown as EventRow[];
+    return rows.map((row) => ({
+      ...unpackStreamEvent(this.schema, decode(row.packed) as PackedStreamEvent),
+      tenantId,
+    }));
+  }
+
   read(tenantId: string, stream: string, streamId: string, after: number): StoredEvent[] {
     const rows = this.db
       .prepare(
