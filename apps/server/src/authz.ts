@@ -1,7 +1,18 @@
+import { DEFAULT_TENANT_ID } from "./tenant.js";
+
 export interface Principal {
   userId: string;
   deviceId: string;
   replicaId: string;
+  /**
+   * Tenant the principal acts within. Every principal has a tenant; the
+   * value is {@link DEFAULT_TENANT_ID} for legacy single-tenant deployments.
+   * The framework pins the tenant at session-issuance time (signup, login,
+   * dev-login) and re-derives it on every authenticated request from the
+   * session's `tenant_id` column. Cross-tenant access is denied with
+   * reason `tenantMismatch` (see {@link decide}).
+   */
+  tenantId: string;
 }
 
 export interface MembershipReader {
@@ -16,6 +27,30 @@ export interface MembershipReader {
    * the original two-method interface.
    */
   hasConversation?(conversationId: string): boolean;
+}
+
+/**
+ * Build a tenant-scoped {@link MembershipReader} over a {@link FrickStore}.
+ * The returned reader silently restricts every query to the supplied
+ * `tenantId`. Used by the HTTP and WebSocket request paths so a principal
+ * cannot trick membership lookups into resolving against another tenant.
+ *
+ * Imported lazily by `server.ts`/`gateway.ts` to avoid a cyclic module
+ * dependency on `store.ts`.
+ */
+export function tenantMembershipReader(
+  store: {
+    hasUser(tenantId: string, userId: string): boolean;
+    isRoomMember(tenantId: string, conversationId: string, userId: string): boolean;
+    hasConversation(tenantId: string, conversationId: string): boolean;
+  },
+  tenantId: string,
+): MembershipReader {
+  return {
+    hasUser: (userId) => store.hasUser(tenantId, userId),
+    isRoomMember: (conversationId, userId) => store.isRoomMember(tenantId, conversationId, userId),
+    hasConversation: (conversationId) => store.hasConversation(tenantId, conversationId),
+  };
 }
 
 /**
@@ -45,7 +80,8 @@ export type FrickDecisionReason =
   | "notAuthorizedForResource"
   | "notMember"
   | "ownerMismatch"
-  | "schemaIncompatible";
+  | "schemaIncompatible"
+  | "tenantMismatch";
 
 export type FrickDecision =
   | { allow: true; reason: "allow" }
@@ -79,7 +115,22 @@ export type FrickPolicyHook = (input: FrickPolicyInput) => FrickDecision | null;
 export interface FrickPolicyInput {
   principal: Principal | undefined;
   action: FrickAction;
-  resource: { kind: string; name?: string; key?: string; ownerId?: string };
+  resource: {
+    kind: string;
+    name?: string;
+    key?: string;
+    ownerId?: string;
+    /**
+     * Tenant the resource belongs to. Surfaced by callers that have already
+     * looked up the resource (or its parent) and know its tenant scope. When
+     * supplied and it differs from {@link Principal.tenantId}, {@link decide}
+     * denies with reason `tenantMismatch`. Omit to skip the tenant check
+     * (used when the storage lookup itself is already tenant-scoped, so a
+     * cross-tenant request would have returned "not found" before reaching
+     * authz).
+     */
+    tenantId?: string;
+  };
   context?: Record<string, unknown>;
 }
 
@@ -127,6 +178,20 @@ export function decide(input: FrickPolicyInput, memberships: MembershipReader): 
 
   if (!principal) {
     return deny("unauthenticated", "Missing session token");
+  }
+
+  // Tenant boundary: when the resource declares a tenant, it must match the
+  // principal's tenant. Callers whose storage lookups are already tenant-
+  // scoped omit `resource.tenantId` and rely on "not found" to hide cross-
+  // tenant resources from existence-leak.
+  if (
+    resource.tenantId !== undefined &&
+    resource.tenantId !== principal.tenantId
+  ) {
+    return deny(
+      "tenantMismatch",
+      `Resource belongs to a different tenant than ${principal.tenantId}`,
+    );
   }
 
   switch (action) {
@@ -214,19 +279,30 @@ function decideWithHooks(
   return applyPolicyHooks(decide(input, memberships), input, hooks);
 }
 
-export function principalFromHello(replicaId: string, deviceId: string): Principal {
+export function principalFromHello(
+  replicaId: string,
+  deviceId: string,
+  tenantId: string = DEFAULT_TENANT_ID,
+): Principal {
   return {
     userId: userIdFromReplica(replicaId),
     deviceId,
     replicaId,
+    tenantId,
   };
 }
 
-export function principalFromUserId(userId: string, replicaId = "http", deviceId = "http"): Principal {
+export function principalFromUserId(
+  userId: string,
+  replicaId = "http",
+  deviceId = "http",
+  tenantId: string = DEFAULT_TENANT_ID,
+): Principal {
   return {
     userId,
     deviceId,
     replicaId,
+    tenantId,
   };
 }
 
