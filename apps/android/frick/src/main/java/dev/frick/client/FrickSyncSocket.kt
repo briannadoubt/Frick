@@ -498,6 +498,36 @@ class FrickSyncSocket internal constructor(
                 pendingObjectWrites.remove(requestId)?.complete(ObjectWriteResult.Failed(envelope))
                 _events.tryEmit(FrickInboundEvent.Nack(requestId, envelope))
             }
+            FrameKindCodes.DELTA -> {
+                @Suppress("UNCHECKED_CAST")
+                val objects = (payload.listField("objects") ?: emptyList())
+                    .mapNotNull { it as? Map<String, Any?> }
+                @Suppress("UNCHECKED_CAST")
+                val events = (payload.listField("events") ?: emptyList())
+                    .mapNotNull { it as? Map<String, Any?> }
+                val cursor = payload.intField("cursor") ?: 0
+                _events.tryEmit(FrickInboundEvent.Delta(objects, events, cursor))
+            }
+            FrameKindCodes.PROJECTION_DELTA -> {
+                val name = payload.stringField("projection") ?: ""
+                val changes = (payload.listField("changes") ?: emptyList()).mapNotNull { item ->
+                    @Suppress("UNCHECKED_CAST")
+                    val row = item as? Map<String, Any?> ?: return@mapNotNull null
+                    val key = row.stringField("key") ?: return@mapNotNull null
+                    val value = row.mapField("value")
+                    ProjectionChange(key, value)
+                }
+                _events.tryEmit(FrickInboundEvent.ProjectionDelta(name, changes))
+            }
+            FrameKindCodes.SYNC_STATUS -> {
+                val connected = (payload["connected"] as? Boolean) ?: false
+                val cursorsRaw = payload.mapField("cursors") ?: emptyMap()
+                val cursors = cursorsRaw.mapValues { (_, v) ->
+                    (v as? Number)?.toInt() ?: 0
+                }
+                val inFlight = payload.intField("inFlight") ?: 0
+                _events.tryEmit(FrickInboundEvent.SyncStatus(connected, cursors, inFlight))
+            }
             FrameKindCodes.PING -> {
                 val sentAt = payload.intField("sentAt")?.toLong() ?: System.currentTimeMillis()
                 val pong = FrickMsgPack.encodeFrame(
