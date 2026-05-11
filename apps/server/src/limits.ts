@@ -1,0 +1,105 @@
+/**
+ * Bounded runtime limits for the Frick server.
+ *
+ * These keep memory and per-connection state from growing unbounded under
+ * abusive or buggy clients. All fields have sensible defaults — most
+ * callers can rely on {@link DEFAULT_FRICK_LIMITS} or pass a partial override
+ * to {@link mergeLimits}.
+ */
+export interface FrickLimits {
+  /** Maximum size of a parsed JSON HTTP body, in bytes. */
+  maxHttpBodyBytes: number;
+  /** Maximum encoded payload size for a stream append, in bytes. */
+  maxStreamAppendPayloadBytes: number;
+  /** Maximum byte length of an uploaded blob body. */
+  maxBlobBytes: number;
+  /** Maximum number of concurrent subscriptions allowed per websocket connection. */
+  maxSubscriptionsPerConnection: number;
+  /** Maximum page size for stream pagination. */
+  maxStreamPageSize: number;
+  /** Maximum number of unacknowledged appends queued per client. */
+  maxPendingAppendsPerClient: number;
+  /** Lower bound (inclusive) for presence record TTL, in seconds. */
+  presenceTtlMinSeconds: number;
+  /** Upper bound (inclusive) for presence record TTL, in seconds. */
+  presenceTtlMaxSeconds: number;
+  /** Lower bound (inclusive) for signal envelope TTL, in seconds. */
+  signalTtlMinSeconds: number;
+  /** Upper bound (inclusive) for signal envelope TTL, in seconds. */
+  signalTtlMaxSeconds: number;
+  /** How often the server sends Ping frames on an idle websocket, in seconds. */
+  heartbeatIntervalSeconds: number;
+  /** How long the server waits for any client frame before terminating, in seconds. */
+  heartbeatTimeoutSeconds: number;
+}
+
+export const DEFAULT_FRICK_LIMITS: FrickLimits = Object.freeze({
+  maxHttpBodyBytes: 5_000_000,
+  maxStreamAppendPayloadBytes: 256_000,
+  maxBlobBytes: 25_000_000,
+  maxSubscriptionsPerConnection: 256,
+  maxStreamPageSize: 500,
+  maxPendingAppendsPerClient: 1_000,
+  presenceTtlMinSeconds: 5,
+  presenceTtlMaxSeconds: 600,
+  signalTtlMinSeconds: 1,
+  signalTtlMaxSeconds: 120,
+  heartbeatIntervalSeconds: 25,
+  heartbeatTimeoutSeconds: 60,
+}) as FrickLimits;
+
+export function mergeLimits(overrides?: Partial<FrickLimits>): FrickLimits {
+  if (!overrides) {
+    return { ...DEFAULT_FRICK_LIMITS };
+  }
+  return { ...DEFAULT_FRICK_LIMITS, ...overrides };
+}
+
+/**
+ * Thrown when a runtime limit is exceeded. The wire shape always uses the
+ * existing {@link import("@frick/protocol").FrickErrorEnvelope} — callers
+ * translate this error into the appropriate `rateLimit.exceeded`,
+ * `blob.tooLarge`, or `stream.appendRejected` envelope.
+ */
+export class FrickLimitError extends Error {
+  readonly limit: keyof FrickLimits;
+  readonly actualValue: number;
+  readonly configuredMax: number;
+
+  constructor(params: { limit: keyof FrickLimits; actualValue: number; configuredMax: number; message?: string }) {
+    super(
+      params.message ??
+        `Limit ${params.limit} exceeded: actual=${params.actualValue} max=${params.configuredMax}`,
+    );
+    this.name = "FrickLimitError";
+    this.limit = params.limit;
+    this.actualValue = params.actualValue;
+    this.configuredMax = params.configuredMax;
+  }
+}
+
+/**
+ * Clamp `seconds` into [min, max]. Returns the clamped value.
+ * `silentClampLogger` is called when a clamp actually occurred so callers
+ * can warn — pass `undefined` to skip logging.
+ */
+export function clampTtlSeconds(
+  seconds: number,
+  min: number,
+  max: number,
+  silentClampLogger?: (clampedFrom: number, clampedTo: number) => void,
+): number {
+  if (!Number.isFinite(seconds)) {
+    silentClampLogger?.(seconds, max);
+    return max;
+  }
+  if (seconds < min) {
+    silentClampLogger?.(seconds, min);
+    return min;
+  }
+  if (seconds > max) {
+    silentClampLogger?.(seconds, max);
+    return max;
+  }
+  return seconds;
+}
