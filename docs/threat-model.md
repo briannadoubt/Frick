@@ -177,18 +177,32 @@ against a Frick server hosted at `frick.example`.
 
 **Today.**
 
-- The server emits `Access-Control-Allow-Origin: *` unconditionally and
-  echoes the standard CORS preflight headers. Combined with the session
-  token being passed via `Authorization: Bearer …` (not a cookie), browsers
-  will not silently attach credentials cross-origin; an attacker must
-  already possess the token to use it.
+- The server enforces an explicit allowlist for both HTTP and WebSocket
+  origins via `config.allowedOrigins` (env var `FRICK_ALLOWED_ORIGINS`).
+  Development defaults to `*`; production defaults to `[]` and requires
+  explicit values. Disallowed preflight (`OPTIONS`) requests are refused
+  with HTTP 403 and a `FrickErrorEnvelope` carrying
+  `code: "auth.forbidden"`, `details.reason: "originNotAllowed"`. Disallowed
+  non-preflight requests are served without `Access-Control-Allow-*`
+  headers — the browser blocks the response from JavaScript, matching
+  typical Express/Node CORS-middleware semantics. WebSocket upgrades from
+  disallowed origins are refused at the `verifyClient` callback with HTTP
+  403. Same-origin / server-to-server requests (no `Origin` header) bypass
+  CORS by design — this is correct browser semantics, not a gap. Allowlist
+  matching is exact-string only: pattern matching (regex, suffix, subdomain
+  wildcards) is a known limitation. Session tokens still travel via
+  `Authorization: Bearer …` rather than cookies, so the browser will not
+  silently attach credentials cross-origin even before CORS rules apply.
 
 **Known gaps.**
 
-- The `*` ACAO is too permissive for any deployment that ever moves session
-  tokens to cookies, and provides no defence-in-depth against XSS-extracted
-  tokens. A configurable allow-list lands in slice 6 alongside the rest of
-  the deployment-shaped configuration.
+- The browser remains the authority on whether a non-preflight response is
+  delivered to JavaScript. A non-browser client (curl, a malicious server)
+  can still reach the body of a disallowed-origin request — this is
+  intentional and matches industry-standard CORS semantics. Operators that
+  want hard server-side refusal can apply it at a reverse proxy.
+- No subdomain or pattern matching; large deployments that need many
+  per-tenant origins must list each exact value.
 
 ---
 
