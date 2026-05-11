@@ -3,6 +3,8 @@ import {
   defaultClientCapabilities,
   defaultServerCapabilities,
   foundationSchema,
+  serverCapabilityNames,
+  unsupportedRequiredCapabilities,
 } from "../src/index.js";
 
 describe("capability negotiation metadata", () => {
@@ -47,5 +49,48 @@ describe("capability negotiation metadata", () => {
       experimental: [],
       limits: {},
     });
+  });
+
+  it("returns deterministic server capability names", () => {
+    expect(
+      serverCapabilityNames({
+        ...defaultServerCapabilities(foundationSchema),
+        experimental: ["alpha", "beta"],
+      }),
+    ).toEqual([
+      "transport.websocket",
+      "transport.http",
+      "encoding.msgpack",
+      "encoding.json",
+      "primitive.objects",
+      "primitive.streams",
+      "primitive.presence",
+      "primitive.signals",
+      "primitive.blobs",
+      "primitive.jobs",
+      "primitive.projections",
+      "blobUpload.direct",
+      "experimental.alpha",
+      "experimental.beta",
+    ]);
+  });
+
+  it("preserves required capability order when reporting unsupported names", () => {
+    const client = defaultClientCapabilities({
+      platform: "web",
+      sdkVersion: "0.0.0-test",
+      schema: foundationSchema,
+    });
+    const server = defaultServerCapabilities(foundationSchema);
+
+    expect(
+      unsupportedRequiredCapabilities(
+        {
+          ...client,
+          required: ["transport.websocket", "primitive.telepathy", "encoding.json", "push.apns"],
+        },
+        server,
+      ),
+    ).toEqual(["primitive.telepathy", "push.apns"]);
   });
 });

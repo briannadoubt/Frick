@@ -3,6 +3,7 @@ import {
   FrameKind,
   decodeFrame,
   defaultClientCapabilities,
+  defaultServerCapabilities,
   encodeFrame,
   foundationSchema,
   rejectSchemaMismatch,
@@ -24,6 +25,21 @@ describe("foundation frames", () => {
             sdkVersion: "0.0.0-test",
             schema: foundationSchema,
           }),
+        },
+      ],
+      [
+        FrameKind.HelloAck,
+        {
+          schemaHash: foundationSchema.hash,
+          schemaId: foundationSchema.schemaId,
+          schemaRevision: foundationSchema.schemaRevision,
+          schemaCompatibility: {
+            compatible: true,
+            reason: "exact",
+            clientRevision: foundationSchema.schemaRevision,
+            serverRevision: foundationSchema.schemaRevision,
+          },
+          serverCapabilities: defaultServerCapabilities(foundationSchema),
         },
       ],
       [

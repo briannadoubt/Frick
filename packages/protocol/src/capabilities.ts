@@ -88,3 +88,22 @@ export function defaultServerCapabilities(schema: FrickSchema): FrickServerCapab
     limits: {},
   };
 }
+
+export function serverCapabilityNames(server: FrickServerCapabilities): string[] {
+  return [
+    ...server.transports.map((name) => `transport.${name}`),
+    ...server.encodings.map((name) => `encoding.${name}`),
+    ...server.primitives.map((name) => `primitive.${name}`),
+    ...server.blobUploads.map((name) => `blobUpload.${name}`),
+    ...server.push.map((name) => `push.${name}`),
+    ...server.experimental.map((name) => `experimental.${name}`),
+  ];
+}
+
+export function unsupportedRequiredCapabilities(
+  client: FrickClientCapabilities,
+  server: FrickServerCapabilities,
+): string[] {
+  const supported = new Set(serverCapabilityNames(server));
+  return client.required.filter((name) => !supported.has(name));
+}

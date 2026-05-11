@@ -4,7 +4,8 @@ import type {
   PackedSignalEnvelope,
   PackedStreamEvent,
 } from "./codec.js";
-import type { FrickClientCapabilities } from "./capabilities.js";
+import type { FrickClientCapabilities, FrickServerCapabilities } from "./capabilities.js";
+import type { SchemaCompatibilityResult } from "./compatibility.js";
 import type { FrickErrorCode, FrickErrorEnvelope } from "./errors.js";
 import type { FrickSchema, PackedRecord, PlainObject } from "./schema.js";
 
@@ -29,6 +30,7 @@ export enum FrameKind {
   Ping = 15,
   Pong = 16,
   SyncStatus = 17,
+  HelloAck = 18,
 }
 
 export type SubscriptionKind = "object" | "stream" | "presence" | "signal" | "projection";
@@ -80,6 +82,14 @@ export interface NackPayload {
   error: FrickErrorEnvelope;
   code?: FrickErrorCode;
   message?: string;
+}
+
+export interface HelloAckPayload {
+  schemaHash: string;
+  schemaId: string;
+  schemaRevision: number;
+  schemaCompatibility: SchemaCompatibilityResult;
+  serverCapabilities: FrickServerCapabilities;
 }
 
 export interface DeltaPayload {
@@ -141,7 +151,8 @@ export type FrickFrame =
   | [FrameKind.CursorCommit, CursorCommitPayload]
   | [FrameKind.Ping, { sentAt: number }]
   | [FrameKind.Pong, { sentAt: number; receivedAt: number }]
-  | [FrameKind.SyncStatus, { connected: boolean; cursors: Record<string, number>; inFlight: number }];
+  | [FrameKind.SyncStatus, { connected: boolean; cursors: Record<string, number>; inFlight: number }]
+  | [FrameKind.HelloAck, HelloAckPayload];
 
 export function encodeFrame(frame: FrickFrame): Uint8Array {
   return encode(frame);
