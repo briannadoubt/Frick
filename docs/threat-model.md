@@ -224,6 +224,8 @@ to exhaust server memory.
 hardening slice (slice 10). Operators must enforce limits at a reverse
 proxy / WAF for now.
 
+WebSocket inbound frames are capped at `FrickLimits.maxWebSocketFrameBytes` (default 512KB). Oversized frames are rejected with `rateLimit.exceeded` before msgpack decode, and the connection is closed.
+
 ---
 
 ## Password storage (current state)
