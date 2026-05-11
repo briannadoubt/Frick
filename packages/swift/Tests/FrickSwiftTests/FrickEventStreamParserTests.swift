@@ -664,11 +664,183 @@ final class FrickEventStreamParserTests: XCTestCase {
         try reopened.removePendingAppend(requestId: "request-1")
         XCTAssertEqual(try reopened.loadPendingAppends(), [])
     }
+
+    func testLoginThrowsFrickServerErrorCarryingEnvelopeOnAuthFailure() async throws {
+        FrickStreamingURLProtocol.reset()
+        FrickStreamingURLProtocol.enqueue(
+            """
+            {
+              "error": {
+                "code": "auth.unauthenticated",
+                "message": "Invalid identity or password",
+                "requestId": "login_rejected",
+                "retryable": false,
+                "schemaHash": "\(FrickSchema.schemaHash)",
+                "schemaRevision": 1
+              },
+              "code": "auth.unauthenticated",
+              "message": "Invalid identity or password",
+              "requestId": "login_rejected",
+              "retryable": false
+            }
+            """,
+            status: 401,
+            for: "/auth/login"
+        )
+        let client = try makeTestClient()
+
+        do {
+            _ = try await client.login(identity: "dorothy", password: "wrong")
+            XCTFail("login should have thrown")
+        } catch let error as FrickServerError {
+            XCTAssertEqual(error.httpStatusCode, 401)
+            XCTAssertEqual(error.code, .authUnauthenticated)
+            XCTAssertEqual(error.message, "Invalid identity or password")
+            XCTAssertEqual(error.requestId, "login_rejected")
+            XCTAssertFalse(error.retryable)
+            XCTAssertEqual(error.envelope?.schemaHash, FrickSchema.schemaHash)
+            XCTAssertEqual(error.envelope?.schemaRevision, 1)
+            XCTAssertNil(client.currentSession)
+        }
+    }
+
+    func testFetchInboxPropagatesFrickServerErrorInsteadOfReturningEmpty() async throws {
+        FrickStreamingURLProtocol.reset()
+        FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-ada", token: "token-ada"), for: "/auth/dev-login")
+        FrickStreamingURLProtocol.enqueue(
+            """
+            {
+              "error": {
+                "code": "auth.forbidden",
+                "message": "Inbox not visible",
+                "requestId": "inbox_rejected",
+                "retryable": false
+              },
+              "code": "auth.forbidden",
+              "message": "Inbox not visible",
+              "requestId": "inbox_rejected",
+              "retryable": false
+            }
+            """,
+            status: 403,
+            for: "/inbox?userId=user-ada"
+        )
+        let client = try makeTestClient()
+        _ = try await client.devLogin(userId: "user-ada")
+
+        do {
+            _ = try await client.fetchInbox()
+            XCTFail("fetchInbox should have thrown")
+        } catch let error as FrickServerError {
+            XCTAssertEqual(error.httpStatusCode, 403)
+            XCTAssertEqual(error.code, .authForbidden)
+            XCTAssertEqual(error.message, "Inbox not visible")
+            XCTAssertEqual(error.requestId, "inbox_rejected")
+        }
+    }
+
+    func testFrickServerErrorWithoutBodyExposesStatusCodeButNoEnvelope() async throws {
+        FrickStreamingURLProtocol.reset()
+        FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-ada", token: "token-ada"), for: "/auth/dev-login")
+        FrickStreamingURLProtocol.enqueue("", status: 500, for: "/inbox?userId=user-ada")
+        let client = try makeTestClient()
+        _ = try await client.devLogin(userId: "user-ada")
+
+        do {
+            _ = try await client.fetchInbox()
+            XCTFail("fetchInbox should have thrown")
+        } catch let error as FrickServerError {
+            XCTAssertEqual(error.httpStatusCode, 500)
+            XCTAssertNil(error.envelope)
+            XCTAssertNil(error.code)
+            XCTAssertFalse(error.retryable)
+        }
+    }
+
+    func testSendAppendQueuesNetworkErrorsButPropagatesServerEnvelopes() async throws {
+        FrickStreamingURLProtocol.reset()
+        FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-ada", token: "token-ada"), for: "/auth/dev-login")
+        FrickStreamingURLProtocol.enqueue(
+            """
+            {
+              "error": {
+                "code": "stream.appendRejected",
+                "message": "Append rejected",
+                "requestId": "append_rejected",
+                "retryable": false
+              },
+              "code": "stream.appendRejected",
+              "message": "Append rejected",
+              "requestId": "append_rejected",
+              "retryable": false
+            }
+            """,
+            status: 400,
+            for: "/append"
+        )
+        let storage = try FrickSQLiteStorage(path: ":memory:")
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [FrickStreamingURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = FrickClient(
+            baseURL: URL(string: "http://frick.test")!,
+            session: session,
+            streamingSession: session,
+            storage: storage
+        )
+
+        _ = try await client.devLogin(userId: "user-ada")
+
+        do {
+            try await client.sendMessage(body: "ignored")
+            XCTFail("sendMessage should have thrown when server returns an envelope")
+        } catch let error as FrickServerError {
+            XCTAssertEqual(error.code, .streamAppendRejected)
+        }
+
+        // Server-error responses must NOT silently queue the append for replay.
+        XCTAssertEqual(try storage.loadPendingAppends(), [])
+    }
+
+    func testFrickErrorEnvelopeDecoderHandlesWrappedAndDirectShapes() throws {
+        let wrapped = """
+        {
+          "error": {
+            "code": "auth.forbidden",
+            "message": "Nope",
+            "requestId": "req-1",
+            "retryable": false
+          }
+        }
+        """
+        let direct = """
+        {
+          "code": "schema.incompatible",
+          "message": "Schema mismatch",
+          "requestId": "req-2",
+          "retryable": false,
+          "schemaHash": "\(FrickSchema.schemaHash)",
+          "schemaRevision": 1
+        }
+        """
+        let wrappedEnvelope = FrickErrorEnvelopeDecoder.decode(from: Data(wrapped.utf8))
+        let directEnvelope = FrickErrorEnvelopeDecoder.decode(from: Data(direct.utf8))
+
+        XCTAssertEqual(wrappedEnvelope?.code, .authForbidden)
+        XCTAssertEqual(wrappedEnvelope?.message, "Nope")
+        XCTAssertEqual(directEnvelope?.code, .schemaIncompatible)
+        XCTAssertEqual(directEnvelope?.schemaRevision, 1)
+    }
+}
+
+private struct QueuedResponse {
+    let body: Data
+    let statusCode: Int
 }
 
 private final class FrickStreamingURLProtocol: URLProtocol {
     nonisolated(unsafe) private static var lock = NSLock()
-    nonisolated(unsafe) private static var responses: [String: [Data]] = [:]
+    nonisolated(unsafe) private static var responses: [String: [QueuedResponse]] = [:]
     nonisolated(unsafe) private static var paths: [String] = []
     nonisolated(unsafe) private static var requests: [RecordedURLRequest] = []
     nonisolated(unsafe) private static var posts: [[String: Any]] = []
@@ -700,15 +872,15 @@ private final class FrickStreamingURLProtocol: URLProtocol {
         lock.unlock()
     }
 
-    static func enqueue(_ payload: String, for path: String) {
+    static func enqueue(_ payload: String, status: Int = 200, for path: String) {
         lock.lock()
-        responses[path, default: []].append(Data(payload.utf8))
+        responses[path, default: []].append(QueuedResponse(body: Data(payload.utf8), statusCode: status))
         lock.unlock()
     }
 
-    static func enqueue(_ payload: Data, for path: String) {
+    static func enqueue(_ payload: Data, status: Int = 200, for path: String) {
         lock.lock()
-        responses[path, default: []].append(payload)
+        responses[path, default: []].append(QueuedResponse(body: payload, statusCode: status))
         lock.unlock()
     }
 
@@ -739,35 +911,35 @@ private final class FrickStreamingURLProtocol: URLProtocol {
                let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
                 Self.posts.append(json)
             }
-            let responseBody: Data?
-            if path.hasPrefix("/auth/") || path == "/conversations" {
+            let queued: QueuedResponse?
+            if path.hasPrefix("/auth/") || path == "/conversations" || path == "/append" {
                 var queuedResponses = Self.responses[path] ?? []
-                responseBody = queuedResponses.isEmpty ? nil : queuedResponses.removeFirst()
+                queued = queuedResponses.isEmpty ? nil : queuedResponses.removeFirst()
                 Self.responses[path] = queuedResponses
             } else {
-                responseBody = nil
+                queued = nil
             }
             Self.lock.unlock()
             let response = HTTPURLResponse(
                 url: url,
-                statusCode: 200,
+                statusCode: queued?.statusCode ?? 200,
                 httpVersion: nil,
                 headerFields: ["x-frick-schema-hash": FrickSchema.schemaHash]
             )!
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            if let responseBody {
-                client?.urlProtocol(self, didLoad: responseBody)
+            if let queued {
+                client?.urlProtocol(self, didLoad: queued.body)
             }
             client?.urlProtocolDidFinishLoading(self)
             return
         }
 
         var queuedResponses = Self.responses[path] ?? []
-        let responseBody = queuedResponses.isEmpty ? nil : queuedResponses.removeFirst()
+        let queued = queuedResponses.isEmpty ? nil : queuedResponses.removeFirst()
         Self.responses[path] = queuedResponses
         Self.lock.unlock()
 
-        let statusCode = responseBody == nil ? 404 : 200
+        let statusCode = queued?.statusCode ?? 404
         let response = HTTPURLResponse(
             url: url,
             statusCode: statusCode,
@@ -778,8 +950,8 @@ private final class FrickStreamingURLProtocol: URLProtocol {
             ]
         )!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        if let responseBody {
-            client?.urlProtocol(self, didLoad: responseBody)
+        if let queued {
+            client?.urlProtocol(self, didLoad: queued.body)
         }
         client?.urlProtocolDidFinishLoading(self)
     }

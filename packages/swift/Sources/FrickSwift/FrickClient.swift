@@ -800,7 +800,7 @@ public final class FrickClient: Sendable {
         )
 
         let (data, response) = try await session.data(for: request)
-        try validate(response)
+        try validate(response, data: data)
         let frickSession = try decoder.decode(FrickSession.self, from: data)
         try frickSession.requireCompatibleSchema()
         sessionStore.session = frickSession
@@ -875,7 +875,7 @@ public final class FrickClient: Sendable {
         authenticate(&request)
 
         let (data, response) = try await session.data(for: request)
-        try validate(response)
+        try validate(response, data: data)
         let created = try decoder.decode(CreatedConversationResponse.self, from: data)
         try created.requireCompatibleSchema()
         try storage.saveObjectData(type: "Conversation", id: created.conversation.id, data: encoder.encode(created.conversation), version: 0)
@@ -890,7 +890,7 @@ public final class FrickClient: Sendable {
         let url = queryURL(path: "/inbox", args: ["userId": userId ?? currentSession?.userId ?? "user-ada"])
         do {
             let (data, response) = try await session.data(for: authenticatedRequest(url: url))
-            try validate(response)
+            try validate(response, data: data)
             let decoded = try decoder.decode(InboxResponse.self, from: data)
             try decoded.requireCompatibleSchema()
             return decoded.data
@@ -907,7 +907,7 @@ public final class FrickClient: Sendable {
             let (data, response) = try await session.data(for: authenticatedRequest(
                 url: baseURL.appending(path: "blobs").appending(path: blobId)
             ))
-            try validate(response)
+            try validate(response, data: data)
             return try decoder.decode(FrickBlobMetadata.self, from: data)
         } catch {
             if shouldReturnEmptyRead(error) {
@@ -932,14 +932,14 @@ public final class FrickClient: Sendable {
         authenticate(&request)
 
         let (responseData, response) = try await session.data(for: request)
-        try validate(response)
+        try validate(response, data: responseData)
         return try decoder.decode(FrickBlobMetadata.self, from: responseData)
     }
 
     public func downloadBlobContent(blobId: String) async throws -> Data? {
         do {
             let (data, response) = try await session.data(for: authenticatedRequest(url: blobContentURL(blobId: blobId)))
-            try validate(response)
+            try validate(response, data: data)
             return data
         } catch {
             if shouldReturnEmptyRead(error) {
@@ -960,14 +960,14 @@ public final class FrickClient: Sendable {
         request.httpBody = try encoder.encode(value)
         authenticate(&request)
 
-        let (_, response) = try await session.data(for: request)
-        try validate(response)
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
     }
 
     public func drainSignals(name: String, key: String) async throws -> [[String: String]] {
         do {
             let (data, response) = try await session.data(for: authenticatedRequest(url: signalURL(name: name, key: key)))
-            try validate(response)
+            try validate(response, data: data)
             let decoded = try decoder.decode(SignalsResponse.self, from: data)
             try decoded.requireCompatibleSchema()
             return decoded.data
@@ -983,7 +983,7 @@ public final class FrickClient: Sendable {
         try? await flushPendingAppends()
         let url = queryURL(path: "/objects", args: ["type": type])
         let (data, response) = try await session.data(for: authenticatedRequest(url: url))
-        try validate(response)
+        try validate(response, data: data)
         let decoded = try decoder.decode(ObjectsResponse<Object>.self, from: data)
         try decoded.requireCompatibleSchema()
         for object in decoded.data {
@@ -1005,7 +1005,7 @@ public final class FrickClient: Sendable {
             .appending(path: conversationId)
         do {
             let (data, response) = try await session.data(for: authenticatedRequest(url: url))
-            try validate(response)
+            try validate(response, data: data)
             let decoded = try decoder.decode(StreamEventsResponse.self, from: data)
             try decoded.requireCompatibleSchema()
             for event in decoded.data {
@@ -1230,12 +1230,15 @@ public final class FrickClient: Sendable {
         request.httpBody = append.body
         authenticate(&request)
 
-        let (_, response) = try await session.data(for: request)
-        try validate(response)
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
     }
 
     private func shouldQueueAppend(_ error: Error) -> Bool {
         if error is FrickSchemaMismatchError {
+            return false
+        }
+        if error is FrickServerError {
             return false
         }
         if let urlError = error as? URLError, urlError.code == .badServerResponse {
@@ -1248,11 +1251,17 @@ public final class FrickClient: Sendable {
         if error is FrickSchemaMismatchError {
             return false
         }
+        if error is FrickServerError {
+            return false
+        }
         return true
     }
 
     private func isTerminalStreamError(_ error: Error) -> Bool {
         if error is FrickSchemaMismatchError {
+            return true
+        }
+        if let serverError = error as? FrickServerError, !serverError.retryable {
             return true
         }
         if let urlError = error as? URLError, urlError.code == .badServerResponse {
@@ -1312,7 +1321,7 @@ public final class FrickClient: Sendable {
         request.httpBody = try encoder.encode(body)
 
         let (data, response) = try await session.data(for: request)
-        try validate(response)
+        try validate(response, data: data)
         let frickSession = try decoder.decode(FrickSession.self, from: data)
         try frickSession.requireCompatibleSchema()
         sessionStore.session = frickSession
@@ -1326,9 +1335,18 @@ public final class FrickClient: Sendable {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     }
 
-    private func validate(_ response: URLResponse) throws {
-        guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
+    private func validate(_ response: URLResponse, data: Data? = nil) throws {
+        guard let httpResponse = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let bodyData = data ?? Data()
+            let envelope = FrickErrorEnvelopeDecoder.decode(from: bodyData, using: decoder)
+            throw FrickServerError(
+                httpStatusCode: httpResponse.statusCode,
+                envelope: envelope,
+                body: bodyData
+            )
         }
         let hashHeader = httpResponse.value(forHTTPHeaderField: "X-Frick-Schema-Hash")
         guard hashHeader == nil || hashHeader == FrickSchema.schemaHash else {
