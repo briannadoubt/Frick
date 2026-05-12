@@ -14,9 +14,9 @@
       proguardRules="proguard.txt"/>
   <library
       name=":@@:frick::debug"
-      jars="/Users/bri/.gradle/caches/9.5.0/transforms/d249096675ca6784b08a0b2996fbb192/transformed/out/jars/classes.jar:/Users/bri/.gradle/caches/9.5.0/transforms/d249096675ca6784b08a0b2996fbb192/transformed/out/jars/libs/R.jar"
+      jars="/Users/bri/.gradle/caches/9.5.0/transforms/6c6cae9983b5c5f6ffecbd9e6b5348d4/transformed/out/jars/classes.jar:/Users/bri/.gradle/caches/9.5.0/transforms/6c6cae9983b5c5f6ffecbd9e6b5348d4/transformed/out/jars/libs/R.jar"
       resolved="FrickAndroidDemo:frick:unspecified"
-      folder="/Users/bri/.gradle/caches/9.5.0/transforms/d249096675ca6784b08a0b2996fbb192/transformed/out"
+      folder="/Users/bri/.gradle/caches/9.5.0/transforms/6c6cae9983b5c5f6ffecbd9e6b5348d4/transformed/out"
       manifest="AndroidManifest.xml"
       resFolder="res"
       assetsFolder="assets"
