@@ -325,6 +325,62 @@ final class FrickSyncSocketTests: XCTestCase {
         await socket.close()
     }
 
+    func testSubscribeObjectSendsSubscribeFrameAndSnapshotSurfaces() async throws {
+        // Object subscriptions: client sends Subscribe { kind: "object",
+        // name: type }, server replies with a Snapshot frame carrying
+        // PackedObjectRecord rows. The Swift SDK surfaces these via the
+        // existing `.objectsDelta` case so consumers see the initial
+        // state and subsequent upserts uniformly.
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+        let socket = makeSocket(factory: factory)
+
+        let events = await socket.events
+        let received = expectation(description: "snapshot surfaced as objects delta")
+        let listener = Task {
+            for try await event in events {
+                if case .objectsDelta(let records, _) = event,
+                   let r = records.first,
+                   r.type == "MessageDraft",
+                   r.id == "user-ada:conv-1",
+                   r.value["body"] == "draft body"
+                {
+                    received.fulfill()
+                    return
+                }
+            }
+        }
+
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+        task.deliver(.data(helloAckFrame()))
+
+        try await socket.subscribeObject(type: "MessageDraft")
+        let subscribeFrame = try FrickMsgPackCodec.decodeFrame(task.sentFrame(at: 1))
+        XCTAssertEqual(subscribeFrame.kind, .subscribe)
+        let subscribePayload = try XCTUnwrap(subscribeFrame.payload.mapValue)
+        XCTAssertEqual(subscribePayload["kind"]?.stringValue, "object")
+        XCTAssertEqual(subscribePayload["name"]?.stringValue, "MessageDraft")
+
+        // MessageDraft = object id 7; `body` is field id 3.
+        let packedDraft: FrickMsgPackValue = .array([
+            .int(7),
+            .string("user-ada:conv-1"),
+            .array([.array([.int(3), .string("draft body")])]),
+        ])
+        let snapshot = FrickMsgPackCodec.encodeFrame(FrickFrame(kind: .snapshot, payload: .map([
+            (.string("subscriptionId"), .string("sub-1")),
+            (.string("cursor"), .int(0)),
+            (.string("objects"), .array([packedDraft])),
+        ])))
+        task.deliver(.data(snapshot))
+
+        await fulfillment(of: [received], timeout: 2)
+        listener.cancel()
+        await socket.close()
+    }
+
     func testObjectUpsertResolvesOnAck() async throws {
         let factory = MockWebSocketFactory()
         let task = MockWebSocketTask()

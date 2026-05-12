@@ -468,6 +468,26 @@ class FrickSyncSocket internal constructor(
         sendOrQueue(frame)
     }
 
+    /**
+     * Subscribe to all objects of a given `type`. The server replies with
+     * a Snapshot frame of the current row set (delivered as
+     * [FrickInboundEvent.Delta] with populated `objects`) and then
+     * streams subsequent upserts as Delta frames. Object subscriptions
+     * are type-scoped on the wire today; per-id filtering happens at
+     * the consumer (see `FrickDraftStore`).
+     */
+    suspend fun subscribeObject(type: String) {
+        val frame = FrickMsgPack.encodeFrame(
+            FrameKindCodes.SUBSCRIBE,
+            mapOf(
+                "subscriptionId" to UUID.randomUUID().toString(),
+                "kind" to "object",
+                "name" to type,
+            ),
+        )
+        sendOrQueue(frame)
+    }
+
     /** Subscribe to a projection by name. */
     suspend fun subscribeProjection(name: String) {
         val frame = FrickMsgPack.encodeFrame(
@@ -598,6 +618,17 @@ class FrickSyncSocket internal constructor(
                     .mapNotNull(::decodePackedStreamEvent)
                 val cursor = payload.intField("cursor") ?: 0
                 _events.tryEmit(FrickInboundEvent.Delta(objects, events, cursor))
+            }
+            FrameKindCodes.SNAPSHOT -> {
+                // Snapshot is the server's response to a `subscribe { kind:
+                // "object" }` and carries the current row set in `objects`.
+                // Surfaced as a Delta with an empty `events` list so existing
+                // consumers (and the typed Compose helpers) don't need a new
+                // case for the initial-state path vs. live updates.
+                val objects = (payload.listField("objects") ?: emptyList())
+                    .mapNotNull(::decodePackedObjectRecord)
+                val cursor = payload.intField("cursor") ?: 0
+                _events.tryEmit(FrickInboundEvent.Delta(objects, emptyList(), cursor))
             }
             FrameKindCodes.PRESENCE_DELTA -> {
                 val name = payload.stringField("name") ?: payload.stringField("presence") ?: ""

@@ -875,6 +875,22 @@ public actor FrickSyncSocket {
         try await sendFrame(frame)
     }
 
+    /// Subscribe to all objects of `type`. The server replies with a
+    /// Snapshot frame of the current row set (surfaced as
+    /// `.objectsDelta(records:, cursor:)`) and then streams subsequent
+    /// upserts the same way. Object subscriptions are type-scoped on
+    /// the wire today; per-id filtering happens at the consumer
+    /// (see `FrickDraftStore`).
+    public func subscribeObject(type: String) async throws {
+        let subId = UUID().uuidString
+        let frame = FrickFrame(kind: .subscribe, payload: .map([
+            (.string("subscriptionId"), .string(subId)),
+            (.string("kind"), .string("object")),
+            (.string("name"), .string(type)),
+        ]))
+        try await sendFrame(frame)
+    }
+
     @discardableResult
     public func upsertObject(
         type: String,
@@ -1036,6 +1052,12 @@ public actor FrickSyncSocket {
             break
         case .delta:
             handleDelta(payload: frame.payload)
+        case .snapshot:
+            // Server response to `subscribe { kind: "object" }`. Same
+            // `objects` payload as Delta — surface via the existing
+            // `objectsDelta` case so consumers don't need a new branch
+            // for the initial-state path vs. live updates.
+            handleSnapshot(payload: frame.payload)
         case .projectionDelta:
             handleProjectionDelta(payload: frame.payload)
         case .presenceDelta:
@@ -1068,6 +1090,19 @@ public actor FrickSyncSocket {
             $0.serverCapabilities = server
             $0.schemaCompatibility = compat
         }
+    }
+
+    private func handleSnapshot(payload: FrickMsgPackValue) {
+        guard let map = payload.mapValue else { return }
+        let cursor = map["cursor"]?.intValue ?? 0
+        let objectArray = map["objects"]?.arrayValue ?? []
+        var records: [FrickObjectRecord] = []
+        for o in objectArray {
+            if let decoded = Self.decodePackedObjectRecord(o) {
+                records.append(decoded)
+            }
+        }
+        eventContinuation?.yield(.objectsDelta(records: records, cursor: cursor))
     }
 
     private func handleDelta(payload: FrickMsgPackValue) {

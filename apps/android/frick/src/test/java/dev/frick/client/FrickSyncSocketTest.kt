@@ -256,6 +256,71 @@ class FrickSyncSocketTest {
     }
 
     @Test
+    fun subscribeObjectDeliversSnapshot() = runBlocking {
+        enqueueWebSocketHandler(
+            onMessage = { _, frame ->
+                when (frame.first) {
+                    FrameKindCodes.HELLO -> sendFrame(
+                        FrameKindCodes.HELLO_ACK,
+                        mapOf(
+                            "schemaHash" to FRICK_SCHEMA_HASH,
+                            "schemaId" to FRICK_SCHEMA_ID,
+                            "schemaRevision" to FRICK_SCHEMA_REVISION,
+                            "schemaCompatibility" to mapOf("status" to "compatible"),
+                            "serverCapabilities" to emptyMap<String, Any?>(),
+                        ),
+                    )
+                    FrameKindCodes.SUBSCRIBE -> {
+                        // Verify the subscribe payload shape and reply with
+                        // a Snapshot frame carrying a single MessageDraft row.
+                        assertEquals("object", frame.second["kind"])
+                        assertEquals("MessageDraft", frame.second["name"])
+                        // PackedObjectRecord tuple = [typeId, id, packedFields].
+                        // MessageDraft = object id 7; field 3 is `body`.
+                        sendFrame(
+                            FrameKindCodes.SNAPSHOT,
+                            mapOf(
+                                "objects" to listOf(
+                                    listOf(
+                                        7,
+                                        "user-ada:conv-1",
+                                        listOf(listOf(3, "draft body")),
+                                    ),
+                                ),
+                                "cursor" to 0,
+                            ),
+                        )
+                    }
+                }
+            },
+        )
+        val socket = newSocket()
+        try {
+            socket.awaitReady()
+            @OptIn(DelicateCoroutinesApi::class)
+            val deltaDeferred = GlobalScope.async {
+                withTimeout(2_000) {
+                    socket.events.filter { it is FrickInboundEvent.Delta }.first() as FrickInboundEvent.Delta
+                }
+            }
+            delay(50)
+            socket.subscribeObject(type = "MessageDraft")
+            val snapshot = deltaDeferred.await()
+            assertEquals(0, snapshot.cursor)
+            assertEquals(0, snapshot.events.size)
+            assertEquals(1, snapshot.objects.size)
+            val record = snapshot.objects.first()
+            assertEquals("MessageDraft", record["type"])
+            assertEquals("user-ada:conv-1", record["id"])
+            @Suppress("UNCHECKED_CAST")
+            val value = record["value"] as Map<String, Any?>
+            assertEquals("draft body", value["body"])
+        } finally {
+            socket.close()
+        }
+    }
+
+    @Test
     fun objectUpsertConflictNacks() = runBlocking {
         enqueueWebSocketHandler(
             onMessage = { _, frame ->
