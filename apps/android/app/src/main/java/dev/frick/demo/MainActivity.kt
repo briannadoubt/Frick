@@ -41,8 +41,11 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.frick.client.ConversationDto
 import dev.frick.client.FrickSession
 import dev.frick.client.FrickStreamEvent
+import dev.frick.client.FrickSyncSocket
 import dev.frick.client.RoomMemberDto
 import dev.frick.client.UserDto
+import dev.frick.client.compose.rememberFrickProjection
+import dev.frick.client.compose.rememberFrickStreamEvents
 import dev.frick.client.isVisibleChatMessage
 import dev.frick.design.FrickButton
 import dev.frick.design.FrickChatBubble
@@ -197,6 +200,16 @@ fun FrickDemo() {
             },
         ) {
             if (state.selectedDestination == ChatDestinationId) {
+                // Live-tail message + typing wiring via the Compose
+                // helpers from `:frick-compose`. The ViewModel hands us
+                // the open socket; the wrappers handle (un)subscribe on
+                // convoId change. Cold-start history still flows through
+                // `state.messages` (seeded by `streamMessages()` SSE);
+                // these effects only push the live delta into the VM.
+                ChatLiveWiring(
+                    viewModel = viewModel,
+                    convoId = state.selectedConversationId,
+                )
                 ChatDetailScreen(
                     title = state.title,
                     inspectorVisible = state.inspectorVisible,
@@ -718,3 +731,22 @@ private fun messageMetadata(users: List<UserDto>, message: FrickStreamEvent): St
         displayName(users, message.payload["senderId"].orEmpty()),
         message.payload["createdAt"]?.substringAfter("T")?.take(5),
     ).joinToString(" • ")
+
+/**
+ * Subscribe to the live message stream + typing projection for the
+ * active conversation using the typed Compose helpers, and push the
+ * resulting state into the ViewModel.
+ *
+ * Lives in the chat detail branch (mounted only when the user is on
+ * the chat destination), so subscriptions tear down automatically as
+ * the user navigates away.
+ */
+@Composable
+private fun ChatLiveWiring(viewModel: FoundationViewModel, convoId: String) {
+    val socket: FrickSyncSocket? by viewModel.socketFlow.collectAsStateWithLifecycle()
+    val current = socket ?: return
+    val liveEvents by rememberFrickStreamEvents(current, "MessageStream", convoId)
+    val typingRows by rememberFrickProjection(current, "TypingState/$convoId")
+    LaunchedEffect(liveEvents) { viewModel.ingestStreamEvents(liveEvents) }
+    LaunchedEffect(typingRows) { viewModel.applyTypingUsers(typingRows) }
+}

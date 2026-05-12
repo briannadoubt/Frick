@@ -5,6 +5,15 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Test
 
+// Kotlin 2.x disallows `sealed` local classes and `object` declarations
+// inside function bodies, so the deep-link router fixture types live at
+// file scope here.
+private sealed class TestRoute {
+    data class Conversation(val id: String) : TestRoute()
+    data class Call(val id: String) : TestRoute()
+    data object Unknown : TestRoute()
+}
+
 class FrickPushReceiverTest {
 
     @Test
@@ -38,16 +47,10 @@ class FrickPushReceiverTest {
 
     @Test
     fun routerResolvesIntentSpecificRoutes() {
-        sealed class Route {
-            data class Conversation(val id: String) : Route()
-            data class Call(val id: String) : Route()
-            object Unknown : Route()
-        }
-
-        val router = FrickDeepLinkRouter<Route>()
-            .on("message.new") { payload -> Route.Conversation(payload.threadId ?: "general") }
-            .on("call.ringing") { payload -> Route.Call(payload.data["callId"].orEmpty()) }
-            .fallback { Route.Unknown }
+        val router = FrickDeepLinkRouter<TestRoute>()
+            .on("message.new") { payload -> TestRoute.Conversation(payload.threadId ?: "general") }
+            .on("call.ringing") { payload -> TestRoute.Call(payload.data["callId"].orEmpty()) }
+            .fallback { TestRoute.Unknown }
 
         val message = FrickPushPayload(
             intent = "message.new",
@@ -57,7 +60,7 @@ class FrickPushReceiverTest {
             deepLink = null,
             data = emptyMap(),
         )
-        assertEquals(Route.Conversation("c1"), router.resolve(message))
+        assertEquals(TestRoute.Conversation("c1"), router.resolve(message))
 
         val call = FrickPushPayload(
             intent = "call.ringing",
@@ -67,7 +70,7 @@ class FrickPushReceiverTest {
             deepLink = null,
             data = mapOf("callId" to "call-7"),
         )
-        assertEquals(Route.Call("call-7"), router.resolve(call))
+        assertEquals(TestRoute.Call("call-7"), router.resolve(call))
 
         val unknown = FrickPushPayload(
             intent = "unrelated.intent",
@@ -77,6 +80,6 @@ class FrickPushReceiverTest {
             deepLink = null,
             data = emptyMap(),
         )
-        assertEquals(Route.Unknown, router.resolve(unknown))
+        assertEquals(TestRoute.Unknown, router.resolve(unknown))
     }
 }

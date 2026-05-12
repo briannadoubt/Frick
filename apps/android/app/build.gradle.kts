@@ -41,6 +41,7 @@ dependencies {
     androidTestImplementation(composeBom)
 
     implementation(project(":frick"))
+    implementation(project(":frick-compose"))
     implementation(project(":design"))
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.core:core-ktx:1.18.0")
@@ -55,7 +56,7 @@ dependencies {
     // WorkManager — schedules the background sync drain so a closed app
     // can flush its pending appends when the OS decides conditions are
     // right (network available, charging not required).
-    implementation("androidx.work:work-runtime-ktx:2.10.0")
+    implementation("androidx.work:work-runtime-ktx:2.11.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
 

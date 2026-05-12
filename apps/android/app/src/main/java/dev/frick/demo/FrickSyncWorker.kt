@@ -9,6 +9,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import dev.frick.client.FrickClient
+import dev.frick.client.SQLiteFrickStorage
 import java.util.concurrent.TimeUnit
 
 /**
@@ -30,7 +31,11 @@ class FrickSyncWorker(
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result {
-        val client = FrickClient(applicationContext)
+        // FrickClient's positional ctor takes `baseUrl: String`, not a
+        // Context — wire the SQLite-backed storage explicitly so the
+        // drain reads the same pending-append queue the foreground VM
+        // does. (Defaults to the emulator-friendly `10.0.2.2:4099`.)
+        val client = FrickClient(storage = SQLiteFrickStorage(applicationContext))
         return try {
             client.flushPendingAppends()
             Result.success()

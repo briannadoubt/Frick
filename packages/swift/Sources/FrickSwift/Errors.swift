@@ -1,27 +1,8 @@
 import Foundation
 
-public struct FrickErrorCode: RawRepresentable, Codable, Equatable, Hashable, Sendable {
-    public let rawValue: String
-
-    public init(rawValue: String) {
-        self.rawValue = rawValue
-    }
-
-    public static let authUnauthenticated = FrickErrorCode(rawValue: "auth.unauthenticated")
-    public static let authForbidden = FrickErrorCode(rawValue: "auth.forbidden")
-    public static let authSessionExpired = FrickErrorCode(rawValue: "auth.sessionExpired")
-    public static let schemaIncompatible = FrickErrorCode(rawValue: "schema.incompatible")
-    public static let schemaMigrationRequired = FrickErrorCode(rawValue: "schema.migrationRequired")
-    public static let storageConflict = FrickErrorCode(rawValue: "storage.conflict")
-    public static let storageNotFound = FrickErrorCode(rawValue: "storage.notFound")
-    public static let streamAppendRejected = FrickErrorCode(rawValue: "stream.appendRejected")
-    public static let syncProtocolError = FrickErrorCode(rawValue: "sync.protocolError")
-    public static let syncReconnectExhausted = FrickErrorCode(rawValue: "sync.reconnectExhausted")
-    public static let blobTooLarge = FrickErrorCode(rawValue: "blob.tooLarge")
-    public static let blobUnsupportedContentType = FrickErrorCode(rawValue: "blob.unsupportedContentType")
-    public static let rateLimitExceeded = FrickErrorCode(rawValue: "rateLimit.exceeded")
-    public static let serverInternal = FrickErrorCode(rawValue: "server.internal")
-}
+// `FrickErrorCode` is generated into FrickGenerated.swift from the
+// foundation schema's error table; the static-let extensible struct
+// that used to live here was superseded when schema codegen took over.
 
 public struct FrickErrorEnvelope: Codable, Equatable, Sendable {
     public let code: FrickErrorCode

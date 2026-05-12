@@ -7,7 +7,9 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import dev.frick.client.FrickInboundEvent
+import dev.frick.client.FrickStreamEvent
 import dev.frick.client.FrickSyncSocket
+import dev.frick.client.ProjectionChange
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -124,3 +126,81 @@ fun <T> UseFrickStatus(flow: StateFlow<T>, onValue: (T) -> Unit) {
 // surface and import Job themselves.
 @Suppress("unused")
 private val unusedSentinel: Job? = null
+
+/**
+ * Decode a wire-shaped stream-event map (the `events` payload of
+ * [FrickInboundEvent.Delta]) into the typed [FrickStreamEvent]
+ * domain shape. Returns `null` if the map is missing required keys.
+ *
+ * Public so the typed Compose helpers below and demo code can share
+ * one canonical decoder rather than each rolling their own.
+ */
+fun decodeFrickStreamEvent(raw: Map<String, Any?>, fallbackStreamId: String? = null): FrickStreamEvent? {
+    val stream = raw["stream"]?.toString() ?: return null
+    val streamId = raw["streamId"]?.toString() ?: fallbackStreamId ?: return null
+    val sequence = (raw["sequence"] as? Number)?.toInt() ?: return null
+    val eventId = raw["eventId"]?.toString() ?: return null
+    val eventName = raw["event"]?.toString() ?: return null
+    @Suppress("UNCHECKED_CAST")
+    val payloadRaw = raw["payload"] as? Map<String, Any?> ?: emptyMap()
+    val payload = payloadRaw.mapValues { entry -> entry.value?.toString().orEmpty() }
+    return FrickStreamEvent(stream, streamId, sequence, eventId, eventName, payload)
+}
+
+/**
+ * Typed sibling of [rememberFrickStream]: subscribes to `(stream, key)`
+ * and returns the accumulated tail decoded into [FrickStreamEvent], the
+ * domain type the rest of the Kotlin SDK already consumes. Duplicates
+ * are dropped by `eventId` and the list is kept ordered by `sequence`.
+ */
+@Composable
+fun rememberFrickStreamEvents(
+    socket: FrickSyncSocket,
+    stream: String,
+    key: String,
+): State<List<FrickStreamEvent>> {
+    val state = remember(stream, key) { mutableStateOf(emptyList<FrickStreamEvent>()) }
+    LaunchedEffect(socket, stream, key) {
+        socket.subscribe(stream, key)
+        socket.events.collect { event ->
+            if (event !is FrickInboundEvent.Delta) return@collect
+            val decoded = event.events
+                .filter { e -> (e["stream"] as? String) == stream && (e["streamId"] as? String) == key }
+                .mapNotNull { decodeFrickStreamEvent(it, key) }
+            if (decoded.isEmpty()) return@collect
+            val combined = (state.value + decoded)
+                .distinctBy { it.eventId }
+                .sortedBy { it.sequence }
+            state.value = combined
+        }
+    }
+    return state
+}
+
+/**
+ * Compose helper for projection subscriptions: subscribes to
+ * `projection` and returns a `State<Map<key, value?>>` representing the
+ * current live row set. Keys whose latest delta carries `value == null`
+ * are removed from the map. Mirrors the projection consumption pattern
+ * the demo previously hand-rolled around [FrickInboundEvent.ProjectionDelta].
+ */
+@Composable
+fun rememberFrickProjection(
+    socket: FrickSyncSocket,
+    projection: String,
+): State<Map<String, Map<String, Any?>?>> {
+    val state = remember(projection) { mutableStateOf(emptyMap<String, Map<String, Any?>?>()) }
+    LaunchedEffect(socket, projection) {
+        socket.subscribeProjection(projection)
+        socket.events.collect { event ->
+            if (event !is FrickInboundEvent.ProjectionDelta) return@collect
+            if (event.projection != projection) return@collect
+            val next = state.value.toMutableMap()
+            for (change: ProjectionChange in event.changes) {
+                if (change.value == null) next.remove(change.key) else next[change.key] = change.value
+            }
+            state.value = next.toMap()
+        }
+    }
+    return state
+}

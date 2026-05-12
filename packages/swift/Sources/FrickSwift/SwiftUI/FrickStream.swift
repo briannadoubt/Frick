@@ -23,8 +23,9 @@ import Foundation
 ///
 /// Falls back to an empty list when no socket is in the environment so
 /// previews render without crashing.
+@MainActor
 @propertyWrapper
-public struct FrickStream: DynamicProperty {
+public struct FrickStream: @MainActor DynamicProperty {
     @Environment(\.frickSyncSocket) private var socket
     @StateObject private var store: StreamStore
     private let streamName: String
@@ -61,7 +62,7 @@ private final class StreamStore: ObservableObject {
         listenerTask = Task { [weak self] in
             do {
                 try await socket.subscribe(stream: stream, key: key)
-                for try await event in socket.events {
+                for try await event in await socket.events {
                     guard case let .delta(_, evs, _) = event else { continue }
                     let filtered = evs.filter { $0.stream == stream && $0.streamId == key }
                     if filtered.isEmpty { continue }
@@ -83,8 +84,9 @@ private final class StreamStore: ObservableObject {
 }
 
 /// SwiftUI property wrapper for a presence row.
+@MainActor
 @propertyWrapper
-public struct FrickPresence: DynamicProperty {
+public struct FrickPresence: @MainActor DynamicProperty {
     @Environment(\.frickSyncSocket) private var socket
     @StateObject private var store: PresenceStore
     private let presenceName: String
@@ -121,7 +123,7 @@ private final class PresenceStore: ObservableObject {
         listenerTask = Task { [weak self] in
             do {
                 try await socket.subscribePresence(name: name, key: key)
-                for try await event in socket.events {
+                for try await event in await socket.events {
                     guard case let .presenceDelta(deltaName, deltaRecords, cleared) = event,
                           deltaName == name
                     else { continue }

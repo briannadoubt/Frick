@@ -121,6 +121,12 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
     private val prefs = application.getSharedPreferences(PrefsName, Context.MODE_PRIVATE)
     private var streamJob: Job? = null
     private var socket: FrickSyncSocket? = null
+    // Exposed for `rememberFrickStreamEvents` / `rememberFrickProjection`
+    // in the chat composable. Mirrors the iOS demo's `Environment` socket
+    // injection — Compose subscribes off the typed wrappers instead of
+    // this ViewModel running its own `events.collect { … }`.
+    private val _socketFlow = MutableStateFlow<FrickSyncSocket?>(null)
+    val socketFlow: StateFlow<FrickSyncSocket?> = _socketFlow.asStateFlow()
     private var socketStatusJob: Job? = null
     private var socketEventsJob: Job? = null
     private var typingJob: Job? = null
@@ -462,6 +468,7 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
         if (socket != null) return
         val newSocket = frick.connectSync(baseUrl = DemoBaseUrl)
         socket = newSocket
+        _socketFlow.value = newSocket
         newSocket.connect()
         socketStatusJob = viewModelScope.launch {
             newSocket.status.collect { status ->
@@ -482,6 +489,7 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
         socketEventsJob?.cancel(); socketEventsJob = null
         typingJob?.cancel(); typingJob = null
         socket?.close(); socket = null
+        _socketFlow.value = null
         _uiState.update { state -> state.copy(sync = SyncStatusUi(SyncIndicator.Red, "Disconnected")) }
     }
 
@@ -501,26 +509,10 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
 
     private fun handleInboundEvent(event: FrickInboundEvent) {
         when (event) {
-            is FrickInboundEvent.Delta -> {
-                val convoId = _uiState.value.selectedConversationId
-                val merged = event.events.mapNotNull { decodeStreamEvent(it, convoId) }
-                if (merged.isEmpty()) return
-                _uiState.update { state ->
-                    val combined = (state.messages + merged)
-                        .distinctBy { e -> e.eventId }
-                        .sortedBy { e -> e.sequence }
-                    state.copy(messages = combined, status = "Live")
-                }
-            }
-            is FrickInboundEvent.ProjectionDelta -> {
-                if (event.projection.startsWith("TypingState/")) {
-                    val typing = event.changes
-                        .filter { change -> change.value != null }
-                        .mapNotNull { change -> change.value?.get("userId")?.toString() }
-                        .filter { id -> id != _uiState.value.session?.userId }
-                    _uiState.update { state -> state.copy(typingUserIds = typing) }
-                }
-            }
+            // FrickInboundEvent.Delta and ProjectionDelta are consumed by
+            // the chat composable via `rememberFrickStreamEvents` and
+            // `rememberFrickProjection`, which call back into
+            // [ingestStreamEvents] / [applyTypingUsers] below.
             is FrickInboundEvent.Nack -> {
                 _uiState.update { state ->
                     state.copy(
@@ -535,16 +527,37 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
         }
     }
 
-    private fun decodeStreamEvent(raw: Map<String, Any?>, fallbackKey: String): FrickStreamEvent? {
-        val stream = raw["stream"]?.toString() ?: return null
-        val streamId = raw["streamId"]?.toString() ?: fallbackKey
-        val sequence = (raw["sequence"] as? Number)?.toInt() ?: return null
-        val eventId = raw["eventId"]?.toString() ?: return null
-        val eventName = raw["event"]?.toString() ?: return null
-        @Suppress("UNCHECKED_CAST")
-        val payloadRaw = raw["payload"] as? Map<String, Any?> ?: emptyMap()
-        val payload = payloadRaw.mapValues { entry -> entry.value?.toString().orEmpty() }
-        return FrickStreamEvent(stream, streamId, sequence, eventId, eventName, payload)
+    /**
+     * Called by the chat composable's `rememberFrickStreamEvents`
+     * wrapper. Merges the wrapper's accumulated live tail into the
+     * cold-start history that [startMessageStream] loaded over SSE.
+     * The wrapper already de-dupes by `eventId` and sorts by `sequence`;
+     * we re-do the merge here to combine across the two sources.
+     */
+    fun ingestStreamEvents(events: List<FrickStreamEvent>) {
+        if (events.isEmpty()) return
+        _uiState.update { state ->
+            val combined = (state.messages + events)
+                .distinctBy { e -> e.eventId }
+                .sortedBy { e -> e.sequence }
+            state.copy(messages = combined, status = "Live")
+        }
+    }
+
+    /**
+     * Called by the chat composable's `rememberFrickProjection`
+     * wrapper for `TypingState/{conversationId}`. The wrapper returns
+     * a `Map<key, row?>` of the projection; this VM filters out the
+     * local user and stores the resulting user-id list for the UI.
+     */
+    fun applyTypingUsers(rows: Map<String, Map<String, Any?>?>) {
+        val selfId = _uiState.value.session?.userId
+        val typing = rows.values
+            .filterNotNull()
+            .mapNotNull { row -> row["userId"]?.toString() }
+            .filter { id -> id != selfId }
+            .distinct()
+        _uiState.update { state -> state.copy(typingUserIds = typing) }
     }
 
     private fun subscribeStreamSocket(conversationId: String) {

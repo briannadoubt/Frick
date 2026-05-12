@@ -206,36 +206,35 @@ final class FoundationModel {
                 await self?.applySyncStatus(update)
             }
         }
-        socketEventsTask = Task { [weak self] in
-            do {
-                for try await event in await opened.events {
-                    await self?.handleInbound(event)
-                }
-            } catch {
-                // Stream closed; status updates will reflect the state.
-            }
-        }
+        // The wire's Delta + PresenceDelta events are consumed by the
+        // SwiftUI `@FrickStream` / `@FrickPresence` property wrappers
+        // attached in `ChatDetailScene`. The view layer calls
+        // `ingestStreamEvents(_:)` / `applyTyping(records:cleared:)`
+        // when those wrappers re-fire, so this actor no longer needs to
+        // run its own `for try await event in opened.events` loop.
     }
 
     private func applySyncStatus(_ update: FrickSyncStatus) {
         syncStatus = update
     }
 
-    private func handleInbound(_ event: FrickInboundEvent) async {
-        switch event {
-        case .delta(_, let events, _):
-            messages = mergeStreamEvents(messages, events)
-            // Propagate read state in real-time to other replicas via WS.
-            if let session = currentSession {
-                await advanceReadReceiptViaSocket(for: selectedConversationId, userId: session.userId)
-            }
-        case .presenceDelta(let name, let records, let cleared):
-            updateTyping(name: name, records: records, cleared: cleared)
-        case .status(let value):
-            syncStatus = value
-        default:
-            break
+    /// Called by the view's `@FrickStream` wrapper when new stream
+    /// events arrive. Merges them into the cold-start history that
+    /// `start()` previously loaded over HTTP, then advances the read
+    /// receipt the same way the manual event loop used to.
+    func ingestStreamEvents(_ incoming: [FrickStreamEvent]) async {
+        if incoming.isEmpty { return }
+        messages = mergeStreamEvents(messages, incoming)
+        if let session = currentSession {
+            await advanceReadReceiptViaSocket(for: selectedConversationId, userId: session.userId)
         }
+    }
+
+    /// Called by the view's `@FrickPresence` wrapper when the typing
+    /// roster changes. The wrapper already tracks cleared keys, so we
+    /// recompute the typing notice off the full current record set.
+    func applyTyping(records: [FrickPresenceRecord]) {
+        updateTyping(name: "TypingState", records: records, cleared: [])
     }
 
     // MARK: WS read-receipts
@@ -789,6 +788,11 @@ struct ContentView: View {
             }
         }
         .frickDesignContext(FrickDesignContext(density: .comfortable, brand: .frickenChat))
+        // Hand the live socket to `@FrickStream` / `@FrickPresence`
+        // wrappers downstream. Becomes non-nil once `model.start()`
+        // calls `ensureSocket()`, at which point the chat view's
+        // wrappers attach and start fanning out events.
+        .environment(\.frickSyncSocket, model.socket)
     }
 }
 
@@ -877,9 +881,18 @@ private struct ChatScene: View {
                 ThreadListToolbar(model: model)
             }
         } detail: {
-            ChatDetailScene(model: model, bottomMessageAnchor: bottomMessageAnchor)
-                .navigationTitle(model.title)
-                .navigationBarTitleDisplayMode(.inline)
+            // `.id(convoId)` forces SwiftUI to re-init the detail scene
+            // when the user switches conversations, which is what gives
+            // the `@FrickStream` / `@FrickPresence` wrappers a chance to
+            // re-bind to the new stream key.
+            ChatDetailScene(
+                model: model,
+                convoId: model.selectedConversationId,
+                bottomMessageAnchor: bottomMessageAnchor
+            )
+            .id(model.selectedConversationId)
+            .navigationTitle(model.title)
+            .navigationBarTitleDisplayMode(.inline)
         }
     }
 
@@ -900,6 +913,20 @@ private struct ChatScene: View {
 private struct ChatDetailScene: View {
     @Bindable var model: FoundationModel
     let bottomMessageAnchor: String
+
+    // Live message tail for the active conversation. The wrapper
+    // subscribes via the environment socket; re-binding when the user
+    // switches conversations is driven by the parent's `.id(convoId)`,
+    // which re-inits this view (and these wrappers) from scratch.
+    @FrickStream private var liveStreamEvents: [FrickStreamEvent]
+    @FrickPresence private var typingRecords: [FrickPresenceRecord]
+
+    init(model: FoundationModel, convoId: String, bottomMessageAnchor: String) {
+        self.model = model
+        self.bottomMessageAnchor = bottomMessageAnchor
+        self._liveStreamEvents = FrickStream("MessageStream", key: convoId)
+        self._typingRecords = FrickPresence("TypingState", key: convoId)
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -936,6 +963,16 @@ private struct ChatDetailScene: View {
             .task(id: model.streamIdentity) {
                 await model.start()
                 scrollToBottom(proxy)
+            }
+            // Bridge the property-wrapper-driven live tail into the
+            // model's `messages` array, which `start()` seeds from the
+            // HTTP cold-start fetch. The wrapper appends only new
+            // wire events; `ingestStreamEvents` de-dupes by `eventId`.
+            .onChange(of: liveStreamEvents.last?.eventId) { _, _ in
+                Task { await model.ingestStreamEvents(liveStreamEvents) }
+            }
+            .onChange(of: typingRecords.map(\.key)) { _, _ in
+                model.applyTyping(records: typingRecords)
             }
         }
         .safeAreaInset(edge: .bottom) {
