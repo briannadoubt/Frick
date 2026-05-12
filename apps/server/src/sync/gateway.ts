@@ -210,8 +210,24 @@ export class SyncGateway {
   }
 
   publishProjectionDelta(notice: ProjectionDeltaNotice): void {
+    this.#fanOutProjectionDelta(notice);
+    if (this.#clusterBus) {
+      this.#clusterBus.publish({
+        kind: "projectionDelta",
+        originNodeId: this.#clusterBus.nodeId,
+        tenantId: notice.tenantId,
+        projection: notice.projection,
+        // Notice changes carry `value: PlainObject | null`; the
+        // envelope's typing is intentionally loose so adapters can
+        // serialize over whatever transport they wrap.
+        changes: notice.changes as ReadonlyArray<{ key: string; value: PlainObject | null }>,
+      });
+    }
+  }
+
+  /** Local-only projection-delta fan-out, also reused by the cluster handler. */
+  #fanOutProjectionDelta(notice: { tenantId: string; projection: string; changes: ProjectionDeltaNotice["changes"] }): void {
     for (const { client: subscriber } of this.#subscriptions.projectionSubscribers(notice.projection)) {
-      // Only deliver to subscribers in the same tenant as the producing write.
       if (subscriber.principal && subscriber.principal.tenantId !== notice.tenantId) {
         continue;
       }
@@ -309,12 +325,6 @@ export class SyncGateway {
    * does NOT forward back to the bus — the originating node already
    * published it. Self-published envelopes are filtered upstream by
    * the bus implementation, so this only sees genuine peer traffic.
-   *
-   * v1 scope: stream events + object upserts. Signal + projection delta
-   * cross-node fan-out is a known follow-up — those paths route through
-   * `routeSignal` / the projection registry's delta listener, both of
-   * which need a small refactor to skip re-publishing when handling a
-   * peer envelope.
    */
   #handleClusterEnvelope(envelope: ClusterEnvelope): void {
     switch (envelope.kind) {
@@ -333,15 +343,53 @@ export class SyncGateway {
         this.#fanOutObjects(envelope.type, envelope.objects as PlainObject[], envelope.tenantId);
         return;
       case "signal":
+        // Don't re-broadcast to the bus — the originating node already
+        // did. `routeSignal` is the same path the local handler takes.
+        routeSignal(
+          this.store,
+          this.#subscriptions,
+          { requestId: envelope.requestId, name: envelope.name, key: envelope.key, value: envelope.value },
+          envelope.tenantId,
+        );
+        return;
       case "projectionDelta":
+        this.#fanOutProjectionDelta({
+          tenantId: envelope.tenantId,
+          projection: envelope.projection,
+          changes: envelope.changes as ProjectionDeltaNotice["changes"],
+        });
+        return;
       case "presenceDelta":
-        // See JSDoc — known follow-up.
+        // Pick the "primary" key for the local-subscriber lookup. The
+        // envelope carries every record + cleared key with the same
+        // presence type; we fan out once per envelope under the union
+        // of keys (single key in the common case).
+        const key = envelope.records[0]?.key ?? envelope.cleared[0];
+        if (key === undefined) return;
+        this.#fanOutPresenceDelta(
+          envelope.tenantId,
+          envelope.name,
+          key,
+          envelope.records,
+          envelope.cleared,
+        );
         return;
     }
   }
 
   publishSignal(name: string, key: string, value: PlainObject, tenantId: string, requestId = "http"): void {
     routeSignal(this.store, this.#subscriptions, { requestId, name, key, value }, tenantId);
+    if (this.#clusterBus) {
+      this.#clusterBus.publish({
+        kind: "signal",
+        originNodeId: this.#clusterBus.nodeId,
+        tenantId,
+        name,
+        key,
+        value,
+        requestId,
+      });
+    }
   }
 
   #handleRawFrame(client: SyncClient, socket: WebSocket, payload: Buffer): void {
@@ -840,15 +888,18 @@ export class SyncGateway {
       (from, to) => console.warn(`Clamped presence TTL for ${payload.name} from ${from}s to ${to}s`),
     );
     this.store.setPresence(principal.tenantId, payload.name, payload.key, payload.value, clampedSeconds * 1000);
-    const packed = packPresenceRecord(this.store.schema, payload.name, payload.key, payload.value);
-    for (const { client: subscriber, subscription } of this.#subscriptions.presenceSubscribers(payload.name, payload.key)) {
-      if (subscriber.principal && subscriber.principal.tenantId !== principal.tenantId) {
-        continue;
-      }
-      sendFrame(subscriber.socket, [
-        FrameKind.PresenceDelta,
-        { subscriptionId: subscription.subscriptionId, records: [packed], cleared: [] },
-      ]);
+    this.#fanOutPresenceDelta(principal.tenantId, payload.name, payload.key, [
+      { key: payload.key, value: payload.value },
+    ], []);
+    if (this.#clusterBus) {
+      this.#clusterBus.publish({
+        kind: "presenceDelta",
+        originNodeId: this.#clusterBus.nodeId,
+        tenantId: principal.tenantId,
+        name: payload.name,
+        records: [{ key: payload.key, value: payload.value }],
+        cleared: [],
+      });
     }
     sendFrame(client.socket, [FrameKind.Ack, { requestId: payload.requestId }]);
   }
@@ -856,16 +907,45 @@ export class SyncGateway {
   #handlePresenceClear(client: SyncClient, payload: PresenceClearPayload): void {
     const principal = requirePrincipal(client);
     this.store.clearPresence(principal.tenantId, payload.name, payload.key);
-    for (const { client: subscriber, subscription } of this.#subscriptions.presenceSubscribers(payload.name, payload.key)) {
-      if (subscriber.principal && subscriber.principal.tenantId !== principal.tenantId) {
+    this.#fanOutPresenceDelta(principal.tenantId, payload.name, payload.key, [], [payload.key]);
+    if (this.#clusterBus) {
+      this.#clusterBus.publish({
+        kind: "presenceDelta",
+        originNodeId: this.#clusterBus.nodeId,
+        tenantId: principal.tenantId,
+        name: payload.name,
+        records: [],
+        cleared: [payload.key],
+      });
+    }
+    sendFrame(client.socket, [FrameKind.Ack, { requestId: payload.requestId }]);
+  }
+
+  /**
+   * Local-only presence-delta fan-out, also reused by the cluster
+   * handler. The wire form carries packed records per subscription —
+   * the subscription id comes from the local subscriber, not the
+   * envelope, so this is a per-node operation.
+   */
+  #fanOutPresenceDelta(
+    tenantId: string,
+    name: string,
+    key: string,
+    records: ReadonlyArray<{ key: string; value: PlainObject | null }>,
+    cleared: readonly string[],
+  ): void {
+    const packed = records
+      .filter((r): r is { key: string; value: PlainObject } => r.value !== null)
+      .map((r) => packPresenceRecord(this.store.schema, name, r.key, r.value));
+    for (const { client: subscriber, subscription } of this.#subscriptions.presenceSubscribers(name, key)) {
+      if (subscriber.principal && subscriber.principal.tenantId !== tenantId) {
         continue;
       }
       sendFrame(subscriber.socket, [
         FrameKind.PresenceDelta,
-        { subscriptionId: subscription.subscriptionId, records: [], cleared: [payload.key] },
+        { subscriptionId: subscription.subscriptionId, records: packed, cleared: [...cleared] },
       ]);
     }
-    sendFrame(client.socket, [FrameKind.Ack, { requestId: payload.requestId }]);
   }
 
   #handleSignal(client: SyncClient, payload: SignalPayload): void {

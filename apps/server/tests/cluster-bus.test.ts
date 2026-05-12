@@ -90,4 +90,51 @@ describe("MemoryClusterBus", () => {
     expect(a.nodeId).not.toBe(b.nodeId);
     expect(a.nodeId.length).toBeGreaterThan(8);
   });
+
+  it("carries every envelope kind across nodes", () => {
+    const channel = new MemoryClusterChannel();
+    const a = new MemoryClusterBus({ channel, nodeId: "node-a" });
+    const b = new MemoryClusterBus({ channel, nodeId: "node-b" });
+    const seen: ClusterEnvelope[] = [];
+    b.subscribe((envelope) => seen.push(envelope));
+
+    a.publish({
+      kind: "objects",
+      originNodeId: "node-a",
+      tenantId: "_default",
+      type: "User",
+      objects: [{ id: "u1", displayName: "Ada" }],
+    });
+    a.publish({
+      kind: "signal",
+      originNodeId: "node-a",
+      tenantId: "_default",
+      name: "WebRTCSignal",
+      key: "call:room-1",
+      value: { kind: "offer", senderDeviceId: "d1" },
+      requestId: "req-1",
+    });
+    a.publish({
+      kind: "projectionDelta",
+      originNodeId: "node-a",
+      tenantId: "_default",
+      projection: "conversation-inbox",
+      changes: [{ key: "user-ada:convo-1", value: { unreadCount: 3 } }],
+    });
+    a.publish({
+      kind: "presenceDelta",
+      originNodeId: "node-a",
+      tenantId: "_default",
+      name: "TypingState",
+      records: [{ key: "convo-1:user-ada:device-web", value: { isTyping: true } }],
+      cleared: [],
+    });
+
+    expect(seen.map((e) => e.kind)).toEqual([
+      "objects",
+      "signal",
+      "projectionDelta",
+      "presenceDelta",
+    ]);
+  });
 });

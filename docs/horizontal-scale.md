@@ -12,9 +12,11 @@ The framework already lets you run N nodes in front of one SQLite database (or t
 |---|---|---|---|
 | Stream events | Subscribers on the same node receive ✓ | Subscribers on **peer** nodes never see it ✗ | All subscribers receive ✓ |
 | Object upserts | Same ✓ | Peers see it only when they re-read ✗ | All subscribers receive ✓ |
-| Signals + Presence + Projection deltas | Same ✓ | **v1 limitation:** still in-process only | Same |
+| Signals | Same ✓ | Same ✗ | All subscribers receive ✓ |
+| Presence deltas | Same ✓ | Same ✗ | All subscribers receive ✓ |
+| Projection deltas | Same ✓ | Same ✗ | All subscribers receive ✓ |
 
-Stream events and object upserts are the high-volume cases; presence / signal / projection delta fan-out is a documented follow-up.
+Every fan-out kind crosses the bus. Loop guard is per-bus via `originNodeId` (the bus never delivers a node's own publish back to its own subscribers).
 
 ## The contract
 
@@ -112,6 +114,5 @@ const server = createFrickServer({ clusterBus: bus });
 
 ## Known follow-ups
 
-- **Signal + presence + projection-delta cross-node fan-out.** The envelope shapes exist; the gateway's `#handleClusterEnvelope` switch covers stream events and object upserts only. The other three need a small refactor to skip re-publishing when handling a peer envelope (they currently dispatch through `routeSignal` / the projection registry's delta listener, both of which would loop without that flag).
 - **Bus-side filtering.** Today every node receives every envelope. A future improvement is to partition envelopes by tenant or stream so a node only pays for envelopes it has subscribers for.
 - **Multi-bus topologies.** The contract is one bus per server. Replicating across regions ("write here, sync to the bus in that other region") is out of scope for v1 — the recommended pattern is to run one bus cluster per region and fail traffic over via your load balancer.
