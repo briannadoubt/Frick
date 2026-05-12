@@ -716,4 +716,114 @@ final class FrickSyncSocketTests: XCTestCase {
 
         await socket.close()
     }
+
+    // MARK: - FrickDraftStore integration
+
+    func testDraftStoreObservesSnapshotAndPersistsUpsert() async throws {
+        // End-to-end through the FrickSyncSocket mock: the store
+        // subscribes to MessageDraft, the server replies with a
+        // Snapshot carrying one row, the store's observer emits the
+        // body. Then a setDraft call goes out as an ObjectUpsert frame
+        // and the server acks with version 1.
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+        let socket = makeSocket(factory: factory)
+        let store = FrickDraftStore(socket: socket, userId: "user-ada")
+
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+        task.deliver(.data(helloAckFrame()))
+        _ = await waitForCondition {
+            let s = await socket.status
+            return s.state == .connected
+        }
+
+        // Start observing; the store kicks off `subscribeObject` lazily.
+        let observation = await store.observe(conversationId: "convo-1")
+        let bin = ObservedBin()
+        let collector = Task {
+            for await body in observation {
+                let count = await bin.append(body)
+                if count >= 2 { break }
+            }
+        }
+
+        _ = await waitForCondition { task.sentFrameCount >= 2 }
+        // Frame 0 = Hello, frame 1 should be the object subscribe.
+        let subscribeFrame = try FrickMsgPackCodec.decodeFrame(task.sentFrame(at: 1))
+        XCTAssertEqual(subscribeFrame.kind, .subscribe)
+        let subscribePayload = try XCTUnwrap(subscribeFrame.payload.mapValue)
+        XCTAssertEqual(subscribePayload["kind"]?.stringValue, "object")
+        XCTAssertEqual(subscribePayload["name"]?.stringValue, "MessageDraft")
+
+        // Deliver a Snapshot with one MessageDraft row — id 7, field 3 = body.
+        let packed: FrickMsgPackValue = .array([
+            .int(7),
+            .string("user-ada:convo-1"),
+            .array([.array([.int(3), .string("from another device")])]),
+        ])
+        task.deliver(.data(FrickMsgPackCodec.encodeFrame(FrickFrame(kind: .snapshot, payload: .map([
+            (.string("subscriptionId"), .string("sub-1")),
+            (.string("cursor"), .int(0)),
+            (.string("objects"), .array([packed])),
+        ])))))
+
+        // Now write a new draft locally — kick it off in the background
+        // since `setDraft` awaits the server's Ack before returning.
+        let writeTask = Task { await store.setDraft("typing here", for: "convo-1") }
+        _ = await waitForCondition { task.sentFrameCount >= 3 }
+        let upsertFrame = try FrickMsgPackCodec.decodeFrame(task.sentFrame(at: 2))
+        XCTAssertEqual(upsertFrame.kind, .objectUpsert)
+        let upsertPayload = try XCTUnwrap(upsertFrame.payload.mapValue)
+        XCTAssertEqual(upsertPayload["objectType"]?.stringValue, "MessageDraft")
+        XCTAssertEqual(upsertPayload["objectId"]?.stringValue, "user-ada:convo-1")
+        let requestId = try XCTUnwrap(upsertPayload["requestId"]?.stringValue)
+
+        // Server acks with the new version so the store can stop the await.
+        task.deliver(.data(FrickMsgPackCodec.encodeFrame(FrickFrame(kind: .ack, payload: .map([
+            (.string("requestId"), .string(requestId)),
+            (.string("version"), .int(1)),
+        ])))))
+        await writeTask.value
+
+        // Wait for the observer to settle. The store yields the snapshot
+        // body first; setDraft updates its own local cache after the Ack
+        // but only emits to observers through the inbound objectsDelta
+        // path. To exercise that, deliver a second snapshot-like Delta
+        // representing the server fanout of our write.
+        let echoed: FrickMsgPackValue = .array([
+            .int(7),
+            .string("user-ada:convo-1"),
+            .array([.array([.int(3), .string("typing here")])]),
+        ])
+        task.deliver(.data(FrickMsgPackCodec.encodeFrame(FrickFrame(kind: .delta, payload: .map([
+            (.string("cursor"), .int(1)),
+            (.string("objects"), .array([echoed])),
+            (.string("events"), .array([])),
+        ])))))
+
+        _ = await waitForCondition { await bin.count >= 2 }
+        collector.cancel()
+
+        // First emission is the snapshot body, second is the echo.
+        let snapshot = await bin.snapshot()
+        XCTAssertEqual(snapshot.first, "from another device")
+        XCTAssertEqual(snapshot.last, "typing here")
+
+        await socket.close()
+    }
+}
+
+/// Tiny actor-backed bin to collect emitted values from a `Task` without
+/// tripping the strict-concurrency `non-Sendable capture` rule. Used only
+/// by the FrickDraftStore integration test above.
+private actor ObservedBin {
+    private var values: [String] = []
+    var count: Int { values.count }
+    func append(_ value: String) -> Int {
+        values.append(value)
+        return values.count
+    }
+    func snapshot() -> [String] { values }
 }

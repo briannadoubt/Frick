@@ -337,7 +337,6 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
                         status = "Thread created",
                     )
                 }
-                subscribeStreamSocket(created.conversation.id)
                 startMessageStream()
             } catch (error: Exception) {
                 _uiState.update { current ->
@@ -367,8 +366,6 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
             )
         }
         if (conversationId != previousConversationId) {
-            subscribeStreamSocket(conversationId)
-            subscribeTypingSocket(conversationId)
             startMessageStream()
         }
     }
@@ -451,7 +448,6 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
                     selectedConversationId = selectedConversationId, messages = messages, status = "Loaded",
                 )
             }
-            subscribeStreamSocket(selectedConversationId)
         } catch (error: Exception) {
             _uiState.update { state -> state.copy(status = error.localizedMessage ?: "Load failed") }
         }
@@ -479,8 +475,10 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
         socketEventsJob = viewModelScope.launch {
             newSocket.events.collect { event -> handleInboundEvent(event) }
         }
-        viewModelScope.launch { subscribeStreamSocket(_uiState.value.selectedConversationId) }
-        viewModelScope.launch { subscribeTypingSocket(_uiState.value.selectedConversationId) }
+        // No explicit subscribe(stream) / subscribeProjection(typing) here:
+        // `ChatLiveWiring` in MainActivity uses `rememberFrickStreamEvents`
+        // and `rememberFrickProjection`, which subscribe lazily when the
+        // chat composable mounts and re-bind on convo switch.
         @Suppress("UNUSED_VARIABLE") val ref = session
     }
 
@@ -558,22 +556,6 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
             .filter { id -> id != selfId }
             .distinct()
         _uiState.update { state -> state.copy(typingUserIds = typing) }
-    }
-
-    private fun subscribeStreamSocket(conversationId: String) {
-        val current = socket ?: return
-        viewModelScope.launch {
-            try { current.subscribe(stream = "MessageStream", key = conversationId) }
-            catch (_: Exception) { /* queued by socket when not Ready */ }
-        }
-    }
-
-    private fun subscribeTypingSocket(conversationId: String) {
-        val current = socket ?: return
-        viewModelScope.launch {
-            try { current.subscribeProjection(name = "TypingState/$conversationId") }
-            catch (_: Exception) { /* ignored */ }
-        }
     }
 
     private fun scheduleTypingPing(draft: String) {

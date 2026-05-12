@@ -256,6 +256,76 @@ class FrickSyncSocketTest {
     }
 
     @Test
+    fun draftStoreObservesSnapshotAndPersistsUpsert() = runBlocking {
+        // End-to-end through FrickSyncSocket: the store subscribes to
+        // MessageDraft, the server replies with a Snapshot row, the
+        // store's `flowDraft` emits the body. Then `setDraft` goes out
+        // as an ObjectUpsert frame; the server acks with version 1.
+        enqueueWebSocketHandler(
+            onMessage = { _, frame ->
+                when (frame.first) {
+                    FrameKindCodes.HELLO -> sendFrame(
+                        FrameKindCodes.HELLO_ACK,
+                        mapOf(
+                            "schemaHash" to FRICK_SCHEMA_HASH,
+                            "schemaId" to FRICK_SCHEMA_ID,
+                            "schemaRevision" to FRICK_SCHEMA_REVISION,
+                            "schemaCompatibility" to mapOf("status" to "compatible"),
+                            "serverCapabilities" to emptyMap<String, Any?>(),
+                        ),
+                    )
+                    FrameKindCodes.SUBSCRIBE -> {
+                        assertEquals("object", frame.second["kind"])
+                        assertEquals("MessageDraft", frame.second["name"])
+                        sendFrame(
+                            FrameKindCodes.SNAPSHOT,
+                            mapOf(
+                                "objects" to listOf(
+                                    listOf(
+                                        7,
+                                        "user-ada:convo-1",
+                                        listOf(listOf(3, "from another device")),
+                                    ),
+                                ),
+                                "cursor" to 0,
+                            ),
+                        )
+                    }
+                    FrameKindCodes.OBJECT_UPSERT -> {
+                        // Verify the upsert payload shape and ack so the
+                        // store's setDraft call doesn't hang on the await.
+                        assertEquals("MessageDraft", frame.second["objectType"])
+                        assertEquals("user-ada:convo-1", frame.second["objectId"])
+                        val requestId = frame.second["requestId"] as String
+                        sendFrame(
+                            FrameKindCodes.ACK,
+                            mapOf("requestId" to requestId, "version" to 1),
+                        )
+                    }
+                }
+            },
+        )
+        val socket = newSocket()
+        try {
+            socket.awaitReady()
+            val store = FrickDraftStore(socket = socket, userId = "user-ada")
+            val flow = store.flowDraft(conversationId = "convo-1")
+            @OptIn(DelicateCoroutinesApi::class)
+            val firstDeferred = GlobalScope.async {
+                withTimeout(2_000) { flow.filter { it.isNotEmpty() }.first() }
+            }
+            val firstEmission = firstDeferred.await()
+            assertEquals("from another device", firstEmission)
+
+            // Now setDraft → upsert frame → ack → returns the new version.
+            val writeResult = store.setDraft(conversationId = "convo-1", body = "typing here")
+            assertEquals(1, writeResult.getOrNull())
+        } finally {
+            socket.close()
+        }
+    }
+
+    @Test
     fun subscribeObjectDeliversSnapshot() = runBlocking {
         enqueueWebSocketHandler(
             onMessage = { _, frame ->
