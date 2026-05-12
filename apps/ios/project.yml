@@ -33,6 +33,11 @@ targets:
         UILaunchStoryboardName: LaunchScreen
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
+        UIBackgroundModes:
+          - fetch
+          - processing
+        BGTaskSchedulerPermittedIdentifiers:
+          - dev.frick.demo.flush-pending-appends
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.frick.demo

@@ -98,6 +98,9 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT),
         )
         super.onCreate(savedInstanceState)
+        // Schedule the periodic background drain. Idempotent — KEEP
+        // policy ignores the call after the first cold start.
+        FrickSyncWorker.schedule(applicationContext)
         setContent {
             FrickDesignTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
