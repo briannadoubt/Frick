@@ -40,6 +40,9 @@ import {
   WorkspaceShell,
 } from "@frick/design-web";
 import { resolveInitialTheme, type ThemePreference } from "./theme.js";
+// Helpers moved into @frick/core/chat (Phase 1c). The local
+// `chat-foundation.ts` shim was deleted in Phase 3b; imports now point
+// at the canonical home.
 import {
   appendAttachmentMarker,
   blobDerivativeUrl,
@@ -67,7 +70,7 @@ import {
   type RoomMember,
   type SearchHit,
   type User,
-} from "./chat-foundation.js";
+} from "@frick/core/chat";
 
 const defaultConversationId = "conversation-general";
 const demoHttpEndpoint = "http://127.0.0.1:4099";

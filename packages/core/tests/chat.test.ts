@@ -26,7 +26,7 @@ import {
   type DemoAttachment,
   type InboxRow,
   type RoomMember,
-} from "./chat-foundation.js";
+} from "../src/chat.js";
 
 const conversations: Conversation[] = [
   {
