@@ -177,6 +177,39 @@ public struct FrickInboxItem: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+/// Single search hit returned from `FrickClient.search(...)`.
+public struct FrickSearchHit: Codable, Equatable, Sendable, Identifiable {
+    public var id: String { docId }
+    public let docId: String
+    public let score: Double
+    /// Highlighted / projected fields, keyed by the index's projection
+    /// schema. Stringified so the SDK doesn't have to know the field types
+    /// at compile time.
+    public let fields: [String: String]
+
+    public init(docId: String, score: Double, fields: [String: String] = [:]) {
+        self.docId = docId
+        self.score = score
+        self.fields = fields
+    }
+}
+
+/// Response envelope from the server's `/search` route. Mirrors the
+/// Kotlin `FrickSearchResponse` and the TS `SearchResponse`.
+public struct FrickSearchResponse: Codable, Equatable, Sendable {
+    public let schemaHash: String?
+    public let index: String
+    public let total: Int
+    public let hits: [FrickSearchHit]
+
+    public init(schemaHash: String? = nil, index: String, total: Int, hits: [FrickSearchHit]) {
+        self.schemaHash = schemaHash
+        self.index = index
+        self.total = total
+        self.hits = hits
+    }
+}
+
 public struct FrickBlobMetadata: Codable, Equatable, Sendable, Identifiable {
     public var id: String { blobId }
 
@@ -1064,6 +1097,35 @@ public final class FrickClient: Sendable {
             }
             throw error
         }
+    }
+
+    /// Full-text search via the server's `/search` route. `index` is the
+    /// FTS index name (e.g. `"messages-fts"`). `filter` is an optional
+    /// scope-narrowing map (e.g. `["conversationId": "abc"]`). Mirrors
+    /// the Kotlin `FrickClient.search(...)` and TS `searchMessages`
+    /// helpers — one canonical search call across every SDK.
+    public func search(
+        index: String,
+        q: String,
+        filter: [String: String]? = nil,
+        limit: Int = 50
+    ) async throws -> FrickSearchResponse {
+        let body = SearchRequestBody(index: index, q: q, limit: limit, filter: filter)
+        var request = URLRequest(url: baseURL.appendingPathComponent("/search"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try encoder.encode(body)
+        authenticate(&request)
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+        return try decoder.decode(FrickSearchResponse.self, from: data)
+    }
+
+    private struct SearchRequestBody: Encodable {
+        let index: String
+        let q: String
+        let limit: Int
+        let filter: [String: String]?
     }
 
     public func sendSignal<Value: Encodable & Sendable>(

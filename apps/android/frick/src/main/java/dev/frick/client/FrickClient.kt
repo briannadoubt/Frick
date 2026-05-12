@@ -86,6 +86,23 @@ data class FrickBlobMetadata(
     val createdAt: String?,
 )
 
+/** Single search hit returned from `FrickClient.search(...)`. */
+@Serializable
+data class FrickSearchHit(
+    val docId: String,
+    val score: Double,
+    val fields: Map<String, JsonElement> = emptyMap(),
+)
+
+/** Response envelope from the server's `/search` route. */
+@Serializable
+data class FrickSearchResponse(
+    val schemaHash: String? = null,
+    val index: String,
+    val total: Int,
+    val hits: List<FrickSearchHit>,
+)
+
 data class CreatedConversation(
     val schemaHash: String?,
     val conversation: ConversationDto,
@@ -900,6 +917,34 @@ class FrickClient(
                 throw error
             }
         }
+    }
+
+    /**
+     * Full-text search via the server's `/search` route. Mirrors the
+     * Swift / TS `searchMessages` helper. `index` is the FTS index name
+     * (e.g. `"messages-fts"` for chat-app message search). `filter` is
+     * an optional `{ conversationId: "..." }` map; pass `null` to search
+     * across the tenant.
+     */
+    suspend fun search(
+        index: String,
+        q: String,
+        filter: Map<String, String>? = null,
+        limit: Int = 50,
+    ): FrickSearchResponse = withContext(Dispatchers.IO) {
+        val body = buildMap<String, JsonElement> {
+            put("index", JsonPrimitive(index))
+            put("q", JsonPrimitive(q))
+            put("limit", JsonPrimitive(limit))
+            if (!filter.isNullOrEmpty()) {
+                put("filter", JsonObject(filter.mapValues { (_, v) -> JsonPrimitive(v) }))
+            }
+        }
+        val raw = transport.post(
+            path = "/search",
+            body = frickJson.encodeToString(JsonObject(body)),
+        )
+        frickJson.decodeFromString(raw)
     }
 
     suspend fun sendSignal(name: String, key: String, value: Map<String, JsonElement>) = withContext(Dispatchers.IO) {

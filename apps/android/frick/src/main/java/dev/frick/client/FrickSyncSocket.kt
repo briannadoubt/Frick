@@ -67,6 +67,14 @@ sealed class FrickInboundEvent {
     data class Schema(val raw: Map<String, Any?>) : FrickInboundEvent()
     data class SyncStatus(val connected: Boolean, val cursors: Map<String, Int>, val inFlight: Int) : FrickInboundEvent()
     object Disconnected : FrickInboundEvent()
+    /**
+     * Presence broadcast from the server. `records` carries the live
+     * presence rows for the subscription, `cleared` lists keys whose
+     * leases were revoked. Each record is shaped `{ type, key, value }`
+     * after the wire's PackedPresenceRecord tuple is decoded via the
+     * generated [FRICK_OBJECT_NAMES] / field tables.
+     */
+    data class PresenceDelta(val name: String, val records: List<Map<String, Any?>>, val cleared: List<String>) : FrickInboundEvent()
 }
 
 data class ProjectionChange(val key: String, val value: Map<String, Any?>?)
@@ -411,6 +419,55 @@ class FrickSyncSocket internal constructor(
         sendOrQueue(frame)
     }
 
+    /**
+     * Subscribe to a presence channel. Receive deltas via
+     * [FrickInboundEvent.PresenceDelta]. Closes parity with the Swift
+     * SDK and the TypeScript `client.presence(...)` surface.
+     */
+    suspend fun subscribePresence(name: String, key: String) {
+        val frame = FrickMsgPack.encodeFrame(
+            FrameKindCodes.SUBSCRIBE,
+            mapOf(
+                "subscriptionId" to UUID.randomUUID().toString(),
+                "kind" to "presence",
+                "name" to name,
+                "key" to key,
+            ),
+        )
+        sendOrQueue(frame)
+    }
+
+    /**
+     * Set a presence row (e.g. `setPresence("TypingState", "$convo:$user:$device", mapOf("isTyping" to true))`).
+     * The server applies the row's `ttlMs` and broadcasts a
+     * [FrickInboundEvent.PresenceDelta] to every subscriber.
+     */
+    suspend fun setPresence(name: String, key: String, value: Map<String, Any?>) {
+        val frame = FrickMsgPack.encodeFrame(
+            FrameKindCodes.PRESENCE_SET,
+            mapOf(
+                "requestId" to UUID.randomUUID().toString(),
+                "name" to name,
+                "key" to key,
+                "value" to value,
+            ),
+        )
+        sendOrQueue(frame)
+    }
+
+    /** Revoke the active user's presence lease on this key. */
+    suspend fun clearPresence(name: String, key: String) {
+        val frame = FrickMsgPack.encodeFrame(
+            FrameKindCodes.PRESENCE_CLEAR,
+            mapOf(
+                "requestId" to UUID.randomUUID().toString(),
+                "name" to name,
+                "key" to key,
+            ),
+        )
+        sendOrQueue(frame)
+    }
+
     /** Subscribe to a projection by name. */
     suspend fun subscribeProjection(name: String) {
         val frame = FrickMsgPack.encodeFrame(
@@ -542,6 +599,14 @@ class FrickSyncSocket internal constructor(
                 val cursor = payload.intField("cursor") ?: 0
                 _events.tryEmit(FrickInboundEvent.Delta(objects, events, cursor))
             }
+            FrameKindCodes.PRESENCE_DELTA -> {
+                val name = payload.stringField("name") ?: payload.stringField("presence") ?: ""
+                val records = (payload.listField("records") ?: emptyList())
+                    .mapNotNull(::decodePackedPresenceRecord)
+                val cleared = (payload.listField("cleared") ?: emptyList())
+                    .mapNotNull { it as? String }
+                _events.tryEmit(FrickInboundEvent.PresenceDelta(name, records, cleared))
+            }
             FrameKindCodes.PROJECTION_DELTA -> {
                 val name = payload.stringField("projection") ?: ""
                 val changes = (payload.listField("changes") ?: emptyList()).mapNotNull { item ->
@@ -591,6 +656,25 @@ class FrickSyncSocket internal constructor(
         val value = unpackFields(packedFields, fieldTable).toMutableMap()
         value["id"] = id
         return mapOf("type" to typeName, "id" to id, "value" to value)
+    }
+
+    /**
+     * Decode a `PackedPresenceRecord` tuple `[presenceTypeId, key,
+     * packedFields]` into a named-field map matching the Swift/TS
+     * `FrickPresenceRecord` shape `{ type, key, value }`. The generated
+     * descriptor today shares the object-id table for presence rows; we'll
+     * switch to a dedicated `FRICK_PRESENCE_*` table when the generator
+     * grows one.
+     */
+    private fun decodePackedPresenceRecord(raw: Any?): Map<String, Any?>? {
+        val tuple = raw as? List<*> ?: return null
+        if (tuple.size < 3) return null
+        val typeId = (tuple[0] as? Number)?.toInt() ?: return null
+        val key = tuple[1] as? String ?: return null
+        val typeName = FRICK_OBJECT_NAMES[typeId] ?: "#$typeId"
+        val packedFields = tuple[2] as? List<*> ?: emptyList<Any?>()
+        val value = unpackFields(packedFields, FRICK_OBJECT_FIELDS[typeId] ?: emptyMap())
+        return mapOf("type" to typeName, "key" to key, "value" to value)
     }
 
     /**
