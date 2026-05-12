@@ -11,8 +11,15 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEven
 import {
   FileDropzone,
   FrickProvider,
+  RequireAuth,
   useAppend,
   useDraft,
+  useMessageActions,
+  useReadReceipts,
+  useSignIn,
+  useSignUp,
+  useTyping,
+  useVoiceMemo,
   useFrickHttpEndpoint,
   useInbox,
   useObjects,
@@ -117,23 +124,32 @@ export function App() {
 
   return (
     <FrickDesignProvider mode={theme} density="comfortable" brand="frickenChat">
-      {session ? (
-        <FrickProvider key={session.sessionToken} session={session}>
-          <ChatWorkspace
-            onLogout={logout}
-            session={session}
-            setTheme={setTheme}
-            theme={theme}
-          />
-        </FrickProvider>
-      ) : (
-        <AuthWorkspace
-          clientIdentity={clientIdentity}
-          onAuthenticated={acceptSession}
-          setTheme={setTheme}
-          theme={theme}
-        />
-      )}
+      {/* Phase 3 — `<FrickProvider>` hoisted above the auth gate so
+          `<RequireAuth>` and the `useSignIn` / `useSignUp` hooks can
+          run from inside the auth screen. The provider tolerates a
+          null session; the WebSocket reconnects with the new bearer
+          token automatically when the session prop changes. */}
+      <FrickProvider endpoint="ws://127.0.0.1:4099/_frick/sync" session={session ?? null}>
+        <RequireAuth
+          fallback={
+            <AuthWorkspace
+              clientIdentity={clientIdentity}
+              onAuthenticated={acceptSession}
+              setTheme={setTheme}
+              theme={theme}
+            />
+          }
+        >
+          {session ? (
+            <ChatWorkspace
+              onLogout={logout}
+              session={session}
+              setTheme={setTheme}
+              theme={theme}
+            />
+          ) : null}
+        </RequireAuth>
+      </FrickProvider>
     </FrickDesignProvider>
   );
 }
@@ -155,17 +171,22 @@ function AuthWorkspace({
   const [identity, setIdentity] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | undefined>();
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  // Phase 3 — `useSignIn` / `useSignUp` own the HTTP request + bearer-token
+  // wiring. The hooks call `client.setSession(...)` on success so the
+  // surrounding `<FrickProvider>` reconnects with the new token; we still
+  // notify `onAuthenticated` so the App-level session state + localStorage
+  // mirror the live session.
+  const { signIn, isPending: isSigningIn } = useSignIn();
+  const { signUp: doSignUp, isPending: isSigningUp } = useSignUp();
+  const isSubmitting = isSigningIn || isSigningUp;
 
   async function submitAuth(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setIsSubmitting(true);
     setError(undefined);
     try {
       const nextSession =
         mode === "signup"
-          ? await signUp({
-              httpEndpoint: demoHttpEndpoint,
+          ? await doSignUp({
               displayName,
               handle,
               password,
@@ -173,8 +194,7 @@ function AuthWorkspace({
               replicaId: clientIdentity.replicaId,
               platform: "web",
             })
-          : await login({
-              httpEndpoint: demoHttpEndpoint,
+          : await signIn({
               identity,
               password,
               deviceId: clientIdentity.deviceId,
@@ -184,8 +204,6 @@ function AuthWorkspace({
       onAuthenticated(nextSession);
     } catch (authError) {
       setError(authError instanceof Error ? authError.message : "Authentication failed");
-    } finally {
-      setIsSubmitting(false);
     }
   }
 
@@ -345,9 +363,14 @@ function ChatWorkspace({
   // The demo currently only consumes the live tail; `loadOlder` will hook
   // into a scrollback button in a future iteration.
   const { events: messages } = useStream<ChatStreamEvent>("MessageStream", selectedConversationId);
-  const typingKey = `${selectedConversationId}:${activeUserId}:${activeDeviceId}`;
-  const typing = usePresence<{ isTyping: boolean }>("TypingState", typingKey);
-  const setTyping = useSetPresence("TypingState", typingKey);
+  // Phase 4 — typing indicator hook with built-in 2.5s auto-stop tail.
+  // Reads `TypingState` presence; the active user's row is what we
+  // surface today (cross-user presence-list is a framework follow-up).
+  const { typingUserIds, setTyping } = useTyping(selectedConversationId);
+  // Mirror the legacy `{ isTyping: boolean }` shape the demo's later
+  // code consumes from `typing?.isTyping`. The hook tells us *who* is
+  // typing; we just need to know whether the row is non-empty here.
+  const typing = typingUserIds.length > 0 ? { isTyping: true } : undefined;
   const appendMessage = useAppend("MessageStream", selectedConversationId);
   const callKey = `call:${selectedConversationId}`;
   const signals = useSignalChannel("WebRTCSignal", callKey);
@@ -370,9 +393,17 @@ function ChatWorkspace({
     [messages],
   );
   const sortedMessages = useMemo(() => sentMessageEvents(sortedEvents), [sortedEvents]);
+  // Phase 4 — apply MessageEdited / MessageRedacted events on top of
+  // the MessageSent list so edits update inline and redactions render
+  // as tombstones. Streams stay append-only on the wire; this is a
+  // pure client-side projection.
   const selectedMessages = useMemo(
-    () => sortedMessages.filter((message) => message.streamId === selectedConversationId),
-    [selectedConversationId, sortedMessages],
+    () =>
+      applyMessageEdits(
+        sortedMessages.filter((message) => message.streamId === selectedConversationId),
+        sortedEvents.filter((event) => event.streamId === selectedConversationId),
+      ),
+    [selectedConversationId, sortedMessages, sortedEvents],
   );
   const liveInboxRows = useMemo(
     () => projectionInboxRowsForUser(projectionInbox, activeUserId),
@@ -414,16 +445,14 @@ function ChatWorkspace({
     (threadKind === "dm"
       ? selectedParticipantIds.length === 1
       : threadTitle.trim().length > 0 && selectedParticipantIds.length > 0);
-  const readReceipts = useMemo(
-    () =>
-      readReceiptsForConversation({
-        conversationId: selectedConversationId,
-        members: visibleMembers,
-        inboxRows,
-        activeUserId,
-      }),
-    [activeUserId, inboxRows, selectedConversationId, visibleMembers],
-  );
+  // Phase 4 — read receipts via the bundled hook. Reads the
+  // conversation-inbox projection and filters to the current
+  // conversation's members; same output shape as the hand-rolled
+  // computation below used to produce.
+  const readReceipts = useReadReceipts({
+    conversationId: selectedConversationId,
+    members: visibleMembers,
+  });
   const latestMessageSequence = selectedMessages.at(-1)?.sequence ?? 0;
   const lastCursor = Math.max(0, ...Object.values(status.cursors));
   const workspaceDestinations = useMemo(
@@ -453,7 +482,7 @@ function ChatWorkspace({
     setDraftAttachments([]);
     setAttachmentStatus(undefined);
     setAttachmentError(undefined);
-    await setTyping({ isTyping: false });
+    setTyping(false);
     const attachmentBlobIds = draftAttachments.map((attachment) => attachment.blobId);
     await appendMessage("MessageSent", {
       messageId: `message-${crypto.randomUUID()}`,
@@ -464,9 +493,9 @@ function ChatWorkspace({
     });
   }
 
-  async function updateDraft(value: string) {
+  function updateDraft(value: string) {
     setDraft(value);
-    await setTyping({ isTyping: value.trim().length > 0 });
+    setTyping(value.trim().length > 0);
   }
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLInputElement>) {
@@ -871,6 +900,13 @@ function ChatWorkspace({
                   conversationId={selectedConversationId}
                   messageId={message.payload.messageId}
                 />
+                {message.payload.senderId === activeUserId ? (
+                  <MessageActionsRow
+                    conversationId={selectedConversationId}
+                    messageId={message.payload.messageId}
+                    currentBody={message.payload.body}
+                  />
+                ) : null}
                 {isLatest && message.payload.senderId === activeUserId && readBy.length > 0 ? (
                   <p className="message-read-receipt" aria-label="Read receipts">
                     Read by {readBy.length === 1
@@ -966,6 +1002,13 @@ function ChatWorkspace({
           label={isUploadingAttachment ? "Uploading image" : "Attach image"}
           disabled={isUploadingAttachment}
           onClick={() => imageInputRef.current?.click()}
+        />
+        <VoiceMemoButton
+          onUploaded={(metadata) => {
+            setDraftAttachments((current) => [...current, metadata]);
+            setAttachmentStatus(`Recorded ${metadata.name} (${formatByteCount(metadata.byteLength)})`);
+          }}
+          onError={(error) => setAttachmentError(error.message)}
         />
         <IconButton type="submit" icon="send" label="Send message" tone="primary" />
       </form>
@@ -1176,6 +1219,42 @@ function isDevEnvironment(): boolean {
   return host === "127.0.0.1" || host === "localhost";
 }
 
+/**
+ * Pure projection: walk the conversation's events oldest-first, replace
+ * the body of any `MessageSent` whose id appears in a later
+ * `MessageEdited`, and replace the body of any redacted message with a
+ * "Redacted" tombstone. Append-only on the wire; mutable for display.
+ */
+function applyMessageEdits(
+  messages: ChatMessageEvent[],
+  allEvents: ChatStreamEvent[],
+): ChatMessageEvent[] {
+  if (messages.length === 0) return messages;
+  const edits = new Map<string, string>();
+  const redactions = new Set<string>();
+  for (const event of allEvents) {
+    const payload = event.payload as Record<string, unknown>;
+    const id = typeof payload.messageId === "string" ? payload.messageId : undefined;
+    if (!id) continue;
+    if (event.event === "MessageEdited" && typeof payload.body === "string") {
+      edits.set(id, payload.body);
+    } else if (event.event === "MessageRedacted") {
+      redactions.add(id);
+    }
+  }
+  return messages.map((message) => {
+    const id = message.payload.messageId;
+    if (redactions.has(id)) {
+      return { ...message, payload: { ...message.payload, body: "🗑️ Redacted" } };
+    }
+    const edited = edits.get(id);
+    if (edited !== undefined) {
+      return { ...message, payload: { ...message.payload, body: edited } };
+    }
+    return message;
+  });
+}
+
 function PlaceholderDestination({ destination }: { destination: ReactNode }) {
   return (
     <section className="placeholder-destination">
@@ -1183,6 +1262,91 @@ function PlaceholderDestination({ destination }: { destination: ReactNode }) {
       <h2>{destination}</h2>
       <p>This destination is not enabled in the web demo yet.</p>
     </section>
+  );
+}
+
+/**
+ * Phase 4 — edit / redact action row using `useMessageActions`. Owner-only.
+ * Edit pops a `prompt()` for v1 simplicity; consumers wanting an inline
+ * editor can replace this with their own UI — the hook surface stays the
+ * same.
+ */
+function MessageActionsRow({
+  conversationId,
+  messageId,
+  currentBody,
+}: {
+  conversationId: string;
+  messageId: string;
+  currentBody: string;
+}) {
+  const { edit, redact } = useMessageActions(conversationId, messageId);
+  return (
+    <div className="message-actions" aria-label="Message actions">
+      <button
+        type="button"
+        className="message-action"
+        onClick={() => {
+          const next = window.prompt("Edit message", currentBody);
+          if (next !== null && next !== currentBody) {
+            void edit(next).catch(() => {/* surfaced via syncStatus.lastError */});
+          }
+        }}
+      >
+        Edit
+      </button>
+      <button
+        type="button"
+        className="message-action message-action-destructive"
+        onClick={() => {
+          if (window.confirm("Redact this message?")) {
+            void redact().catch(() => {});
+          }
+        }}
+      >
+        Redact
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Phase 4 — voice memo button. `useVoiceMemo` owns `getUserMedia` +
+ * `MediaRecorder` + the upload-to-blob handshake; the demo only needs
+ * to plumb the resulting `AttachmentMetadata` into its draft tray.
+ */
+function VoiceMemoButton({
+  onUploaded,
+  onError,
+}: {
+  onUploaded: (metadata: AttachmentMetadata) => void;
+  onError: (error: Error) => void;
+}) {
+  const memo = useVoiceMemo();
+  const label =
+    memo.state === "recording"
+      ? "Stop recording"
+      : memo.state === "uploading"
+      ? "Uploading…"
+      : "Record voice memo";
+  return (
+    <IconButton
+      className="attach-button voice-memo-button"
+      icon="mic"
+      label={label}
+      data-active={memo.state === "recording"}
+      disabled={memo.state === "uploading"}
+      onClick={async () => {
+        if (memo.state === "recording") {
+          const metadata = await memo.stop();
+          if (metadata) onUploaded(metadata);
+          else if (memo.error) onError(memo.error);
+        } else if (memo.state === "idle") {
+          await memo.start();
+          if (memo.error) onError(memo.error);
+        }
+      }}
+    />
   );
 }
 

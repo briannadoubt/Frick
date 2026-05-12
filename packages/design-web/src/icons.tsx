@@ -5,6 +5,7 @@ import {
   Info,
   LoaderCircle,
   MessageCircle,
+  Mic,
   Moon,
   Paperclip,
   Plus,
@@ -27,6 +28,7 @@ export type FrickIconName =
   | "live"
   | "message"
   | "paperclip"
+  | "mic"
   | "video"
   | "settings"
   | "themeLight"
@@ -51,6 +53,7 @@ export const icons = {
   chat: {
     message: MessageCircle,
     attachment: Paperclip,
+    mic: Mic,
   },
   call: {
     video: Video,
@@ -67,6 +70,7 @@ export const semanticIcons: Record<FrickIconName, FrickIcon> = {
   live: icons.status.live,
   message: icons.chat.message,
   paperclip: icons.chat.attachment,
+  mic: icons.chat.mic,
   video: icons.call.video,
   settings: icons.action.settings,
   themeLight: Sun,
