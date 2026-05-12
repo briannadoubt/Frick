@@ -28,6 +28,7 @@ import type { TenantSettingsStore } from "../storage/tenant-settings-store.js";
 
 export const APNS_SETTINGS_KEY = "push.apns.encrypted";
 export const FCM_SETTINGS_KEY = "push.fcm.encrypted";
+export const WEB_PUSH_SETTINGS_KEY = "push.webPush.encrypted";
 
 /**
  * APNs credentials. The framework signs JWTs (ES256) from `privateKeyPem` and
@@ -59,6 +60,17 @@ export interface FcmCredentials {
   readonly clientEmail: string;
   readonly privateKey: string;
   readonly tokenUri?: string;
+}
+
+/**
+ * Web push credentials. VAPID keypair (subject + public + private) plus
+ * an optional `audience` override the adapter uses to scope the
+ * authorization JWT. Subject must be either `mailto:` or `https://`.
+ */
+export interface WebPushCredentials {
+  readonly subject: string;
+  readonly publicKey: string;
+  readonly privateKey: string;
 }
 
 export type PushCredentialError =
@@ -171,6 +183,14 @@ export function loadFcmCredentials(
   return loadCredential<FcmCredentials>(store, tenantId, FCM_SETTINGS_KEY, env);
 }
 
+export function loadWebPushCredentials(
+  store: TenantSettingsStore,
+  tenantId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): { ok: true; value: WebPushCredentials } | { ok: false; error: PushCredentialError } {
+  return loadCredential<WebPushCredentials>(store, tenantId, WEB_PUSH_SETTINGS_KEY, env);
+}
+
 function loadCredential<T extends object>(
   store: TenantSettingsStore,
   tenantId: string,
@@ -204,6 +224,15 @@ export function saveFcmCredentials(
   env: NodeJS.ProcessEnv = process.env,
 ): { ok: true } | { ok: false; error: PushCredentialError } {
   return saveCredential(store, tenantId, FCM_SETTINGS_KEY, value, env);
+}
+
+export function saveWebPushCredentials(
+  store: TenantSettingsStore,
+  tenantId: string,
+  value: WebPushCredentials,
+  env: NodeJS.ProcessEnv = process.env,
+): { ok: true } | { ok: false; error: PushCredentialError } {
+  return saveCredential(store, tenantId, WEB_PUSH_SETTINGS_KEY, value, env);
 }
 
 function saveCredential(
