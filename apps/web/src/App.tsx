@@ -295,7 +295,11 @@ function ChatWorkspace({
   // Phase 6 — composer drafts persisted per (user, conversation) so a reload
   // doesn't lose typing. The hook's setter handles "" by removing the
   // storage entry, so existing `setDraft("")` call-sites continue to work.
-  const { draft, setDraft } = useDraft(selectedConversationId);
+  // The sync toggle below opts into cross-device sync via the
+  // `MessageDraft` foundation object; defaults to local-only so the
+  // existing demo behaviour is preserved unless the user opts in.
+  const [draftSyncEnabled, setDraftSyncEnabled] = useState(false);
+  const { draft, setDraft } = useDraft(selectedConversationId, { sync: draftSyncEnabled });
   const [draftAttachments, setDraftAttachments] = useState<AttachmentMetadata[]>([]);
   const [attachmentStatus, setAttachmentStatus] = useState<string | undefined>();
   const [attachmentError, setAttachmentError] = useState<string | undefined>();
@@ -999,6 +1003,14 @@ function ChatWorkspace({
           disabled={isUploadingAttachment}
           onClick={() => void addDemoAttachment()}
         />
+        <label className="draft-sync-toggle" title="Sync the active draft across this user's devices via MessageDraft">
+          <input
+            type="checkbox"
+            checked={draftSyncEnabled}
+            onChange={(event) => setDraftSyncEnabled(event.target.checked)}
+          />
+          sync drafts
+        </label>
         <input
           accept="image/*"
           aria-label="Upload image attachment"
