@@ -91,6 +91,64 @@ describe("MemoryClusterBus", () => {
     expect(a.nodeId.length).toBeGreaterThan(8);
   });
 
+  it("drops inbound envelopes whose tenant is not in the subscribed set", () => {
+    const channel = new MemoryClusterChannel();
+    const a = new MemoryClusterBus({ channel, nodeId: "node-a" });
+    const b = new MemoryClusterBus({ channel, nodeId: "node-b" });
+
+    const seen: ClusterEnvelope[] = [];
+    b.subscribe((envelope) => seen.push(envelope));
+    b.setSubscribedTenants(new Set(["acme"]));
+
+    // From node A, publish for two different tenants.
+    a.publish({ ...streamEventEnvelope("node-a", 1), tenantId: "globex" });
+    a.publish({ ...streamEventEnvelope("node-a", 2), tenantId: "acme" });
+
+    expect(seen.map((e) => e.tenantId)).toEqual(["acme"]);
+  });
+
+  it("treats an empty subscribed set as 'drop everything'", () => {
+    const channel = new MemoryClusterChannel();
+    const a = new MemoryClusterBus({ channel, nodeId: "node-a" });
+    const b = new MemoryClusterBus({ channel, nodeId: "node-b" });
+
+    const seen: ClusterEnvelope[] = [];
+    b.subscribe((envelope) => seen.push(envelope));
+    b.setSubscribedTenants(new Set());
+
+    a.publish(streamEventEnvelope("node-a", 1));
+    expect(seen).toEqual([]);
+  });
+
+  it("a bus that never calls setSubscribedTenants passes envelopes through unfiltered", () => {
+    const channel = new MemoryClusterChannel();
+    const a = new MemoryClusterBus({ channel, nodeId: "node-a" });
+    const b = new MemoryClusterBus({ channel, nodeId: "node-b" });
+
+    const seen: ClusterEnvelope[] = [];
+    b.subscribe((envelope) => seen.push(envelope));
+
+    a.publish({ ...streamEventEnvelope("node-a", 1), tenantId: "globex" });
+    a.publish({ ...streamEventEnvelope("node-a", 2), tenantId: "acme" });
+    expect(seen.map((e) => e.tenantId)).toEqual(["globex", "acme"]);
+  });
+
+  it("snapshots the tenant set so caller mutation does not leak in", () => {
+    const channel = new MemoryClusterChannel();
+    const a = new MemoryClusterBus({ channel, nodeId: "node-a" });
+    const b = new MemoryClusterBus({ channel, nodeId: "node-b" });
+
+    const seen: ClusterEnvelope[] = [];
+    b.subscribe((envelope) => seen.push(envelope));
+
+    const live = new Set(["acme"]);
+    b.setSubscribedTenants(live);
+    live.add("globex"); // mutating the original must not widen the filter
+
+    a.publish({ ...streamEventEnvelope("node-a", 1), tenantId: "globex" });
+    expect(seen).toEqual([]);
+  });
+
   it("carries every envelope kind across nodes", () => {
     const channel = new MemoryClusterChannel();
     const a = new MemoryClusterBus({ channel, nodeId: "node-a" });

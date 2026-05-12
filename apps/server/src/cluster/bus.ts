@@ -85,6 +85,18 @@ export interface FrickClusterBus {
   subscribe(handler: ClusterEnvelopeHandler): () => void;
   /** Tear down peer connections. Called from `server.close()`. */
   close(): Promise<void>;
+  /**
+   * Optional inbound filter: declares the set of tenants this node
+   * currently has subscribers for. Adapters that implement this drop
+   * inbound envelopes whose `tenantId` is not in the set before they
+   * reach the gateway, saving the parse + dispatch cost on nodes that
+   * don't serve that tenant. The gateway recomputes + calls this on
+   * every subscription add / remove. Adapters that don't implement it
+   * (or implement as a no-op) keep the original "every envelope
+   * everywhere" behaviour — fine for small clusters where the filter
+   * overhead exceeds the bandwidth saved.
+   */
+  setSubscribedTenants?(tenantIds: ReadonlySet<string>): void;
 }
 
 export interface MemoryClusterBusOptions {
@@ -133,6 +145,9 @@ export class MemoryClusterBus implements FrickClusterBus {
   readonly #channel: MemoryClusterChannel;
   readonly #localHandlers = new Set<ClusterEnvelopeHandler>();
   #channelDetach: (() => void) | undefined;
+  // `undefined` = pass-through (back-compat). Once the gateway calls
+  // `setSubscribedTenants` even once, we filter against the stored set.
+  #subscribedTenants: ReadonlySet<string> | undefined;
 
   constructor(options: MemoryClusterBusOptions = {}) {
     this.nodeId = options.nodeId ?? randomNodeId();
@@ -140,6 +155,9 @@ export class MemoryClusterBus implements FrickClusterBus {
     // Funnel cross-bus traffic into our local handlers.
     this.#channelDetach = this.#channel.attach((envelope) => {
       if (envelope.originNodeId === this.nodeId) return;
+      if (this.#subscribedTenants && !this.#subscribedTenants.has(envelope.tenantId)) {
+        return;
+      }
       for (const handler of this.#localHandlers) {
         try {
           handler(envelope);
@@ -160,6 +178,11 @@ export class MemoryClusterBus implements FrickClusterBus {
   subscribe(handler: ClusterEnvelopeHandler): () => void {
     this.#localHandlers.add(handler);
     return () => this.#localHandlers.delete(handler);
+  }
+
+  setSubscribedTenants(tenantIds: ReadonlySet<string>): void {
+    // Snapshot — caller may keep mutating the set after handing it over.
+    this.#subscribedTenants = new Set(tenantIds);
   }
 
   async close(): Promise<void> {

@@ -109,10 +109,9 @@ const server = createFrickServer({ clusterBus: bus });
 
 - **Sticky sessions are still nice to have.** The cluster bus makes them unnecessary for correctness, but a subscriber that bounces between nodes burns a full handshake on each connect. Configure your load balancer's `ws` upgrade with sticky cookies when you can.
 - **No back-pressure on the bus path.** A burst of writes still fans out unthrottled. Adapter implementations can add their own bounded queues if a downstream broker complains.
-- **Per-tenant scoping.** The framework filters peer envelopes by tenant in the local fan-out path (same logic as the single-node case). The bus carries `tenantId` on every envelope; adapter-level encryption + scoping is your call.
+- **Per-tenant scoping.** The framework filters peer envelopes by tenant in the local fan-out path (same logic as the single-node case). The bus carries `tenantId` on every envelope; adapter-level encryption + scoping is your call. Buses may additionally implement `setSubscribedTenants(tenantIds)` to drop inbound envelopes for tenants this node doesn't serve at the wire boundary — the gateway refcounts connected-client tenants and pushes the live set down on every connect / disconnect. The bundled `MemoryClusterBus` implements this; adapters that omit the method retain the original "every envelope to every node" behaviour, which is fine for small clusters where the filter overhead exceeds the bandwidth saved.
 - **What happens on bus failure?** A `publish(...)` that throws will be logged by your adapter but not propagated — the local fan-out has already happened, so the publishing node's clients see the write either way. Peer nodes miss it; clients will catch up on their next reconnect via the existing cursor-replay path.
 
 ## Known follow-ups
 
-- **Bus-side filtering.** Today every node receives every envelope. A future improvement is to partition envelopes by tenant or stream so a node only pays for envelopes it has subscribers for.
 - **Multi-bus topologies.** The contract is one bus per server. Replicating across regions ("write here, sync to the bus in that other region") is out of scope for v1 — the recommended pattern is to run one bus cluster per region and fail traffic over via your load balancer.

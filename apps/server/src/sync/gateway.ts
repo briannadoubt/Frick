@@ -93,6 +93,11 @@ export class SyncGateway {
   readonly #appRegistry: FrickAppRegistry | undefined;
   readonly #clusterBus: FrickClusterBus | undefined;
   #clusterUnsubscribe: (() => void) | undefined;
+  // Refcount of currently-connected clients per tenant. Used to push
+  // the active tenant set down to a `FrickClusterBus` that supports
+  // `setSubscribedTenants`, so peer nodes can drop envelopes addressed
+  // to tenants we don't serve before they hit the dispatch path.
+  readonly #tenantSubscriberCounts = new Map<string, number>();
 
   constructor(
     private readonly wss: WebSocketServer,
@@ -135,6 +140,7 @@ export class SyncGateway {
       const principal = this.#principalFromRequest(request);
       const client: SyncClient = { socket, subscriptions: new Map(), ...(principal ? { principal } : {}) };
       this.#subscriptions.addClient(client);
+      if (principal) this.#bumpTenantCount(principal.tenantId, +1);
       this.#pendingAppendCounts.set(client, 0);
       this.#lastSeenAt.set(client, Date.now());
       // Resolve per-tenant limits once per connection; fall back to global
@@ -174,6 +180,7 @@ export class SyncGateway {
         clearInterval(heartbeat);
         this.#heartbeatTimers.delete(heartbeat);
         this.#subscriptions.removeClient(client);
+        if (client.principal) this.#bumpTenantCount(client.principal.tenantId, -1);
         this.#activeConnections = Math.max(0, this.#activeConnections - 1);
         this.#connectionsGauge?.set(this.#activeConnections);
         emitDevToolsEvent(this.store, {
@@ -207,6 +214,27 @@ export class SyncGateway {
    */
   #limitsFor(client: SyncClient): FrickLimits {
     return this.#clientLimits.get(client) ?? this.#limits;
+  }
+
+  /**
+   * Adjust the per-tenant subscriber refcount and, when a tenant
+   * transitions between absent and present, push the updated set down
+   * to a cluster bus that supports filtering. Adapters without
+   * `setSubscribedTenants` are skipped — they keep the original
+   * "every envelope to every node" semantics.
+   */
+  #bumpTenantCount(tenantId: string, delta: 1 | -1): void {
+    const current = this.#tenantSubscriberCounts.get(tenantId) ?? 0;
+    const next = current + delta;
+    const transitioned = (current === 0) !== (next === 0);
+    if (next <= 0) {
+      this.#tenantSubscriberCounts.delete(tenantId);
+    } else {
+      this.#tenantSubscriberCounts.set(tenantId, next);
+    }
+    if (transitioned) {
+      this.#clusterBus?.setSubscribedTenants?.(new Set(this.#tenantSubscriberCounts.keys()));
+    }
   }
 
   publishProjectionDelta(notice: ProjectionDeltaNotice): void {
