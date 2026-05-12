@@ -918,14 +918,17 @@ private struct ChatDetailScene: View {
     // subscribes via the environment socket; re-binding when the user
     // switches conversations is driven by the parent's `.id(convoId)`,
     // which re-inits this view (and these wrappers) from scratch.
+    // `FrickPresence` collides with the FrickDesign presence indicator
+    // (a SwiftUI `View`), so we fully-qualify the property-wrapper
+    // form here. `FrickStream` is unambiguous.
     @FrickStream private var liveStreamEvents: [FrickStreamEvent]
-    @FrickPresence private var typingRecords: [FrickPresenceRecord]
+    @FrickSwift.FrickPresence private var typingRecords: [FrickPresenceRecord]
 
     init(model: FoundationModel, convoId: String, bottomMessageAnchor: String) {
         self.model = model
         self.bottomMessageAnchor = bottomMessageAnchor
         self._liveStreamEvents = FrickStream("MessageStream", key: convoId)
-        self._typingRecords = FrickPresence("TypingState", key: convoId)
+        self._typingRecords = FrickSwift.FrickPresence("TypingState", key: convoId)
     }
 
     var body: some View {

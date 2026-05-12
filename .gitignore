@@ -10,6 +10,7 @@ dist-types/
 *.sqlite-wal
 apps/server/data/
 apps/ios/FrickDemo.xcodeproj/
+apps/ios/build/
 apps/android/.gradle/
 apps/android/build/
 apps/android/app/build/

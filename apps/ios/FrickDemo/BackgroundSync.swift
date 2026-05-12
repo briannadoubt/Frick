@@ -1,4 +1,4 @@
-import BackgroundTasks
+@preconcurrency import BackgroundTasks
 import Foundation
 import FrickSwift
 
@@ -53,7 +53,7 @@ public enum FrickBackgroundSync {
 
     private static func handleFlush(
         task: BGAppRefreshTask,
-        makeClient: @Sendable () -> FrickClient
+        makeClient: @escaping @Sendable () -> FrickClient
     ) {
         // Reschedule first so a crash mid-flush doesn't drop the next
         // run; system docs explicitly recommend this ordering.
