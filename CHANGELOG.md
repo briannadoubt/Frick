@@ -6,7 +6,50 @@ Each package version is independent — a release header documents which package
 
 ## Unreleased
 
-### Protocol
+### Cohesive SDK Refactor (Phases 1–6)
+
+A multi-commit rollout that lifts the client SDKs from "you can hand-write it" to "the SDK does the obvious thing":
+
+#### Phase 1 — Codegen foundation + chat helpers graduated
+
+- New TypeScript schema generator (`generateTypeScriptBindings`) emits typed DTOs, tagged-union stream-event types, a `FrickBindings` interface, and field-id lookup tables. Output written to `packages/core/src/generated/bindings.ts` so consumers get `frick.Conversation.useAll()` with full autocomplete.
+- New typed error-code generators emit Swift `FrickErrorCode: String` enums, Kotlin `enum class FrickErrorCode(val wireValue: String)` with `fromWire(...)` round-tripping, and a TS const-union + membership predicate — all derived from a single `FRICK_ERROR_CODES` source-of-truth array.
+- `bindSchema(client, schema)` runtime factory in `@frick/core` flattens schema entries into name-keyed bindings that reuse the existing `Signal<T>` cache.
+- New backwards-paginated read primitive: `StreamStore.readBefore(...)` + `?before=N&limit=M` on the `/streams/:name/:key` route + `FrickClient.loadOlder(stream, key, count, before?)`.
+- `apps/web/src/chat-foundation.ts` graduated into `@frick/core/chat`: auth (devLogin/signUp/login), blob (upload/hash/derivatives), search, push registration, conversation create, inbox/read-receipt derivation. The shim was retired in Phase 3b.
+
+#### Phase 2 — Optimistic mutations + persistent web cache + devtools
+
+- `OptimisticOverlay` in `@frick/core` synthesizes display-only events / object upserts into the runtime's `stream()` / `objects()` signals before server Ack. `client.append(..., { optimistic })` and `client.upsertObject(..., undefined, { optimistic: true })` opt in; the new Promise rejects with `OptimisticConflictError` on `storage.conflict` nacks so the UI can roll back.
+- `openIndexedDBFrickCache({ dbName, indexedDB? })` factory in `@frick/core` mirrors every write through to IndexedDB so a page reload preserves objects, stream events, cursors, and the pending-append queue. Closes the web client's parity gap with iOS/Android SQLite caches.
+- New `@frick/devtools` workspace publishes a `<FrickDevtools enabled />` React component — floating panel polls `/_frick/inspect/devtools/events`, surfaces connection status + frame log + push deliveries + filter-by-kind input. Dependency-free inline styles; gate behind `import.meta.env.DEV` in production.
+
+#### Phase 3 — Auth/blob/search hooks + breaking `useStream` shape
+
+- `useStream(...)` now returns `{ events, loadOlder, hasMore, loading }` instead of a bare array. **Breaking change** — pre-1.0 with `greenfield-cutover` compatibility makes this safe. `useAppend` / `useUpsertObject` gain optional `{ optimistic }` options threading into the Phase 2 overlay.
+- `packages/react/src/auth.tsx` — `useSession`, `useSignIn`, `useSignUp`, `useDevSignIn`, `useSignOut`, `<RequireAuth fallback>`. Sets the session on the surrounding `<FrickProvider>` so the WebSocket reconnects with the new bearer token automatically.
+- `packages/react/src/blob.tsx` — `useUploadBlob`, `<FileDropzone>`, `usePasteImageUpload`. Optional client-side image compression via `createImageBitmap` + `OffscreenCanvas`.
+- `packages/react/src/search.tsx` — `useSearch(query, opts)` with debounced fetch, race protection, tagged `{ response, isLoading, error }` state.
+
+#### Phase 4 — Realtime UX wrappers + media memos
+
+- `packages/react/src/realtime.tsx` collapses chat-app primitives: `useReactions`, `useTyping` (debounced presence with auto-stop tail), `useReadReceipts` (over the inbox projection), `useMessageActions` (`edit` / `redact` with optimism), `useLiveCursor`.
+- `packages/react/src/media.tsx` — `useVoiceMemo()` / `useVideoMemo()` wrap `MediaRecorder` + `getUserMedia` into start/stop/cancel with auto-stop at `maxDurationMs`. Pipe captures through `useUploadBlob`.
+
+#### Phase 5 — Native parity
+
+- Kotlin: `FrickSyncSocket.subscribePresence` / `setPresence` / `clearPresence` (closes the gap with Swift + TypeScript). New `FrickInboundEvent.PresenceDelta(name, records, cleared)` case + `PRESENCE_DELTA` frame handler. `FrickClient.search(index, q, filter, limit)` mirrors the Swift+TS search call with typed `FrickSearchResponse`.
+- Swift: `FrickClient.search(...)` + `FrickSearchHit` / `FrickSearchResponse` Codable structs. New `Sources/FrickSwift/SwiftUI/FrickStream.swift` adds `@FrickStream("MessageStream", key:)` and `@FrickPresence("TypingState", key:)` property wrappers driven by an `@Environment(\.frickSyncSocket)` key.
+- New `:frick-compose` Gradle module: `rememberFrickStream(socket, stream, key)` + `rememberFrickPresence(...)` + `UseFrickEvents` / `UseFrickStatus` Composables. Lives in its own module so the base `:frick` SDK stays Compose-agnostic.
+- Web Push adapter (`createFrickWebPushAdapter`) rounds out the APNs/FCM trio. VAPID-authenticated ES256 JWT signing, per-tenant credential storage in `tenant_settings.push.webPush.encrypted`. Maps 410 / 404 → `push.unregistered`, 429 → `push.rateLimited`, etc.
+
+#### Phase 6 — Production lifecycle
+
+- Outbound email: `FrickEmailAdapter` interface + `createFrickTestEmailAdapter` (default) + `createFrickResendEmailAdapter` (Resend reference implementation, `RESEND_API_KEY` from env). `createFrickEmailRouter(...)` wraps every send with `frick.email.delivery` devtools telemetry, `redactEmail`-masked recipient logs, and convenience helpers `sendVerificationEmail` / `sendPasswordResetEmail`.
+- Composer drafts: `useDraft(conversationId)` in `@frick/react` persists composer text per `(user, conversation)` in `localStorage` with a 250ms debounce. Local-only for v1; cross-device drafts are a follow-up that needs a schema bump.
+- Web background sync: `apps/web/public/frick-sw.js` Service Worker handles the `frick-pending-appends` sync tag (posts `frick:flush` to clients) and push receive + `notificationclick` deep-link routing. `registerFrickBackgroundSync({ onFlush, onNavigate })` helper in `@frick/core` does the registration dance with graceful degradation when the Background Sync API is missing.
+
+#### Protocol
 
 - Generator now emits a `FrickSchemaDescriptor` (Swift `enum`) and `FRICK_*` constant tables (Kotlin `internal val`s) alongside the existing DTOs: type-id → name and (typeId → fieldId → fieldName) for objects, streams, and events. Used by the native SDKs to decode packed Delta tuples back into named-field shapes.
 
