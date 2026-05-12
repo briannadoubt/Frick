@@ -8,7 +8,7 @@
   "protocol": "frick.realtime",
   "protocolVersion": 1,
   "compatibility": "greenfield-cutover",
-  "hash": "frick-foundation-0.1.0",
+  "hash": "frick-foundation-0.2.0",
   "objects": [
     {
       "id": 1,
@@ -248,6 +248,109 @@
           ]
         }
       ]
+    },
+    {
+      "id": 7,
+      "name": "MessageDraft",
+      "fields": [
+        {
+          "id": 1,
+          "name": "userId",
+          "kind": "ref",
+          "ref": "User",
+          "required": true
+        },
+        {
+          "id": 2,
+          "name": "conversationId",
+          "kind": "ref",
+          "ref": "Conversation",
+          "required": true
+        },
+        {
+          "id": 3,
+          "name": "body",
+          "kind": "string",
+          "required": true
+        },
+        {
+          "id": 4,
+          "name": "updatedAt",
+          "kind": "timestamp",
+          "required": true
+        }
+      ],
+      "indexes": [
+        {
+          "id": 1,
+          "name": "byOwner",
+          "fields": [
+            "userId",
+            "conversationId"
+          ]
+        }
+      ],
+      "mergePolicy": "versionPrecondition"
+    },
+    {
+      "id": 8,
+      "name": "ScheduledMessage",
+      "fields": [
+        {
+          "id": 1,
+          "name": "userId",
+          "kind": "ref",
+          "ref": "User",
+          "required": true
+        },
+        {
+          "id": 2,
+          "name": "conversationId",
+          "kind": "ref",
+          "ref": "Conversation",
+          "required": true
+        },
+        {
+          "id": 3,
+          "name": "body",
+          "kind": "string",
+          "required": true
+        },
+        {
+          "id": 4,
+          "name": "scheduledFor",
+          "kind": "timestamp",
+          "required": true
+        },
+        {
+          "id": 5,
+          "name": "attachmentBlobIds",
+          "kind": "json",
+          "required": false
+        },
+        {
+          "id": 6,
+          "name": "status",
+          "kind": "enum",
+          "enumValues": [
+            "pending",
+            "delivered",
+            "cancelled"
+          ],
+          "required": true
+        }
+      ],
+      "indexes": [
+        {
+          "id": 1,
+          "name": "byDueDate",
+          "fields": [
+            "status",
+            "scheduledFor"
+          ]
+        }
+      ],
+      "mergePolicy": "versionPrecondition"
     }
   ],
   "streams": [

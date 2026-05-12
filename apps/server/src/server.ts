@@ -102,6 +102,10 @@ import {
   encodeBlobProcessPayload,
 } from "./blobs/processor-job.js";
 import { emitDevToolsEvent } from "./devtools/emit.js";
+import {
+  SCHEDULED_SWEEP_JOB_TYPE,
+  createScheduledMessageSweepHandler,
+} from "./scheduled-messages/sweep.js";
 
 export interface ServerOptions {
   port?: number;
@@ -369,6 +373,12 @@ export function createFrickServer(options: ServerOptions = {}) {
         blobProcessors: store.blobProcessors,
         logger,
       }),
+    );
+  }
+  if (!jobRegistry.resolve(SCHEDULED_SWEEP_JOB_TYPE)) {
+    jobRegistry.register(
+      SCHEDULED_SWEEP_JOB_TYPE,
+      createScheduledMessageSweepHandler({ store, logger }),
     );
   }
   // Default: worker runs in non-test envs. Tests would otherwise have a

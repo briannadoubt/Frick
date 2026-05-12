@@ -10,7 +10,7 @@ export const foundationSchema: FrickSchema = {
   protocol: "frick.realtime",
   protocolVersion: 1,
   compatibility: "greenfield-cutover",
-  hash: "frick-foundation-0.1.0",
+  hash: "frick-foundation-0.2.0",
   objects: [
     {
       id: 1,
@@ -73,6 +73,39 @@ export const foundationSchema: FrickSchema = {
         { id: 4, name: "expiresAt", kind: "timestamp", required: true },
       ],
       indexes: [{ id: 1, name: "byUser", fields: ["userId"] }],
+    },
+    {
+      // Composer draft synced across the user's devices. Keyed by
+      // `(userId, conversationId)`; only the draft's owner sees it.
+      // Updated by the React `useDraft` hook (Phase 6b shipped local
+      // persistence; this object enables the cross-device upgrade).
+      id: 7,
+      name: "MessageDraft",
+      fields: [
+        { id: 1, name: "userId", kind: "ref", ref: "User", required: true },
+        { id: 2, name: "conversationId", kind: "ref", ref: "Conversation", required: true },
+        { id: 3, name: "body", kind: "string", required: true },
+        { id: 4, name: "updatedAt", kind: "timestamp", required: true },
+      ],
+      indexes: [{ id: 1, name: "byOwner", fields: ["userId", "conversationId"] }],
+      mergePolicy: "versionPrecondition",
+    },
+    {
+      // Pre-composed message scheduled for later delivery. Server's
+      // jobs framework runs a periodic sweep that promotes due rows to
+      // `MessageSent` events and tombstones the draft.
+      id: 8,
+      name: "ScheduledMessage",
+      fields: [
+        { id: 1, name: "userId", kind: "ref", ref: "User", required: true },
+        { id: 2, name: "conversationId", kind: "ref", ref: "Conversation", required: true },
+        { id: 3, name: "body", kind: "string", required: true },
+        { id: 4, name: "scheduledFor", kind: "timestamp", required: true },
+        { id: 5, name: "attachmentBlobIds", kind: "json", required: false },
+        { id: 6, name: "status", kind: "enum", enumValues: ["pending", "delivered", "cancelled"], required: true },
+      ],
+      indexes: [{ id: 1, name: "byDueDate", fields: ["status", "scheduledFor"] }],
+      mergePolicy: "versionPrecondition",
     },
   ],
   streams: [

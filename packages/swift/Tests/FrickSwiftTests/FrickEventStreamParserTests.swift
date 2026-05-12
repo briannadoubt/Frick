@@ -373,7 +373,7 @@ final class FrickEventStreamParserTests: XCTestCase {
     }
 
     func testGeneratedFoundationDTOsCarrySchemaContract() throws {
-        XCTAssertEqual(FrickSchema.schemaHash, "frick-foundation-0.1.0")
+        XCTAssertEqual(FrickSchema.schemaHash, "frick-foundation-0.2.0")
 
         let user = UserDTO(id: "user-ada", displayName: "Ada Lovelace", avatarBlobId: nil)
         let device = UserDeviceDTO(

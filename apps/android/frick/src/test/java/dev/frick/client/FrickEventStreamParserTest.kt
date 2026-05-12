@@ -49,7 +49,7 @@ class FrickEventStreamParserTest {
 
     @Test
     fun exposesGeneratedFoundationDtos() {
-        assertEquals("frick-foundation-0.1.0", FRICK_SCHEMA_HASH)
+        assertEquals("frick-foundation-0.2.0", FRICK_SCHEMA_HASH)
         assertEquals(
             UserDto(id = "user-ada", displayName = "Ada", avatarBlobId = null),
             UserDto(id = "user-ada", displayName = "Ada", avatarBlobId = null),

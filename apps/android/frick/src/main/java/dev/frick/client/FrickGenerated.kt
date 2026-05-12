@@ -8,7 +8,7 @@ const val FRICK_SCHEMA_VERSION: String = "0.1.0"
 const val FRICK_SCHEMA_REVISION: Int = 1
 const val FRICK_MINIMUM_CLIENT_REVISION: Int = 1
 const val FRICK_MINIMUM_SERVER_REVISION: Int = 1
-const val FRICK_SCHEMA_HASH: String = "frick-foundation-0.1.0"
+const val FRICK_SCHEMA_HASH: String = "frick-foundation-0.2.0"
 
 /**
  * Type-id → name and (typeId → (fieldId → fieldName)) tables for the
@@ -23,6 +23,8 @@ internal val FRICK_OBJECT_NAMES: Map<Int, String> = mapOf(
   4 to "CallRoom",
   5 to "UserDevice",
   6 to "UserSession",
+  7 to "MessageDraft",
+  8 to "ScheduledMessage",
 )
 internal val FRICK_STREAM_NAMES: Map<Int, String> = mapOf(
   1 to "MessageStream",
@@ -46,6 +48,8 @@ internal val FRICK_OBJECT_FIELDS: Map<Int, Map<Int, String>> = mapOf(
   4 to mapOf(1 to "conversationId", 2 to "state", 3 to "createdBy"),
   5 to mapOf(1 to "userId", 2 to "label", 3 to "platform", 4 to "lastSeenAt"),
   6 to mapOf(1 to "userId", 2 to "deviceId", 3 to "replicaId", 4 to "expiresAt"),
+  7 to mapOf(1 to "userId", 2 to "conversationId", 3 to "body", 4 to "updatedAt"),
+  8 to mapOf(1 to "userId", 2 to "conversationId", 3 to "body", 4 to "scheduledFor", 5 to "attachmentBlobIds", 6 to "status"),
 )
 internal val FRICK_EVENT_FIELDS: Map<Int, Map<Int, String>> = mapOf(
   1 to mapOf(1 to "messageId", 2 to "senderId", 3 to "body", 4 to "createdAt", 5 to "attachmentBlobIds"),
@@ -144,6 +148,24 @@ data class UserSessionDto(
   val deviceId: String,
   val replicaId: String,
   val expiresAt: String
+)
+
+data class MessageDraftDto(
+  val id: String,
+  val userId: String,
+  val conversationId: String,
+  val body: String,
+  val updatedAt: String
+)
+
+data class ScheduledMessageDto(
+  val id: String,
+  val userId: String,
+  val conversationId: String,
+  val body: String,
+  val scheduledFor: String,
+  val attachmentBlobIds: JsonElement? = null,
+  val status: String
 )
 
 data class MessageSentDto(

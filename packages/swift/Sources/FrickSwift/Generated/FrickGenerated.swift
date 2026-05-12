@@ -8,10 +8,10 @@ public enum FrickSchema {
   public static let schemaRevision = 1
   public static let minimumClientRevision = 1
   public static let minimumServerRevision = 1
-  public static let schemaHash = "frick-foundation-0.1.0"
+  public static let schemaHash = "frick-foundation-0.2.0"
 }
 
-public let frickSchemaHash = "frick-foundation-0.1.0"
+public let frickSchemaHash = "frick-foundation-0.2.0"
 
 /// Type-id → name and (typeId → (fieldId → fieldName)) tables for the
 /// foundation schema. Used by `FrickSyncSocket` to translate packed Delta
@@ -25,6 +25,8 @@ public enum FrickSchemaDescriptor {
     4: "CallRoom",
     5: "UserDevice",
     6: "UserSession",
+    7: "MessageDraft",
+    8: "ScheduledMessage",
   ]
   public static let streamNames: [Int: String] = [
     1: "MessageStream",
@@ -48,6 +50,8 @@ public enum FrickSchemaDescriptor {
     4: [1: "conversationId", 2: "state", 3: "createdBy"],
     5: [1: "userId", 2: "label", 3: "platform", 4: "lastSeenAt"],
     6: [1: "userId", 2: "deviceId", 3: "replicaId", 4: "expiresAt"],
+    7: [1: "userId", 2: "conversationId", 3: "body", 4: "updatedAt"],
+    8: [1: "userId", 2: "conversationId", 3: "body", 4: "scheduledFor", 5: "attachmentBlobIds", 6: "status"],
   ]
   public static let eventFields: [Int: [Int: String]] = [
     1: [1: "messageId", 2: "senderId", 3: "body", 4: "createdAt", 5: "attachmentBlobIds"],
@@ -254,6 +258,56 @@ public struct UserSessionDTO: Codable, Equatable, Sendable {
     self.deviceId = deviceId
     self.replicaId = replicaId
     self.expiresAt = expiresAt
+  }
+}
+
+public struct MessageDraftDTO: Codable, Equatable, Sendable {
+  public let id: String
+  public let userId: String
+  public let conversationId: String
+  public let body: String
+  public let updatedAt: String
+
+  public init(
+    id: String,
+    userId: String,
+    conversationId: String,
+    body: String,
+    updatedAt: String
+  ) {
+    self.id = id
+    self.userId = userId
+    self.conversationId = conversationId
+    self.body = body
+    self.updatedAt = updatedAt
+  }
+}
+
+public struct ScheduledMessageDTO: Codable, Equatable, Sendable {
+  public let id: String
+  public let userId: String
+  public let conversationId: String
+  public let body: String
+  public let scheduledFor: String
+  public let attachmentBlobIds: FrickJSONValue?
+  public let status: String
+
+  public init(
+    id: String,
+    userId: String,
+    conversationId: String,
+    body: String,
+    scheduledFor: String,
+    attachmentBlobIds: FrickJSONValue? = nil,
+    status: String
+  ) {
+    self.id = id
+    self.userId = userId
+    self.conversationId = conversationId
+    self.body = body
+    self.scheduledFor = scheduledFor
+    self.attachmentBlobIds = attachmentBlobIds
+    self.status = status
   }
 }
 
