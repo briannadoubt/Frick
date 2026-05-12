@@ -9,13 +9,18 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import {
+  FileDropzone,
   FrickProvider,
   useAppend,
+  useDraft,
   useFrickHttpEndpoint,
   useInbox,
   useObjects,
+  usePasteImageUpload,
   usePresence,
   useProjection,
+  useReactions,
+  useSearch,
   useSendSignal,
   useSetPresence,
   useSignalChannel,
@@ -23,6 +28,7 @@ import {
   useSyncStatus,
   useUpsertObject,
 } from "@frick/react";
+import { FrickDevtools } from "@frick/devtools";
 import {
   Avatar,
   Button,
@@ -268,7 +274,10 @@ function ChatWorkspace({
   onLogout(): void;
 }) {
   const [selectedConversationId, setSelectedConversationId] = useState(defaultConversationId);
-  const [draft, setDraft] = useState("");
+  // Phase 6 — composer drafts persisted per (user, conversation) so a reload
+  // doesn't lose typing. The hook's setter handles "" by removing the
+  // storage entry, so existing `setDraft("")` call-sites continue to work.
+  const { draft, setDraft } = useDraft(selectedConversationId);
   const [draftAttachments, setDraftAttachments] = useState<AttachmentMetadata[]>([]);
   const [attachmentStatus, setAttachmentStatus] = useState<string | undefined>();
   const [attachmentError, setAttachmentError] = useState<string | undefined>();
@@ -284,10 +293,20 @@ function ChatWorkspace({
   const [selectedDestination, setSelectedDestination] = useState("chat");
   const [compactThreadsOpen, setCompactThreadsOpen] = useState(() => window.matchMedia("(max-width: 640px)").matches);
   const [inspectorOpen, setInspectorOpen] = useState(() => window.matchMedia("(min-width: 1041px)").matches);
+  // Phase 3 — debounced FTS search hook replaces the hand-rolled
+  // fetch/debounce/error state below. Re-runs on every keystroke; the
+  // hook cancels stale requests on its own.
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<SearchHit[]>([]);
-  const [searchError, setSearchError] = useState<string | undefined>();
-  const [isSearching, setIsSearching] = useState(false);
+  const {
+    response: searchResponse,
+    isLoading: isSearching,
+    error: searchHookError,
+  } = useSearch(searchQuery, {
+    conversationId: selectedConversationId,
+    debounceMs: 200,
+  });
+  const searchResults = searchResponse?.hits ?? [];
+  const searchError = searchHookError?.message;
   const [pushRegistration, setPushRegistration] = useState<PushRegistration | undefined>(
     () => readStoredPushRegistration(),
   );
@@ -300,6 +319,18 @@ function ChatWorkspace({
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const activeUserId = session.userId;
   const activeDeviceId = session.deviceId;
+
+  // Phase 4 — paste-to-attach. Cmd-V / Ctrl-V of any image lands in the
+  // composer attachment tray. Re-uses the same upload pipeline as drag-
+  // and-drop and the explicit "attach" button.
+  usePasteImageUpload({
+    onUpload: (metadata) => {
+      setDraftAttachments((current) => [...current, metadata]);
+      setAttachmentStatus(`Attached ${metadata.name} (${formatByteCount(metadata.byteLength)})`);
+    },
+    onError: (error) => setAttachmentError(error.message),
+    compression: { maxDimension: 2048, quality: 0.85 },
+  });
   const users = useObjects<User>("User");
   const conversations = useObjects<Conversation>("Conversation");
   const members = useObjects<RoomMember>("RoomMember");
@@ -567,30 +598,11 @@ function ChatWorkspace({
     }
   }
 
-  async function runSearch(query: string) {
-    const trimmed = query.trim();
-    if (!trimmed) {
-      setSearchResults([]);
-      setSearchError(undefined);
-      return;
-    }
-    setIsSearching(true);
-    setSearchError(undefined);
-    try {
-      const response = await searchMessages({
-        httpEndpoint,
-        q: trimmed,
-        ...(selectedConversationId ? { conversationId: selectedConversationId } : {}),
-        sessionToken: session.sessionToken,
-        limit: 50,
-      });
-      setSearchResults(response.hits);
-    } catch (error) {
-      setSearchError(error instanceof Error ? error.message : "Search failed");
-      setSearchResults([]);
-    } finally {
-      setIsSearching(false);
-    }
+  // Search is fully driven by the `useSearch` hook above — the explicit
+  // submit handler stays around so users hitting Enter feels natural,
+  // but it's a no-op because the hook already runs on every keystroke.
+  function runSearch(_query: string): void {
+    /* no-op; useSearch handles it */
   }
 
   function jumpToSearchHit(hit: SearchHit) {
@@ -855,6 +867,10 @@ function ChatWorkspace({
                     ))}
                   </div>
                 ) : null}
+                <MessageReactions
+                  conversationId={selectedConversationId}
+                  messageId={message.payload.messageId}
+                />
                 {isLatest && message.payload.senderId === activeUserId && readBy.length > 0 ? (
                   <p className="message-read-receipt" aria-label="Read receipts">
                     Read by {readBy.length === 1
@@ -874,6 +890,16 @@ function ChatWorkspace({
 
   function renderChatComposer() {
     return (
+      <FileDropzone
+        accept="image/"
+        onUpload={(metadata) => {
+          setDraftAttachments((current) => [...current, metadata]);
+          setAttachmentStatus(`Attached ${metadata.name} (${formatByteCount(metadata.byteLength)})`);
+          setAttachmentError(undefined);
+        }}
+        onError={(error) => setAttachmentError(error.message)}
+        options={{ maxDimension: 2048, quality: 0.85 }}
+      >
       <form
         className="composer"
         onSubmit={(event) => {
@@ -943,6 +969,7 @@ function ChatWorkspace({
         />
         <IconButton type="submit" icon="send" label="Send message" tone="primary" />
       </form>
+      </FileDropzone>
     );
   }
 
@@ -1107,33 +1134,46 @@ function ChatWorkspace({
   }
 
   return (
-    <WorkspaceShell
-      className="chat-workspace-shell"
-      destinations={workspaceDestinations}
-      navigationLabel={<span className="workspace-brand">Frick</span>}
-      navigationActions={renderWorkspaceActions()}
-      compactCollectionVisible={compactThreadsOpen}
-      selectedDestination={selectedDestination}
-      onDestinationChange={(destinationId) => {
-        setSelectedDestination(destinationId);
-        setCompactThreadsOpen(false);
-      }}
-      collection={renderThreadsPanel()}
-      header={renderChatHeader()}
-      footer={selectedDestination === "chat" ? renderChatComposer() : undefined}
-      inspector={renderChatInspector()}
-      inspectorOpen={inspectorOpen}
-      onInspectorOpenChange={setInspectorOpen}
-    >
-      {selectedDestination === "chat" ? (
-        renderChatMessages()
-      ) : (
-        <PlaceholderDestination
-          destination={workspaceDestinations.find((item) => item.id === selectedDestination)?.label ?? "Destination"}
-        />
-      )}
-    </WorkspaceShell>
+    <>
+      <WorkspaceShell
+        className="chat-workspace-shell"
+        destinations={workspaceDestinations}
+        navigationLabel={<span className="workspace-brand">Frick</span>}
+        navigationActions={renderWorkspaceActions()}
+        compactCollectionVisible={compactThreadsOpen}
+        selectedDestination={selectedDestination}
+        onDestinationChange={(destinationId) => {
+          setSelectedDestination(destinationId);
+          setCompactThreadsOpen(false);
+        }}
+        collection={renderThreadsPanel()}
+        header={renderChatHeader()}
+        footer={selectedDestination === "chat" ? renderChatComposer() : undefined}
+        inspector={renderChatInspector()}
+        inspectorOpen={inspectorOpen}
+        onInspectorOpenChange={setInspectorOpen}
+      >
+        {selectedDestination === "chat" ? (
+          renderChatMessages()
+        ) : (
+          <PlaceholderDestination
+            destination={workspaceDestinations.find((item) => item.id === selectedDestination)?.label ?? "Destination"}
+          />
+        )}
+      </WorkspaceShell>
+      {/* Phase 2c — dev-only inspector. Renders nothing in production builds. */}
+      <FrickDevtools enabled={isDevEnvironment()} />
+    </>
   );
+}
+
+function isDevEnvironment(): boolean {
+  // Vite's `import.meta.env.DEV` requires the `vite/client` types; rather
+  // than thread those into the workspace typecheck just for one flag, ask
+  // the browser whether we're on a dev-server host.
+  if (typeof window === "undefined") return false;
+  const host = window.location.hostname;
+  return host === "127.0.0.1" || host === "localhost";
 }
 
 function PlaceholderDestination({ destination }: { destination: ReactNode }) {
@@ -1143,6 +1183,33 @@ function PlaceholderDestination({ destination }: { destination: ReactNode }) {
       <h2>{destination}</h2>
       <p>This destination is not enabled in the web demo yet.</p>
     </section>
+  );
+}
+
+/**
+ * Phase 4 — message reactions row using `useReactions` from `@frick/react`.
+ * Renders an emoji-count chip per distinct reaction; clicking the chip
+ * toggles the active user's reaction via the hook's optimistic-append path.
+ */
+function MessageReactions({ conversationId, messageId }: { conversationId: string; messageId: string }) {
+  const { reactions, react, unreact } = useReactions(conversationId, messageId);
+  if (reactions.length === 0) return null;
+  return (
+    <ul className="message-reactions" aria-label="Reactions">
+      {reactions.map((reaction) => (
+        <li key={reaction.emoji}>
+          <button
+            type="button"
+            className="reaction-chip"
+            data-active={reaction.meReacted}
+            onClick={() => (reaction.meReacted ? void unreact(reaction.emoji) : void react(reaction.emoji))}
+          >
+            <span aria-hidden="true">{reaction.emoji}</span>
+            <span className="reaction-count">{reaction.userIds.length}</span>
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }
 

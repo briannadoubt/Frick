@@ -10,6 +10,7 @@
   "dependencies": {
     "@frick/core": "workspace:*",
     "@frick/design-web": "workspace:*",
+    "@frick/devtools": "workspace:*",
     "@frick/protocol": "workspace:*",
     "@frick/react": "workspace:*",
     "@vitejs/plugin-react": "^5.1.1",

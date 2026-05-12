@@ -70,6 +70,9 @@ importers:
       '@frick/design-web':
         specifier: workspace:*
         version: link:../../packages/design-web
+      '@frick/devtools':
+        specifier: workspace:*
+        version: link:../../packages/devtools
       '@frick/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

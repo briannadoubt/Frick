@@ -10,7 +10,8 @@
   "references": [
     { "path": "../../packages/react" },
     { "path": "../../packages/protocol" },
-    { "path": "../../packages/core" }
+    { "path": "../../packages/core" },
+    { "path": "../../packages/devtools" }
   ],
   "include": ["src"]
 }
