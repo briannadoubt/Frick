@@ -52,6 +52,7 @@ import { resolveTenantLimits } from "../tenant-config.js";
 import type { FrickMetrics, Gauge } from "../metrics.js";
 import { emitDevToolsEvent } from "../devtools/emit.js";
 import type { FrickAppRegistry } from "../apps/registry.js";
+import type { ClusterEnvelope, FrickClusterBus } from "../cluster/bus.js";
 
 /**
  * Per-connection tracking for the DevTools `ws.disconnect` event. We synth a
@@ -90,6 +91,8 @@ export class SyncGateway {
 
   readonly #projections: FrickProjectionRegistry | undefined;
   readonly #appRegistry: FrickAppRegistry | undefined;
+  readonly #clusterBus: FrickClusterBus | undefined;
+  #clusterUnsubscribe: (() => void) | undefined;
 
   constructor(
     private readonly wss: WebSocketServer,
@@ -101,6 +104,13 @@ export class SyncGateway {
       metrics?: FrickMetrics;
       projections?: FrickProjectionRegistry;
       appRegistry?: FrickAppRegistry;
+      /**
+       * Optional cluster bus for horizontal-scale fan-out. When set,
+       * every locally-published stream event / object delta is also
+       * forwarded to peer nodes; envelopes received from peers are
+       * fanned out locally without re-publishing back to the bus.
+       */
+      clusterBus?: FrickClusterBus;
     } = {},
   ) {
     this.#limits = options.limits ?? DEFAULT_FRICK_LIMITS;
@@ -109,8 +119,14 @@ export class SyncGateway {
     this.#connectionsGauge = this.#metrics?.gauge("frick.ws.connections.current");
     this.#projections = options.projections;
     this.#appRegistry = options.appRegistry;
+    this.#clusterBus = options.clusterBus;
     if (this.#projections) {
       this.#projections.setDeltaListener((notice) => this.publishProjectionDelta(notice));
+    }
+    if (this.#clusterBus) {
+      this.#clusterUnsubscribe = this.#clusterBus.subscribe((envelope) =>
+        this.#handleClusterEnvelope(envelope),
+      );
     }
   }
 
@@ -179,6 +195,8 @@ export class SyncGateway {
     }
     this.#heartbeatTimers.clear();
     this.#projections?.setDeltaListener(undefined);
+    this.#clusterUnsubscribe?.();
+    this.#clusterUnsubscribe = undefined;
     this.#subscriptions.closeAll();
   }
 
@@ -227,8 +245,36 @@ export class SyncGateway {
 
   publishStreamEvent(event: StoredEvent): void {
     const packed = packStreamEvent(this.store.schema, event);
+    this.#fanOutStreamEvent(event, packed);
+    if (this.#clusterBus) {
+      this.#clusterBus.publish({
+        kind: "streamEvent",
+        originNodeId: this.#clusterBus.nodeId,
+        tenantId: event.tenantId,
+        stream: event.stream,
+        streamId: event.streamId,
+        sequence: event.sequence,
+        packed,
+      });
+    }
+  }
+
+  publishObjects(type: string, objects: PlainObject[], tenantId?: string): void {
+    this.#fanOutObjects(type, objects, tenantId);
+    if (this.#clusterBus && tenantId !== undefined) {
+      this.#clusterBus.publish({
+        kind: "objects",
+        originNodeId: this.#clusterBus.nodeId,
+        tenantId,
+        type,
+        objects: [...objects],
+      });
+    }
+  }
+
+  /** Local-only stream-event fan-out, also reused by the cluster handler. */
+  #fanOutStreamEvent(event: { tenantId: string; stream: string; streamId: string; sequence: number }, packed: ReturnType<typeof packStreamEvent>): void {
     for (const { client: subscriber } of this.#subscriptions.streamSubscribers(event.stream, event.streamId)) {
-      // Only deliver to subscribers in the same tenant as the event.
       if (subscriber.principal && subscriber.principal.tenantId !== event.tenantId) {
         continue;
       }
@@ -236,7 +282,8 @@ export class SyncGateway {
     }
   }
 
-  publishObjects(type: string, objects: PlainObject[], tenantId?: string): void {
+  /** Local-only object fan-out, also reused by the cluster handler. */
+  #fanOutObjects(type: string, objects: PlainObject[], tenantId?: string): void {
     const cursor = Date.now();
     for (const { client: subscriber } of this.#subscriptions.objectSubscribers(type)) {
       const principal = requirePrincipal(subscriber);
@@ -253,6 +300,43 @@ export class SyncGateway {
         FrameKind.Delta,
         { objects: packObjects(this.store, type, visibleObjects), events: [], cursor },
       ]);
+    }
+  }
+
+  /**
+   * Apply an envelope received from a peer node. Runs the same local
+   * fan-out paths the originating node's `publish*` methods do, but
+   * does NOT forward back to the bus — the originating node already
+   * published it. Self-published envelopes are filtered upstream by
+   * the bus implementation, so this only sees genuine peer traffic.
+   *
+   * v1 scope: stream events + object upserts. Signal + projection delta
+   * cross-node fan-out is a known follow-up — those paths route through
+   * `routeSignal` / the projection registry's delta listener, both of
+   * which need a small refactor to skip re-publishing when handling a
+   * peer envelope.
+   */
+  #handleClusterEnvelope(envelope: ClusterEnvelope): void {
+    switch (envelope.kind) {
+      case "streamEvent":
+        this.#fanOutStreamEvent(
+          {
+            tenantId: envelope.tenantId,
+            stream: envelope.stream,
+            streamId: envelope.streamId,
+            sequence: envelope.sequence,
+          },
+          envelope.packed,
+        );
+        return;
+      case "objects":
+        this.#fanOutObjects(envelope.type, envelope.objects as PlainObject[], envelope.tenantId);
+        return;
+      case "signal":
+      case "projectionDelta":
+      case "presenceDelta":
+        // See JSDoc — known follow-up.
+        return;
     }
   }
 

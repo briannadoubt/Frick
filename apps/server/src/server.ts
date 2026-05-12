@@ -106,6 +106,7 @@ import {
   SCHEDULED_SWEEP_JOB_TYPE,
   createScheduledMessageSweepHandler,
 } from "./scheduled-messages/sweep.js";
+import type { FrickClusterBus } from "./cluster/bus.js";
 
 export interface ServerOptions {
   port?: number;
@@ -213,6 +214,20 @@ export interface ServerOptions {
    * underlying store. See `docs/operations.md` for the partition follow-up.
    */
   apps?: readonly FrickAppDefinition[];
+  /**
+   * Optional cluster bus for horizontal-scale fan-out. When set, the
+   * sync gateway forwards every locally-published stream event +
+   * object delta to peer nodes (Redis / NATS / whatever the bus
+   * adapter wraps) and applies peer envelopes back into local
+   * subscribers. Single-node deployments can leave this unset; the
+   * gateway then runs in-process only, identical to the pre-Phase 7
+   * behavior.
+   *
+   * Bus contract: `apps/server/src/cluster/bus.ts`. The framework
+   * ships `MemoryClusterBus` for tests / single-node use; production
+   * adapters (e.g. RedisClusterBus) live out-of-tree.
+   */
+  clusterBus?: FrickClusterBus;
 }
 
 export function createFrickServer(options: ServerOptions = {}) {
@@ -322,6 +337,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     metrics,
     projections: store.projections,
     appRegistry,
+    ...(options.clusterBus ? { clusterBus: options.clusterBus } : {}),
   });
   gateway.attach();
 
@@ -1586,6 +1602,15 @@ export function createFrickServer(options: ServerOptions = {}) {
     notifications: notificationRouter,
     pushRegistry,
     apps: appRegistry,
+    gateway,
+    /** Derived `http://host:port` origin. Resolved after `listen()` binds. */
+    get httpUrl(): string {
+      const address = server.address();
+      if (address && typeof address === "object") {
+        return `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${address.port}`;
+      }
+      return `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${port}`;
+    },
   };
 }
 

@@ -31,6 +31,8 @@ pnpm web                      # http://127.0.0.1:5173
 - [`docs/operations.md`](./docs/operations.md) — runtime modes, environment variables, admin routes, shutdown contract.
 - [`docs/threat-model.md`](./docs/threat-model.md) — trust boundaries and the auth/permissions story.
 - [`docs/push-adapters.md`](./docs/push-adapters.md) — wire up the APNs and FCM adapters, set per-tenant credentials via the CLI, and read back delivery telemetry.
+- [`docs/push-receive.md`](./docs/push-receive.md) — typed `FrickPushPayload` + `FrickDeepLinkRouter` for iOS / Android / web push receive.
+- [`docs/horizontal-scale.md`](./docs/horizontal-scale.md) — running multiple server nodes behind a load balancer; cluster-bus contract + Redis adapter skeleton.
 - [`docs/cross-platform-client-contract.md`](./docs/cross-platform-client-contract.md) — what every client SDK must implement.
 - [`docs/versioning.md`](./docs/versioning.md) — schema-identity stability, when to bump revision vs hash, breaking-change policy.
 - [`CONTRIBUTING.md`](./CONTRIBUTING.md) — how to run tests, commit conventions, PR expectations.
