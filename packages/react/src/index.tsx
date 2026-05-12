@@ -372,6 +372,9 @@ export function createAuthorizedFetchInit(
 export * from "./auth.js";
 export * from "./blob.js";
 export * from "./search.js";
+// Phase 4 — realtime UX wrappers (reactions, typing, receipts, cursors,
+// message actions). Pure on top of existing primitives; no server changes.
+export * from "./realtime.js";
 
 function useSignalValue<T>(signal: { value: T; subscribe(listener: (value: T) => void): () => void }): T {
   const [value, setValue] = useState(signal.value);
