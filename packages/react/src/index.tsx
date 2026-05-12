@@ -376,6 +376,8 @@ export * from "./search.js";
 // message actions). Pure on top of existing primitives; no server changes.
 export * from "./realtime.js";
 export * from "./media.js";
+// Phase 6 — composer draft persistence (local-device only for v1).
+export * from "./draft.js";
 
 function useSignalValue<T>(signal: { value: T; subscribe(listener: (value: T) => void): () => void }): T {
   const [value, setValue] = useState(signal.value);

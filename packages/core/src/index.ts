@@ -1,3 +1,4 @@
+export * from "./background-sync.js";
 export * from "./bindings.js";
 export * from "./cache.js";
 export * from "./chat.js";
