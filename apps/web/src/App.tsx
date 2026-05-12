@@ -360,9 +360,15 @@ function ChatWorkspace({
   const httpEndpoint = useFrickHttpEndpoint();
   const upsertUser = useUpsertObject<User>("User");
   // Phase 3 shape: `useStream` returns `{ events, loadOlder, hasMore, loading }`.
-  // The demo currently only consumes the live tail; `loadOlder` will hook
-  // into a scrollback button in a future iteration.
-  const { events: messages } = useStream<ChatStreamEvent>("MessageStream", selectedConversationId);
+  // Scrollback ("Load earlier") wires into the same `client.loadOlder`
+  // primitive that ships with `@frick/core`; events are prepended to the
+  // live tail and the hook keeps both in `events`.
+  const {
+    events: messages,
+    loadOlder: loadOlderMessages,
+    hasMore: hasOlderMessages,
+    loading: loadingOlderMessages,
+  } = useStream<ChatStreamEvent>("MessageStream", selectedConversationId);
   // Phase 4 — typing indicator hook with built-in 2.5s auto-stop tail.
   // Reads `TypingState` presence; the active user's row is what we
   // surface today (cross-user presence-list is a framework follow-up).
@@ -869,6 +875,17 @@ function ChatWorkspace({
         </div>
 
         <MessageList className="messages" onScroll={advanceReadCursor}>
+          {hasOlderMessages ? (
+            <div className="messages-scrollback">
+              <Button
+                className="secondary-action"
+                disabled={loadingOlderMessages}
+                onClick={() => void loadOlderMessages(50)}
+              >
+                {loadingOlderMessages ? "Loading…" : "Load earlier messages"}
+              </Button>
+            </div>
+          ) : null}
           {selectedMessages.map((message, index) => {
             const isLatest = index === selectedMessages.length - 1;
             const readBy = isLatest
