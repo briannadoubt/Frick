@@ -668,6 +668,13 @@ export class FrickStore {
         this.isRoomMember(tenantId, object.conversationId, userId)
       );
     }
+    if (type === "MessageDraft") {
+      // Drafts are private to the authoring user. The cross-SDK id
+      // convention is `${userId}:${conversationId}`, but we match on
+      // the `userId` field directly so a malicious client can't peek
+      // at someone else's drafts by guessing the id.
+      return object.userId === userId;
+    }
     return true;
   }
 
