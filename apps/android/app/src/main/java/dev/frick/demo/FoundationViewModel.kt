@@ -281,6 +281,9 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
         val convoId = _uiState.value.selectedConversationId
         val senderId = _uiState.value.session?.userId ?: return
         _uiState.update { state -> state.copy(draft = "", status = "Sending") }
+        // Stop the typing hint as soon as the user commits a message —
+        // mirrors the iOS demo's `setTyping(false)` post-send call.
+        scheduleTypingPing(draft = "")
         viewModelScope.launch {
             val current = socket
             try {
@@ -560,22 +563,37 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
 
     private fun scheduleTypingPing(draft: String) {
         val active = _uiState.value.session ?: return
-        if (draft.isBlank()) return
+        val current = socket ?: return
+        val convoId = _uiState.value.selectedConversationId
+        // Mirrors the iOS demo's typing key shape so the server's
+        // TypingState projection rows from web / iOS / Android all
+        // collapse to the same `(convo, user, device)` triple.
+        val key = "$convoId:${active.userId}:$DemoDeviceId"
+        if (draft.isBlank()) {
+            typingJob?.cancel()
+            typingJob = viewModelScope.launch {
+                try { current.clearPresence(name = "TypingState", key = key) } catch (_: Exception) {}
+            }
+            return
+        }
         if (typingJob?.isActive == true) return
         typingJob = viewModelScope.launch {
-            // FrickSyncSocket does not expose presence-write today (round-10b
-            // only added subscribe/append/upsert) and the server has no HTTP
-            // presence-write endpoint, so the demo debounces locally and
-            // leaves the wire-side ping for a follow-up round. The presence
-            // projection subscribe still surfaces typing state pushed from
-            // other clients via SDKs that DO write presence.
             try {
+                current.setPresence(
+                    name = "TypingState",
+                    key = key,
+                    value = mapOf(
+                        "isTyping" to true,
+                        "conversationId" to convoId,
+                        "userId" to active.userId,
+                        "deviceId" to DemoDeviceId,
+                    ),
+                )
                 delay(TypingDebounceMs)
-                @Suppress("UNUSED_VARIABLE") val ref = active.userId
             } catch (_: CancellationException) {
                 throw CancellationException("typing cancelled")
             } catch (_: Exception) {
-                // best-effort
+                // best-effort — presence is a hint, not authoritative.
             }
         }
     }
