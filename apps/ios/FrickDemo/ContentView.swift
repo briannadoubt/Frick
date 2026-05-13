@@ -74,8 +74,6 @@ final class FoundationModel {
     private var socketStatusTask: Task<Void, Never>?
     @ObservationIgnored
     private var socketEventsTask: Task<Void, Never>?
-    @ObservationIgnored
-    private var subscribedConversationId: String?
 
     var syncStatus: FrickSyncStatus = .initial
     var typingNotice: String?
@@ -184,9 +182,11 @@ final class FoundationModel {
             }
             messages = initial
 
-            // Bring up the live WebSocket subscription for this conversation.
+            // Bring up the live WebSocket connection. The chat view's
+            // `@FrickStream` / `@FrickSwift.FrickPresence` wrappers
+            // subscribe lazily on mount and re-bind on convo switch,
+            // so this actor doesn't issue an explicit `subscribe` call.
             try await ensureSocket()
-            await resubscribeMessages(for: resolvedConversationId)
             status = "Live"
         } catch is CancellationError {
             // Normal when signing out or replacing the active stream.
@@ -264,18 +264,9 @@ final class FoundationModel {
         )
     }
 
-    private func resubscribeMessages(for conversationId: String) async {
-        guard let socket else { return }
-        if subscribedConversationId == conversationId { return }
-        subscribedConversationId = conversationId
-        do {
-            try await socket.subscribe(stream: "MessageStream", key: conversationId)
-            // Also subscribe to typing presence keyed on the conversationId.
-            try await socket.subscribePresence(name: "TypingState", key: conversationId)
-        } catch {
-            status = "Subscribe failed: \(error.localizedDescription)"
-        }
-    }
+    // resubscribeMessages was removed once the chat view's
+    // `@FrickStream` / `@FrickSwift.FrickPresence` wrappers took over
+    // the (un)subscribe lifecycle on convo switch.
 
     // MARK: Push notifications
 
@@ -580,7 +571,6 @@ final class FoundationModel {
         draft = ""
         threadError = nil
         status = "Loading"
-        subscribedConversationId = nil
         typingNotice = nil
     }
 
@@ -640,7 +630,6 @@ final class FoundationModel {
         socket = nil
         socketStatusTask = nil
         socketEventsTask = nil
-        subscribedConversationId = nil
         syncStatus = .initial
         typingNotice = nil
         lastReceiptSequence = [:]

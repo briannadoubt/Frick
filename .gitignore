@@ -12,6 +12,7 @@ apps/server/data/
 apps/ios/FrickDemo.xcodeproj/
 apps/ios/build/
 apps/android/.gradle/
+apps/android/.kotlin/
 apps/android/build/
 apps/android/app/build/
 apps/android/frick/build/
