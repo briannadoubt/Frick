@@ -3,6 +3,7 @@ import { createFrickServer } from "../src/server.js";
 import { FrickStore } from "../src/store.js";
 import { exportDataSubject } from "../src/compliance/data-subject-export.js";
 import { eraseDataSubject } from "../src/compliance/data-subject-erase.js";
+import { createMessagesSearchIndex, MESSAGES_SEARCH_INDEX_NAME } from "../src/search/messages-index.js";
 
 const ADMIN_TOKEN = "test-admin-token-1234567890ABCDEF1234567890ABCDEF";
 const TENANT = "tenant-ds";
@@ -59,6 +60,7 @@ describe("data-subject export", () => {
 
     expect(report.deleted.auth_sessions).toBe(1);
     expect(report.deleted.push_device_registrations).toBe(1);
+    expect(report.deleted.idempotency_keys).toBe(1);
     expect(report.pseudonymized.auth_accounts).toBe(1);
     expect(report.pseudonymized.stream_events).toBe(1);
 
@@ -88,6 +90,74 @@ describe("data-subject export", () => {
     expect(senderMap).toContainEqual({ senderId: null, body: null });
     expect(senderMap).toContainEqual({ senderId: OTHER, body: "hi from other" });
     store.close();
+  });
+
+  it("erase removes authored message text from search while keeping other messages searchable", () => {
+    const store = seedStore();
+    try {
+      expect(
+        store.searchAdapter.query(TENANT, {
+          index: MESSAGES_SEARCH_INDEX_NAME,
+          q: "me",
+          limit: 10,
+        }).total,
+      ).toBe(1);
+      expect(
+        store.searchAdapter.query(TENANT, {
+          index: MESSAGES_SEARCH_INDEX_NAME,
+          q: "other",
+          limit: 10,
+        }).total,
+      ).toBe(1);
+
+      eraseDataSubject(store, TENANT, USER);
+
+      expect(
+        store.searchAdapter.query(TENANT, {
+          index: MESSAGES_SEARCH_INDEX_NAME,
+          q: "me",
+          limit: 10,
+        }).total,
+      ).toBe(0);
+      expect(
+        store.searchAdapter.query(TENANT, {
+          index: MESSAGES_SEARCH_INDEX_NAME,
+          q: "other",
+          limit: 10,
+        }).total,
+      ).toBe(1);
+      expect(
+        store.db
+          .prepare(`SELECT COUNT(*) AS n FROM search_indexes WHERE tenant_id = ? AND text LIKE ?`)
+          .get(TENANT, "%hi from me%"),
+      ).toEqual({ n: 0 });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("erase deletes idempotency keys only for events authored by the erased user", () => {
+    const store = seedStore();
+    try {
+      expect(
+        store.db
+          .prepare(`SELECT COUNT(*) AS n FROM idempotency_keys WHERE tenant_id = ?`)
+          .get(TENANT),
+      ).toEqual({ n: 2 });
+
+      const report = eraseDataSubject(store, TENANT, USER);
+
+      expect(report.deleted.idempotency_keys).toBe(1);
+      expect(
+        store.db
+          .prepare(
+            `SELECT replica_id, request_id FROM idempotency_keys WHERE tenant_id = ? ORDER BY replica_id ASC`,
+          )
+          .all(TENANT),
+      ).toEqual([{ replica_id: "replica-2", request_id: "req-other" }]);
+    } finally {
+      store.close();
+    }
   });
 
   it("HTTP erase refuses in production without ?confirm=yes", async () => {
@@ -125,6 +195,8 @@ describe("data-subject export", () => {
 
 function seedStore(): FrickStore {
   const store = new FrickStore({ path: ":memory:", seed: false });
+  store.searchIndexes.register(createMessagesSearchIndex());
+  store.searchAdapter.registerIndex(createMessagesSearchIndex());
   seedRowsInto(store);
   return store;
 }

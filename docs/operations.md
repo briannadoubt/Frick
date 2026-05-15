@@ -5,9 +5,8 @@
 This document describes what `apps/server` looks like to an operator today:
 the runtime modes it supports, the environment variables it reads, the HTTP
 endpoints exposed for orchestrators, the inspection routes, and the
-shutdown contract. Anything aspirational lives in
-`internal/framework-hardening-spec.md` — this file only describes
-what is in main right now.
+shutdown contract. Anything aspirational lives under `internal/specs/`
+and `internal/plans/` — this file only describes what is in main right now.
 
 The framework ships a `frick` CLI for ops (`frick doctor`, `frick migrate
 status`, `frick reset --dev`, `frick tenants list`, …). See
@@ -43,13 +42,15 @@ All variables are optional. Defaults match the runtime mode.
 | `FRICK_HOST`                | `127.0.0.1`                 | `0.0.0.0`                             | Host the HTTP server binds to.                                       |
 | `FRICK_PORT`                | `4099`                      | `4099`                                | Integer in `[0, 65535]`. `0` asks the kernel to allocate a port.     |
 | `FRICK_PUBLIC_URL`          | unset                       | unset                                 | Externally-reachable URL; surfaced in the startup log when set.      |
-| `FRICK_ALLOWED_ORIGINS`     | `["*"]`                     | `[]`                                  | Comma-separated. Parsed and stored; CORS enforcement is a known gap. |
+| `FRICK_ALLOWED_ORIGINS`     | `["*"]`                     | `[]`                                  | Comma-separated allowlist. Enforced for HTTP preflight and WebSocket upgrades; same-origin/server-to-server requests omit `Origin`. |
 | `FRICK_DB_PATH`             | `./frick.sqlite`            | `./frick.sqlite`                      | SQLite path. `":memory:"` is rejected in production.                 |
-| `FRICK_BLOB_STORAGE_PATH`   | `./frick-blobs/`            | `./frick-blobs/`                      | Local filesystem directory for the current blob driver.              |
+| `FRICK_BLOB_STORAGE_PATH`   | `./frick-blobs/`            | `./frick-blobs/`                      | Parsed for future filesystem blob storage; current blob bytes are SQLite-backed. |
 | `FRICK_LOG_LEVEL`           | `info`                      | `info`                                | One of `debug`, `info`, `warn`, `error`.                             |
 | `FRICK_DEMO_AUTH_ENABLED`   | `true`                      | `false`                               | Toggles `POST /auth/dev-login`. Forcing on in prod logs a warning.   |
 | `FRICK_SESSION_TTL_SECONDS` | `604800` (7d)               | `604800`                              | New sessions get `expiresAt = now + ttl`.                            |
 | `FRICK_INSPECTION_ENABLED`  | `true`                      | `false`                               | Gates `/_frick/inspect/*`. Forcing on in prod logs a warning.        |
+| `FRICK_ADMIN_TOKEN`         | unset                       | unset                                 | Enables `/_frick/admin/*` and production inspection auth. Must be at least 32 chars in production. |
+| `FRICK_IMPLICIT_TENANT_CREATION` | `true`                 | `false`                               | Allows auth routes to create unknown tenants automatically.           |
 
 Validation errors throw `FrickConfigError` at startup, before any port is
 opened. Unknown env values (e.g. `FRICK_ENV=staging`) are fatal — the
@@ -83,7 +84,7 @@ readinessProbe:
 ## Inspection routes
 
 When `inspectionEnabled` is true (the default outside production), the
-server exposes three additional GET endpoints under `/_frick/inspect/`:
+server exposes these GET endpoints under `/_frick/inspect/`:
 
 - `/_frick/inspect/server` — `{ schemaId, schemaVersion, schemaRevision,
   schemaHash, env, demoAuthEnabled, inspectionEnabled, startedAt }`.
@@ -110,8 +111,10 @@ When inspection is disabled (production default), every path under
 opt back in for an on-call session, set `FRICK_INSPECTION_ENABLED=true`.
 A startup warning is logged when that override is active in production.
 
-These routes share the same session bearer as the rest of the protected
-API. There is no separate "ops principal" or admin role today.
+Inspection routes require authentication. Outside production, callers must
+send a valid session bearer or `x-frick-session-token` header. In
+production, callers must send the configured admin bearer token. The
+`sessionToken` query parameter is not accepted for HTTP inspection routes.
 
 ## Graceful shutdown
 
@@ -247,7 +250,13 @@ When `adminEnabled` is on:
   production mode with `auth.forbidden` and
   `details.reason: "restoreNotAllowedInProduction"`.
 
-Both routes audit-log under `backup.dump` and `backup.restore`.
+Both routes audit-log under `backup.dump` and `backup.restore`. These
+backup and restore audit writes are fail-closed: if the audit row cannot be
+recorded, the admin action is rejected instead of silently continuing.
+The same fail-closed policy applies to sensitive admin mutations for tenant
+creation, tenant setting writes, account creation, job enqueue, search
+rebuild, and projection rebuild. Rebuild routes record the allow intent
+before starting work because rebuild side effects are not rollbackable.
 
 ### Schema drift and migration parity
 
@@ -294,11 +303,13 @@ is `{ findings, breakingCount }`.
 
 ## Known gaps
 
-- CORS is parsed (`allowedOrigins`) but not yet enforced in HTTP
-  handlers. The current handler responds with `Access-Control-Allow-Origin: *`.
-- No CLI binary yet (`frick schema check`, `frick doctor`, etc.). The
-  underlying functions (`runFrameworkMigrations`, `listAppliedMigrations`,
-  `loadFrickConfig`) are exported and stable; a CLI slice can wrap them.
-- Blob storage is SQLite-backed today; the `FRICK_BLOB_STORAGE_PATH`
-  variable is parsed for forward compatibility with a future filesystem
-  driver.
+- CORS is enforced for HTTP preflight requests and WebSocket upgrades.
+  Same-origin and server-to-server requests with no `Origin` header bypass
+  CORS by browser convention; exact-string origin matching is the only
+  supported mode.
+- The CLI exists in the monorepo as `pnpm cli <command>` and can be built
+  as `frick`, but it is still private and imports server internals directly.
+  Publishing a standalone npm CLI remains a release-surface follow-up.
+- Blob content is stored in SQLite today. `FRICK_BLOB_STORAGE_PATH` is
+  parsed and exposed for a future filesystem driver, but the current server
+  does not write blob bytes there.

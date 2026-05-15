@@ -54,6 +54,64 @@ describe("restoreFrickDatabase", () => {
     }
   });
 
+  it("round-trips blob derivatives, search indexes, and tenant settings", async () => {
+    const source = new FrickStore({ path: ":memory:", seed: false });
+    try {
+      source.tenants.create("tenant-alpha");
+      source.blobDerivatives.record({
+        tenantId: "tenant-alpha",
+        parentBlobId: "blob-parent-alpha",
+        derivativeId: "thumb",
+        processorId: "image-thumb",
+        mimeType: "image/png",
+        byteLength: 3,
+        contentHash: "hash-alpha",
+        storageKey: "derivative/blob-parent-alpha/thumb",
+        content: Buffer.from([1, 2, 3]),
+        metadata: { width: 64 },
+      });
+      source.searchAdapter.upsert("tenant-alpha", "messages-fts", {
+        docId: "event-alpha",
+        text: "alpha secret",
+        fields: { senderId: "user-alpha" },
+      });
+      source.tenantSettings.set("tenant-alpha", "retentionMs", 1234);
+
+      const lines = await dumpToLines(source, "tenant-alpha");
+      const target = new FrickStore({ path: ":memory:", seed: false });
+      try {
+        const report = await restoreFrickDatabase({
+          target,
+          source: fromLines(lines),
+          confirm: "yes",
+        });
+        expect(report.rowCountsByType.blob_derivatives).toBe(1);
+        expect(report.rowCountsByType.search_indexes).toBe(1);
+        expect(report.rowCountsByType.tenant_settings).toBe(1);
+
+        const derivative = target.blobDerivatives.read(
+          "blob-parent-alpha",
+          "thumb",
+          "tenant-alpha",
+        );
+        expect(Array.from(derivative?.bytes ?? [])).toEqual([1, 2, 3]);
+        expect(derivative?.row.metadata).toEqual({ width: 64 });
+        expect(
+          target.searchAdapter.query("tenant-alpha", {
+            index: "messages-fts",
+            q: "alpha",
+            limit: 10,
+          }).total,
+        ).toBe(1);
+        expect(target.tenantSettings.get("tenant-alpha", "retentionMs")).toBe(1234);
+      } finally {
+        target.close();
+      }
+    } finally {
+      source.close();
+    }
+  });
+
   it("refuses to restore over a non-empty target without overwrite", async () => {
     const source = new FrickStore({ path: ":memory:", seed: false });
     const target = new FrickStore({ path: ":memory:" });
@@ -156,6 +214,83 @@ describe("restoreFrickDatabase", () => {
         expect(report.skipped.some((s) => s.type === "<unparseable>")).toBe(true);
         expect(report.skipped.some((s) => s.type === "no_such_table")).toBe(true);
         expect(report.rowCountsByType.objects).toBe(1);
+      } finally {
+        target.close();
+      }
+    } finally {
+      source.close();
+    }
+  });
+
+  it("refuses a tenant-scoped restore row whose tenant_id does not match the header", async () => {
+    const source = new FrickStore({ path: ":memory:", seed: false });
+    try {
+      source.tenants.create("tenant-alpha");
+      source.upsertObject("tenant-alpha", "User", "user-alpha", { displayName: "Alpha" });
+      const lines = await dumpToLines(source, "tenant-alpha");
+      const mismatchedRow = JSON.stringify({
+        type: "objects",
+        row: {
+          tenant_id: "tenant-beta",
+          object_type: "User",
+          object_id: "user-beta",
+          version: 0,
+          packed_base64: Buffer.from([1, 2, 3]).toString("base64"),
+          updated_at: "2026-01-01T00:00:00.000Z",
+        },
+      });
+      const target = new FrickStore({ path: ":memory:", seed: false });
+      try {
+        await expect(
+          restoreFrickDatabase({
+            target,
+            source: fromLines([lines[0]!, mismatchedRow, ...lines.slice(1)]),
+            confirm: "yes",
+          }),
+        ).rejects.toMatchObject({ reason: "tenantScopeMismatch" });
+        expect(target.readObject("tenant-beta", "User", "user-beta")).toBeUndefined();
+      } finally {
+        target.close();
+      }
+    } finally {
+      source.close();
+    }
+  });
+
+  it("skips rows with columns outside the target table schema before insert SQL is built", async () => {
+    const source = new FrickStore({ path: ":memory:", seed: false });
+    try {
+      source.tenants.create("tenant-alpha");
+      const lines = await dumpToLines(source, "tenant-alpha");
+      const invalidRow = JSON.stringify({
+        type: "objects",
+        row: {
+          tenant_id: "tenant-alpha",
+          object_type: "User",
+          object_id: "user-bad",
+          version: 0,
+          packed_base64: Buffer.from([1, 2, 3]).toString("base64"),
+          updated_at: "2026-01-01T00:00:00.000Z",
+          "object_id\") VALUES ('x'); DROP TABLE objects; --": "ignored",
+        },
+      });
+      const target = new FrickStore({ path: ":memory:", seed: false });
+      try {
+        const report = await restoreFrickDatabase({
+          target,
+          source: fromLines([lines[0]!, invalidRow, ...lines.slice(1)]),
+          confirm: "yes",
+        });
+        expect(report.skipped).toContainEqual(
+          expect.objectContaining({
+            type: "objects",
+            reason:
+              "invalidColumn: objects.object_id\") VALUES ('x'); DROP TABLE objects; --",
+          }),
+        );
+        expect(target.readObject("tenant-alpha", "User", "user-bad")).toBeUndefined();
+        target.upsertObject("tenant-alpha", "User", "user-ok", { displayName: "OK" });
+        expect(target.readObject("tenant-alpha", "User", "user-ok")?.displayName).toBe("OK");
       } finally {
         target.close();
       }

@@ -42,6 +42,33 @@ afterEach(async () => {
 });
 
 describe("sync gateway object upserts", () => {
+  it("rejects an HTTP direct RoomMember write but still allows a custom Note object", async () => {
+    app = await startServer({ schema: schemaWithNote("lastWriteWins") });
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    const forged = await fetch(`${app.httpUrl}/objects/RoomMember/member-forged-http`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${login.sessionToken}` },
+      body: JSON.stringify({
+        conversationId: "conversation-general",
+        userId: "user-mallory",
+        role: "member",
+      }),
+    });
+    expect(forged.status).toBe(403);
+    expect(app.store.readObject("_default", "RoomMember", "member-forged-http")).toBeUndefined();
+
+    const note = await fetch(`${app.httpUrl}/objects/Note/note-http`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${login.sessionToken}` },
+      body: JSON.stringify({ body: "custom objects are app-owned" }),
+    });
+    expect(note.status).toBe(201);
+    expect(app.store.readObject("_default", "Note", "note-http")).toMatchObject({
+      body: "custom objects are app-owned",
+    });
+  });
+
   it("acks an lastWriteWins ObjectUpsert with version 1 on first write and 2 on update", async () => {
     app = await startServer({ schema: schemaWithNote("lastWriteWins") });
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
@@ -76,6 +103,37 @@ describe("sync gateway object upserts", () => {
     const ack2 = await nextAck(socket);
     expect(ack2[1]).toMatchObject({ requestId: "req-lww-2", version: 2 });
 
+    socket.close();
+  });
+
+  it("nacks a websocket direct RoomMember write", async () => {
+    app = await startServer();
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const socket = await connectAndHello(app.url, app.schemaHash, login.sessionToken);
+
+    socket.send(
+      encodeFrame([
+        FrameKind.ObjectUpsert,
+        {
+          requestId: "req-forged-roommember",
+          objectType: "RoomMember",
+          objectId: "member-forged-ws",
+          value: {
+            conversationId: "conversation-general",
+            userId: "user-mallory",
+            role: "member",
+          },
+        },
+      ]),
+    );
+
+    const frame = await nextAck(socket);
+    expect(frame[0]).toBe(FrameKind.Nack);
+    expect(frame[1]).toMatchObject({
+      requestId: "req-forged-roommember",
+      code: "auth.forbidden",
+    });
+    expect(app.store.readObject("_default", "RoomMember", "member-forged-ws")).toBeUndefined();
     socket.close();
   });
 
@@ -238,7 +296,7 @@ async function connectAndHello(
   schemaHash: string,
   sessionToken: string,
 ): Promise<WebSocket> {
-  const socket = new WebSocket(`${url}?sessionToken=${encodeURIComponent(sessionToken)}`);
+  const socket = new WebSocket(url, { headers: { authorization: `Bearer ${sessionToken}` } });
   await new Promise<void>((resolve) => socket.once("open", resolve));
   const hello = expectHelloAckThenSchema(socket);
   socket.send(

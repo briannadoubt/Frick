@@ -78,6 +78,8 @@ function registration(token: string): PushDeviceRegistration {
   };
 }
 
+const publicResolver = async (): Promise<readonly { address: string }[]> => [{ address: "8.8.8.8" }];
+
 describe("web push adapter", () => {
   it("returns skipped when credentials are missing", async () => {
     const env = { FRICK_PUSH_CRED_KEY: freshKey() };
@@ -102,7 +104,7 @@ describe("web push adapter", () => {
       expect(String(url)).toBe("https://push.example.test/p/abc");
       return new Response(null, { status: 201 });
     };
-    const adapter = createFrickWebPushAdapter({ env, fetch: fetchImpl });
+    const adapter = createFrickWebPushAdapter({ env, fetch: fetchImpl, resolveHostname: publicResolver });
     const delivery = await adapter.send(
       intent,
       registration(JSON.stringify({ endpoint: "https://push.example.test/p/abc", keys: { p256dh: "p", auth: "a" } })),
@@ -118,6 +120,7 @@ describe("web push adapter", () => {
     const adapter = createFrickWebPushAdapter({
       env,
       fetch: (async () => new Response(null, { status: 410 })) as typeof fetch,
+      resolveHostname: publicResolver,
     });
     const delivery = await adapter.send(
       intent,
@@ -138,6 +141,82 @@ describe("web push adapter", () => {
     const delivery = await adapter.send(intent, registration("not-json"), makeCtx(tenantSettings));
     expect(delivery.status).toBe("failed");
     expect(delivery.error?.code).toBe("push.badDeviceToken");
+  });
+
+  it("rejects non-https subscription endpoints before fetch", async () => {
+    const env = { FRICK_PUSH_CRED_KEY: freshKey() };
+    const { tenantSettings } = setupTenant(env);
+    let fetchCalled = false;
+    const adapter = createFrickWebPushAdapter({
+      env,
+      fetch: (async () => {
+        fetchCalled = true;
+        return new Response();
+      }) as typeof fetch,
+    });
+    const delivery = await adapter.send(
+      intent,
+      registration(JSON.stringify({ endpoint: "http://push.example.test/p/abc" })),
+      makeCtx(tenantSettings),
+    );
+    expect(delivery.status).toBe("failed");
+    expect(delivery.error?.code).toBe("push.badDeviceToken");
+    expect(fetchCalled).toBe(false);
+  });
+
+  it("rejects loopback and private subscription endpoints before fetch", async () => {
+    const env = { FRICK_PUSH_CRED_KEY: freshKey() };
+    const { tenantSettings } = setupTenant(env);
+    let fetchCalled = false;
+    const adapter = createFrickWebPushAdapter({
+      env,
+      fetch: (async () => {
+        fetchCalled = true;
+        return new Response();
+      }) as typeof fetch,
+    });
+    for (const endpoint of [
+      "https://localhost/p/abc",
+      "https://127.0.0.1/p/abc",
+      "https://10.1.2.3/p/abc",
+      "https://172.16.0.1/p/abc",
+      "https://192.168.1.1/p/abc",
+      "https://169.254.169.254/latest/meta-data",
+      "https://[::1]/p/abc",
+      "https://[fd00::1]/p/abc",
+    ]) {
+      const delivery = await adapter.send(
+        intent,
+        registration(JSON.stringify({ endpoint })),
+        makeCtx(tenantSettings),
+      );
+      expect(delivery.status).toBe("failed");
+      expect(delivery.error?.code).toBe("push.badDeviceToken");
+    }
+    expect(fetchCalled).toBe(false);
+  });
+
+  it("rejects hostnames that resolve to private addresses before fetch", async () => {
+    const env = { FRICK_PUSH_CRED_KEY: freshKey() };
+    const { tenantSettings } = setupTenant(env);
+    let fetchCalled = false;
+    const adapter = createFrickWebPushAdapter({
+      env,
+      fetch: (async () => {
+        fetchCalled = true;
+        return new Response();
+      }) as typeof fetch,
+      resolveHostname: async () => [{ address: "10.0.0.2" }],
+    });
+    const delivery = await adapter.send(
+      intent,
+      registration(JSON.stringify({ endpoint: "https://push.example.test/p/abc" })),
+      makeCtx(tenantSettings),
+    );
+
+    expect(delivery.status).toBe("failed");
+    expect(delivery.error?.code).toBe("push.badDeviceToken");
+    expect(fetchCalled).toBe(false);
   });
 
   it("signs a VAPID JWT parseable as {typ, alg, aud, exp, sub} with a 64-byte signature", () => {

@@ -223,6 +223,10 @@ class FrickHttpException(
     val retryable: Boolean get() = envelope?.retryable ?: false
 }
 
+class FrickAuthenticationRequiredException(
+    message: String = "Frick requires an authenticated session for this operation",
+) : IllegalStateException(message)
+
 fun parseFrickErrorEnvelope(body: String): FrickErrorEnvelope? {
     if (body.isBlank()) {
         return null
@@ -298,6 +302,9 @@ interface FrickStorage {
     fun loadPendingAppends(): List<PendingAppend>
     fun appendPendingAppend(append: PendingAppend)
     fun removePendingAppend(requestId: String)
+    fun clearPendingAppends() {
+        loadPendingAppends().forEach { append -> removePendingAppend(append.requestId) }
+    }
     fun loadSession(): FrickSession?
     fun saveSession(session: FrickSession)
     fun clearSession()
@@ -314,6 +321,7 @@ object NoopFrickStorage : FrickStorage {
     override fun loadPendingAppends(): List<PendingAppend> = emptyList()
     override fun appendPendingAppend(append: PendingAppend) = Unit
     override fun removePendingAppend(requestId: String) = Unit
+    override fun clearPendingAppends() = Unit
     override fun loadSession(): FrickSession? = null
     override fun saveSession(session: FrickSession) = Unit
     override fun clearSession() = Unit
@@ -447,6 +455,12 @@ class SQLiteFrickStorage(
                 "$REQUEST_ID = ?",
                 arrayOf(requestId),
             )
+        }
+    }
+
+    override fun clearPendingAppends() {
+        synchronized(lock) {
+            writableDatabase.delete(PENDING_APPENDS_TABLE, null, null)
         }
     }
 
@@ -641,7 +655,7 @@ class SQLiteFrickStorage(
 }
 
 class KtorFrickTransport(
-    private val baseUrl: String = "http://10.0.2.2:4099",
+    private val baseUrl: String = FrickClient.DefaultBaseUrl,
     private val httpClient: HttpClient = defaultHttpClient(),
     private val sessionTokenProvider: () -> String? = { null },
 ) : FrickTransport, AutoCloseable {
@@ -707,7 +721,7 @@ class KtorFrickTransport(
 }
 
 class FrickClient(
-    baseUrl: String = "http://10.0.2.2:4099",
+    baseUrl: String = DefaultBaseUrl,
     private val replicaId: String = "android-demo",
     private val requestIdFactory: () -> String = { UUID.randomUUID().toString() },
     private val storage: FrickStorage = NoopFrickStorage,
@@ -716,6 +730,11 @@ class FrickClient(
         sessionTokenProvider = { storage.loadSession()?.sessionToken },
     ),
 ) {
+    companion object {
+        const val DefaultBaseUrl = "https://127.0.0.1:4099"
+        const val LocalDevelopmentBaseUrl = "http://10.0.2.2:4099"
+    }
+
     private val readSequenceLock = Any()
     private val readSequences = mutableMapOf<String, Int>()
 
@@ -816,6 +835,7 @@ class FrickClient(
     }
 
     fun signOut() {
+        storage.clearPendingAppends()
         storage.clearSession()
     }
 
@@ -1123,6 +1143,7 @@ class FrickClient(
     }
 
     suspend fun flushPendingAppends() {
+        requireAuthenticatedSession()
         for (append in storage.loadPendingAppends()) {
             sendAppend(append)
             storage.removePendingAppend(append.requestId)
@@ -1130,6 +1151,7 @@ class FrickClient(
     }
 
     private suspend fun sendAppend(append: PendingAppend) {
+        requireAuthenticatedSession()
         transport.post(path = "/append", body = append.body)
     }
 
@@ -1147,7 +1169,16 @@ class FrickClient(
     }
 
     private fun authenticatedUserId(): String =
-        storage.loadSession()?.userId ?: "user-ada"
+        requireAuthenticatedSession().userId
+
+    private fun requireAuthenticatedSession(): FrickSession {
+        val session = storage.loadSession()
+            ?: throw FrickAuthenticationRequiredException()
+        if (session.sessionToken.isBlank()) {
+            throw FrickAuthenticationRequiredException()
+        }
+        return session
+    }
 
     /**
      * Open a WebSocket sync connection. The caller is responsible for calling
@@ -1160,6 +1191,7 @@ class FrickClient(
         config: FrickSyncSocketConfig = FrickSyncSocketConfig(replicaId = replicaId),
         httpClient: okhttp3.OkHttpClient = FrickSyncSocket.defaultOkHttpClient(),
     ): FrickSyncSocket {
+        requireAuthenticatedSession()
         verifyCacheCompatibility()
         return FrickSyncSocket(
             baseUrl = baseUrl,
@@ -1386,7 +1418,9 @@ private fun incompatibilityMessage(
     }
 
 private fun shouldQueueAppend(error: Exception): Boolean =
-    error !is FrickSchemaMismatchException && error !is FrickHttpException
+    error !is FrickAuthenticationRequiredException &&
+        error !is FrickSchemaMismatchException &&
+        error !is FrickHttpException
 
 private fun shouldReturnEmptyRead(error: Exception): Boolean =
     error !is FrickSchemaMismatchException

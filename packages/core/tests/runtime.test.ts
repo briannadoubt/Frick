@@ -140,7 +140,7 @@ describe("foundation runtime", () => {
     expect(inbox.value.has("user-grace:conversation-general")).toBe(false);
   });
 
-  it("appends the session token to websocket URLs", () => {
+  it("sends the session token in hello without putting it in websocket URLs", () => {
     const socket = TestWebSocket.prepare();
     const client = new FrickClient({
       endpoint: "ws://test/_frick/sync?transport=websocket",
@@ -157,10 +157,21 @@ describe("foundation runtime", () => {
     });
 
     client.connect();
+    socket.emit("open", {});
 
-    expect(socket.endpoint).toBe(
-      "ws://test/_frick/sync?transport=websocket&sessionToken=session-token-123",
-    );
+    expect(socket.endpoint).toBe("ws://test/_frick/sync?transport=websocket");
+    const frame = decodeFrame(socket.sent[0] as Uint8Array);
+    expect(frame[0]).toBe(FrameKind.Hello);
+    if (frame[0] !== FrameKind.Hello) {
+      throw new Error("Expected first frame to be Hello");
+    }
+    expect(frame[1]).toMatchObject({
+      replicaId: "replica-web",
+      deviceId: "device-web",
+      schemaHash: foundationSchema.hash,
+      knownCursors: {},
+      sessionToken: "session-token-123",
+    });
     expect(client.syncStatus.value).toEqual(
       expect.objectContaining({
         authenticated: true,

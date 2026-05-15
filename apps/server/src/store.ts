@@ -1074,6 +1074,10 @@ export class FrickStore {
     return this.sessions.readAny(sessionToken);
   }
 
+  deleteSession(sessionToken: string): boolean {
+    return this.sessions.delete(sessionToken);
+  }
+
   enqueueJob(type: string, value: PlainObject): void;
   enqueueJob(tenantId: string, type: string, value: PlainObject): void;
   enqueueJob(a: string, b: string | PlainObject, c?: PlainObject): void {
@@ -1124,4 +1128,3 @@ function memberIdFor(conversationId: string, userId: string): string {
 function unique(values: string[]): string[] {
   return Array.from(new Set(values));
 }
-

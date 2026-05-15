@@ -22,6 +22,22 @@ describe("/_frick/admin/tenants routes", () => {
     expect(body.error.code).toBe("auth.unauthenticated");
   });
 
+  it("does not accept admin tokens from the sessionToken query parameter", async () => {
+    app = await startServer({ adminToken: ADMIN_TOKEN });
+    const response = await fetch(
+      `${app.httpUrl}/_frick/admin/tenants?sessionToken=${encodeURIComponent(ADMIN_TOKEN)}`,
+    );
+    expect(response.status).toBe(401);
+  });
+
+  it("does not accept admin tokens from x-frick-session-token", async () => {
+    app = await startServer({ adminToken: ADMIN_TOKEN });
+    const response = await fetch(`${app.httpUrl}/_frick/admin/tenants`, {
+      headers: { "x-frick-session-token": ADMIN_TOKEN },
+    });
+    expect(response.status).toBe(401);
+  });
+
   it("returns 403 envelope for a tenant-scoped principal", async () => {
     app = await startServer({ adminToken: ADMIN_TOKEN });
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
@@ -60,6 +76,22 @@ describe("/_frick/admin/tenants routes", () => {
     });
     const body = (await list.json()) as { tenants: Array<{ tenantId: string }> };
     expect(body.tenants.map((row) => row.tenantId)).toContain("tenant-alpha");
+  });
+
+  it("POST fails closed before creating a tenant when audit recording fails", async () => {
+    app = await startServer({ adminToken: ADMIN_TOKEN });
+    (app.store.adminAudit as unknown as { record: () => never }).record = () => {
+      throw new Error("audit unavailable");
+    };
+
+    const response = await fetch(`${app.httpUrl}/_frick/admin/tenants`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ tenantId: "tenant-audit-fail", displayName: "Audit Fail" }),
+    });
+
+    expect(response.status).toBe(500);
+    expect(app.store.tenants.get("tenant-audit-fail")).toBeUndefined();
   });
 
   it("POST returns 409 envelope on duplicate id", async () => {
@@ -107,6 +139,30 @@ describe("/_frick/admin/tenants routes", () => {
     );
     const withBody = (await withArchived.json()) as { tenants: Array<{ tenantId: string }> };
     expect(withBody.tenants.map((row) => row.tenantId)).toContain("tenant-archive");
+  });
+
+  it("rejects protected HTTP requests using a session from an archived tenant", async () => {
+    app = await startServer({ adminToken: ADMIN_TOKEN });
+    const headers = { authorization: `Bearer ${ADMIN_TOKEN}` };
+    await fetch(`${app.httpUrl}/_frick/admin/tenants`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ tenantId: "tenant-session-archive" }),
+    });
+    const login = await devLogin(app.httpUrl, {
+      userId: "user-archived",
+      tenantId: "tenant-session-archive",
+    });
+    const archive = await fetch(
+      `${app.httpUrl}/_frick/admin/tenants/tenant-session-archive/archive`,
+      { method: "POST", headers },
+    );
+    expect(archive.status).toBe(200);
+
+    const protectedResponse = await fetch(`${app.httpUrl}/objects`, {
+      headers: { authorization: `Bearer ${login.sessionToken}` },
+    });
+    expect(protectedResponse.status).toBe(401);
   });
 
   it("returns 404 when admin token is unset", async () => {

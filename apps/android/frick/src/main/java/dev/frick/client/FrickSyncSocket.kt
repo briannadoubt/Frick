@@ -143,7 +143,7 @@ data class FrickSyncSocketConfig(
     val helloAckTimeoutMs: Long = 10_000,
 )
 
-internal fun buildSyncUrl(baseUrl: String, sessionToken: String?): String {
+internal fun buildSyncUrl(baseUrl: String): String {
     val trimmed = baseUrl.trimEnd('/')
     val withScheme = when {
         trimmed.startsWith("ws://") || trimmed.startsWith("wss://") -> trimmed
@@ -151,10 +151,7 @@ internal fun buildSyncUrl(baseUrl: String, sessionToken: String?): String {
         trimmed.startsWith("http://") -> "ws://" + trimmed.removePrefix("http://")
         else -> "ws://$trimmed"
     }
-    val query = sessionToken?.takeIf { it.isNotBlank() }
-        ?.let { "?sessionToken=${java.net.URLEncoder.encode(it, "UTF-8")}" }
-        ?: ""
-    return "$withScheme/_frick/sync$query"
+    return "$withScheme/_frick/sync"
 }
 
 // ----- msgpack encode/decode helpers -----
@@ -308,6 +305,7 @@ class FrickSyncSocket internal constructor(
 
     @Volatile private var closed = false
     @Volatile private var webSocket: WebSocket? = null
+    @Volatile private var activeSessionToken: String? = null
     @Volatile private var helloAcked = CompletableDeferred<Unit>()
     @Volatile private var connectJob: Job? = null
 
@@ -318,7 +316,7 @@ class FrickSyncSocket internal constructor(
     private val pendingObjectWrites = ConcurrentHashMap<String, CompletableDeferred<ObjectWriteResult>>()
 
     init {
-        URI(buildSyncUrl(baseUrl, sessionTokenProvider()))
+        URI(buildSyncUrl(baseUrl))
     }
 
     @Volatile private var reconnectEnabled: Boolean = true
@@ -351,10 +349,15 @@ class FrickSyncSocket internal constructor(
         helloAcked = CompletableDeferred()
         disconnectedSignal = CompletableDeferred()
         _status.value = FrickSyncStatus.Connecting
-        val url = buildSyncUrl(baseUrl, sessionTokenProvider())
-        val request = Request.Builder()
+        val sessionToken = sessionTokenProvider()?.takeIf { token -> token.isNotBlank() }
+        activeSessionToken = sessionToken
+        val url = buildSyncUrl(baseUrl)
+        val requestBuilder = Request.Builder()
             .url(url.replace("ws://", "http://").replace("wss://", "https://"))
-            .build()
+        if (sessionToken != null) {
+            requestBuilder.header("Authorization", "Bearer $sessionToken")
+        }
+        val request = requestBuilder.build()
         val ws = httpClient.newWebSocket(request, Listener())
         webSocket = ws
     }
@@ -364,13 +367,14 @@ class FrickSyncSocket internal constructor(
     }
 
     private fun sendHello() {
-        val payload = mapOf(
-            "replicaId" to config.replicaId,
-            "deviceId" to config.deviceId,
-            "schemaHash" to FRICK_SCHEMA_HASH,
-            "knownCursors" to emptyMap<String, Int>(),
-            "clientCapabilities" to defaultAndroidCapabilities(config.sdkVersion),
-        )
+        val payload = buildMap<String, Any?> {
+            put("replicaId", config.replicaId)
+            put("deviceId", config.deviceId)
+            activeSessionToken?.let { token -> put("sessionToken", token) }
+            put("schemaHash", FRICK_SCHEMA_HASH)
+            put("knownCursors", emptyMap<String, Int>())
+            put("clientCapabilities", defaultAndroidCapabilities(config.sdkVersion))
+        }
         val bytes = FrickMsgPack.encodeFrame(FrameKindCodes.HELLO, payload)
         if (webSocket?.send(bytes.toByteString()) == true) {
             _status.value = FrickSyncStatus.HelloSent

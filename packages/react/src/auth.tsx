@@ -19,6 +19,7 @@ import { useCallback, useMemo, useState, type ReactNode } from "react";
 import {
   devLogin as devLoginCore,
   login as loginCore,
+  logout as logoutCore,
   signUp as signUpCore,
   type AuthSession,
 } from "@frick/core/chat";
@@ -131,7 +132,17 @@ export function useDevSignIn(): (userId: string, opts?: { deviceId?: string; rep
  */
 export function useSignOut(): () => void {
   const client = useFrick();
-  return useCallback(() => client.setSession(null), [client]);
+  const httpEndpoint = useFrickHttpEndpoint();
+  const session = useFrickSession();
+  return useCallback(() => {
+    const token = session?.sessionToken;
+    client.setSession(null);
+    if (token) {
+      void logoutCore({ httpEndpoint, sessionToken: token }).catch(() => {
+        // Local sign-out should not depend on server reachability.
+      });
+    }
+  }, [client, httpEndpoint, session?.sessionToken]);
 }
 
 /**

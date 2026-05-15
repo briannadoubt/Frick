@@ -49,7 +49,11 @@ pnpm web                        # http://127.0.0.1:5173
 In the third, watch the sync log:
 
 ```bash
-curl -s http://127.0.0.1:4099/_frick/inspect/server | jq
+TOKEN="$(curl -s -X POST http://127.0.0.1:4099/auth/dev-login \
+  -H 'content-type: application/json' \
+  -d '{"userId":"user-ada"}' | jq -r .sessionToken)"
+curl -s http://127.0.0.1:4099/_frick/inspect/server \
+  -H "Authorization: Bearer $TOKEN" | jq
 ```
 
 Now open `http://127.0.0.1:5173` in **two browser tabs**. The demo is a thin conversation harness over the `conversation-general` stream. Type a message in tab A and submit it. Tab B should receive the `MessageSent` event within a few hundred milliseconds — that's the same `MessageStream` subscription, served via the WebSocket frame protocol, and applied to the local cache via a projection delta.
@@ -79,7 +83,7 @@ Most day-to-day work is one of these. Each links to the canonical reference.
 - **`pnpm verify:generated` fails.** Generated artifacts and the schema have drifted. Run `pnpm schema:generate && pnpm fixtures:generate` and commit the regenerated files.
 - **`frick migrate status` shows pending migrations after a pull.** Run `pnpm cli migrate up`. In production this requires `--confirm-prod`; see [`docs/operations.md`](./operations.md).
 - **"Why can't I see this row I just wrote?"** Tenant boundary. The server scopes objects and streams by tenant id; a subscription with a different tenant context will never see the write. Check the connection's tenant header and verify the row's `tenantId` column.
-- **"Missing admin token" / 401 on `/_frick/inspect/*`.** Inspection routes are off by default in production. Either run in `development` (where they're on automatically) or set `FRICK_ADMIN_TOKEN` and pass it via `Authorization: Bearer …`.
+- **401 on `/_frick/inspect/*`.** Inspection routes require auth. In development, pass a normal session bearer from `/auth/dev-login`; in production, enable inspection deliberately and pass `FRICK_ADMIN_TOKEN` via `Authorization: Bearer …`.
 - **CLI says `init refused: target directory not empty`.** `frick init` is for fresh scaffolds only. Choose a new directory or remove the conflicting files; the CLI will list which ones it found.
 
 ## Where things live
@@ -100,7 +104,8 @@ Most day-to-day work is one of these. Each links to the canonical reference.
 │   ├── design/      # design tokens (shared)
 │   ├── design-web/  # web binding for design tokens
 │   └── design-swift/# Swift binding for design tokens
-├── docs/            # this guide and friends; superpowers/ holds specs and plans
+├── docs/            # public guides and runbooks
+├── internal/        # specs, delivery plans, and maintainer-only notes
 ├── scripts/         # repo-wide tooling (artifact verification, emulator launchers)
 └── Tiltfile         # one-command local dev (install, schema:generate, server, web)
 ```

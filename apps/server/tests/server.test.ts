@@ -437,7 +437,7 @@ describe("foundation sync gateway", () => {
       deviceId: "device-ada-session",
       replicaId: "replica-ada-session",
     });
-    const socket = await connect(`${app.url}?sessionToken=${encodeURIComponent(login.sessionToken)}`);
+    const socket = await connectWithSession(app.url, login.sessionToken);
 
     const hello = expectHelloAckThenSchema(socket);
     socket.send(
@@ -1225,7 +1225,9 @@ async function connect(url: string): Promise<WebSocket> {
 }
 
 async function connectWithSession(url: string, sessionToken: string): Promise<WebSocket> {
-  return connect(`${url}?sessionToken=${encodeURIComponent(sessionToken)}`);
+  const socket = new WebSocket(url, { headers: authHeaders(sessionToken) });
+  await new Promise<void>((resolve) => socket.once("open", resolve));
+  return socket;
 }
 
 async function nextFrame(socket: WebSocket): Promise<FrickFrame> {

@@ -187,6 +187,28 @@ describe("admin /_frick/admin/tenants/:tenantId/settings", () => {
     const body = await response.json();
     expect(body.error.code).toBe("blob.tooLarge");
   });
+
+  it("PUT fails closed before persisting when audit recording fails", async () => {
+    app = await startServer({ adminToken: ADMIN_TOKEN });
+    (app.store.adminAudit as unknown as { record: () => never }).record = () => {
+      throw new Error("audit unavailable");
+    };
+
+    const response = await fetch(
+      `${app.httpUrl}/_frick/admin/tenants/_default/settings/retentionMs`,
+      {
+        method: "PUT",
+        headers: {
+          authorization: `Bearer ${ADMIN_TOKEN}`,
+          "content-type": "application/json",
+        },
+        body: "60000",
+      },
+    );
+
+    expect(response.status).toBe(500);
+    expect(app.store.tenantSettings.get("_default", "retentionMs")).toBeUndefined();
+  });
 });
 
 describe("per-tenant maxBlobBytes (HTTP)", () => {
@@ -270,9 +292,7 @@ describe("per-tenant maxSubscriptionsPerConnection (WS)", () => {
     );
 
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
-    const socket = await connect(
-      `${app.url}?sessionToken=${encodeURIComponent(login.sessionToken)}`,
-    );
+    const socket = await connect(app.url, login.sessionToken);
     const frames: FrickFrame[] = [];
     socket.on("message", (data) => frames.push(decodeFrame(data as Buffer)));
 
@@ -349,8 +369,11 @@ async function startServer(overrides: { adminToken?: string } = {}) {
   };
 }
 
-async function connect(url: string): Promise<WebSocket> {
-  const socket = new WebSocket(url);
+async function connect(url: string, sessionToken?: string): Promise<WebSocket> {
+  const socket = new WebSocket(
+    url,
+    sessionToken ? { headers: { authorization: `Bearer ${sessionToken}` } } : undefined,
+  );
   await new Promise<void>((resolve) => socket.once("open", resolve));
   return socket;
 }

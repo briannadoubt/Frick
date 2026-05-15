@@ -52,6 +52,44 @@ describe("POST /_frick/admin/backup", () => {
     const response = await fetch(`${app.httpUrl}/_frick/admin/backup`, { method: "POST" });
     expect(response.status).toBe(401);
   });
+
+  it("returns 400 for malformed JSON while keeping empty body defaults", async () => {
+    app = await startServer();
+    const malformed = await fetch(`${app.httpUrl}/_frick/admin/backup`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${ADMIN_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: "{",
+    });
+    expect(malformed.status).toBe(400);
+
+    const empty = await fetch(`${app.httpUrl}/_frick/admin/backup`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+      body: "",
+    });
+    expect(empty.status).toBe(200);
+  });
+
+  it("fails closed when backup audit recording fails", async () => {
+    app = await startServer();
+    (app.store.adminAudit as unknown as { record: () => never }).record = () => {
+      throw new Error("audit unavailable");
+    };
+
+    const response = await fetch(`${app.httpUrl}/_frick/admin/backup`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${ADMIN_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ tenantId: "_default" }),
+    });
+
+    expect(response.status).toBe(500);
+  });
 });
 
 describe("POST /_frick/admin/restore", () => {

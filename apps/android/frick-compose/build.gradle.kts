@@ -22,6 +22,8 @@ android {
     lint {
         abortOnError = true
         warningsAsErrors = true
+        disable += "AndroidGradlePluginVersion"
+        disable += "NewerVersionAvailable"
     }
 }
 

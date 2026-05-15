@@ -122,6 +122,7 @@ final class MockWebSocketFactory: FrickWebSocketFactory, @unchecked Sendable {
     private let lock = TaskLock()
     private var tasks: [MockWebSocketTask] = []
     private var pendingTasks: [MockWebSocketTask] = []
+    private var requests: [URLRequest] = []
 
     func enqueue(_ task: MockWebSocketTask) {
         lock.withLock { pendingTasks.append(task) }
@@ -131,8 +132,26 @@ final class MockWebSocketFactory: FrickWebSocketFactory, @unchecked Sendable {
         lock.withLock { tasks }
     }
 
+    var producedRequests: [URLRequest] {
+        lock.withLock { requests }
+    }
+
     func makeTask(url: URL) -> FrickWebSocketTaskProtocol {
         lock.withLock {
+            let next: MockWebSocketTask
+            if !pendingTasks.isEmpty {
+                next = pendingTasks.removeFirst()
+            } else {
+                next = MockWebSocketTask()
+            }
+            tasks.append(next)
+            return next
+        }
+    }
+
+    func makeTask(request: URLRequest) -> FrickWebSocketTaskProtocol {
+        lock.withLock {
+            requests.append(request)
             let next: MockWebSocketTask
             if !pendingTasks.isEmpty {
                 next = pendingTasks.removeFirst()
@@ -242,6 +261,7 @@ final class FrickSyncSocketTests: XCTestCase {
         XCTAssertEqual(map["replicaId"]?.stringValue, "test-replica")
         XCTAssertEqual(map["deviceId"]?.stringValue, "test-device")
         XCTAssertEqual(map["schemaHash"]?.stringValue, FrickSchema.schemaHash)
+        XCTAssertEqual(map["sessionToken"]?.stringValue, "token-1")
         let caps = try XCTUnwrap(map["clientCapabilities"]?.mapValue)
         XCTAssertEqual(caps["platform"]?.stringValue, "ios")
         XCTAssertEqual(caps["sdkVersion"]?.stringValue, "0.1.0-test")
@@ -300,6 +320,27 @@ final class FrickSyncSocketTests: XCTestCase {
         let map = try XCTUnwrap(secondFrame.payload.mapValue)
         XCTAssertEqual(map["stream"]?.stringValue, "MessageStream")
         XCTAssertEqual(map["event"]?.stringValue, "MessageSent")
+
+        await socket.close()
+    }
+
+    func testConnectAddsAuthorizationHeaderWithoutSessionTokenQuery() async throws {
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+        let socket = makeSocket(factory: factory)
+
+        await socket.connect()
+
+        let ok = await waitForCondition { factory.producedRequests.count == 1 }
+        XCTAssertTrue(ok)
+        let request = try XCTUnwrap(factory.producedRequests.first)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer token-1")
+        let queryToken = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?
+            .queryItems?
+            .first(where: { $0.name == "sessionToken" })?
+            .value
+        XCTAssertNil(queryToken)
 
         await socket.close()
     }

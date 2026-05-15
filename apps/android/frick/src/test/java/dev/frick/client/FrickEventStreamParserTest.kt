@@ -343,10 +343,63 @@ class FrickEventStreamParserTest {
         )
         val storage = MemoryFrickStorage(session = session)
         val client = FrickClient(storage = storage, transport = FakeFrickTransport())
+        storage.appendPendingAppend(PendingAppend(requestId = "request-1", body = "{}"))
 
         client.signOut()
 
         assertEquals(null, storage.loadSession())
+        assertEquals(emptyList<PendingAppend>(), storage.loadPendingAppends())
+    }
+
+    @Test
+    fun flushPendingAppendsRequiresSessionBeforePosting() = runBlocking {
+        val transport = FakeFrickTransport()
+        val storage = MemoryFrickStorage(
+            pendingAppends = listOf(PendingAppend(requestId = "request-1", body = "{}")),
+        )
+        val client = FrickClient(transport = transport, storage = storage)
+
+        try {
+            client.flushPendingAppends()
+            fail("expected auth requirement before flushing pending appends")
+        } catch (_: FrickAuthenticationRequiredException) {
+            // expected
+        }
+
+        assertEquals(emptyList<FakeFrickTransport.Post>(), transport.postAttempts)
+        assertEquals(listOf("request-1"), storage.pendingAppends.map { append -> append.requestId })
+    }
+
+    @Test
+    fun fetchInboxWithoutSessionOrExplicitUserIdRequiresAuthBeforeRequest() = runBlocking {
+        val transport = FakeFrickTransport()
+        val client = FrickClient(transport = transport, storage = MemoryFrickStorage())
+
+        try {
+            client.fetchInbox()
+            fail("expected auth requirement before defaulting inbox user")
+        } catch (_: FrickAuthenticationRequiredException) {
+            // expected
+        }
+
+        assertEquals(emptyList<String>(), transport.requestedPaths)
+    }
+
+    @Test
+    fun sendMessageWithoutSessionOrExplicitSenderRequiresAuthBeforeAppend() = runBlocking {
+        val transport = FakeFrickTransport()
+        val storage = MemoryFrickStorage()
+        val client = FrickClient(transport = transport, storage = storage)
+
+        try {
+            client.sendMessage(body = "no fallback")
+            fail("expected auth requirement before defaulting sender id")
+        } catch (_: FrickAuthenticationRequiredException) {
+            // expected
+        }
+
+        assertEquals(emptyList<FakeFrickTransport.Post>(), transport.postAttempts)
+        assertEquals(emptyList<PendingAppend>(), storage.pendingAppends)
     }
 
     @Test
@@ -610,6 +663,7 @@ class FrickEventStreamParserTest {
         val transport = FakeFrickTransport()
         val client = FrickClient(
             transport = transport,
+            storage = MemoryFrickStorage(session = testSession()),
             replicaId = "android-test",
             requestIdFactory = { "request-${transport.posts.size + 1}" },
         )
@@ -643,6 +697,7 @@ class FrickEventStreamParserTest {
         val transport = FakeFrickTransport()
         val client = FrickClient(
             transport = transport,
+            storage = MemoryFrickStorage(session = testSession()),
             replicaId = "android-test",
             requestIdFactory = { "request-1" },
         )
@@ -691,7 +746,7 @@ class FrickEventStreamParserTest {
     @Test
     fun queuesAppendWhenOfflineAndFlushesBeforeFetch() = runBlocking {
         val transport = FakeFrickTransport(failingPosts = 1)
-        val storage = MemoryFrickStorage()
+        val storage = MemoryFrickStorage(session = testSession())
         val client = FrickClient(
             transport = transport,
             storage = storage,
@@ -1034,6 +1089,10 @@ private class MemoryFrickStorage(
         pendingAppends = pendingAppends.filterNot { append -> append.requestId == requestId }
     }
 
+    override fun clearPendingAppends() {
+        pendingAppends = emptyList()
+    }
+
     override fun loadSession(): FrickSession? = sessionBacking[0]
 
     override fun saveSession(session: FrickSession) {
@@ -1060,6 +1119,19 @@ private class MemoryFrickStorage(
         cacheMetadata = null
     }
 }
+
+private fun testSession(
+    userId: String = "user-ada",
+    token: String = "session-token-ada",
+): FrickSession =
+    FrickSession(
+        schemaHash = FRICK_SCHEMA_HASH,
+        sessionToken = token,
+        userId = userId,
+        deviceId = "android-device",
+        replicaId = "android-replica",
+        expiresAt = "2026-05-09T22:00:00.000Z",
+    )
 
 private fun startEnvelopeFailureServer(statusCode: Int, body: String): HttpServer {
     val server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)

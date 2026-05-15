@@ -45,7 +45,7 @@ Out of scope (please don't submit reports for these):
 - Vulnerabilities in third-party dependencies — report those upstream. We monitor advisories via `pnpm audit` in CI and pick up patched versions on the next release.
 - The demo apps under `apps/web`, `apps/ios/FrickDemo`, `apps/android/app`. They exist to exercise the framework, not to ship to end users.
 - Issues that require physical access to a developer workstation, or that depend on a misconfigured `FRICK_PUSH_CRED_KEY` (e.g. the env var is empty in production — that's an operator error, and the framework already returns `push.credentials.disabled` rather than silently downgrading).
-- Operational issues that are documented as such in `docs/operations.md` and `docs/threat-model.md` (e.g. the `demoAuthEnabled=true in production` warning is an opt-in escape hatch).
+- Operational deployment choices that are documented as such in `docs/operations.md` and `docs/threat-model.md`.
 
 ## Hall of fame
 

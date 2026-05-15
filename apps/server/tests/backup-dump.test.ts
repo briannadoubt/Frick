@@ -84,6 +84,76 @@ describe("dumpFrickDatabase", () => {
     }
   });
 
+  it("per-tenant dump includes security-relevant framework tables for the chosen tenant", async () => {
+    const store = new FrickStore({ path: ":memory:", seed: false });
+    try {
+      store.tenants.create("tenant-alpha");
+      store.tenants.create("tenant-beta");
+      store.blobDerivatives.record({
+        tenantId: "tenant-alpha",
+        parentBlobId: "blob-parent-alpha",
+        derivativeId: "thumb",
+        processorId: "image-thumb",
+        mimeType: "image/png",
+        byteLength: 3,
+        contentHash: "hash-alpha",
+        storageKey: "derivative/blob-parent-alpha/thumb",
+        content: Buffer.from([1, 2, 3]),
+        metadata: { width: 64 },
+      });
+      store.blobDerivatives.record({
+        tenantId: "tenant-beta",
+        parentBlobId: "blob-parent-beta",
+        derivativeId: "thumb",
+        processorId: "image-thumb",
+        mimeType: "image/png",
+        byteLength: 1,
+        contentHash: "hash-beta",
+        storageKey: "derivative/blob-parent-beta/thumb",
+        content: Buffer.from([9]),
+      });
+      store.searchAdapter.upsert("tenant-alpha", "messages-fts", {
+        docId: "event-alpha",
+        text: "alpha secret",
+        fields: { senderId: "user-alpha" },
+      });
+      store.searchAdapter.upsert("tenant-beta", "messages-fts", {
+        docId: "event-beta",
+        text: "beta secret",
+        fields: { senderId: "user-beta" },
+      });
+      store.tenantSettings.set("tenant-alpha", "retentionMs", 1234);
+      store.tenantSettings.set("tenant-beta", "retentionMs", 5678);
+
+      const lines = await collect(dumpFrickDatabase(store, { tenantId: "tenant-alpha" }));
+      const rows = lines
+        .slice(1)
+        .map((l) => JSON.parse(l) as { type: string; row: Record<string, unknown> });
+      const byType = new Map<string, Array<Record<string, unknown>>>();
+      for (const entry of rows) {
+        byType.set(entry.type, [...(byType.get(entry.type) ?? []), entry.row]);
+      }
+
+      expect(byType.get("blob_derivatives")).toHaveLength(1);
+      expect(byType.get("blob_derivatives")?.[0]?.tenant_id).toBe("tenant-alpha");
+      expect(byType.get("blob_derivatives")?.[0]?.content_base64).toBe("AQID");
+      expect(byType.get("search_indexes")).toHaveLength(1);
+      expect(byType.get("search_indexes")?.[0]).toMatchObject({
+        tenant_id: "tenant-alpha",
+        doc_id: "event-alpha",
+        text: "alpha secret",
+      });
+      expect(byType.get("tenant_settings")).toHaveLength(1);
+      expect(byType.get("tenant_settings")?.[0]).toMatchObject({
+        tenant_id: "tenant-alpha",
+        setting_key: "retentionMs",
+        setting_value: "1234",
+      });
+    } finally {
+      store.close();
+    }
+  });
+
   it("whole-database dump includes admin_audit_log and frick_migrations", async () => {
     const store = new FrickStore({ path: ":memory:" });
     try {

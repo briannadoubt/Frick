@@ -392,9 +392,18 @@ public protocol FrickStorage: AnyObject, Sendable {
     func loadPendingAppends() throws -> [PendingAppend]
     func appendPendingAppend(_ append: PendingAppend) throws
     func removePendingAppend(requestId: String) throws
+    func clearPendingAppends() throws
     func loadCacheMetadata() throws -> FrickCacheMetadata?
     func saveCacheMetadata(_ metadata: FrickCacheMetadata) throws
     func clearCache() throws
+}
+
+public extension FrickStorage {
+    func clearPendingAppends() throws {
+        for append in try loadPendingAppends() {
+            try removePendingAppend(requestId: append.requestId)
+        }
+    }
 }
 
 public final class FrickSQLiteStorage: FrickStorage, @unchecked Sendable {
@@ -552,6 +561,12 @@ public final class FrickSQLiteStorage: FrickStorage, @unchecked Sendable {
             "DELETE FROM pending_appends WHERE request_id = ?",
             bindings: [.text(requestId)]
         )
+    }
+
+    public func clearPendingAppends() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        try run("DELETE FROM pending_appends", bindings: [])
     }
 
     public func loadCacheMetadata() throws -> FrickCacheMetadata? {
@@ -844,6 +859,25 @@ private func makeFrickStreamingSession() -> URLSession {
 }
 
 public final class FrickClient: Sendable {
+    public static let localDevelopmentBaseURL = URL(string: "http://127.0.0.1:4099")!
+    public static let secureLocalBaseURL = URL(string: "https://127.0.0.1:4099")!
+
+    public static var defaultBaseURL: URL {
+        #if DEBUG
+        localDevelopmentBaseURL
+        #else
+        secureLocalBaseURL
+        #endif
+    }
+
+    public static var defaultAllowsInsecureLocalTransport: Bool {
+        #if DEBUG
+        true
+        #else
+        false
+        #endif
+    }
+
     private let baseURL: URL
     private let session: URLSession
     private let streamingSession: URLSession
@@ -857,14 +891,16 @@ public final class FrickClient: Sendable {
     private let decoder = JSONDecoder()
 
     public init(
-        baseURL: URL = URL(string: "http://127.0.0.1:4099")!,
+        baseURL: URL = FrickClient.defaultBaseURL,
         session: URLSession = .shared,
         streamingSession: URLSession? = nil,
         streamReconnectDelayNanoseconds: UInt64 = 250_000_000,
         replicaId: String = "ios-demo",
         storage: FrickStorage = FrickSQLiteStorage.appStorage,
+        allowInsecureLocalTransport: Bool = FrickClient.defaultAllowsInsecureLocalTransport,
         requestIdFactory: @escaping @Sendable () -> String = { UUID().uuidString }
     ) {
+        Self.validateBaseURL(baseURL, allowInsecureLocalTransport: allowInsecureLocalTransport)
         self.baseURL = baseURL
         self.session = session
         self.streamingSession = streamingSession ?? makeFrickStreamingSession()
@@ -907,10 +943,11 @@ public final class FrickClient: Sendable {
     }
 
     /// Open a sync WebSocket against `baseURL` (defaults to the client's
-    /// configured `baseURL`). Callers must hold a session — the active
-    /// session token is appended as a query string. Cache compatibility
-    /// is verified up-front; throws `FrickCacheIncompatibleError` if the
-    /// local cache is stale.
+    /// configured `baseURL`). Callers must hold a session. The active
+    /// session token is sent in the Authorization header and in the
+    /// WebSocket Hello payload.
+    /// Cache compatibility is verified up-front; throws
+    /// `FrickCacheIncompatibleError` if the local cache is stale.
     public func connectSync(baseURL: URL? = nil) throws -> FrickSyncSocket {
         guard let session = currentSession else {
             throw FrickSyncSocketError.notConnected
@@ -928,6 +965,7 @@ public final class FrickClient: Sendable {
     }
 
     public func signOut() {
+        try? storage.clearPendingAppends()
         sessionStore.session = nil
     }
 
@@ -1037,7 +1075,8 @@ public final class FrickClient: Sendable {
 
     public func fetchInbox(userId: String? = nil) async throws -> [FrickInboxItem] {
         try? await flushPendingAppends()
-        let url = queryURL(path: "/inbox", args: ["userId": userId ?? currentSession?.userId ?? "user-ada"])
+        let resolvedUserId = try userId ?? requireAuthenticatedSession().userId
+        let url = queryURL(path: "/inbox", args: ["userId": resolvedUserId])
         do {
             let (data, response) = try await session.data(for: authenticatedRequest(url: url))
             try validate(response, data: data)
@@ -1322,13 +1361,14 @@ public final class FrickClient: Sendable {
         senderId: String? = nil,
         body: String
     ) async throws {
+        let resolvedSenderId = try senderId ?? requireAuthenticatedSession().userId
         try await append(
             stream: "MessageStream",
             key: conversationId,
             event: "MessageSent",
             payload: [
                 "messageId": "message-\(UUID().uuidString)",
-                "senderId": senderId ?? currentSession?.userId ?? "user-ada",
+                "senderId": resolvedSenderId,
                 "body": body,
                 "createdAt": ISO8601DateFormatter().string(from: Date()),
             ]
@@ -1396,6 +1436,7 @@ public final class FrickClient: Sendable {
     }
 
     public func flushPendingAppends() async throws {
+        _ = try requireAuthenticatedSession()
         for append in try storage.loadPendingAppends() {
             try await sendAppend(append)
             try storage.removePendingAppend(requestId: append.requestId)
@@ -1403,6 +1444,7 @@ public final class FrickClient: Sendable {
     }
 
     private func sendAppend(_ append: PendingAppend) async throws {
+        _ = try requireAuthenticatedSession()
         var request = URLRequest(url: baseURL.appending(path: "/append"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
@@ -1414,6 +1456,9 @@ public final class FrickClient: Sendable {
     }
 
     private func shouldQueueAppend(_ error: Error) -> Bool {
+        if error is FrickAuthenticationRequiredError {
+            return false
+        }
         if error is FrickSchemaMismatchError {
             return false
         }
@@ -1490,6 +1535,13 @@ public final class FrickClient: Sendable {
         return request
     }
 
+    private func requireAuthenticatedSession() throws -> FrickSession {
+        guard let session = currentSession, !session.sessionToken.isEmpty else {
+            throw FrickAuthenticationRequiredError()
+        }
+        return session
+    }
+
     private func postAuthSession<RequestBody: Encodable>(
         path: String,
         body: RequestBody
@@ -1512,6 +1564,18 @@ public final class FrickClient: Sendable {
             return
         }
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    }
+
+    private static func validateBaseURL(_ url: URL, allowInsecureLocalTransport: Bool) {
+        guard url.scheme?.lowercased() == "http" else {
+            return
+        }
+        if allowInsecureLocalTransport {
+            return
+        }
+        preconditionFailure(
+            "FrickClient requires HTTPS outside debug/demo local transport. Pass an HTTPS baseURL or explicitly opt into insecure local transport only for debug/demo builds."
+        )
     }
 
     private func validate(_ response: URLResponse, data: Data? = nil) throws {

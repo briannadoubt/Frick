@@ -74,6 +74,7 @@ export type FrickAction =
   | "stream.append"
   | "presence.write"
   | "signal.send"
+  | "signal.read"
   | "blob.read"
   | "blob.write"
   | "inbox.read"
@@ -99,6 +100,16 @@ export type FrickDecision =
   | { allow: false; reason: Exclude<FrickDecisionReason, "allow">; publicMessage: string };
 
 export const ALLOW: FrickDecision = { allow: true, reason: "allow" };
+
+const FOUNDATION_DIRECT_WRITE_DENIED_OBJECTS = new Set([
+  "RoomMember",
+  "Conversation",
+  "UserSession",
+  "UserDevice",
+  "CallRoom",
+]);
+
+const FOUNDATION_OWNER_SCOPED_OBJECTS = new Set(["MessageDraft", "ScheduledMessage"]);
 
 export function deny(
   reason: Exclude<FrickDecisionReason, "allow">,
@@ -224,25 +235,9 @@ export function decide(input: FrickPolicyInput, memberships: MembershipReader): 
       }
       return ALLOW;
     }
-    case "signal.send": {
-      const conversationId = resource.key;
-      if (!conversationId) {
-        return ALLOW;
-      }
-      // Only enforce membership when the key references a known conversation.
-      // Signals keyed by other room-like objects (e.g. ad-hoc CallRoom ids)
-      // are not gated by conversation membership in this slice.
-      if (!memberships.hasConversation || !memberships.hasConversation(conversationId)) {
-        return ALLOW;
-      }
-      if (!memberships.isRoomMember(conversationId, principal.userId)) {
-        return deny(
-          "notMember",
-          `${principal.userId} is not a member of ${conversationId}`,
-        );
-      }
-      return ALLOW;
-    }
+    case "signal.send":
+    case "signal.read":
+      return decideSignalAccess(principal, resource.key, memberships);
     case "projection.read": {
       // Projection subscribe is allowed for any authenticated principal in
       // the same tenant. Per-projection app-level policy can tighten this
@@ -252,15 +247,32 @@ export function decide(input: FrickPolicyInput, memberships: MembershipReader): 
     case "search.query": {
       // Search queries are allowed for any authenticated principal within
       // their own tenant. The route layer scopes results to
-      // `principal.tenantId`; per-index app policy (e.g. membership-aware
-      // filtering of `messages-fts` hits) is a follow-up — see docs/spec.md.
+      // `principal.tenantId` and applies built-in membership filtering for
+      // framework indexes such as `messages-fts`.
       return ALLOW;
     }
     case "object.write": {
-      // Any authenticated principal may write objects in its own tenant. The
-      // tenant-mismatch guard above already denied cross-tenant attempts.
-      // App-level policy hooks can tighten further (per-type ownership,
-      // immutable fields, etc.).
+      if (principal.scope === "admin") {
+        return ALLOW;
+      }
+      const objectType = resource.name;
+      if (!objectType) {
+        return deny("notAuthorizedForResource", "Object type is required");
+      }
+      if (objectType === "User") {
+        return decideSelfUserWrite(principal, resource.key, input.context?.value);
+      }
+      if (FOUNDATION_DIRECT_WRITE_DENIED_OBJECTS.has(objectType)) {
+        return deny(
+          "notAuthorizedForResource",
+          `${objectType} objects must be written through framework routes`,
+        );
+      }
+      if (FOUNDATION_OWNER_SCOPED_OBJECTS.has(objectType)) {
+        return decideOwnerScopedObjectWrite(principal, objectType, input.context?.value, memberships);
+      }
+      // Custom app objects are app-owned and remain writable by authenticated
+      // tenant users unless a policy hook tightens the decision.
       return ALLOW;
     }
     case "stream.read":
@@ -280,6 +292,75 @@ export function decide(input: FrickPolicyInput, memberships: MembershipReader): 
     default:
       return deny("notAuthorizedForResource", "Action not authorized");
   }
+}
+
+function decideSignalAccess(
+  principal: Principal,
+  key: string | undefined,
+  memberships: MembershipReader,
+): FrickDecision {
+  if (!key) {
+    return ALLOW;
+  }
+  // Only enforce membership when the key references a known conversation.
+  // Signals keyed by unrelated ad-hoc rooms remain allowed.
+  if (!memberships.hasConversation || !memberships.hasConversation(key)) {
+    return ALLOW;
+  }
+  if (!memberships.isRoomMember(key, principal.userId)) {
+    return deny("notMember", `${principal.userId} is not a member of ${key}`);
+  }
+  return ALLOW;
+}
+
+function decideSelfUserWrite(
+  principal: Principal,
+  objectId: string | undefined,
+  value: unknown,
+): FrickDecision {
+  if (objectId !== principal.userId) {
+    return deny("ownerMismatch", "User object id must match the principal");
+  }
+  if (!isRecord(value)) {
+    return deny("notAuthorizedForResource", "User value must be an object");
+  }
+  if (typeof value.id === "string" && value.id !== principal.userId) {
+    return deny("ownerMismatch", "User value id must match the principal");
+  }
+  return ALLOW;
+}
+
+function decideOwnerScopedObjectWrite(
+  principal: Principal,
+  objectType: string,
+  value: unknown,
+  memberships: MembershipReader,
+): FrickDecision {
+  if (!isRecord(value)) {
+    return deny("notAuthorizedForResource", `${objectType} value must be an object`);
+  }
+  const ownerId = typeof value.userId === "string" ? value.userId : undefined;
+  if (ownerId !== principal.userId) {
+    return deny("ownerMismatch", `${objectType} userId must match the principal`);
+  }
+  const conversationId =
+    typeof value.conversationId === "string" ? value.conversationId : undefined;
+  if (
+    !conversationId ||
+    !memberships.hasConversation ||
+    !memberships.hasConversation(conversationId) ||
+    !memberships.isRoomMember(conversationId, principal.userId)
+  ) {
+    return deny(
+      "notMember",
+      `${principal.userId} is not a member of ${conversationId ?? "the conversation"}`,
+    );
+  }
+  return ALLOW;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 /**
@@ -361,6 +442,21 @@ export function assertCanSubscribe(
     }
     return;
   }
+  if (kind === "signal") {
+    const decision = decideWithHooks(
+      {
+        principal,
+        action: "signal.read",
+        resource: { kind: "signal", name, ...(key !== undefined ? { key } : {}) },
+      },
+      memberships,
+      hooks,
+    );
+    if (!decision.allow) {
+      throw new AuthorizationError(decision);
+    }
+    return;
+  }
   if (kind !== "stream") {
     return;
   }
@@ -416,13 +512,32 @@ export function assertCanWriteObject(
   objectId: string,
   memberships: MembershipReader,
   hooks?: readonly FrickPolicyHook[],
+  value?: Record<string, unknown>,
 ): void {
   const decision = decideWithHooks(
     {
       principal,
       action: "object.write",
       resource: { kind: "object", name: objectType, key: objectId, tenantId: principal.tenantId },
+      ...(value !== undefined ? { context: { value } } : {}),
     },
+    memberships,
+    hooks,
+  );
+  if (!decision.allow) {
+    throw new AuthorizationError(decision);
+  }
+}
+
+export function assertCanReadSignal(
+  principal: Principal,
+  signal: string,
+  key: string,
+  memberships: MembershipReader,
+  hooks?: readonly FrickPolicyHook[],
+): void {
+  const decision = decideWithHooks(
+    { principal, action: "signal.read", resource: { kind: "signal", name: signal, key } },
     memberships,
     hooks,
   );
@@ -504,6 +619,7 @@ export function assertBlobOwnership(
 const NULL_MEMBERSHIP: MembershipReader = {
   hasUser: () => false,
   isRoomMember: () => false,
+  hasConversation: () => false,
 };
 
 function userIdFromReplica(replicaId: string): string {

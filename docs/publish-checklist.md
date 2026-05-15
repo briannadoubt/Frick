@@ -25,7 +25,7 @@ Companion docs:
 - [ ] `pnpm release:dry-run` exits 0
   - Runs `npm pack --dry-run --json` per publishable package and flags
     suspicious manifest entries (test files, fixtures, large sourcemaps,
-    missing README). Fix any findings before bumping.
+    lifecycle hooks, missing README). Fix any findings before bumping.
 
 ## Bump
 

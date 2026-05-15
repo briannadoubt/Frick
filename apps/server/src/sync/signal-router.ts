@@ -9,9 +9,18 @@ export function routeSignal(
   payload: SignalPayload,
   tenantId: string,
 ): void {
+  if (store.tenants.get(tenantId)?.archivedAt !== undefined) {
+    return;
+  }
   const envelope = packSignalEnvelope(store.schema, payload.name, payload.key, payload.value);
   for (const { client } of subscriptions.signalSubscribers(payload.name, payload.key)) {
-    if (client.principal && client.principal.tenantId !== tenantId) {
+    if (!client.principal || client.principal.tenantId !== tenantId) {
+      continue;
+    }
+    if (
+      store.hasConversation(tenantId, payload.key) &&
+      !store.isRoomMember(tenantId, payload.key, client.principal.userId)
+    ) {
       continue;
     }
     sendFrame(client.socket, [FrameKind.SignalDeliver, { envelope }]);

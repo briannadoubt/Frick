@@ -51,6 +51,10 @@ public enum FrickBackgroundSync {
         }
     }
 
+    public static func cancelFlush() {
+        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: flushTaskIdentifier)
+    }
+
     private static func handleFlush(
         task: BGAppRefreshTask,
         makeClient: @escaping @Sendable () -> FrickClient
@@ -63,6 +67,8 @@ public enum FrickBackgroundSync {
             let client = makeClient()
             do {
                 try await client.flushPendingAppends()
+                return true
+            } catch is FrickAuthenticationRequiredError {
                 return true
             } catch {
                 return false

@@ -6,6 +6,14 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+fun configuredFrickBaseUrl(defaultUrl: String): String =
+    (project.findProperty("frick.baseUrl") as String?)
+        ?: System.getenv("FRICK_BASE_URL")
+        ?: defaultUrl
+
+fun String.asBuildConfigString(): String =
+    "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
+
 android {
     namespace = "dev.frick.demo"
     compileSdk = 37
@@ -16,10 +24,15 @@ android {
         targetSdk = 37
         versionCode = 1
         versionName = "0.1.0"
-        val frickBaseUrl = (project.findProperty("frick.baseUrl") as String?)
-            ?: System.getenv("FRICK_BASE_URL")
-            ?: "http://10.0.2.2:4099"
-        buildConfigField("String", "FRICK_BASE_URL", "\"$frickBaseUrl\"")
+    }
+
+    buildTypes {
+        debug {
+            buildConfigField("String", "FRICK_BASE_URL", configuredFrickBaseUrl("http://10.0.2.2:4099").asBuildConfigString())
+        }
+        release {
+            buildConfigField("String", "FRICK_BASE_URL", configuredFrickBaseUrl("https://127.0.0.1:4099").asBuildConfigString())
+        }
     }
 
     buildFeatures {
@@ -34,6 +47,8 @@ android {
     lint {
         abortOnError = true
         warningsAsErrors = true
+        disable += "AndroidGradlePluginVersion"
+        disable += "NewerVersionAvailable"
     }
 
     packaging {

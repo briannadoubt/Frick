@@ -21,8 +21,10 @@ import {
   assertCanAppend,
   assertCanReadBlob,
   assertCanReadInbox,
+  assertCanReadSignal,
   assertCanSignal,
   assertCanSubscribe,
+  assertCanWriteObject,
   tenantMembershipReader,
   type FrickPolicyHook,
   type Principal,
@@ -54,11 +56,12 @@ import {
   DEFAULT_SEARCH_LIMIT,
   MAX_SEARCH_LIMIT,
   type FrickSearchAdapter,
+  type FrickSearchResult,
   type FrickSearchIndexDefinition,
   type FrickSearchIndexRegistry,
   type FrickSearchProjectInput,
 } from "./search/types.js";
-import { createMessagesSearchIndex } from "./search/messages-index.js";
+import { MESSAGES_SEARCH_INDEX_NAME, createMessagesSearchIndex } from "./search/messages-index.js";
 import type { StoredAccount } from "./storage/account-store.js";
 import type { StoredSession } from "./storage/session-store.js";
 import { TenantAlreadyExistsError } from "./storage/tenant-store.js";
@@ -88,6 +91,7 @@ import {
 } from "./push/router.js";
 import type { FrickNotificationIntent, FrickPushAdapter } from "./push/types.js";
 import { isPushPlatform } from "./storage/push-registration-store.js";
+import { validateWebPushRegistrationToken } from "./push/web-push-adapter.js";
 import { dumpFrickDatabase, type FrickDumpOptions } from "./backup/dump.js";
 import {
   FrickRestoreRefusedError,
@@ -534,6 +538,11 @@ export function createFrickServer(options: ServerOptions = {}) {
     }
 
     if (config.inspectionEnabled && request.method === "GET" && url.pathname.startsWith("/_frick/inspect/")) {
+      const inspectionPrincipal = inspectionPrincipalFromRequest(request, url, store, config);
+      if (inspectionPrincipal instanceof Error) {
+        sendErrorWithMetrics(response, inspectionPrincipal, "inspect_unauthorized");
+        return;
+      }
       const sub = url.pathname.slice("/_frick/inspect/".length);
       if (sub === "server") {
         sendJson(response, 200, {
@@ -766,7 +775,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         });
         const session = createSessionForUser(store, account.userId, deviceId, replicaId, platform, config, tenantId);
 
-        sendJson(response, 201, authSessionResponse(store, session, account));
+        sendAuthJson(response, 201, authSessionResponse(store, session, account));
       } catch (error) {
         sendErrorWithMetrics(response, error, "signup_rejected");
       }
@@ -789,7 +798,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         const replicaId = typeof body.replicaId === "string" && body.replicaId.length > 0 ? body.replicaId : `replica-${randomToken(12)}`;
         const session = createSessionForUser(store, account.userId, deviceId, replicaId, platform, config, tenantId);
 
-        sendJson(response, 200, authSessionResponse(store, session, account));
+        sendAuthJson(response, 200, authSessionResponse(store, session, account));
       } catch (error) {
         sendErrorWithMetrics(response, error, "login_rejected");
       }
@@ -839,7 +848,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         const replicaId = typeof body.replicaId === "string" && body.replicaId.length > 0 ? body.replicaId : `replica-${randomToken(12)}`;
         const session = createSessionForUser(store, userId, deviceId, replicaId, platform, config, tenantId);
 
-        sendJson(response, 200, {
+        sendAuthJson(response, 200, {
           schemaHash: store.schema.hash,
           sessionToken: session.sessionToken,
           tenantId: session.tenantId,
@@ -850,6 +859,24 @@ export function createFrickServer(options: ServerOptions = {}) {
         });
       } catch (error) {
         sendErrorWithMetrics(response, error, "dev_login_rejected");
+      }
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/auth/logout") {
+      try {
+        const token = sessionTokenFromRequest(request, url);
+        if (!token) {
+          throw new AuthenticationError("Missing session token");
+        }
+        const principal = principalFromActiveSessionToken(store, token);
+        if (principal instanceof Error) {
+          throw principal;
+        }
+        store.deleteSession(token);
+        sendAuthJson(response, 200, { ok: true });
+      } catch (error) {
+        sendErrorWithMetrics(response, error, "logout_rejected");
       }
       return;
     }
@@ -915,10 +942,14 @@ export function createFrickServer(options: ServerOptions = {}) {
     if (objectWriteRoute && (request.method === "POST" || request.method === "PUT")) {
       try {
         const value = await readJsonBody(request, tenantLimits.maxHttpBodyBytes);
-        // Inline auth check: any authenticated principal may write any object
-        // within their tenant. TODO(authz): integrate with the policy
-        // `decide()` for `object.write` once the round-3 wiring stabilizes —
-        // see docs/spec.md §11.
+        assertCanWriteObject(
+          principal,
+          objectWriteRoute.type,
+          objectWriteRoute.id,
+          tenantMembershipReader(store, principal.tenantId),
+          policyHooks,
+          value,
+        );
         const mergePolicy = store.objectMergePolicy(objectWriteRoute.type);
         const expectedVersion = parseIfMatchHeader(request);
         const result = store.upsertObjectWithPolicy({
@@ -1004,6 +1035,9 @@ export function createFrickServer(options: ServerOptions = {}) {
           );
         }
         const token = requireString(body.token, "token");
+        if (platform === "webPush") {
+          validateWebPushRegistrationToken(token);
+        }
         const environment =
           typeof body.environment === "string" && body.environment.length > 0
             ? body.environment
@@ -1084,6 +1118,14 @@ export function createFrickServer(options: ServerOptions = {}) {
         url.searchParams.forEach((value, key) => {
           query[key] = value;
         });
+        if (name === "conversation-inbox" && query.userId !== undefined) {
+          assertCanReadInbox(
+            principal,
+            query.userId,
+            tenantMembershipReader(store, principal.tenantId),
+            policyHooks,
+          );
+        }
         const ctx: FrickProjectionContext = {
           tenantId: principal.tenantId,
           store,
@@ -1120,22 +1162,23 @@ export function createFrickServer(options: ServerOptions = {}) {
           }
           limit = Math.min(MAX_SEARCH_LIMIT, Math.floor(parsed));
         }
-        // Authz: framework allows search.query for any authed principal in
-        // the same tenant; per-index membership filtering is a follow-up.
-        // (Calling decide() here directly would be redundant given the
-        // tenant scoping below — but we still surface it through the policy
-        // hooks so apps can deny outright via a hook.)
+        // Authz: tenant scoping happens at the adapter call; framework-owned
+        // indexes with narrower visibility are filtered before returning.
         const result = store.searchAdapter.query(principal.tenantId, {
           index: indexName,
           q,
           ...(filter !== undefined ? { filter } : {}),
-          limit,
+          limit: indexName === MESSAGES_SEARCH_INDEX_NAME ? MAX_SEARCH_LIMIT : limit,
         });
+        const authorizedResult =
+          indexName === MESSAGES_SEARCH_INDEX_NAME
+            ? filterMessagesSearchResultForPrincipal(result, principal, store)
+            : result;
         sendJson(response, 200, {
           schemaHash: store.schema.hash,
           index: indexName,
-          hits: result.hits,
-          total: result.total,
+          hits: authorizedResult.hits.slice(0, limit),
+          total: authorizedResult.total,
         });
       } catch (error) {
         sendErrorWithMetrics(response, error, "search_rejected");
@@ -1144,11 +1187,19 @@ export function createFrickServer(options: ServerOptions = {}) {
     }
 
     if (request.method === "GET" && url.pathname === "/blobs") {
-      const ownerId = url.searchParams.get("ownerId") ?? undefined;
-      sendJson(response, 200, {
-        schemaHash: store.schema.hash,
-        data: store.blobs.list(principal.tenantId, ownerId),
-      });
+      try {
+        const requestedOwnerId =
+          url.searchParams.get("ownerId") ?? (principal.scope === "admin" ? undefined : principal.userId);
+        if (principal.scope !== "admin" && requestedOwnerId !== undefined) {
+          assertCanReadBlob(principal, requestedOwnerId, policyHooks);
+        }
+        sendJson(response, 200, {
+          schemaHash: store.schema.hash,
+          data: store.blobs.list(principal.tenantId, requestedOwnerId),
+        });
+      } catch (error) {
+        sendErrorWithMetrics(response, error, "blob_list_rejected");
+      }
       return;
     }
 
@@ -1392,6 +1443,13 @@ export function createFrickServer(options: ServerOptions = {}) {
 
     if (signalRoute && request.method === "GET") {
       try {
+        assertCanReadSignal(
+          principal,
+          signalRoute.name,
+          signalRoute.key,
+          tenantMembershipReader(store, principal.tenantId),
+          policyHooks,
+        );
         sendJson(response, 200, {
           schemaHash: store.schema.hash,
           name: signalRoute.name,
@@ -1684,6 +1742,14 @@ class AccountNotFoundError extends Error {
   }
 }
 
+class AdminAuditWriteError extends Error {
+  readonly reason = "adminAuditWriteFailed";
+  constructor(cause: unknown) {
+    super(`Admin audit write failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = "AdminAuditWriteError";
+  }
+}
+
 /**
  * Thrown by `/projections/:name` and the admin rebuild route when the
  * requested projection isn't registered. Maps to 404 with
@@ -1777,7 +1843,7 @@ function setCors(
     "Access-Control-Allow-Headers",
     "authorization, content-type, if-match, x-frick-owner-id, x-frick-session-token",
   );
-  response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
+  response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
   response.setHeader(
     "Access-Control-Expose-Headers",
     "etag, x-frick-schema-hash, x-frick-blob-id, x-frick-content-hash",
@@ -1789,25 +1855,36 @@ function sendJson(response: http.ServerResponse, status: number, body: unknown):
   response.end(JSON.stringify(body));
 }
 
+function sendAuthJson(response: http.ServerResponse, status: number, body: unknown): void {
+  response.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+    pragma: "no-cache",
+  });
+  response.end(JSON.stringify(body));
+}
+
 function sendError(response: http.ServerResponse, error: unknown, requestId: string): void {
   const status =
     error instanceof FrickLimitError
       ? 413
       : error instanceof BlobValidationRejectedError
         ? 415
-      : error instanceof AccountNotFoundError
-        ? 401
-        : error instanceof AuthenticationError
-          ? 401
-          : error instanceof AuthorizationError
-            ? 403
-            : error instanceof CorsOriginRejectedError
-              ? 403
-              : error instanceof ProjectionNotFoundError
-                ? 404
-                : error instanceof SearchIndexNotFoundError
-                  ? 404
-                  : 400;
+        : error instanceof AdminAuditWriteError
+          ? 500
+          : error instanceof AccountNotFoundError
+            ? 401
+            : error instanceof AuthenticationError
+              ? 401
+              : error instanceof AuthorizationError
+                ? 403
+                : error instanceof CorsOriginRejectedError
+                  ? 403
+                  : error instanceof ProjectionNotFoundError
+                    ? 404
+                    : error instanceof SearchIndexNotFoundError
+                      ? 404
+                      : 400;
   const details: Record<string, unknown> = { routeCode: requestId };
   if (
     (error instanceof AuthenticationError || error instanceof AuthorizationError) &&
@@ -1826,6 +1903,9 @@ function sendError(response: http.ServerResponse, error: unknown, requestId: str
     details.reason = error.reason;
   }
   if (error instanceof AccountNotFoundError) {
+    details.reason = error.reason;
+  }
+  if (error instanceof AdminAuditWriteError) {
     details.reason = error.reason;
   }
   if (error instanceof TenantIdValidationError) {
@@ -1887,6 +1967,9 @@ function httpErrorCode(error: unknown): FrickErrorCode {
   }
   if (error instanceof BlobValidationRejectedError) {
     return "blob.unsupportedContentType";
+  }
+  if (error instanceof AdminAuditWriteError) {
+    return "sync.protocolError";
   }
   if (error instanceof FrickLimitError) {
     if (error.limit === "maxBlobBytes") {
@@ -2101,6 +2184,14 @@ function protectedHttpPrincipal(request: http.IncomingMessage, url: URL, store: 
   }
 
   const session = store.readActiveSession(token);
+  return principalFromActiveSessionToken(store, token, session);
+}
+
+function principalFromActiveSessionToken(
+  store: FrickStore,
+  token: string,
+  session: StoredSession | undefined = store.readActiveSession(token),
+): Principal | AuthenticationError {
   if (!session) {
     const stale = store.readAnySession(token);
     if (stale && Date.parse(stale.expiresAt) <= Date.now()) {
@@ -2109,12 +2200,41 @@ function protectedHttpPrincipal(request: http.IncomingMessage, url: URL, store: 
     return new AuthenticationError("Invalid or expired session token");
   }
 
+  if (isTenantArchived(store, session.tenantId)) {
+    return new AuthenticationError("Tenant is archived");
+  }
+
   return {
     userId: session.userId,
     deviceId: session.deviceId,
     replicaId: session.replicaId,
     tenantId: session.tenantId,
   };
+}
+
+function isTenantArchived(store: FrickStore, tenantId: string): boolean {
+  return store.tenants.get(tenantId)?.archivedAt !== undefined;
+}
+
+function inspectionPrincipalFromRequest(
+  request: http.IncomingMessage,
+  url: URL,
+  store: FrickStore,
+  config: FrickConfig,
+): Principal | AuthenticationError {
+  if (config.env === "production") {
+    const admin = adminPrincipalFromRequest(request, url, config);
+    return admin ?? new AuthenticationError("Missing or invalid admin token");
+  }
+
+  const admin = adminPrincipalFromRequest(request, url, config);
+  if (admin) return admin;
+
+  const token = sessionTokenFromRequest(request, url);
+  if (!token) {
+    return new AuthenticationError("Missing session token");
+  }
+  return principalFromActiveSessionToken(store, token);
 }
 
 /**
@@ -2131,7 +2251,8 @@ function adminPrincipalFromRequest(
   if (!config.adminEnabled || !config.adminToken) {
     return undefined;
   }
-  const token = sessionTokenFromRequest(request, url);
+  void url;
+  const token = bearerTokenFromRequest(request);
   if (!token || token !== config.adminToken) {
     return undefined;
   }
@@ -2221,6 +2342,24 @@ async function handleAdminRoute(
       // Audit failures are best-effort. Don't tear down the request.
     }
   };
+  const strictAudit = (input: {
+    action: string;
+    target?: string;
+    outcome: "allow" | "deny" | "error";
+    detail?: Record<string, unknown>;
+  }): void => {
+    try {
+      store.adminAudit.record({
+        adminTokenFingerprint,
+        action: input.action,
+        ...(input.target !== undefined ? { target: input.target } : {}),
+        outcome: input.outcome,
+        ...(input.detail !== undefined ? { detail: JSON.stringify(input.detail) } : {}),
+      });
+    } catch (error) {
+      throw new AdminAuditWriteError(error);
+    }
+  };
 
   if (request.method === "GET" && sub === "audit-log") {
     const sinceParam = url.searchParams.get("since") ?? undefined;
@@ -2256,17 +2395,43 @@ async function handleAdminRoute(
         typeof body.displayName === "string" && body.displayName.length > 0
           ? body.displayName
           : undefined;
-      const row = store.tenants.create(tenantId, displayName);
-      audit({
+      const existing = store.tenants.get(tenantId);
+      if (existing && !existing.archivedAt) {
+        strictAudit({
+          action: "tenants.create",
+          target: tenantId,
+          outcome: "deny",
+          detail: { reason: "tenantExists" },
+        });
+        const envelope = createFrickErrorEnvelope({
+          code: "sync.protocolError",
+          message: `Tenant ${tenantId} already exists`,
+          requestId: "admin_tenant_conflict",
+          retryable: false,
+          details: { reason: "tenantExists", tenantId },
+          schemaHash: foundationSchema.hash,
+          schemaRevision: foundationSchema.schemaRevision,
+        });
+        sendJson(response, 409, {
+          error: envelope,
+          code: envelope.code,
+          message: envelope.message,
+          requestId: envelope.requestId,
+          retryable: envelope.retryable,
+        });
+        return;
+      }
+      strictAudit({
         action: "tenants.create",
         target: tenantId,
         outcome: "allow",
-        detail: displayName !== undefined ? { displayName } : {},
+        ...(displayName !== undefined ? { detail: { displayName } } : {}),
       });
+      const row = store.tenants.create(tenantId, displayName);
       sendJson(response, 201, row);
     } catch (error) {
       if (error instanceof TenantAlreadyExistsError) {
-        audit({
+        strictAudit({
           action: "tenants.create",
           target: error.tenantId,
           outcome: "deny",
@@ -2290,12 +2455,14 @@ async function handleAdminRoute(
         });
         return;
       }
-      audit({
-        action: "tenants.create",
-        ...(tenantId !== undefined ? { target: tenantId } : {}),
-        outcome: "error",
-        detail: { error: error instanceof Error ? error.message : String(error) },
-      });
+      if (!(error instanceof AdminAuditWriteError)) {
+        strictAudit({
+          action: "tenants.create",
+          ...(tenantId !== undefined ? { target: tenantId } : {}),
+          outcome: "error",
+          detail: { error: error instanceof Error ? error.message : String(error) },
+        });
+      }
       throw error;
     }
     return;
@@ -2306,7 +2473,7 @@ async function handleAdminRoute(
     const tenantId = decodeURIComponent(archiveMatch[1]!);
     const existing = store.tenants.get(tenantId);
     if (!existing) {
-      audit({
+      strictAudit({
         action: "tenants.archive",
         target: tenantId,
         outcome: "deny",
@@ -2316,17 +2483,19 @@ async function handleAdminRoute(
       return;
     }
     try {
+      strictAudit({ action: "tenants.archive", target: tenantId, outcome: "allow" });
       store.tenants.archive(tenantId);
       const row = store.tenants.get(tenantId);
-      audit({ action: "tenants.archive", target: tenantId, outcome: "allow" });
       sendJson(response, 200, row);
     } catch (error) {
-      audit({
-        action: "tenants.archive",
-        target: tenantId,
-        outcome: "error",
-        detail: { error: error instanceof Error ? error.message : String(error) },
-      });
+      if (!(error instanceof AdminAuditWriteError)) {
+        strictAudit({
+          action: "tenants.archive",
+          target: tenantId,
+          outcome: "error",
+          detail: { error: error instanceof Error ? error.message : String(error) },
+        });
+      }
       throw error;
     }
     return;
@@ -2373,20 +2542,22 @@ async function handleAdminRoute(
           );
         }
       }
-      store.tenantSettings.set(tenantId, settingKey, value);
-      audit({
+      strictAudit({
         action: "tenants.settings.put",
         target: `${tenantId}/${settingKey}`,
         outcome: "allow",
       });
+      store.tenantSettings.set(tenantId, settingKey, value);
       sendJson(response, 200, { tenantId, key: settingKey, value });
     } catch (error) {
-      audit({
-        action: "tenants.settings.put",
-        target: `${tenantId}/${settingKey}`,
-        outcome: "error",
-        detail: { error: error instanceof Error ? error.message : String(error) },
-      });
+      if (!(error instanceof AdminAuditWriteError)) {
+        strictAudit({
+          action: "tenants.settings.put",
+          target: `${tenantId}/${settingKey}`,
+          outcome: "error",
+          detail: { error: error instanceof Error ? error.message : String(error) },
+        });
+      }
       throw error;
     }
     return;
@@ -2427,17 +2598,57 @@ async function handleAdminRoute(
   }
 
   if (request.method === "POST" && sub === "accounts") {
-    const body = await readJsonBody(request, maxBodyBytes);
-    const tenantId = resolveAuthTenantId(body.tenantId);
-    ensureTenantAllowed(store, config, tenantId);
-    const handle = normalizeHandle(requireString(body.handle, "handle"));
-    const displayName = normalizeDisplayName(requireString(body.displayName, "displayName"));
-    const password = normalizePassword(requireString(body.password, "password"));
-    const userId =
-      typeof body.userId === "string" && body.userId.length > 0
-        ? body.userId
-        : userIdFromHandle(tenantId, handle);
+    let tenantId: string | undefined;
+    let handle: string | undefined;
+    const sendConflict = (message: string, conflictTenantId: string, conflictHandle: string): void => {
+      const envelope = createFrickErrorEnvelope({
+        code: "storage.conflict",
+        message,
+        requestId: "admin_account_conflict",
+        retryable: false,
+        details: { reason: "handleExists", tenantId: conflictTenantId, handle: conflictHandle },
+        schemaHash: foundationSchema.hash,
+        schemaRevision: foundationSchema.schemaRevision,
+      });
+      sendJson(response, 409, {
+        error: envelope,
+        code: envelope.code,
+        message: envelope.message,
+        requestId: envelope.requestId,
+        retryable: envelope.retryable,
+      });
+    };
     try {
+      const body = await readJsonBody(request, maxBodyBytes);
+      tenantId = resolveAuthTenantId(body.tenantId);
+      ensureTenantAllowed(store, config, tenantId);
+      handle = normalizeHandle(requireString(body.handle, "handle"));
+      const displayName = normalizeDisplayName(requireString(body.displayName, "displayName"));
+      const password = normalizePassword(requireString(body.password, "password"));
+      const userId =
+        typeof body.userId === "string" && body.userId.length > 0
+          ? body.userId
+          : userIdFromHandle(tenantId, handle);
+      const target = `${tenantId}/${handle}`;
+      const existingAccount =
+        store.accounts.readByIdentity(tenantId, handle) ??
+        store.accounts.readByIdentity(tenantId, userId);
+      if (existingAccount || store.hasUser(tenantId, userId)) {
+        strictAudit({
+          action: "accounts.create",
+          target,
+          outcome: "deny",
+          detail: { reason: "handleExists", tenantId, handle },
+        });
+        sendConflict("Handle is already taken", tenantId, handle);
+        return;
+      }
+      strictAudit({
+        action: "accounts.create",
+        target,
+        outcome: "allow",
+        detail: { tenantId, handle, userId },
+      });
       const account = store.createAccountUser({
         tenantId,
         userId,
@@ -2448,23 +2659,30 @@ async function handleAdminRoute(
       sendJson(response, 201, { account });
     } catch (error) {
       if (error instanceof Error && /already taken|UNIQUE|constraint/i.test(error.message)) {
-        const envelope = createFrickErrorEnvelope({
-          code: "storage.conflict",
-          message: error.message,
-          requestId: "admin_account_conflict",
-          retryable: false,
-          details: { reason: "handleExists", tenantId, handle },
-          schemaHash: foundationSchema.hash,
-          schemaRevision: foundationSchema.schemaRevision,
+        const target =
+          tenantId !== undefined && handle !== undefined ? `${tenantId}/${handle}` : undefined;
+        strictAudit({
+          action: "accounts.create",
+          ...(target !== undefined ? { target } : {}),
+          outcome: "deny",
+          detail: {
+            reason: "handleExists",
+            ...(tenantId !== undefined ? { tenantId } : {}),
+            ...(handle !== undefined ? { handle } : {}),
+          },
         });
-        sendJson(response, 409, {
-          error: envelope,
-          code: envelope.code,
-          message: envelope.message,
-          requestId: envelope.requestId,
-          retryable: envelope.retryable,
-        });
+        sendConflict(error.message, tenantId ?? DEFAULT_TENANT_ID, handle ?? "");
         return;
+      }
+      if (!(error instanceof AdminAuditWriteError)) {
+        const target =
+          tenantId !== undefined && handle !== undefined ? `${tenantId}/${handle}` : tenantId;
+        strictAudit({
+          action: "accounts.create",
+          ...(target !== undefined ? { target } : {}),
+          outcome: "error",
+          detail: { error: error instanceof Error ? error.message : String(error) },
+        });
       }
       throw error;
     }
@@ -2486,26 +2704,28 @@ async function handleAdminRoute(
         typeof body.idempotencyKey === "string" && body.idempotencyKey.length > 0
           ? body.idempotencyKey
           : undefined;
+      strictAudit({
+        action: "jobs.enqueue",
+        target: jobType,
+        outcome: "allow",
+        detail: { tenantId },
+      });
       const row = store.jobs.enqueue({
         tenantId,
         jobType,
         payload,
         ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
       });
-      audit({
-        action: "jobs.enqueue",
-        target: jobType,
-        outcome: "allow",
-        detail: { tenantId, jobId: row.id },
-      });
       sendJson(response, 201, row);
     } catch (error) {
-      audit({
-        action: "jobs.enqueue",
-        target: jobType,
-        outcome: "error",
-        detail: { error: error instanceof Error ? error.message : String(error) },
-      });
+      if (!(error instanceof AdminAuditWriteError)) {
+        strictAudit({
+          action: "jobs.enqueue",
+          target: jobType,
+          outcome: "error",
+          detail: { error: error instanceof Error ? error.message : String(error) },
+        });
+      }
       throw error;
     }
     return;
@@ -2542,21 +2762,23 @@ async function handleAdminRoute(
         ...(typeof body.threadId === "string" ? { threadId: body.threadId } : {}),
         ...(typeof body.deepLink === "string" ? { deepLink: body.deepLink } : {}),
       };
-      const row = notificationRouter.enqueueIntent(intent);
-      audit({
+      strictAudit({
         action: "push.deliver",
         target: intentName,
         outcome: "allow",
-        detail: { tenantId, jobId: row.id, recipientCount: recipientUserIds.length },
+        detail: { tenantId, recipientCount: recipientUserIds.length },
       });
+      const row = notificationRouter.enqueueIntent(intent);
       sendJson(response, 201, { jobId: row.id, jobType: row.jobType, status: row.status });
     } catch (error) {
-      audit({
-        action: "push.deliver",
-        ...(bodyTenant !== undefined ? { target: bodyTenant } : {}),
-        outcome: "error",
-        detail: { error: error instanceof Error ? error.message : String(error) },
-      });
+      if (!(error instanceof AdminAuditWriteError)) {
+        strictAudit({
+          action: "push.deliver",
+          ...(bodyTenant !== undefined ? { target: bodyTenant } : {}),
+          outcome: "error",
+          detail: { error: error instanceof Error ? error.message : String(error) },
+        });
+      }
       throw error;
     }
     return;
@@ -2564,12 +2786,7 @@ async function handleAdminRoute(
 
   if (request.method === "POST" && sub === "backup") {
     let tenantId: string | undefined;
-    let bodyParsed: Record<string, unknown> = {};
-    try {
-      bodyParsed = await readJsonBody(request, maxBodyBytes);
-    } catch {
-      // Empty body is fine — defaults to whole-DB.
-    }
+    const bodyParsed = await readJsonBody(request, maxBodyBytes);
     if (typeof bodyParsed.tenantId === "string" && bodyParsed.tenantId.length > 0) {
       tenantId = bodyParsed.tenantId;
       if (tenantId !== "all") {
@@ -2579,29 +2796,28 @@ async function handleAdminRoute(
     }
     const options: FrickDumpOptions = tenantId !== undefined ? { tenantId } : {};
     try {
+      strictAudit({
+        action: "backup.dump",
+        ...(tenantId !== undefined ? { target: tenantId } : { target: "all" }),
+        outcome: "allow",
+      });
       response.writeHead(200, {
         "content-type": "application/x-ndjson; charset=utf-8",
         "cache-control": "no-store",
       });
-      let rowCount = 0;
       for await (const line of dumpFrickDatabase(store, options)) {
         response.write(`${line}\n`);
-        rowCount += 1;
       }
       response.end();
-      audit({
-        action: "backup.dump",
-        ...(tenantId !== undefined ? { target: tenantId } : { target: "all" }),
-        outcome: "allow",
-        detail: { rows: rowCount },
-      });
     } catch (error) {
-      audit({
-        action: "backup.dump",
-        ...(tenantId !== undefined ? { target: tenantId } : { target: "all" }),
-        outcome: "error",
-        detail: { error: error instanceof Error ? error.message : String(error) },
-      });
+      if (!(error instanceof AdminAuditWriteError)) {
+        strictAudit({
+          action: "backup.dump",
+          ...(tenantId !== undefined ? { target: tenantId } : { target: "all" }),
+          outcome: "error",
+          detail: { error: error instanceof Error ? error.message : String(error) },
+        });
+      }
       throw error;
     }
     return;
@@ -2609,7 +2825,7 @@ async function handleAdminRoute(
 
   if (request.method === "POST" && sub === "restore") {
     if (config.env === "production") {
-      audit({
+      strictAudit({
         action: "backup.restore",
         outcome: "deny",
         detail: { reason: "restoreNotAllowedInProduction" },
@@ -2633,7 +2849,7 @@ async function handleAdminRoute(
       return;
     }
     if (url.searchParams.get("confirm") !== "yes") {
-      audit({
+      strictAudit({
         action: "backup.restore",
         outcome: "deny",
         detail: { reason: "missingConfirmation" },
@@ -2649,6 +2865,11 @@ async function handleAdminRoute(
       yield text;
     }
     try {
+      strictAudit({
+        action: "backup.restore",
+        outcome: "allow",
+        detail: { overwrite, forceSchemaDrift },
+      });
       const report = await restoreFrickDatabase({
         target: store,
         source: asLines(),
@@ -2656,15 +2877,10 @@ async function handleAdminRoute(
         overwrite,
         forceSchemaDrift,
       });
-      audit({
-        action: "backup.restore",
-        outcome: "allow",
-        detail: { rowCountsByType: report.rowCountsByType, skipped: report.skipped.length },
-      });
       sendJson(response, 200, report);
     } catch (error) {
       if (error instanceof FrickRestoreRefusedError) {
-        audit({
+        strictAudit({
           action: "backup.restore",
           outcome: "deny",
           detail: { reason: error.reason, ...(error.details ?? {}) },
@@ -2677,11 +2893,13 @@ async function handleAdminRoute(
         });
         return;
       }
-      audit({
-        action: "backup.restore",
-        outcome: "error",
-        detail: { error: error instanceof Error ? error.message : String(error) },
-      });
+      if (!(error instanceof AdminAuditWriteError)) {
+        strictAudit({
+          action: "backup.restore",
+          outcome: "error",
+          detail: { error: error instanceof Error ? error.message : String(error) },
+        });
+      }
       throw error;
     }
     return;
@@ -2695,7 +2913,7 @@ async function handleAdminRoute(
     try {
       validateTenantId(tenantId);
     } catch (error) {
-      audit({
+      strictAudit({
         action: "search.rebuild",
         target: indexName,
         outcome: "error",
@@ -2705,7 +2923,7 @@ async function handleAdminRoute(
     }
     const def = store.searchIndexes.get(indexName);
     if (!def) {
-      audit({
+      strictAudit({
         action: "search.rebuild",
         target: indexName,
         outcome: "deny",
@@ -2716,22 +2934,24 @@ async function handleAdminRoute(
     try {
       const normalizedTenant = normalizeTenantId(tenantId);
       const source = sourceIterableForIndex(store, def, normalizedTenant);
-      await store.searchAdapter.rebuild(normalizedTenant, indexName, source);
-      const rebuiltAt = new Date().toISOString();
-      audit({
+      strictAudit({
         action: "search.rebuild",
         target: indexName,
         outcome: "allow",
-        detail: { tenantId: normalizedTenant, rebuiltAt },
+        detail: { tenantId: normalizedTenant },
       });
+      await store.searchAdapter.rebuild(normalizedTenant, indexName, source);
+      const rebuiltAt = new Date().toISOString();
       sendJson(response, 200, { index: indexName, tenantId: normalizedTenant, rebuiltAt });
     } catch (error) {
-      audit({
-        action: "search.rebuild",
-        target: indexName,
-        outcome: "error",
-        detail: { error: error instanceof Error ? error.message : String(error) },
-      });
+      if (!(error instanceof AdminAuditWriteError)) {
+        strictAudit({
+          action: "search.rebuild",
+          target: indexName,
+          outcome: "error",
+          detail: { error: error instanceof Error ? error.message : String(error) },
+        });
+      }
       throw error;
     }
     return;
@@ -2745,7 +2965,7 @@ async function handleAdminRoute(
     try {
       validateTenantId(tenantId);
     } catch (error) {
-      audit({
+      strictAudit({
         action: "projections.rebuild",
         target: name,
         outcome: "error",
@@ -2755,7 +2975,7 @@ async function handleAdminRoute(
     }
     const projection = store.projections.get(name);
     if (!projection) {
-      audit({
+      strictAudit({
         action: "projections.rebuild",
         target: name,
         outcome: "deny",
@@ -2764,7 +2984,7 @@ async function handleAdminRoute(
       throw new ProjectionNotFoundError(name);
     }
     if (!projection.handler.rebuild) {
-      audit({
+      strictAudit({
         action: "projections.rebuild",
         target: name,
         outcome: "deny",
@@ -2782,22 +3002,24 @@ async function handleAdminRoute(
         store,
         logger,
       };
-      projection.handler.rebuild(ctx);
-      const rebuiltAt = new Date().toISOString();
-      audit({
+      strictAudit({
         action: "projections.rebuild",
         target: name,
         outcome: "allow",
-        detail: { tenantId: ctx.tenantId, rebuiltAt },
+        detail: { tenantId: ctx.tenantId },
       });
+      projection.handler.rebuild(ctx);
+      const rebuiltAt = new Date().toISOString();
       sendJson(response, 200, { projection: name, tenantId: ctx.tenantId, rebuiltAt });
     } catch (error) {
-      audit({
-        action: "projections.rebuild",
-        target: name,
-        outcome: "error",
-        detail: { error: error instanceof Error ? error.message : String(error) },
-      });
+      if (!(error instanceof AdminAuditWriteError)) {
+        strictAudit({
+          action: "projections.rebuild",
+          target: name,
+          outcome: "error",
+          detail: { error: error instanceof Error ? error.message : String(error) },
+        });
+      }
       throw error;
     }
     return;
@@ -2807,7 +3029,7 @@ async function handleAdminRoute(
     const rawTenant = url.searchParams.get("tenantId");
     const userId = url.searchParams.get("userId");
     if (!rawTenant || !userId) {
-      audit({
+      strictAudit({
         action: "compliance.dataSubject.export",
         outcome: "deny",
         detail: { reason: "missingParameters" },
@@ -2822,7 +3044,7 @@ async function handleAdminRoute(
     const tenantId = normalizeTenantId(rawTenant);
     try {
       const payload = exportDataSubject(store, tenantId, userId);
-      audit({
+      strictAudit({
         action: "compliance.dataSubject.export",
         target: userId,
         outcome: "allow",
@@ -2830,12 +3052,14 @@ async function handleAdminRoute(
       });
       sendJson(response, 200, payload);
     } catch (error) {
-      audit({
-        action: "compliance.dataSubject.export",
-        target: userId,
-        outcome: "error",
-        detail: { error: error instanceof Error ? error.message : String(error) },
-      });
+      if (!(error instanceof AdminAuditWriteError)) {
+        strictAudit({
+          action: "compliance.dataSubject.export",
+          target: userId,
+          outcome: "error",
+          detail: { error: error instanceof Error ? error.message : String(error) },
+        });
+      }
       throw error;
     }
     return;
@@ -2846,7 +3070,7 @@ async function handleAdminRoute(
     const userId = url.searchParams.get("userId");
     const confirm = url.searchParams.get("confirm");
     if (!rawTenant || !userId) {
-      audit({
+      strictAudit({
         action: "compliance.dataSubject.erase",
         outcome: "deny",
         detail: { reason: "missingParameters" },
@@ -2858,7 +3082,7 @@ async function handleAdminRoute(
       return;
     }
     if (config.env === "production" && confirm !== "yes") {
-      audit({
+      strictAudit({
         action: "compliance.dataSubject.erase",
         target: userId,
         outcome: "deny",
@@ -2874,25 +3098,23 @@ async function handleAdminRoute(
     validateTenantId(rawTenant);
     const tenantId = normalizeTenantId(rawTenant);
     try {
-      const report = eraseDataSubject(store, tenantId, userId);
-      audit({
+      strictAudit({
         action: "compliance.dataSubject.erase",
         target: userId,
         outcome: "allow",
-        detail: {
-          tenantId,
-          deleted: report.deleted,
-          pseudonymized: report.pseudonymized,
-        },
+        detail: { tenantId },
       });
+      const report = eraseDataSubject(store, tenantId, userId);
       sendJson(response, 200, report);
     } catch (error) {
-      audit({
-        action: "compliance.dataSubject.erase",
-        target: userId,
-        outcome: "error",
-        detail: { error: error instanceof Error ? error.message : String(error) },
-      });
+      if (!(error instanceof AdminAuditWriteError)) {
+        strictAudit({
+          action: "compliance.dataSubject.erase",
+          target: userId,
+          outcome: "error",
+          detail: { error: error instanceof Error ? error.message : String(error) },
+        });
+      }
       throw error;
     }
     return;
@@ -2957,9 +3179,14 @@ async function handleAdminRoute(
 }
 
 function sessionTokenFromRequest(request: http.IncomingMessage, url: URL): string | undefined {
+  void url;
+  const bearer = bearerTokenFromRequest(request);
+  return bearer ?? headerValue(request, "x-frick-session-token") ?? undefined;
+}
+
+function bearerTokenFromRequest(request: http.IncomingMessage): string | undefined {
   const auth = headerValue(request, "authorization");
-  const bearer = /^Bearer\s+(.+)$/i.exec(auth ?? "")?.[1];
-  return bearer ?? headerValue(request, "x-frick-session-token") ?? url.searchParams.get("sessionToken") ?? undefined;
+  return /^Bearer\s+(.+)$/i.exec(auth ?? "")?.[1];
 }
 
 function isProtectedPath(pathname: string): boolean {
@@ -3002,6 +3229,21 @@ function parseSearchFilter(value: unknown): Record<string, string | number> | un
     out[key] = raw;
   }
   return out;
+}
+
+function filterMessagesSearchResultForPrincipal(
+  result: FrickSearchResult,
+  principal: Principal,
+  store: FrickStore,
+): FrickSearchResult {
+  const hits = result.hits.filter((hit) => {
+    const conversationId = hit.fields.conversationId;
+    return (
+      typeof conversationId === "string" &&
+      store.isRoomMember(principal.tenantId, conversationId, principal.userId)
+    );
+  });
+  return { hits, total: hits.length };
 }
 
 /**

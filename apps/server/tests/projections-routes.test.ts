@@ -56,6 +56,20 @@ describe("/projections HTTP routes", () => {
     expect(projectionBody.data).toEqual(inboxBody.data);
   });
 
+  it("rejects conversation-inbox reads for another userId", async () => {
+    app = await startServer();
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    const response = await fetch(
+      `${app.httpUrl}/projections/conversation-inbox?userId=user-grace`,
+      { headers: authHeaders(login.sessionToken) },
+    );
+
+    expect(response.status).toBe(403);
+    const body = await response.json();
+    expect(body.error.details.reason).toBe("notAuthorizedForResource");
+  });
+
   it("returns 404 envelope for an unknown projection name", async () => {
     app = await startServer();
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
@@ -98,6 +112,30 @@ describe("/projections HTTP routes", () => {
     expect(typeof body.rebuiltAt).toBe("string");
   });
 
+  it("admin rebuild fails closed before running the handler when audit recording fails", async () => {
+    app = await startServer({ adminToken: ADMIN_TOKEN });
+    const projection = app.store.projections.get("conversation-inbox");
+    expect(projection).toBeDefined();
+    let rebuildCalls = 0;
+    (projection!.handler as unknown as { rebuild: () => void }).rebuild = () => {
+      rebuildCalls += 1;
+    };
+    (app.store.adminAudit as unknown as { record: () => never }).record = () => {
+      throw new Error("audit unavailable");
+    };
+
+    const response = await fetch(
+      `${app.httpUrl}/_frick/admin/projections/conversation-inbox/rebuild`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+      },
+    );
+
+    expect(response.status).toBe(500);
+    expect(rebuildCalls).toBe(0);
+  });
+
   it("admin rebuild rejects non-admin sessions with 403", async () => {
     app = await startServer({ adminToken: ADMIN_TOKEN });
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
@@ -129,7 +167,10 @@ describe("/projections HTTP routes", () => {
 
   it("exposes /_frick/inspect/projections when inspection is enabled", async () => {
     app = await startServer({ inspectionEnabled: true });
-    const response = await fetch(`${app.httpUrl}/_frick/inspect/projections`);
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const response = await fetch(`${app.httpUrl}/_frick/inspect/projections`, {
+      headers: authHeaders(login.sessionToken),
+    });
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
       projections: Array<{

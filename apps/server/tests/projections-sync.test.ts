@@ -57,12 +57,13 @@ describe("projection deltas over the sync gateway", () => {
 
     const delta = await deltas.next();
     expect(delta.projection).toBe("conversation-inbox");
-    expect(delta.changes.length).toBeGreaterThan(0);
-    // Each change targets a deterministic `${userId}:${conversationId}` key.
-    for (const change of delta.changes) {
-      expect(change.key).toMatch(/^user-[^:]+:conversation-general$/);
-      expect(change.value).not.toBeNull();
-    }
+    expect(delta.changes.map((change) => change.key)).toEqual([
+      "user-ada:conversation-general",
+    ]);
+    expect(delta.changes[0]?.value).toMatchObject({
+      userId: "user-ada",
+      conversationId: "conversation-general",
+    });
     socket.close();
   });
 
@@ -220,7 +221,7 @@ async function postJson(
 }
 
 async function connectAndHello(url: string, sessionToken: string): Promise<WebSocket> {
-  const socket = new WebSocket(`${url}?sessionToken=${encodeURIComponent(sessionToken)}`);
+  const socket = new WebSocket(url, { headers: { authorization: `Bearer ${sessionToken}` } });
   await new Promise<void>((resolve) => socket.once("open", resolve));
   socket.send(
     encodeFrame([

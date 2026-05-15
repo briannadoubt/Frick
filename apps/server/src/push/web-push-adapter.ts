@@ -27,6 +27,8 @@
  */
 
 import { createSign } from "node:crypto";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import type {
   FrickNotificationContext,
   FrickNotificationIntent,
@@ -43,6 +45,7 @@ export interface WebPushAdapterOptions {
   readonly fetch?: typeof fetch;
   readonly env?: NodeJS.ProcessEnv;
   readonly now?: () => number;
+  readonly resolveHostname?: (hostname: string) => Promise<readonly { address: string }[]>;
 }
 
 interface CachedVapid {
@@ -59,6 +62,7 @@ export function createFrickWebPushAdapter(options: WebPushAdapterOptions = {}): 
   const env = options.env ?? process.env;
   const now = options.now ?? Date.now;
   const fetchImpl = options.fetch ?? fetch;
+  const resolveHostname = options.resolveHostname ?? defaultResolveHostname;
   const vapidCache = new Map<string, CachedVapid>();
 
   function vapidHeader(creds: WebPushCredentials, audience: string): { authorization: string } {
@@ -90,6 +94,17 @@ export function createFrickWebPushAdapter(options: WebPushAdapterOptions = {}): 
     }
     const subscription = parseSubscriptionToken(registration.token);
     if (!subscription) {
+      return {
+        registration,
+        attemptedAt: new Date().toISOString(),
+        status: "failed",
+        error: {
+          code: "push.badDeviceToken",
+          message: "Registration token is not a valid PushSubscription JSON",
+        },
+      };
+    }
+    if (!(await isSafeWebPushEndpointForSend(subscription.endpoint, resolveHostname))) {
       return {
         registration,
         attemptedAt: new Date().toISOString(),
@@ -150,11 +165,164 @@ interface ParsedSubscription {
 function parseSubscriptionToken(token: string): ParsedSubscription | undefined {
   try {
     const parsed = JSON.parse(token) as Partial<ParsedSubscription>;
-    if (typeof parsed.endpoint !== "string" || !parsed.endpoint.startsWith("http")) return undefined;
+    if (typeof parsed.endpoint !== "string" || !isSafeWebPushEndpoint(parsed.endpoint)) {
+      return undefined;
+    }
     return { endpoint: parsed.endpoint, keys: parsed.keys ?? { p256dh: "", auth: "" } };
   } catch {
     return undefined;
   }
+}
+
+export function validateWebPushRegistrationToken(token: string): void {
+  if (!parseSubscriptionToken(token)) {
+    throw new Error(
+      "webPush token must be a PushSubscription JSON with a public https endpoint",
+    );
+  }
+}
+
+function isSafeWebPushEndpoint(endpoint: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "https:") {
+    return false;
+  }
+  return !isUnsafeHost(url.hostname);
+}
+
+async function isSafeWebPushEndpointForSend(
+  endpoint: string,
+  resolveHostname: (hostname: string) => Promise<readonly { address: string }[]>,
+): Promise<boolean> {
+  if (!isSafeWebPushEndpoint(endpoint)) {
+    return false;
+  }
+  const url = new URL(endpoint);
+  const host = normalizeHostname(url.hostname);
+  if (isIP(host)) {
+    return true;
+  }
+  try {
+    const addresses = await resolveHostname(host);
+    return addresses.length > 0 && addresses.every((row) => !isUnsafeHost(row.address));
+  } catch {
+    return false;
+  }
+}
+
+async function defaultResolveHostname(hostname: string): Promise<readonly { address: string }[]> {
+  return lookup(hostname, { all: true, verbatim: true });
+}
+
+function isUnsafeHost(hostname: string): boolean {
+  const host = normalizeHostname(hostname);
+  if (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host === "metadata.google.internal"
+  ) {
+    return true;
+  }
+  const version = isIP(host);
+  if (version === 4) {
+    return isUnsafeIpv4(host);
+  }
+  if (version === 6) {
+    return isUnsafeIpv6(host);
+  }
+  return false;
+}
+
+function normalizeHostname(hostname: string): string {
+  return hostname
+    .toLowerCase()
+    .replace(/^\[(.*)\]$/, "$1")
+    .replace(/\.$/, "");
+}
+
+function isUnsafeIpv4(host: string): boolean {
+  const parts = host.split(".").map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return true;
+  }
+  const [a, b] = parts as [number, number, number, number];
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 198 && (b === 18 || b === 19)) ||
+    (a >= 224 && a <= 239) ||
+    a >= 240
+  );
+}
+
+function isUnsafeIpv6(host: string): boolean {
+  const embeddedIpv4 = host.includes(".")
+    ? host.slice(host.lastIndexOf(":") + 1)
+    : undefined;
+  if (embeddedIpv4 && isIP(embeddedIpv4) === 4 && isUnsafeIpv4(embeddedIpv4)) {
+    return true;
+  }
+  const segments = parseIpv6Segments(host);
+  if (!segments) {
+    return true;
+  }
+  const first = segments[0]!;
+  const allButLastZero = segments.slice(0, 7).every((segment) => segment === 0);
+  return (
+    (allButLastZero && (segments[7] === 0 || segments[7] === 1)) ||
+    (first & 0xfe00) === 0xfc00 ||
+    (first & 0xffc0) === 0xfe80 ||
+    (first & 0xff00) === 0xff00
+  );
+}
+
+function parseIpv6Segments(host: string): number[] | undefined {
+  const withoutZone = host.split("%", 1)[0] ?? host;
+  const sides = withoutZone.split("::");
+  if (sides.length > 2) {
+    return undefined;
+  }
+  const left = splitIpv6Side(sides[0] ?? "");
+  const right = splitIpv6Side(sides[1] ?? "");
+  if (!left || !right) {
+    return undefined;
+  }
+  const missing = 8 - left.length - right.length;
+  if (sides.length === 1 && missing !== 0) {
+    return undefined;
+  }
+  if (sides.length === 2 && missing < 0) {
+    return undefined;
+  }
+  return [...left, ...Array(Math.max(0, missing)).fill(0), ...right];
+}
+
+function splitIpv6Side(side: string): number[] | undefined {
+  if (side.length === 0) {
+    return [];
+  }
+  const out: number[] = [];
+  for (const part of side.split(":")) {
+    if (part.length === 0 || part.length > 4 || !/^[0-9a-f]+$/i.test(part)) {
+      return undefined;
+    }
+    const parsed = Number.parseInt(part, 16);
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 0xffff) {
+      return undefined;
+    }
+    out.push(parsed);
+  }
+  return out;
 }
 
 /**

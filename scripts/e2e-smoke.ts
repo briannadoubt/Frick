@@ -81,6 +81,7 @@ interface ServerHandle {
 
 async function bootServer(dbPath: string): Promise<ServerHandle> {
   const server = createFrickServer({
+    port: 0,
     dbPath,
     config: { env: "development" as const },
   });
@@ -245,7 +246,9 @@ async function main(): Promise<void> {
     });
 
     await record("phase1.inspect_db", async () => {
-      const r = await fetchJson(`${server!.baseUrl}/_frick/inspect/db`);
+      const r = await fetchJson(`${server!.baseUrl}/_frick/inspect/db`, {
+        headers: { authorization: `Bearer ${sessionToken}` },
+      });
       if (r.status !== 200) throw new Error(`/_frick/inspect/db returned ${r.status}`);
       const body = r.body as { ready: boolean; applied: number; idempotencyCache: { size: number } };
       if (!body.ready) throw new Error("/_frick/inspect/db reports not ready");
@@ -256,7 +259,7 @@ async function main(): Promise<void> {
     // WS round-trip: connect, Hello, expect HelloAck + Schema, subscribe,
     // expect StreamPage, append via HTTP, expect Delta.
     await record("phase1.ws_roundtrip", async () => {
-      const ws = new WebSocket(`${server!.wsUrl}?sessionToken=${encodeURIComponent(sessionToken)}`);
+      const ws = new WebSocket(server!.wsUrl);
       ws.binaryType = "arraybuffer";
       const queue = createFrameQueue(ws);
       await new Promise<void>((resolve, reject) => {
@@ -274,6 +277,7 @@ async function main(): Promise<void> {
           {
             replicaId: "e2e-replica",
             deviceId: "e2e-device",
+            sessionToken,
             schemaHash: foundationSchema.hash,
             knownCursors: {},
             clientCapabilities: defaultClientCapabilities({

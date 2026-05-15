@@ -74,11 +74,22 @@ const TABLE_ORDER: readonly TableSpec[] = [
   { name: "blob_metadata", tenantScoped: true, orderBy: "tenant_id ASC, blob_id ASC" },
   { name: "blob_content", tenantScoped: true, orderBy: "tenant_id ASC, blob_id ASC" },
   {
+    name: "blob_derivatives",
+    tenantScoped: true,
+    orderBy: "tenant_id ASC, parent_blob_id ASC, derivative_id ASC",
+  },
+  {
     name: "conversation_inbox",
     tenantScoped: true,
     orderBy: "tenant_id ASC, conversation_id ASC, user_id ASC",
   },
+  {
+    name: "search_indexes",
+    tenantScoped: true,
+    orderBy: "tenant_id ASC, index_name ASC, doc_id ASC",
+  },
   { name: "idempotency_keys", tenantScoped: true, orderBy: "tenant_id ASC, replica_id ASC, request_id ASC" },
+  { name: "tenant_settings", tenantScoped: true, orderBy: "tenant_id ASC, setting_key ASC" },
   { name: "jobs", tenantScoped: true, orderBy: "id ASC" },
   {
     name: "push_device_registrations",

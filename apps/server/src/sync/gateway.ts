@@ -256,12 +256,20 @@ export class SyncGateway {
   /** Local-only projection-delta fan-out, also reused by the cluster handler. */
   #fanOutProjectionDelta(notice: { tenantId: string; projection: string; changes: ProjectionDeltaNotice["changes"] }): void {
     for (const { client: subscriber } of this.#subscriptions.projectionSubscribers(notice.projection)) {
-      if (subscriber.principal && subscriber.principal.tenantId !== notice.tenantId) {
+      const principal = subscriber.principal;
+      if (!principal || !this.#isPrincipalActive(principal)) {
+        continue;
+      }
+      if (principal.tenantId !== notice.tenantId) {
+        continue;
+      }
+      const changes = filterProjectionChangesForPrincipal(notice.projection, notice.changes, principal);
+      if (changes.length === 0) {
         continue;
       }
       sendFrame(subscriber.socket, [
         FrameKind.ProjectionDelta,
-        { projection: notice.projection, changes: notice.changes },
+        { projection: notice.projection, changes },
       ]);
     }
   }
@@ -319,7 +327,8 @@ export class SyncGateway {
   /** Local-only stream-event fan-out, also reused by the cluster handler. */
   #fanOutStreamEvent(event: { tenantId: string; stream: string; streamId: string; sequence: number }, packed: ReturnType<typeof packStreamEvent>): void {
     for (const { client: subscriber } of this.#subscriptions.streamSubscribers(event.stream, event.streamId)) {
-      if (subscriber.principal && subscriber.principal.tenantId !== event.tenantId) {
+      const principal = subscriber.principal;
+      if (!principal || !this.#isPrincipalActive(principal) || principal.tenantId !== event.tenantId) {
         continue;
       }
       sendFrame(subscriber.socket, [FrameKind.Delta, { objects: [], events: [packed], cursor: event.sequence }]);
@@ -330,7 +339,10 @@ export class SyncGateway {
   #fanOutObjects(type: string, objects: PlainObject[], tenantId?: string): void {
     const cursor = Date.now();
     for (const { client: subscriber } of this.#subscriptions.objectSubscribers(type)) {
-      const principal = requirePrincipal(subscriber);
+      const principal = subscriber.principal;
+      if (!principal || !this.#isPrincipalActive(principal)) {
+        continue;
+      }
       if (tenantId !== undefined && principal.tenantId !== tenantId) {
         continue;
       }
@@ -486,6 +498,10 @@ export class SyncGateway {
   #handleFrame(client: SyncClient, frame: FrickFrame): void {
     switch (frame[0]) {
       case FrameKind.Hello: {
+        if (!this.#authenticateHelloSession(client, frame[1].sessionToken)) {
+          return;
+        }
+
         // Hello-driven app routing: when the client advertises a schemaId
         // matching a registered app, route this connection to that app's
         // schema. Falls back to the store's schema in single-app mode (no
@@ -622,7 +638,10 @@ export class SyncGateway {
   }
 
   #handleSubscribe(client: SyncClient, payload: SubscribePayload): void {
-    const principal = requirePrincipal(client);
+    const principal = this.#activePrincipalForFrame(client, payload.subscriptionId);
+    if (!principal) {
+      return;
+    }
     const clientLimits = this.#limitsFor(client);
     if (
       !client.subscriptions.has(payload.subscriptionId) &&
@@ -725,7 +744,10 @@ export class SyncGateway {
   }
 
   #handleAppend(client: SyncClient, payload: AppendPayload): void {
-    const principal = requirePrincipal(client);
+    const principal = this.#activePrincipalForFrame(client, payload.requestId);
+    if (!principal) {
+      return;
+    }
     const clientLimits = this.#limitsFor(client);
 
     const pending = this.#pendingAppendCounts.get(client) ?? 0;
@@ -805,21 +827,10 @@ export class SyncGateway {
   }
 
   #handleObjectUpsert(client: SyncClient, payload: ObjectUpsertPayload): void {
-    if (!client.principal) {
-      const envelope = createFrickErrorEnvelope({
-        code: "auth.unauthenticated",
-        message: "Missing session token",
-        requestId: payload.requestId,
-        retryable: false,
-        details: { reason: "unauthenticated" },
-      });
-      sendFrame(client.socket, [
-        FrameKind.Nack,
-        { requestId: payload.requestId, error: envelope, code: envelope.code, message: envelope.message },
-      ]);
+    const principal = this.#activePrincipalForFrame(client, payload.requestId);
+    if (!principal) {
       return;
     }
-    const principal = client.principal;
 
     // Object upserts share the pending-append counter intentionally: both are
     // outstanding write intents and a single combined cap matches the limits
@@ -854,6 +865,7 @@ export class SyncGateway {
           payload.objectId,
           tenantMembershipReader(this.store, principal.tenantId),
           this.#policyHooks,
+          payload.value,
         );
       } catch (error) {
         if (this.#sendAuthNack(client, payload.requestId, error)) {
@@ -906,7 +918,10 @@ export class SyncGateway {
   }
 
   #handlePresenceSet(client: SyncClient, payload: PresenceSetPayload): void {
-    const principal = requirePrincipal(client);
+    const principal = this.#activePrincipalForFrame(client, payload.requestId);
+    if (!principal) {
+      return;
+    }
     const presence = presenceByName(this.store.schema, payload.name);
     const ttlSeconds = presence.ttlMs / 1000;
     const clampedSeconds = clampTtlSeconds(
@@ -933,7 +948,10 @@ export class SyncGateway {
   }
 
   #handlePresenceClear(client: SyncClient, payload: PresenceClearPayload): void {
-    const principal = requirePrincipal(client);
+    const principal = this.#activePrincipalForFrame(client, payload.requestId);
+    if (!principal) {
+      return;
+    }
     this.store.clearPresence(principal.tenantId, payload.name, payload.key);
     this.#fanOutPresenceDelta(principal.tenantId, payload.name, payload.key, [], [payload.key]);
     if (this.#clusterBus) {
@@ -966,7 +984,8 @@ export class SyncGateway {
       .filter((r): r is { key: string; value: PlainObject } => r.value !== null)
       .map((r) => packPresenceRecord(this.store.schema, name, r.key, r.value));
     for (const { client: subscriber, subscription } of this.#subscriptions.presenceSubscribers(name, key)) {
-      if (subscriber.principal && subscriber.principal.tenantId !== tenantId) {
+      const principal = subscriber.principal;
+      if (!principal || !this.#isPrincipalActive(principal) || principal.tenantId !== tenantId) {
         continue;
       }
       sendFrame(subscriber.socket, [
@@ -977,7 +996,10 @@ export class SyncGateway {
   }
 
   #handleSignal(client: SyncClient, payload: SignalPayload): void {
-    const principal = requirePrincipal(client);
+    const principal = this.#activePrincipalForFrame(client, payload.requestId);
+    if (!principal) {
+      return;
+    }
     try {
       assertCanSignal(
         principal,
@@ -1016,13 +1038,94 @@ export class SyncGateway {
     return true;
   }
 
+  #activePrincipalForFrame(client: SyncClient, requestId: string): Principal | undefined {
+    const principal = client.principal;
+    if (!principal) {
+      this.#sendAuthNack(client, requestId, new AuthenticationError("Missing session token"));
+      return undefined;
+    }
+    if (!this.#isPrincipalActive(principal)) {
+      this.#sendAuthNack(client, requestId, new AuthenticationError("Tenant is archived"));
+      try {
+        client.socket.close(1008, "Tenant is archived");
+      } catch {
+        // socket already closing
+      }
+      return undefined;
+    }
+    return principal;
+  }
+
+  #authenticateHelloSession(client: SyncClient, sessionToken: string | undefined): boolean {
+    if (!sessionToken) {
+      return true;
+    }
+    const principal = this.#principalFromSessionToken(sessionToken);
+    if (!principal) {
+      this.#sendHelloAuthNack(client, {
+        code: "auth.unauthenticated",
+        message: "Invalid session token",
+        reason: "unauthenticated",
+      });
+      return false;
+    }
+    if (client.principal) {
+      if (!samePrincipal(client.principal, principal)) {
+        this.#sendHelloAuthNack(client, {
+          code: "auth.forbidden",
+          message: "Hello session token does not match the connection principal",
+          reason: "notAuthorizedForResource",
+        });
+        return false;
+      }
+      return true;
+    }
+
+    client.principal = principal;
+    this.#bumpTenantCount(principal.tenantId, +1);
+    this.#clientLimits.set(client, resolveTenantLimits(principal.tenantId, this.store, this.#limits));
+    return true;
+  }
+
+  #sendHelloAuthNack(
+    client: SyncClient,
+    input: {
+      code: "auth.unauthenticated" | "auth.forbidden";
+      message: string;
+      reason: "unauthenticated" | "notAuthorizedForResource";
+    },
+  ): void {
+    const envelope = createFrickErrorEnvelope({
+      code: input.code,
+      message: input.message,
+      requestId: "hello",
+      retryable: false,
+      details: { reason: input.reason },
+    });
+    sendFrame(client.socket, [
+      FrameKind.Nack,
+      { requestId: "hello", error: envelope, code: envelope.code, message: envelope.message },
+    ]);
+    try {
+      client.socket.close(1008, input.message);
+    } catch {
+      // socket already closing
+    }
+  }
+
   #principalFromRequest(request: IncomingMessage): Principal | undefined {
-    const url = new URL(request.url ?? "/", "ws://127.0.0.1");
-    const token = url.searchParams.get("sessionToken");
+    const token = bearerTokenFromRequest(request);
     if (!token) {
       return undefined;
     }
+    return this.#principalFromSessionToken(token);
+  }
+
+  #principalFromSessionToken(token: string): Principal | undefined {
     const session = this.store.readActiveSession(token);
+    if (session && !this.#isTenantActive(session.tenantId)) {
+      return undefined;
+    }
     return session
       ? {
           userId: session.userId,
@@ -1032,13 +1135,46 @@ export class SyncGateway {
         }
       : undefined;
   }
+
+  #isPrincipalActive(principal: Principal): boolean {
+    return principal.scope === "admin" || this.#isTenantActive(principal.tenantId);
+  }
+
+  #isTenantActive(tenantId: string): boolean {
+    return this.store.tenants.get(tenantId)?.archivedAt === undefined;
+  }
 }
 
-function requirePrincipal(client: SyncClient) {
-  if (!client.principal) {
-    throw new Error("Client must send hello before realtime operations");
+function samePrincipal(left: Principal, right: Principal): boolean {
+  return (
+    left.userId === right.userId &&
+    left.deviceId === right.deviceId &&
+    left.replicaId === right.replicaId &&
+    left.tenantId === right.tenantId
+  );
+}
+
+function bearerTokenFromRequest(request: IncomingMessage): string | undefined {
+  const raw = request.headers.authorization;
+  const auth = Array.isArray(raw) ? raw[0] : raw;
+  return /^Bearer\s+(.+)$/i.exec(auth ?? "")?.[1];
+}
+
+function filterProjectionChangesForPrincipal(
+  projection: string,
+  changes: ProjectionDeltaNotice["changes"],
+  principal: Principal,
+): ProjectionDeltaNotice["changes"] {
+  if (projection !== "conversation-inbox") {
+    return changes;
   }
-  return client.principal;
+  const keyPrefix = `${principal.userId}:`;
+  return changes.filter((change) => {
+    if (change.key.startsWith(keyPrefix)) {
+      return true;
+    }
+    return change.value?.userId === principal.userId;
+  });
 }
 
 function requireKey(payload: SubscribePayload): string {

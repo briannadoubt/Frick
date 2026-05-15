@@ -29,12 +29,14 @@ pnpm web                      # http://127.0.0.1:5173
 - [`docs/schema-author-tutorial.md`](./docs/schema-author-tutorial.md) — add an object type end-to-end, regenerate native DTOs, lint for breaking changes.
 - [`docs/authoring.md`](./docs/authoring.md) — full app authoring reference (init flags, scaffold commands, server wiring).
 - [`docs/operations.md`](./docs/operations.md) — runtime modes, environment variables, admin routes, shutdown contract.
+- [`docs/status.md`](./docs/status.md) — current stable surfaces, known limitations, and quality gates.
 - [`docs/threat-model.md`](./docs/threat-model.md) — trust boundaries and the auth/permissions story.
 - [`docs/push-adapters.md`](./docs/push-adapters.md) — wire up the APNs and FCM adapters, set per-tenant credentials via the CLI, and read back delivery telemetry.
 - [`docs/push-receive.md`](./docs/push-receive.md) — typed `FrickPushPayload` + `FrickDeepLinkRouter` for iOS / Android / web push receive.
 - [`docs/horizontal-scale.md`](./docs/horizontal-scale.md) — running multiple server nodes behind a load balancer; cluster-bus contract + Redis adapter skeleton.
 - [`docs/cross-platform-client-contract.md`](./docs/cross-platform-client-contract.md) — what every client SDK must implement.
 - [`docs/versioning.md`](./docs/versioning.md) — schema-identity stability, when to bump revision vs hash, breaking-change policy.
+- [`AGENTS.md`](./AGENTS.md) — repo-specific guidance for AI agents and automation.
 - [`CONTRIBUTING.md`](./CONTRIBUTING.md) — how to run tests, commit conventions, PR expectations.
 
 ## Tech stack
@@ -49,7 +51,7 @@ The TypeScript stack is required; Swift and Android tooling are only needed if y
 
 ## Status
 
-Pre-1.0. The schema identity (`schemaId`, `protocolVersion`, `schemaRevision`, `hash`) and the structured error envelope are stable — clients and servers in the wild can rely on those. Storage layout, admin/inspection routes, and the CLI surface may still shift between minor versions. Local SQLite databases should be considered disposable while the framework is in cutover posture.
+Pre-1.0. The schema identity (`schemaId`, `protocolVersion`, `schemaRevision`, `hash`) and the structured error envelope are stable enough for clients and servers to rely on. Storage layout, admin/inspection routes, and the CLI surface may still shift between minor versions. Local SQLite databases should be considered disposable while the framework is in cutover posture. See [`docs/status.md`](./docs/status.md) for the current support boundaries and known limitations.
 
 ## License
 

@@ -1,8 +1,9 @@
 local_resource(
   "install",
-  cmd="pnpm install",
+  cmd="pnpm install --frozen-lockfile --ignore-scripts",
   deps=[
     "package.json",
+    "pnpm-lock.yaml",
     "pnpm-workspace.yaml",
     "packages/protocol/package.json",
     "packages/core/package.json",

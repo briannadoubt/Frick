@@ -17,7 +17,6 @@ describe("CORS enforcement (HTTP)", () => {
         env: "production",
         allowedOrigins: ["https://app.example.com"],
         dbPath: tmpDbPath(),
-        demoAuthEnabled: true,
         inspectionEnabled: false,
       },
     });
@@ -43,7 +42,6 @@ describe("CORS enforcement (HTTP)", () => {
         env: "production",
         allowedOrigins: ["https://app.example.com"],
         dbPath: tmpDbPath(),
-        demoAuthEnabled: true,
         inspectionEnabled: false,
       },
     });
@@ -73,7 +71,6 @@ describe("CORS enforcement (HTTP)", () => {
         env: "production",
         allowedOrigins: ["https://app.example.com"],
         dbPath: tmpDbPath(),
-        demoAuthEnabled: true,
         inspectionEnabled: false,
       },
     });
@@ -95,7 +92,6 @@ describe("CORS enforcement (HTTP)", () => {
         env: "production",
         allowedOrigins: ["https://app.example.com"],
         dbPath: tmpDbPath(),
-        demoAuthEnabled: true,
         inspectionEnabled: false,
       },
     });
@@ -116,7 +112,6 @@ describe("CORS enforcement (HTTP)", () => {
         env: "production",
         allowedOrigins: ["https://app.example.com"],
         dbPath: tmpDbPath(),
-        demoAuthEnabled: true,
         inspectionEnabled: false,
       },
     });
@@ -153,7 +148,6 @@ describe("CORS enforcement (HTTP)", () => {
         env: "production",
         allowedOrigins: ["https://app.example.com", "https://admin.example.com"],
         dbPath: tmpDbPath(),
-        demoAuthEnabled: true,
         inspectionEnabled: false,
       },
     });
@@ -183,7 +177,6 @@ describe("CORS enforcement (WebSocket upgrade)", () => {
         env: "production",
         allowedOrigins: ["https://app.example.com"],
         dbPath: tmpDbPath(),
-        demoAuthEnabled: true,
         inspectionEnabled: false,
       },
     });
@@ -204,7 +197,6 @@ describe("CORS enforcement (WebSocket upgrade)", () => {
         env: "production",
         allowedOrigins: ["https://app.example.com"],
         dbPath: tmpDbPath(),
-        demoAuthEnabled: true,
         inspectionEnabled: false,
       },
     });

@@ -43,6 +43,22 @@ describe("/_frick/admin/jobs/:jobType POST", () => {
     expect(row.payload.kind).toBe("message");
   });
 
+  it("fails closed before enqueueing when audit recording fails", async () => {
+    app = await startServer({ adminToken: ADMIN_TOKEN });
+    (app.store.adminAudit as unknown as { record: () => never }).record = () => {
+      throw new Error("audit unavailable");
+    };
+
+    const response = await fetch(`${app.httpUrl}/_frick/admin/jobs/TestJob`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ payload: { recipientUserId: "user-grace", kind: "message" } }),
+    });
+
+    expect(response.status).toBe(500);
+    expect(app.store.jobs.list({ jobType: "TestJob" })).toEqual([]);
+  });
+
   it("non-admin bearer returns 403", async () => {
     app = await startServer({ adminToken: ADMIN_TOKEN });
     const login = await fetch(`${app.httpUrl}/auth/dev-login`, {

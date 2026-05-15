@@ -35,7 +35,8 @@ export class FrickRestoreRefusedError extends Error {
       | "missingHeader"
       | "schemaHashMismatch"
       | "missingMigrations"
-      | "targetNotEmpty",
+      | "targetNotEmpty"
+      | "tenantScopeMismatch",
     message: string,
     readonly details?: Record<string, unknown>,
   ) {
@@ -53,8 +54,11 @@ const TENANT_SCOPED_TABLES: readonly string[] = [
   "signal_outbox",
   "blob_metadata",
   "blob_content",
+  "blob_derivatives",
   "conversation_inbox",
+  "search_indexes",
   "idempotency_keys",
+  "tenant_settings",
   "jobs",
   "push_device_registrations",
 ];
@@ -66,6 +70,7 @@ const INFRA_TABLES: readonly string[] = [
 ];
 
 const ALL_TABLES: readonly string[] = [...TENANT_SCOPED_TABLES, ...INFRA_TABLES];
+const TENANT_ID_CONSTRAINED_TABLES = new Set([...TENANT_SCOPED_TABLES, "tenants"]);
 
 export async function restoreFrickDatabase(
   options: FrickRestoreOptions,
@@ -81,6 +86,7 @@ export async function restoreFrickDatabase(
   const db = options.target.rawDatabase();
   const skipped: FrickRestoreReport["skipped"] = [];
   const rowCountsByType: Record<string, number> = {};
+  const columnCache = new Map<string, Set<string>>();
 
   const reader = lineReader(options.source);
   const headerLine = await reader.next();
@@ -148,8 +154,11 @@ export async function restoreFrickDatabase(
         skipped.push({ type: parsed.type, reason: "unknownTableType", line: lineNumber });
         continue;
       }
+      if (tenantScope !== "all" && TENANT_ID_CONSTRAINED_TABLES.has(parsed.type)) {
+        assertRowTenantMatchesScope(parsed.type, parsed.row, tenantScope, lineNumber);
+      }
       try {
-        insertRow(db, parsed.type, parsed.row);
+        insertRow(db, parsed.type, parsed.row, columnCache);
         rowCountsByType[parsed.type] = (rowCountsByType[parsed.type] ?? 0) + 1;
       } catch (error) {
         skipped.push({
@@ -178,23 +187,74 @@ export async function restoreFrickDatabase(
   };
 }
 
-function insertRow(db: DatabaseSync, table: string, row: Record<string, unknown>): void {
+function assertRowTenantMatchesScope(
+  table: string,
+  row: Record<string, unknown>,
+  tenantScope: string,
+  lineNumber: number,
+): void {
+  if (row.tenant_id === tenantScope) return;
+  throw new FrickRestoreRefusedError(
+    "tenantScopeMismatch",
+    `Refusing to restore ${table} row for tenant ${String(row.tenant_id)} into tenant-scoped dump ${tenantScope}`,
+    { table, tenantId: row.tenant_id, expectedTenantId: tenantScope, line: lineNumber },
+  );
+}
+
+function insertRow(
+  db: DatabaseSync,
+  table: string,
+  row: Record<string, unknown>,
+  columnCache: Map<string, Set<string>>,
+): void {
+  const allowedColumns = getTableColumns(db, table, columnCache);
   const columns: string[] = [];
   const params: unknown[] = [];
   for (const [key, value] of Object.entries(row)) {
+    const column = key.endsWith("_base64") ? key.slice(0, -"_base64".length) : key;
+    if (!allowedColumns.has(column)) {
+      throw new Error(`invalidColumn: ${table}.${column}`);
+    }
+    if (columns.includes(column)) {
+      throw new Error(`duplicateColumn: ${table}.${column}`);
+    }
     if (key.endsWith("_base64")) {
-      const col = key.slice(0, -"_base64".length);
-      columns.push(col);
+      columns.push(column);
       params.push(Buffer.from(String(value), "base64"));
     } else {
-      columns.push(key);
+      columns.push(column);
       params.push(value as never);
     }
   }
+  if (columns.length === 0) {
+    throw new Error(`emptyRow: ${table}`);
+  }
   const placeholders = columns.map(() => "?").join(", ");
-  const columnList = columns.map((c) => `"${c}"`).join(", ");
-  const sql = `INSERT INTO ${table} (${columnList}) VALUES (${placeholders})`;
+  const columnList = columns.map(quoteIdentifier).join(", ");
+  const sql = `INSERT INTO ${quoteIdentifier(table)} (${columnList}) VALUES (${placeholders})`;
   db.prepare(sql).run(...(params as Array<string | number | bigint | Buffer | null>));
+}
+
+function getTableColumns(
+  db: DatabaseSync,
+  table: string,
+  columnCache: Map<string, Set<string>>,
+): Set<string> {
+  const cached = columnCache.get(table);
+  if (cached) return cached;
+  const rows = db
+    .prepare(`PRAGMA table_info(${quoteIdentifier(table)})`)
+    .all() as Array<{ name: string }>;
+  if (rows.length === 0) {
+    throw new Error(`missingTable: ${table}`);
+  }
+  const columns = new Set(rows.map((row) => row.name));
+  columnCache.set(table, columns);
+  return columns;
+}
+
+function quoteIdentifier(identifier: string): string {
+  return `"${identifier.replaceAll('"', '""')}"`;
 }
 
 function truncateScope(db: DatabaseSync, tenantScope: string): void {

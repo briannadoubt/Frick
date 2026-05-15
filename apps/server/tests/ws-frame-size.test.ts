@@ -20,7 +20,7 @@ describe("websocket inbound frame-size cap", () => {
   it("nacks frames larger than maxWebSocketFrameBytes and closes the socket", async () => {
     app = await startServer({ limits: { maxWebSocketFrameBytes: 1024 } });
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
-    const socket = await connect(`${app.url}?sessionToken=${encodeURIComponent(login.sessionToken)}`);
+    const socket = await connect(app.url, login.sessionToken);
 
     const frames: FrickFrame[] = [];
     socket.on("message", (data) => frames.push(decodeFrame(data as Buffer)));
@@ -76,7 +76,7 @@ describe("websocket inbound frame-size cap", () => {
       deviceId: probeLogin.deviceId,
       replicaId: probeLogin.replicaId,
     });
-    const socket = await connect(`${app.url}?sessionToken=${encodeURIComponent(login.sessionToken)}`);
+    const socket = await connect(app.url, login.sessionToken);
 
     const frames: FrickFrame[] = [];
     socket.on("message", (data) => frames.push(decodeFrame(data as Buffer)));
@@ -103,7 +103,7 @@ describe("websocket inbound frame-size cap", () => {
   it("accepts repeated frames slightly under the limit", async () => {
     app = await startServer({ limits: { maxWebSocketFrameBytes: 4096 } });
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
-    const socket = await connect(`${app.url}?sessionToken=${encodeURIComponent(login.sessionToken)}`);
+    const socket = await connect(app.url, login.sessionToken);
 
     const frames: FrickFrame[] = [];
     socket.on("message", (data) => frames.push(decodeFrame(data as Buffer)));
@@ -147,8 +147,11 @@ async function startServer(options: { limits?: Parameters<typeof createFrickServ
   };
 }
 
-async function connect(url: string): Promise<WebSocket> {
-  const socket = new WebSocket(url);
+async function connect(url: string, sessionToken?: string): Promise<WebSocket> {
+  const socket = new WebSocket(
+    url,
+    sessionToken ? { headers: { authorization: `Bearer ${sessionToken}` } } : undefined,
+  );
   await new Promise<void>((resolve) => socket.once("open", resolve));
   return socket;
 }

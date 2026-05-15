@@ -55,7 +55,10 @@ export async function registerFrickBackgroundSync(
     if (data.type === "frick:flush") {
       void options.onFlush();
     } else if (data.type === "frick:navigate" && typeof data.url === "string") {
-      options.onNavigate?.(data.url);
+      const url = normalizeNavigateUrl(data.url);
+      if (url !== undefined) {
+        options.onNavigate?.(url);
+      }
     }
   };
   navigator.serviceWorker.addEventListener("message", messageHandler);
@@ -86,4 +89,21 @@ export async function registerFrickBackgroundSync(
       },
     },
   };
+}
+
+function normalizeNavigateUrl(value: string): string | undefined {
+  const baseOrigin =
+    typeof globalThis.location?.origin === "string"
+      ? globalThis.location.origin
+      : "http://localhost";
+  let parsed: URL;
+  try {
+    parsed = new URL(value, `${baseOrigin}/`);
+  } catch {
+    return undefined;
+  }
+  if (parsed.origin !== baseOrigin) {
+    return undefined;
+  }
+  return `${parsed.pathname}${parsed.search}${parsed.hash}`;
 }

@@ -5,7 +5,11 @@ import SwiftUI
 
 enum DemoEndpoint {
     static var baseURL: URL {
+        #if DEBUG
         let fallback = URL(string: "http://127.0.0.1:4099")!
+        #else
+        let fallback = URL(string: "https://127.0.0.1:4099")!
+        #endif
         if let override = ProcessInfo.processInfo.environment["FRICK_ENDPOINT"],
            let url = URL(string: override) {
             return url
@@ -317,16 +321,19 @@ final class FoundationModel {
         }
     }
 
-    private func unregisterPush() async {
+    @discardableResult
+    private func unregisterPush() async -> Bool {
         guard let session = currentSession,
               let registrationId = UserDefaults.standard.string(forKey: pushRegistrationDefaultsKey)
-        else { return }
+        else { return true }
         do {
             try await deletePushRegistration(sessionToken: session.sessionToken, id: registrationId)
             UserDefaults.standard.removeObject(forKey: pushRegistrationDefaultsKey)
             status = "Push revoked"
+            return true
         } catch {
             status = "Push revoke failed: \(error.localizedDescription)"
+            return false
         }
     }
 
@@ -637,10 +644,38 @@ final class FoundationModel {
     }
 
     func logout() {
+        status = "Signing out"
         Task { [socket, socketStatusTask, socketEventsTask] in
+            if isPushEnabled {
+                _ = await unregisterPush()
+                UserDefaults.standard.removeObject(forKey: pushRegistrationDefaultsKey)
+            }
             await socket?.close()
             socketStatusTask?.cancel()
             socketEventsTask?.cancel()
+            FrickBackgroundSync.cancelFlush()
+            client.signOut()
+            currentSession = nil
+            users = []
+            conversations = []
+            roomMembers = []
+            messages = []
+            selectedConversationId = defaultConversationId
+            selectedDestination = "chat"
+            isInspectorPresented = false
+            newThreadTitle = ""
+            newThreadKind = .direct
+            newThreadParticipantIds = []
+            threadError = nil
+            isCreatingThread = false
+            draft = ""
+            authMode = .login
+            displayName = ""
+            handle = ""
+            password = ""
+            authError = nil
+            isAuthenticating = false
+            status = "Signed out"
         }
         socket = nil
         socketStatusTask = nil
@@ -648,28 +683,6 @@ final class FoundationModel {
         syncStatus = .initial
         typingNotice = nil
         lastReceiptSequence = [:]
-        client.signOut()
-        currentSession = nil
-        users = []
-        conversations = []
-        roomMembers = []
-        messages = []
-        selectedConversationId = defaultConversationId
-        selectedDestination = "chat"
-        isInspectorPresented = false
-        newThreadTitle = ""
-        newThreadKind = .direct
-        newThreadParticipantIds = []
-        threadError = nil
-        isCreatingThread = false
-        draft = ""
-        authMode = .login
-        displayName = ""
-        handle = ""
-        password = ""
-        authError = nil
-        isAuthenticating = false
-        status = "Signed out"
     }
 
     func createDemoAccount() async {

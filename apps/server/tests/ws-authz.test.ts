@@ -19,6 +19,135 @@ afterEach(async () => {
 });
 
 describe("websocket authorization parity", () => {
+  it("accepts websocket session tokens from the Authorization header", async () => {
+    app = await startServer();
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const socket = await connectAndHelloWithHeaders(app.url, {
+      authorization: `Bearer ${login.sessionToken}`,
+    });
+
+    expect(socket.readyState).toBe(WebSocket.OPEN);
+    socket.close();
+  });
+
+  it("authenticates an initially anonymous websocket from Hello.sessionToken", async () => {
+    app = await startServer();
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const socket = await connectAndHelloFromHelloToken(app.url, login.sessionToken);
+
+    socket.send(
+      encodeFrame([
+        FrameKind.Append,
+        {
+          requestId: "request-hello-token-append",
+          stream: "MessageStream",
+          key: "conversation-general",
+          event: "MessageSent",
+          payload: {
+            messageId: "message-hello-token",
+            senderId: "user-ada",
+            body: "hello token auth",
+            createdAt: "2026-05-09T00:00:00.000Z",
+          },
+        },
+      ]),
+    );
+
+    const frame = await nextFrame(socket);
+    expect(frame[0]).toBe(FrameKind.Ack);
+    expect(frame[1]).toMatchObject({
+      requestId: "request-hello-token-append",
+    });
+    socket.close();
+  });
+
+  it("does not authenticate websocket sessions from the sessionToken query parameter", async () => {
+    app = await startServer();
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const socket = new WebSocket(`${app.url}?sessionToken=${encodeURIComponent(login.sessionToken)}`);
+    await finishHello(socket);
+
+    socket.send(
+      encodeFrame([
+        FrameKind.ObjectUpsert,
+        {
+          requestId: "request-query-token-write",
+          objectType: "User",
+          objectId: "user-ada",
+          value: { displayName: "Ada Query Token" },
+        },
+      ]),
+    );
+
+    const frame = await nextFrame(socket);
+    expect(frame[0]).toBe(FrameKind.Nack);
+    expect(frame[1]).toMatchObject({
+      requestId: "request-query-token-write",
+      code: "auth.unauthenticated",
+    });
+    socket.close();
+  });
+
+  it("nacks unauthenticated websocket writes with request-specific auth errors", async () => {
+    app = await startServer();
+    const socket = new WebSocket(app.url);
+    await finishHello(socket);
+
+    socket.send(
+      encodeFrame([
+        FrameKind.Append,
+        {
+          requestId: "request-unauthenticated-append",
+          stream: "MessageStream",
+          key: "conversation-general",
+          event: "MessageSent",
+          payload: {
+            messageId: "message-unauthenticated-append",
+            senderId: "user-ada",
+            body: "missing auth",
+            createdAt: "2026-05-09T00:00:00.000Z",
+          },
+        },
+      ]),
+    );
+
+    const frame = await nextFrame(socket);
+    expect(frame[0]).toBe(FrameKind.Nack);
+    expect(frame[1]).toMatchObject({
+      requestId: "request-unauthenticated-append",
+      code: "auth.unauthenticated",
+    });
+    socket.close();
+  });
+
+  it("nacks invalid Hello.sessionToken credentials", async () => {
+    app = await startServer();
+    const socket = new WebSocket(app.url);
+    await new Promise<void>((resolve) => socket.once("open", resolve));
+    const nack = nextFrame(socket);
+
+    socket.send(
+      encodeFrame([
+        FrameKind.Hello,
+        {
+          replicaId: "replica-test",
+          deviceId: "device-test",
+          schemaHash: foundationSchema.hash,
+          knownCursors: {},
+          sessionToken: "not-a-valid-session",
+        },
+      ]),
+    );
+
+    const frame = await nack;
+    expect(frame[0]).toBe(FrameKind.Nack);
+    expect(frame[1]).toMatchObject({
+      requestId: "hello",
+      code: "auth.unauthenticated",
+    });
+    socket.close();
+  });
+
   it("nacks signal frames from non-members of a conversation with auth.forbidden", async () => {
     app = await startServer();
     app.store.upsertObject("User", "user-mallory", {
@@ -131,6 +260,82 @@ describe("websocket authorization parity", () => {
     socket.close();
   });
 
+  it("nacks signal subscriptions from non-members with auth.forbidden", async () => {
+    app = await startServer();
+    app.store.upsertObject("User", "user-mallory", {
+      displayName: "Mallory",
+      avatarBlobId: undefined,
+    });
+    const malloryLogin = await devLogin(app.httpUrl, { userId: "user-mallory" });
+    const socket = await connectAndHello(app.url, malloryLogin.sessionToken);
+
+    socket.send(
+      encodeFrame([
+        FrameKind.Subscribe,
+        {
+          subscriptionId: "sub-signal-mallory",
+          kind: "signal",
+          name: "WebRTCSignal",
+          key: "conversation-general",
+        },
+      ]),
+    );
+
+    const frame = await nextFrame(socket);
+    expect(frame[0]).toBe(FrameKind.Nack);
+    expect(frame[1]).toMatchObject({
+      requestId: "sub-signal-mallory",
+      code: "auth.forbidden",
+    });
+    expect(frame[1].error).toMatchObject({
+      code: "auth.forbidden",
+      details: { reason: "notMember" },
+    });
+    socket.close();
+  });
+
+  it("rejects websocket writes when the session tenant is archived after socket authentication", async () => {
+    app = await startServer({ adminToken: ADMIN_TOKEN });
+    await fetch(`${app.httpUrl}/_frick/admin/tenants`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ tenantId: "tenant-archived-ws" }),
+    });
+    const login = await devLogin(app.httpUrl, {
+      userId: "user-archived",
+      tenantId: "tenant-archived-ws",
+    });
+    const socket = await connectAndHello(app.url, login.sessionToken);
+    const archive = await fetch(
+      `${app.httpUrl}/_frick/admin/tenants/tenant-archived-ws/archive`,
+      { method: "POST", headers: { authorization: `Bearer ${ADMIN_TOKEN}` } },
+    );
+    expect(archive.status).toBe(200);
+
+    const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+    socket.send(
+      encodeFrame([
+        FrameKind.ObjectUpsert,
+        {
+          requestId: "req-archived-ws",
+          objectType: "Note",
+          objectId: "note-archived-ws",
+          value: { body: "no writes after archive" },
+        },
+      ]),
+    );
+
+    const frame = await nextFrame(socket);
+    expect(frame[0]).toBe(FrameKind.Nack);
+    expect(frame[1]).toMatchObject({
+      requestId: "req-archived-ws",
+      code: "auth.unauthenticated",
+    });
+    expect(app.store.readObject("tenant-archived-ws", "Note", "note-archived-ws")).toBeUndefined();
+    await closed;
+    socket.close();
+  });
+
   it("invokes registered policy hooks on the websocket signal path", async () => {
     const denySignals: FrickPolicyHook = (input) => {
       if (input.action === "signal.send") {
@@ -177,10 +382,13 @@ describe("websocket authorization parity", () => {
   });
 });
 
-async function startServer(options: { policyHooks?: readonly FrickPolicyHook[] } = {}) {
+const ADMIN_TOKEN = "test-admin-token-1234567890ABCDEF1234567890ABCDEF";
+
+async function startServer(options: { policyHooks?: readonly FrickPolicyHook[]; adminToken?: string } = {}) {
   const server = createFrickServer({
     port: 0,
     dbPath: ":memory:",
+    ...(options.adminToken ? { config: { adminToken: options.adminToken } } : {}),
     ...(options.policyHooks ? { policyHooks: options.policyHooks } : {}),
   });
   await server.listen();
@@ -197,7 +405,27 @@ async function startServer(options: { policyHooks?: readonly FrickPolicyHook[] }
 }
 
 async function connectAndHello(url: string, sessionToken: string): Promise<WebSocket> {
-  const socket = new WebSocket(`${url}?sessionToken=${encodeURIComponent(sessionToken)}`);
+  const socket = new WebSocket(url, { headers: { authorization: `Bearer ${sessionToken}` } });
+  await finishHello(socket);
+  return socket;
+}
+
+async function connectAndHelloFromHelloToken(url: string, sessionToken: string): Promise<WebSocket> {
+  const socket = new WebSocket(url);
+  await finishHello(socket, sessionToken);
+  return socket;
+}
+
+async function connectAndHelloWithHeaders(
+  url: string,
+  headers: Record<string, string>,
+): Promise<WebSocket> {
+  const socket = new WebSocket(url, { headers });
+  await finishHello(socket);
+  return socket;
+}
+
+async function finishHello(socket: WebSocket, sessionToken?: string): Promise<void> {
   await new Promise<void>((resolve) => socket.once("open", resolve));
   const hello = expectHelloAckThenSchema(socket);
   socket.send(
@@ -208,11 +436,11 @@ async function connectAndHello(url: string, sessionToken: string): Promise<WebSo
         deviceId: "device-test",
         schemaHash: foundationSchema.hash,
         knownCursors: {},
+        ...(sessionToken ? { sessionToken } : {}),
       },
     ]),
   );
   await hello;
-  return socket;
 }
 
 async function nextFrame(socket: WebSocket): Promise<FrickFrame> {
@@ -239,7 +467,7 @@ async function expectHelloAckThenSchema(socket: WebSocket): Promise<HelloAckPayl
 
 async function devLogin(
   httpUrl: string,
-  body: { userId: string; deviceId?: string; replicaId?: string; platform?: string },
+  body: { userId: string; tenantId?: string; deviceId?: string; replicaId?: string; platform?: string },
 ): Promise<{ sessionToken: string }> {
   const response = await fetch(`${httpUrl}/auth/dev-login`, {
     method: "POST",

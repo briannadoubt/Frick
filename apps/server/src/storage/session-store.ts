@@ -96,6 +96,13 @@ export class SessionStore {
       .get(sessionToken) as SessionRow | undefined;
     return row ? fromRow(row) : undefined;
   }
+
+  delete(sessionToken: string): boolean {
+    const result = this.db
+      .prepare("DELETE FROM auth_sessions WHERE session_token = ?")
+      .run(sessionToken);
+    return result.changes > 0;
+  }
 }
 
 function fromRow(row: SessionRow): StoredSession {

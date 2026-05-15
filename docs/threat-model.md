@@ -67,10 +67,8 @@ with `senderId: "user-grace"` posted from Ada's session.
 **Known gaps.**
 
 - Custom stream/event types beyond `MessageStream` get no payload-binding
-  check. App authors must add their own checks until the policy hook system
-  ships.
-- No tenant boundary — `Principal` has no `tenantId`. Multi-tenant isolation
-  is a future refactor.
+  check by default. App authors must register `policyHooks` on
+  `createFrickServer` to tighten app-specific stream rules.
 
 ---
 
@@ -138,11 +136,9 @@ listing.
 
 **Known gaps.**
 
-- Blob reads (`GET /blobs/:id/content`) currently do not assert the reader
-  is allowed to see the blob — any authenticated principal can fetch any
-  blob by id. A future slice will add a `blob.read` action with membership
-  semantics.
-- No per-user quota.
+- Blob reads (`GET /blobs/:id/content`) assert `blob.read` ownership before
+  returning bytes, and blob listing defaults to the caller's own rows. The
+  framework still has no per-user quota.
 
 ---
 
@@ -206,6 +202,42 @@ against a Frick server hosted at `frick.example`.
 
 ---
 
+## Browser demo shell and stored browser state
+
+**Threat.** A browser-facing demo page is embedded by another origin, runs
+unexpected script/style, keeps a stale bearer token after expiry, or carries
+one user's local push-registration state into the next login.
+
+**Today.**
+
+- `apps/web` ships a Vite config that serves CSP plus browser hardening
+  headers (`X-Content-Type-Options`, `Referrer-Policy`,
+  `Permissions-Policy`, COOP/CORP, and `Service-Worker-Allowed`) for the
+  demo app. Preview builds use a no-`unsafe-inline` / no-`unsafe-eval`
+  policy; the dev server keeps the `script-src`, `style-src`, and local
+  `connect-src` allowances Vite needs for React refresh and HMR.
+- The demo stores auth sessions in `sessionStorage`, migrates valid legacy
+  `localStorage` sessions once, and deletes expired, malformed, or migrated
+  localStorage bearer tokens.
+- Logout clears browser-held user state before the best-effort server
+  logout request, including the stored session and web push-registration
+  marker.
+- The demo Service Worker normalizes notification deep links to same-origin
+  app routes before posting `frick:navigate` to a tab or opening a window.
+
+**Known gaps.**
+
+- These headers cover the Vite-served demo surface. Apps that deploy Frick
+  behind another web server must carry equivalent headers in that server or
+  CDN config.
+- The dev-server CSP is intentionally weaker than preview so HMR keeps
+  working. Use preview or a production host to audit the stricter policy.
+- Bearer tokens are still readable by same-origin JavaScript while a session
+  is active; CSP reduces XSS blast radius but does not make bearer tokens
+  HttpOnly.
+
+---
+
 ## DoS via large payloads, rapid reconnects, or unbounded subscriptions
 
 **Threat.** An attacker submits multi-gigabyte blob uploads, opens thousands
@@ -245,10 +277,9 @@ per-tenant, not globally — `dorothy` in `tenant-a` and `dorothy` in
 existing rows accordingly without changing the wire protocol.
 
 **Known gap**: tenant assignment is per-session and per-account; there is no
-admin route for moving an account between tenants, no `tenants` table, and
-no admin principal that can act across tenants. A future slice can introduce
-those without breaking the boundary above, because tenant identity is
-already a first-class column on every row.
+admin route for moving an account between tenants. The framework does have a
+tenants ledger and admin bearer principals for cross-tenant operations, but
+account re-homing still needs an explicit migration workflow.
 
 ---
 

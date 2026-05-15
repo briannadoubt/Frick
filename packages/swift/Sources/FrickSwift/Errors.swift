@@ -49,6 +49,14 @@ public struct FrickServerError: Error, Equatable, Sendable {
     public var retryable: Bool { envelope?.retryable ?? false }
 }
 
+public struct FrickAuthenticationRequiredError: Error, Equatable, Sendable {
+    public let message: String
+
+    public init(message: String = "Frick requires an authenticated session for this operation") {
+        self.message = message
+    }
+}
+
 struct FrickHttpErrorBody: Decodable {
     let error: FrickErrorEnvelope?
 }

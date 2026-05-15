@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
 
 const generatedPaths = [
+  "packages/core/src/generated/bindings.ts",
+  "packages/core/src/generated/errors.ts",
   "packages/swift/Sources/FrickSwift/Generated/FrickGenerated.swift",
   "apps/android/frick/src/main/java/dev/frick/client/FrickGenerated.kt",
   "packages/protocol/fixtures",

@@ -45,7 +45,8 @@ describe("/_frick/inspect/metrics endpoint", () => {
     await fetch(`${app.httpUrl}/health`);
     await fetch(`${app.httpUrl}/health`);
 
-    const response = await fetch(`${app.httpUrl}/_frick/inspect/metrics`);
+    const headers = await inspectHeaders(app.httpUrl);
+    const response = await fetch(`${app.httpUrl}/_frick/inspect/metrics`, { headers });
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
       snapshotAt: string;
@@ -69,7 +70,8 @@ describe("/_frick/inspect/metrics endpoint", () => {
     const r = await fetch(`${app.httpUrl}/objects?type=Conversation`);
     expect(r.status).toBe(401);
 
-    const response = await fetch(`${app.httpUrl}/_frick/inspect/metrics`);
+    const headers = await inspectHeaders(app.httpUrl);
+    const response = await fetch(`${app.httpUrl}/_frick/inspect/metrics`, { headers });
     const body = (await response.json()) as { counters: MetricEntry[] };
     const err = findCounter(body.counters, "frick.http.errors.total", {
       code: "auth.unauthenticated",
@@ -81,7 +83,7 @@ describe("/_frick/inspect/metrics endpoint", () => {
   it("tracks ws connection gauge and frame counter, and resets gauge on close", async () => {
     app = await startServer();
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
-    const socket = await connect(`${app.wsUrl}?sessionToken=${encodeURIComponent(login.sessionToken)}`);
+    const socket = await connect(app.wsUrl, login.sessionToken);
 
     // Allow the gateway "connection" event a tick to fire.
     await new Promise((resolve) => setTimeout(resolve, 25));
@@ -102,7 +104,8 @@ describe("/_frick/inspect/metrics endpoint", () => {
     );
     await waitForFrameCount(frames, 2);
 
-    let response = await fetch(`${app.httpUrl}/_frick/inspect/metrics`);
+    const headers = { authorization: `Bearer ${login.sessionToken}` };
+    let response = await fetch(`${app.httpUrl}/_frick/inspect/metrics`, { headers });
     let body = (await response.json()) as { counters: MetricEntry[]; gauges: MetricEntry[] };
     const gaugeOpen = body.gauges.find((g) => g.name === "frick.ws.connections.current");
     expect(gaugeOpen?.value).toBe(1);
@@ -116,7 +119,7 @@ describe("/_frick/inspect/metrics endpoint", () => {
     // Allow the close handler to settle.
     await new Promise((resolve) => setTimeout(resolve, 25));
 
-    response = await fetch(`${app.httpUrl}/_frick/inspect/metrics`);
+    response = await fetch(`${app.httpUrl}/_frick/inspect/metrics`, { headers });
     body = (await response.json()) as { counters: MetricEntry[]; gauges: MetricEntry[] };
     const gaugeAfter = body.gauges.find((g) => g.name === "frick.ws.connections.current");
     expect(gaugeAfter?.value).toBe(0);
@@ -143,8 +146,9 @@ describe("/_frick/inspect/metrics endpoint", () => {
     app = await startServer();
     await fetch(`${app.httpUrl}/health`);
     await fetch(`${app.httpUrl}/ready`);
-    const a = await (await fetch(`${app.httpUrl}/_frick/inspect/metrics`)).json();
-    const b = await (await fetch(`${app.httpUrl}/_frick/inspect/metrics`)).json();
+    const headers = await inspectHeaders(app.httpUrl);
+    const a = await (await fetch(`${app.httpUrl}/_frick/inspect/metrics`, { headers })).json();
+    const b = await (await fetch(`${app.httpUrl}/_frick/inspect/metrics`, { headers })).json();
     expect(a.counters.map((c: MetricEntry) => [c.name, c.fields])).toEqual(
       b.counters.map((c: MetricEntry) => [c.name, c.fields]),
     );
@@ -167,8 +171,11 @@ async function startServer(options: Parameters<typeof createFrickServer>[0] = {}
   };
 }
 
-async function connect(url: string): Promise<WebSocket> {
-  const socket = new WebSocket(url);
+async function connect(url: string, sessionToken?: string): Promise<WebSocket> {
+  const socket = new WebSocket(
+    url,
+    sessionToken ? { headers: { authorization: `Bearer ${sessionToken}` } } : undefined,
+  );
   await new Promise<void>((resolve) => socket.once("open", resolve));
   return socket;
 }
@@ -206,4 +213,9 @@ async function devLogin(
     deviceId: string;
     replicaId: string;
   };
+}
+
+async function inspectHeaders(httpUrl: string): Promise<Record<string, string>> {
+  const login = await devLogin(httpUrl, { userId: "user-ada" });
+  return { authorization: `Bearer ${login.sessionToken}` };
 }

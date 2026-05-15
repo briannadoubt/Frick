@@ -27,6 +27,17 @@ describe("authorization denial envelopes", () => {
     expect(body.error.details.reason).toBe("unauthenticated");
   });
 
+  it("does not accept protected HTTP session tokens from the query string", async () => {
+    app = await startServer();
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    const response = await fetch(
+      `${app.httpUrl}/objects?sessionToken=${encodeURIComponent(login.sessionToken)}`,
+    );
+
+    expect(response.status).toBe(401);
+  });
+
   it("denies non-members reading another conversation's stream with reason notMember", async () => {
     app = await startServer();
     app.store.upsertObject("User", "user-mallory", {
@@ -153,6 +164,39 @@ describe("authorization denial envelopes", () => {
     expect(meta.ownerId).toBe("user-grace");
   });
 
+  it("defaults blob listing to the principal and rejects another ownerId", async () => {
+    app = await startServer();
+    const adaLogin = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const graceLogin = await devLogin(app.httpUrl, { userId: "user-grace" });
+
+    const adaUpload = await fetch(`${app.httpUrl}/blobs/blob-ada-list/content?ownerId=user-ada`, {
+      method: "PUT",
+      headers: { "content-type": "text/plain", ...authHeaders(adaLogin.sessionToken) },
+      body: Buffer.from("ada bytes"),
+    });
+    expect(adaUpload.status).toBe(201);
+    const graceUpload = await fetch(`${app.httpUrl}/blobs/blob-grace-list/content?ownerId=user-grace`, {
+      method: "PUT",
+      headers: { "content-type": "text/plain", ...authHeaders(graceLogin.sessionToken) },
+      body: Buffer.from("grace bytes"),
+    });
+    expect(graceUpload.status).toBe(201);
+
+    const ownList = await fetch(`${app.httpUrl}/blobs`, {
+      headers: authHeaders(adaLogin.sessionToken),
+    });
+    expect(ownList.status).toBe(200);
+    const ownBody = await ownList.json();
+    expect(ownBody.data.map((row: { blobId: string }) => row.blobId)).toEqual(["blob-ada-list"]);
+
+    const otherList = await fetch(`${app.httpUrl}/blobs?ownerId=user-grace`, {
+      headers: authHeaders(adaLogin.sessionToken),
+    });
+    expect(otherList.status).toBe(403);
+    const otherBody = await otherList.json();
+    expect(otherBody.error.details.reason).toBe("ownerMismatch");
+  });
+
   it("denies non-members POSTing signals to another conversation with reason notMember", async () => {
     app = await startServer();
     app.store.upsertObject("User", "user-mallory", {
@@ -176,6 +220,42 @@ describe("authorization denial envelopes", () => {
     expect(isFrickErrorEnvelope(body.error)).toBe(true);
     expect(body.error.code).toBe("auth.forbidden");
     expect(body.error.details.reason).toBe("notMember");
+  });
+
+  it("denies non-members draining conversation signals without deleting queued messages", async () => {
+    app = await startServer();
+    app.store.upsertObject("User", "user-mallory", {
+      displayName: "Mallory",
+      avatarBlobId: undefined,
+    });
+    const adaLogin = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const malloryLogin = await devLogin(app.httpUrl, { userId: "user-mallory" });
+
+    const post = await fetch(`${app.httpUrl}/signals/WebRTCSignal/conversation-general`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders(adaLogin.sessionToken) },
+      body: JSON.stringify({
+        senderDeviceId: "device-ada",
+        kind: "offer",
+        payload: "sdp-for-members",
+      }),
+    });
+    expect(post.status).toBe(200);
+
+    const forbidden = await fetch(`${app.httpUrl}/signals/WebRTCSignal/conversation-general`, {
+      headers: authHeaders(malloryLogin.sessionToken),
+    });
+    expect(forbidden.status).toBe(403);
+    const forbiddenBody = await forbidden.json();
+    expect(forbiddenBody.error.details.reason).toBe("notMember");
+
+    const allowed = await fetch(`${app.httpUrl}/signals/WebRTCSignal/conversation-general`, {
+      headers: authHeaders(adaLogin.sessionToken),
+    });
+    expect(allowed.status).toBe(200);
+    const allowedBody = await allowed.json();
+    expect(allowedBody.data).toHaveLength(1);
+    expect(allowedBody.data[0]).toMatchObject({ payload: "sdp-for-members" });
   });
 
   it("invokes registered policy hooks after an allow and lets them deny", async () => {
@@ -293,12 +373,50 @@ describe("decide() deny-by-default for unrecognised actions", () => {
     }
   });
 
-  it("allows object.write for any authenticated principal in its own tenant", () => {
+  it("denies direct writes to framework-managed Conversation objects", () => {
     const decision = decide(
       { principal: stranger, action: "object.write", resource: { kind: "object", name: "Conversation" } },
       memberships,
     );
+    expect(decision.allow).toBe(false);
+    if (!decision.allow) {
+      expect(decision.reason).toBe("notAuthorizedForResource");
+    }
+  });
+
+  it("allows object.write for custom app objects in the principal's own tenant", () => {
+    const decision = decide(
+      { principal: stranger, action: "object.write", resource: { kind: "object", name: "Note" } },
+      memberships,
+    );
     expect(decision.allow).toBe(true);
+  });
+
+  it("allows self User writes but denies writing another user's User object", () => {
+    const allowSelf = decide(
+      {
+        principal: stranger,
+        action: "object.write",
+        resource: { kind: "object", name: "User", key: "user-stranger" },
+        context: { value: { id: "user-stranger", displayName: "Stranger" } },
+      },
+      memberships,
+    );
+    expect(allowSelf.allow).toBe(true);
+
+    const denyOther = decide(
+      {
+        principal: stranger,
+        action: "object.write",
+        resource: { kind: "object", name: "User", key: "user-grace" },
+        context: { value: { id: "user-grace", displayName: "Grace" } },
+      },
+      memberships,
+    );
+    expect(denyOther.allow).toBe(false);
+    if (!denyOther.allow) {
+      expect(denyOther.reason).toBe("ownerMismatch");
+    }
   });
 
   it("denies cross-tenant object.write with reason tenantMismatch", () => {

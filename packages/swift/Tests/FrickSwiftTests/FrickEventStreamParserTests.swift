@@ -283,6 +283,91 @@ final class FrickEventStreamParserTests: XCTestCase {
         XCTAssertEqual(FrickStreamingURLProtocol.recordedRequests.last?.headerValue("authorization"), "Bearer token-grace")
     }
 
+    func testSignOutClearsSessionAndPendingAppends() async throws {
+        FrickStreamingURLProtocol.reset()
+        FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-ada", token: "token-ada"), for: "/auth/dev-login")
+        let storage = try FrickSQLiteStorage(path: ":memory:")
+        try storage.appendPendingAppend(PendingAppend(requestId: "request-1", body: Data("{}".utf8)))
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [FrickStreamingURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = FrickClient(
+            baseURL: URL(string: "http://frick.test")!,
+            session: session,
+            streamingSession: session,
+            storage: storage
+        )
+
+        _ = try await client.devLogin(userId: "user-ada")
+        client.signOut()
+
+        XCTAssertNil(client.currentSession)
+        XCTAssertEqual(try storage.loadPendingAppends(), [])
+    }
+
+    func testFlushPendingAppendsRequiresSessionBeforePosting() async throws {
+        FrickStreamingURLProtocol.reset()
+        let storage = try FrickSQLiteStorage(path: ":memory:")
+        try storage.appendPendingAppend(PendingAppend(requestId: "request-1", body: Data("{}".utf8)))
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [FrickStreamingURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = FrickClient(
+            baseURL: URL(string: "http://frick.test")!,
+            session: session,
+            streamingSession: session,
+            storage: storage
+        )
+
+        do {
+            try await client.flushPendingAppends()
+            XCTFail("expected auth requirement before flushing pending appends")
+        } catch is FrickAuthenticationRequiredError {
+            // expected
+        }
+
+        XCTAssertEqual(FrickStreamingURLProtocol.recordedRequests, [])
+        XCTAssertEqual(try storage.loadPendingAppends().map(\.requestId), ["request-1"])
+    }
+
+    func testFetchInboxWithoutSessionOrExplicitUserIdRequiresAuthBeforeRequest() async throws {
+        FrickStreamingURLProtocol.reset()
+        let client = try makeTestClient()
+
+        do {
+            _ = try await client.fetchInbox()
+            XCTFail("expected auth requirement before defaulting inbox user")
+        } catch is FrickAuthenticationRequiredError {
+            // expected
+        }
+
+        XCTAssertEqual(FrickStreamingURLProtocol.recordedRequests, [])
+    }
+
+    func testSendMessageWithoutSessionOrExplicitSenderRequiresAuthBeforeAppend() async throws {
+        FrickStreamingURLProtocol.reset()
+        let storage = try FrickSQLiteStorage(path: ":memory:")
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [FrickStreamingURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let client = FrickClient(
+            baseURL: URL(string: "http://frick.test")!,
+            session: session,
+            streamingSession: session,
+            storage: storage
+        )
+
+        do {
+            try await client.sendMessage(body: "no fallback")
+            XCTFail("expected auth requirement before defaulting sender id")
+        } catch is FrickAuthenticationRequiredError {
+            // expected
+        }
+
+        XCTAssertEqual(FrickStreamingURLProtocol.recordedRequests, [])
+        XCTAssertEqual(try storage.loadPendingAppends(), [])
+    }
+
     func testMessageStreamReconnectsAfterSseResponseEnds() async throws {
         FrickStreamingURLProtocol.reset()
         FrickStreamingURLProtocol.enqueue(
@@ -440,7 +525,7 @@ final class FrickEventStreamParserTests: XCTestCase {
             storage: try FrickSQLiteStorage(path: ":memory:")
         )
 
-        let inbox = try await client.fetchInbox()
+        let inbox = try await client.fetchInbox(userId: "user-ada")
         let blob = try await client.fetchBlobMetadata(blobId: "blob-1")
 
         XCTAssertEqual(inbox, [
@@ -584,6 +669,7 @@ final class FrickEventStreamParserTests: XCTestCase {
 
     func testAdvancesReadReceiptOncePerLoadedSequence() async throws {
         FrickStreamingURLProtocol.reset()
+        FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-ada", token: "token-ada"), for: "/auth/dev-login")
         FrickStreamingURLProtocol.enqueue(
             try streamEventsResponse(events: [
                 streamEvent(sequence: 1, eventId: "event-1", body: "first"),
@@ -611,11 +697,15 @@ final class FrickEventStreamParserTests: XCTestCase {
             requestIdFactory: { "request-\(FrickStreamingURLProtocol.postedBodies.count + 1)" }
         )
 
+        _ = try await client.devLogin(userId: "user-ada")
         _ = try await client.fetchMessages(conversationId: "conversation-general", readUserId: "user-ada")
         _ = try await client.fetchMessages(conversationId: "conversation-general", readUserId: "user-ada")
 
-        XCTAssertEqual(FrickStreamingURLProtocol.postedBodies.count, 1)
-        let body = try XCTUnwrap(FrickStreamingURLProtocol.postedBodies.first)
+        let appendPosts = FrickStreamingURLProtocol.postedBodies.filter { body in
+            body["event"] as? String == "ReceiptAdvanced"
+        }
+        XCTAssertEqual(appendPosts.count, 1)
+        let body = try XCTUnwrap(appendPosts.first)
         XCTAssertEqual(body["stream"] as? String, "MessageStream")
         XCTAssertEqual(body["key"] as? String, "conversation-general")
         XCTAssertEqual(body["event"] as? String, "ReceiptAdvanced")

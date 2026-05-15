@@ -296,8 +296,20 @@ export function useOptionalEndpoint<T = unknown>(path: string): OptionalEndpoint
 
   useEffect(() => {
     const controller = new AbortController();
-    const url = frickHttpUrl(httpEndpoint, path);
     setState((current) => ({ ...current, loading: true }));
+
+    let url: URL;
+    try {
+      url = frickHttpUrl(httpEndpoint, path);
+    } catch (error) {
+      setState({
+        data: undefined,
+        error: error instanceof Error ? error : new Error("Endpoint request failed"),
+        found: false,
+        loading: false,
+      });
+      return () => controller.abort();
+    }
 
     fetch(url, createAuthorizedFetchInit(session, { signal: controller.signal }))
       .then(async (response) => {
@@ -346,8 +358,17 @@ export function inboxEndpointPath(userId?: string): string {
   return `/inbox?${query.toString()}`;
 }
 
-function frickHttpUrl(httpEndpoint: string, path: string): URL {
-  return new URL(path.replace(/^\/+/, ""), `${httpEndpoint.replace(/\/$/, "")}/`);
+export function frickHttpUrl(httpEndpoint: string, path: string): URL {
+  const candidate = path.trim();
+  if (candidate !== path || candidate.startsWith("//") || /^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(candidate)) {
+    throw new Error("Frick optional endpoint paths must be relative paths");
+  }
+  const base = new URL(`${httpEndpoint.replace(/\/$/, "")}/`);
+  const url = new URL(candidate.replace(/^\/+/, ""), base);
+  if (url.origin !== base.origin) {
+    throw new Error("Frick optional endpoint paths must stay on the configured HTTP origin");
+  }
+  return url;
 }
 
 export function resolveHttpEndpoint(endpoint: string): string {

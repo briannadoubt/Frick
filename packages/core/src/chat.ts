@@ -710,6 +710,25 @@ export async function login({
   });
 }
 
+export async function logout({
+  httpEndpoint,
+  sessionToken,
+  fetchImpl = fetch,
+}: {
+  httpEndpoint: string;
+  sessionToken: string;
+  fetchImpl?: FetchImpl | undefined;
+}): Promise<void> {
+  const response = await fetchImpl(frickHttpUrl(httpEndpoint, "auth/logout"), {
+    method: "POST",
+    headers: authorizedHeaders(sessionToken),
+  });
+
+  if (!response.ok) {
+    throw new Error(await authErrorMessage(response, "Logout"));
+  }
+}
+
 export function appendAttachmentMarker(body: string, attachments: AttachmentMetadata[]): string {
   const trimmed = body.trim();
   if (attachments.length === 0) {

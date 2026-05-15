@@ -237,6 +237,80 @@ describe("auth-flow: signup then dev-login cycle", () => {
   });
 });
 
+describe("auth-flow: session response hardening", () => {
+  it("marks auth token responses no-store", async () => {
+    app = await startServer();
+
+    const signup = await fetch(`${app.httpUrl}/auth/signup`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        displayName: "Cache User",
+        handle: "cache-user",
+        password: "correcthorsebattery",
+        tenantId: "tenant-cache",
+      }),
+    });
+    expect(signup.status).toBe(201);
+    expect(signup.headers.get("cache-control")).toBe("no-store");
+    expect(signup.headers.get("pragma")).toBe("no-cache");
+
+    const login = await fetch(`${app.httpUrl}/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        identity: "cache-user",
+        password: "correcthorsebattery",
+        tenantId: "tenant-cache",
+      }),
+    });
+    expect(login.status).toBe(200);
+    expect(login.headers.get("cache-control")).toBe("no-store");
+
+    const devLogin = await fetch(`${app.httpUrl}/auth/dev-login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        userId: "user-cache",
+        tenantId: "tenant-cache-dev",
+      }),
+    });
+    expect(devLogin.status).toBe(200);
+    expect(devLogin.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("revokes the current bearer session on logout", async () => {
+    app = await startServer();
+
+    const login = await fetch(`${app.httpUrl}/auth/dev-login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ userId: "user-ada" }),
+    });
+    expect(login.status).toBe(200);
+    const session = await login.json();
+
+    const beforeLogout = await fetch(`${app.httpUrl}/inbox?userId=user-ada`, {
+      headers: { authorization: `Bearer ${session.sessionToken}` },
+    });
+    expect(beforeLogout.status).toBe(200);
+
+    const logout = await fetch(`${app.httpUrl}/auth/logout`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${session.sessionToken}` },
+    });
+    expect(logout.status).toBe(200);
+    expect(logout.headers.get("cache-control")).toBe("no-store");
+
+    const afterLogout = await fetch(`${app.httpUrl}/inbox?userId=user-ada`, {
+      headers: { authorization: `Bearer ${session.sessionToken}` },
+    });
+    const body = await afterLogout.json();
+    expect(afterLogout.status).toBe(401);
+    expect(body.error.code).toBe("auth.unauthenticated");
+  });
+});
+
 async function startServer(options: Parameters<typeof createFrickServer>[0] = {}) {
   const server = createFrickServer({ port: 0, dbPath: ":memory:", ...options });
   await server.listen();

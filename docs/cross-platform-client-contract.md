@@ -73,7 +73,7 @@ Clients announce their capabilities during the WebSocket handshake (`Hello` fram
 - Client `clientCapabilities` field on `HelloPayload` (currently optional during the rollout slice).
 - Server returns `HelloAckPayload` with the resolved `schemaCompatibility` result and the active `serverCapabilities`.
 
-Today only the TypeScript runtime opens WebSocket connections. Swift and Android clients use HTTP + SSE and so don't participate in capability negotiation yet, but the generated artifacts expose enough schema identity for that to be added in a later slice without a wire change.
+TypeScript, Swift, and Android clients all open WebSocket sync connections and participate in the Hello/HelloAck capability handshake. HTTP routes still exist for auth, initial REST helpers, blob/search operations, and some native client convenience methods.
 
 ### Capability Names
 
@@ -88,9 +88,13 @@ Server capabilities are reported as a flat list using these prefixes:
 
 A client lists names it strictly *requires* in `clientCapabilities.required`. The server rejects the handshake with a `sync.protocolError` nack carrying `details.unsupportedCapabilities` if any required capability isn't supported.
 
+### WebSocket Session Credentials
+
+`HelloPayload` carries an optional `sessionToken`. Clients authenticate WebSocket sessions by sending that Hello token or by using an `Authorization: Bearer ...` header on the upgrade request. The server does not authenticate `sessionToken` values from the WebSocket URL query string.
+
 ## Sync Diagnostics
 
-Each client runtime exposes diagnostic fields covering the same observable state. Today these live on the TypeScript `SyncStatus` object:
+Each client runtime exposes diagnostic fields covering the same observable state. The TypeScript runtime surfaces them on `SyncStatus`; Swift exposes `FrickSyncStatus` plus an async status stream; Android exposes `FrickSyncStatus` through a `StateFlow`.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
@@ -103,7 +107,7 @@ Each client runtime exposes diagnostic fields covering the same observable state
 | `schemaCompatibility` | object? | Result of `compareSchemaCompatibility` on `HelloAck` |
 | `lastError` | `FrickErrorEnvelope`? | Last nack envelope the server returned |
 
-Swift and Android currently expose connection state inline on each call rather than as a streamed object; they will gain matching diagnostics if/when they grow WebSocket transports.
+The exact field names vary by language, but reconnect state, schema/capability handshake results, pending work, and last framework-visible errors should stay observable.
 
 ## Local Cache Compatibility
 
@@ -156,11 +160,11 @@ Pending appends are preserved across compatible reloads. When an incompatible-ca
 | Local cache stamps schema identity on save | ✓ | ✓ (via `verifyCacheCompatibility`) | ✓ (via `verifyCacheCompatibility`) |
 | Throws typed incompatible-cache error on schema-id or revision mismatch | `FrickCacheIncompatibleError` | `FrickCacheIncompatibleError` | `FrickCacheIncompatibleException` |
 | Destructive cache reset entry point | `cache.clear()` | `FrickClient.resetCache()` | `FrickClient.resetCache()` |
-| Capability negotiation in handshake | ✓ (WebSocket) | — (HTTP-only today) | — (HTTP-only today) |
+| Capability negotiation in handshake | ✓ (WebSocket) | ✓ (WebSocket) | ✓ (WebSocket) |
 
 ## Object Upserts Over the Sync Socket
 
-Object upserts may flow over the sync WebSocket via `FrameKind.ObjectUpsert`. The server honors the schema's `mergePolicy`: `lastWriteWins` accepts any write and increments the version, `versionPrecondition` requires `expectedVersion` to match the on-disk row and Nacks with `storage.conflict` otherwise. Successful upserts reply with an `Ack` carrying the new version. Swift and Android clients are HTTP-only for object writes today and will pick up the WS path in a future round; the TypeScript SDK exposes `FrickClient.upsertObject`, which queues while disconnected and flushes on reconnect through the shared pending-write budget.
+Object upserts flow over the sync WebSocket via `FrameKind.ObjectUpsert`. The server honors the schema's `mergePolicy`: `lastWriteWins` accepts any write and increments the version, `versionPrecondition` requires `expectedVersion` to match the on-disk row and Nacks with `storage.conflict` otherwise. Successful upserts reply with an `Ack` carrying the new version. TypeScript exposes `FrickClient.upsertObject`, Swift exposes `FrickSyncSocket.upsertObject`, and Android exposes `FrickSyncSocket.upsertObject`; each queues or buffers writes while disconnected and flushes on reconnect.
 
 ## Versioning
 

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   createAuthorizedFetchInit,
+  frickHttpUrl,
   inboxEndpointPath,
   resolveHttpEndpoint,
   useProjection,
@@ -54,6 +55,30 @@ describe("useProjection", () => {
 });
 
 describe("authorized optional endpoint requests", () => {
+  test("builds optional endpoint URLs relative to the configured HTTP endpoint", () => {
+    expect(frickHttpUrl("https://api.example.test/frick", "/inbox?userId=user-ada").toString()).toBe(
+      "https://api.example.test/frick/inbox?userId=user-ada",
+    );
+  });
+
+  test("rejects absolute optional endpoint paths before bearer tokens are attached", () => {
+    expect(() => frickHttpUrl("https://api.example.test", "https://evil.example/collect")).toThrow(
+      /relative paths/,
+    );
+  });
+
+  test("rejects scheme-relative optional endpoint paths before bearer tokens are attached", () => {
+    expect(() => frickHttpUrl("https://api.example.test", "//evil.example/collect")).toThrow(
+      /relative paths/,
+    );
+  });
+
+  test("rejects schemed optional endpoint paths before bearer tokens are attached", () => {
+    expect(() => frickHttpUrl("https://api.example.test", "javascript:alert(1)")).toThrow(
+      /relative paths/,
+    );
+  });
+
   test("adds a bearer token when a session token is available", () => {
     expect(
       createAuthorizedFetchInit({

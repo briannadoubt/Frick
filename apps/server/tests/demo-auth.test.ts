@@ -41,29 +41,14 @@ describe("dev-login demo auth gating", () => {
     expect(body.error.message).toContain("Demo authentication");
   });
 
-  it("allows demoAuthEnabled override even in production (for staging-like envs)", async () => {
-    const warnings: string[] = [];
-    const originalWrite = process.stderr.write.bind(process.stderr);
-    process.stderr.write = ((chunk: string | Uint8Array) => {
-      warnings.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
-      return true;
-    }) as typeof process.stderr.write;
-    try {
-      app = await startServer({
-        config: { env: "production", demoAuthEnabled: true },
-      });
-    } finally {
-      process.stderr.write = originalWrite;
-    }
-
-    const response = await fetch(`${app.httpUrl}/auth/dev-login`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ userId: "user-ada" }),
-    });
-
-    expect(response.status).toBe(200);
-    expect(warnings.join("")).toContain("demoAuthEnabled=true in production");
+  it("refuses to start when demoAuthEnabled is forced on in production", async () => {
+    await expect(
+      Promise.resolve().then(() =>
+        startServer({
+          config: { env: "production", demoAuthEnabled: true, dbPath: "/tmp/frick-prod-demo-auth.sqlite" },
+        }),
+      ),
+    ).rejects.toThrow(/demoAuthEnabled=true is forbidden in production/);
   });
 });
 

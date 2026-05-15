@@ -107,10 +107,26 @@ class FrickSyncSocketTest {
             val frame = takeFrame()
             assertEquals(FrameKindCodes.HELLO, frame.first)
             assertEquals("test-replica", frame.second["replicaId"])
+            assertEquals("test-token", frame.second["sessionToken"])
             assertEquals(FRICK_SCHEMA_HASH, frame.second["schemaHash"])
             @Suppress("UNCHECKED_CAST")
             val caps = frame.second["clientCapabilities"] as Map<String, Any?>
             assertEquals("android", caps["platform"])
+        } finally {
+            socket.close()
+        }
+    }
+
+    @Test
+    fun websocketHandshakeCarriesAuthorizationHeaderWithoutSessionTokenQuery() = runBlocking {
+        enqueueWebSocketHandler()
+        val socket = newSocket()
+        try {
+            val request = server.takeRequest(2, TimeUnit.SECONDS)
+                ?: error("no websocket handshake request")
+
+            assertEquals("Bearer test-token", request.headers["Authorization"])
+            assertEquals(null, request.url.queryParameter("sessionToken"))
         } finally {
             socket.close()
         }

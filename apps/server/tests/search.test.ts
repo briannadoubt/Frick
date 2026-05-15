@@ -104,6 +104,32 @@ describe("POST /search with the built-in messages-fts index", () => {
     expect(bResult.body.hits[0].fields.conversationId).toBe(convB);
   });
 
+  it("filters messages-fts hits to conversations where the caller is a member", async () => {
+    app = await startServer();
+    const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
+    await appendMessage(app.httpUrl, ada.sessionToken, {
+      requestId: "req-search-member-only",
+      conversationId: "conversation-general",
+      messageId: "msg-member-only",
+      senderId: "user-ada",
+      body: "ravenclaw-only searchable text",
+    });
+    app.store.upsertObject("_default", "User", "user-mallory", {
+      displayName: "Mallory",
+      avatarBlobId: undefined,
+    });
+    const mallory = await devLogin(app.httpUrl, { userId: "user-mallory" });
+
+    const result = await postSearch(app.httpUrl, mallory.sessionToken, {
+      index: "messages-fts",
+      q: "ravenclaw",
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body.hits).toEqual([]);
+    expect(result.body.total).toBe(0);
+  });
+
   it("orders more-relevant hits ahead of less-relevant ones", async () => {
     app = await startServer();
     const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
@@ -191,7 +217,10 @@ describe("POST /search with the built-in messages-fts index", () => {
 
   it("exposes /_frick/inspect/search when inspection is enabled", async () => {
     app = await startServer({ inspectionEnabled: true });
-    const response = await fetch(`${app.httpUrl}/_frick/inspect/search`);
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const response = await fetch(`${app.httpUrl}/_frick/inspect/search`, {
+      headers: { authorization: `Bearer ${login.sessionToken}` },
+    });
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
       adapter: string;
@@ -207,6 +236,7 @@ async function startServer(
   overrides: { inspectionEnabled?: boolean } = {},
 ): Promise<{
   httpUrl: string;
+  store: ReturnType<typeof createFrickServer>["store"];
   close: () => Promise<void>;
 }> {
   const config: Record<string, unknown> = {};
@@ -220,6 +250,7 @@ async function startServer(
   }
   return {
     httpUrl: `http://127.0.0.1:${address.port}`,
+    store: server.store,
     close: server.close,
   };
 }

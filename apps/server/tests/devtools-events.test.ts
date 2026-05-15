@@ -38,6 +38,18 @@ async function startServer(overrides: { inspectionEnabled?: boolean } = {}) {
   };
 }
 
+async function inspectHeaders(): Promise<Record<string, string>> {
+  if (!app) throw new Error("server not started");
+  const response = await fetch(`${app.httpUrl}/auth/dev-login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ userId: "user-ada" }),
+  });
+  expect(response.status).toBe(200);
+  const body = (await response.json()) as { sessionToken: string };
+  return { authorization: `Bearer ${body.sessionToken}` };
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -169,19 +181,23 @@ describe("devtools event feed", () => {
   it("inspect endpoint serves the events feed when enabled", async () => {
     app = await startServer({ inspectionEnabled: true });
     await fetch(`${app.httpUrl}/health`);
+    const headers = await inspectHeaders();
     await waitFor(
       () => app!.server.store.devtoolsEvents.list({ kind: "http.request" }).length >= 1,
     );
 
     const response = await fetch(
       `${app.httpUrl}/_frick/inspect/devtools/events?kind=http.request`,
+      { headers },
     );
     expect(response.status).toBe(200);
     const body = (await response.json()) as { events: Array<{ kind: string }> };
     expect(body.events.length).toBeGreaterThan(0);
     expect(body.events.every((row) => row.kind === "http.request")).toBe(true);
 
-    const summary = await fetch(`${app.httpUrl}/_frick/inspect/devtools/summary?windowMs=60000`);
+    const summary = await fetch(`${app.httpUrl}/_frick/inspect/devtools/summary?windowMs=60000`, {
+      headers,
+    });
     expect(summary.status).toBe(200);
     const summaryBody = (await summary.json()) as { total: number; byKind: Record<string, number> };
     expect(summaryBody.total).toBeGreaterThan(0);

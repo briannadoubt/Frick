@@ -18,9 +18,8 @@ export interface FrickConfig {
   /**
    * Whether the demo-only authentication shortcuts (e.g. POST
    * `/auth/dev-login`) are exposed by the HTTP server. Defaults to true in
-   * any non-production environment. Forcing this on in production logs a
-   * structured warning so operators can spot misconfiguration in CI/log
-   * scrapers.
+   * any non-production environment. Production mode refuses to start when
+   * this is enabled.
    */
   demoAuthEnabled: boolean;
   /**
@@ -43,9 +42,10 @@ export interface FrickConfig {
    */
   publicUrl: string | undefined;
   /**
-   * Origins allowed for CORS, parsed from a comma-separated env var. v1 just
-   * stores the parsed list — actual CORS enforcement in HTTP handlers is a
-   * known gap documented in `docs/operations.md`.
+   * Origins allowed for CORS, parsed from a comma-separated env var. HTTP
+   * preflight requests and WebSocket upgrades are rejected when the request's
+   * `Origin` is not on this list. Requests without an `Origin` header are
+   * treated as same-origin/server-to-server traffic.
    */
   allowedOrigins: string[];
   /** SQLite database path. Tests pass `":memory:"`. */
@@ -55,7 +55,7 @@ export interface FrickConfig {
   /** Threshold for the structured logger. */
   logLevel: FrickLogLevel;
   /**
-   * Whether inspection routes under `/_frick/inspect/*` are exposed. Defaults
+   * Whether inspection routes under `/_frick/inspect/*` are enabled. Defaults
    * to true when `env !== "production"`, off otherwise. Set
    * `FRICK_INSPECTION_ENABLED=true` to force them on in production.
    */
@@ -158,7 +158,9 @@ export function loadFrickConfig(
     );
 
   if (runtimeEnv === "production" && demoAuthEnabled) {
-    warn("[frick.config] demoAuthEnabled=true in production — /auth/dev-login is exposed");
+    throw new FrickConfigError(
+      "demoAuthEnabled=true is forbidden in production — unset FRICK_DEMO_AUTH_ENABLED or use a non-production FRICK_ENV",
+    );
   }
   if (runtimeEnv === "production" && dbPath === ":memory:") {
     throw new FrickConfigError(
@@ -166,7 +168,7 @@ export function loadFrickConfig(
     );
   }
   if (runtimeEnv === "production" && inspectionEnabled) {
-    warn("[frick.config] inspectionEnabled=true in production — /_frick/inspect/* is exposed");
+    warn("[frick.config] inspectionEnabled=true in production — /_frick/inspect/* is enabled and requires admin auth");
   }
   if (runtimeEnv === "production" && adminEnabled) {
     if (!adminToken || adminToken.length < 32) {

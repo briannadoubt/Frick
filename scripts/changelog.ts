@@ -12,7 +12,7 @@
  *   pnpm changelog --version 1.3.0
  */
 
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import process from "node:process";
 
@@ -38,6 +38,8 @@ const GROUPS: { key: string; label: string }[] = [
 ];
 
 const OTHER = "Other";
+const FRAMEWORK_TAG_RE =
+  /^framework-v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?(?:\+[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?$/;
 
 function parseArgs(argv: string[]): Options {
   const opts: Options = { output: null, since: null, version: "Unreleased" };
@@ -62,44 +64,58 @@ function parseArgs(argv: string[]): Options {
   return opts;
 }
 
-function sh(cmd: string): string {
-  return execSync(cmd, { encoding: "utf8" }).trim();
+function die(msg: string): never {
+  process.stderr.write(`changelog: ${msg}\n`);
+  process.exit(2);
 }
 
-function shOrEmpty(cmd: string): string {
+function gitOrEmpty(args: string[]): string {
   try {
-    return execSync(cmd, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    return execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
   } catch {
     return "";
   }
 }
 
+function verifyFrameworkTag(ref: string): string {
+  if (!FRAMEWORK_TAG_RE.test(ref)) {
+    die(`expected framework tag like framework-v1.2.3, got: ${ref}`);
+  }
+  const commit = gitOrEmpty(["rev-parse", "--verify", "--end-of-options", `refs/tags/${ref}^{commit}`]);
+  if (!commit) {
+    die(`unknown framework tag: ${ref}`);
+  }
+  return ref;
+}
+
 function resolveSince(explicit: string | null): string | null {
-  if (explicit) return explicit;
-  const tag = shOrEmpty("git describe --tags --abbrev=0 --match 'framework-v*'");
-  return tag || null;
+  if (explicit) return verifyFrameworkTag(explicit);
+  const tag = gitOrEmpty(["describe", "--tags", "--abbrev=0", "--match", "framework-v*"]);
+  return tag ? verifyFrameworkTag(tag) : null;
 }
 
 function readCommits(since: string | null): Commit[] {
-  const range = since ? `${since}..HEAD` : "HEAD";
-  const out = shOrEmpty(`git log --no-merges --pretty=format:%H%x09%s ${range}`);
+  const range = since ? `refs/tags/${since}..HEAD` : "HEAD";
+  const out = gitOrEmpty(["log", "--no-merges", "--pretty=format:%H%x09%s", range]);
   if (!out) return [];
-  return out
+  const commits: Commit[] = [];
+  for (const line of out
     .split("\n")
-    .filter((l) => l.length > 0)
-    .map((line) => {
-      const [hash, ...rest] = line.split("\t");
-      return { hash, subject: rest.join("\t") };
-    });
+    .filter((l) => l.length > 0)) {
+    const [hash, ...rest] = line.split("\t");
+    if (!hash) continue;
+    commits.push({ hash, subject: rest.join("\t") });
+  }
+  return commits;
 }
 
 function categorize(subject: string): { group: string; scope: string | null; message: string } {
   // Matches: type(scope)!: message, type: message, etc.
   const m = subject.match(/^([a-z]+)(?:\(([^)]+)\))?(!)?:\s*(.+)$/);
   if (!m) return { group: OTHER, scope: null, message: subject };
-  const type = m[1].toLowerCase();
+  const type = (m[1] ?? "").toLowerCase();
   const scope = m[2] ?? null;
-  const message = m[4];
+  const message = m[4] ?? subject;
   const known = GROUPS.find((g) => g.key === type);
   return { group: known ? known.label : OTHER, scope, message };
 }

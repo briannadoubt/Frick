@@ -239,6 +239,7 @@ export class FrickClient {
           deviceId: this.#deviceId,
           schemaHash: this.schema.hash,
           knownCursors: this.syncStatus.value.cursors,
+          ...(this.#sessionToken ? { sessionToken: this.#sessionToken } : {}),
           clientCapabilities: defaultClientCapabilities({
             platform: "web",
             sdkVersion: "0.0.0-runtime",
@@ -825,12 +826,7 @@ export class FrickClient {
   }
 
   #webSocketEndpoint(): string {
-    if (!this.#sessionToken) {
-      return this.#endpoint;
-    }
-    const url = new URL(this.#endpoint);
-    url.searchParams.set("sessionToken", this.#sessionToken);
-    return url.toString();
+    return this.#endpoint;
   }
 
   /** HTTP endpoint used by REST helpers such as `loadOlder`. */

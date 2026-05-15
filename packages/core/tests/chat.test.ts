@@ -9,6 +9,7 @@ import {
   deriveInboxItems,
   drainHttpSignals,
   login,
+  logout,
   nextReadReceiptPayload,
   postHttpSignal,
   projectionInboxRowsForUser,
@@ -489,6 +490,29 @@ describe("account auth helpers", () => {
         fetchImpl,
       }),
     ).rejects.toThrow("Nope");
+  });
+
+  test("logout revokes the current session with bearer auth", async () => {
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    const fetchImpl = async (input: URL, init?: RequestInit) => {
+      calls.push({ url: input.toString(), init });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    };
+
+    await expect(
+      logout({
+        httpEndpoint: "http://127.0.0.1:4099/",
+        sessionToken: "session-token-existing",
+        fetchImpl,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("http://127.0.0.1:4099/auth/logout");
+    expect(calls[0]?.init?.method).toBe("POST");
+    expect(headersObject(calls[0]?.init?.headers)).toEqual({
+      authorization: "Bearer session-token-existing",
+    });
   });
 });
 

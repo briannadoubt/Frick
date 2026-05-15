@@ -28,7 +28,7 @@ targets:
       properties:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
-        FrickEndpoint: "http://127.0.0.1:4099"
+        FrickEndpoint: "$(FRICK_ENDPOINT)"
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         UILaunchStoryboardName: LaunchScreen
@@ -45,6 +45,11 @@ targets:
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         ENABLE_APP_INTENTS_METADATA_GENERATION: "NO"
+      configs:
+        Debug:
+          FRICK_ENDPOINT: "http://127.0.0.1:4099"
+        Release:
+          FRICK_ENDPOINT: "https://127.0.0.1:4099"
 schemes:
   FrickDemo:
     build:

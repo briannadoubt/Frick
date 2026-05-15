@@ -40,21 +40,26 @@ A multi-commit rollout that lifts the client SDKs from "you can hand-write it" t
 
 - Kotlin: `FrickSyncSocket.subscribePresence` / `setPresence` / `clearPresence` (closes the gap with Swift + TypeScript). New `FrickInboundEvent.PresenceDelta(name, records, cleared)` case + `PRESENCE_DELTA` frame handler. `FrickClient.search(index, q, filter, limit)` mirrors the Swift+TS search call with typed `FrickSearchResponse`.
 - Swift: `FrickClient.search(...)` + `FrickSearchHit` / `FrickSearchResponse` Codable structs. New `Sources/FrickSwift/SwiftUI/FrickStream.swift` adds `@FrickStream("MessageStream", key:)` and `@FrickPresence("TypingState", key:)` property wrappers driven by an `@Environment(\.frickSyncSocket)` key.
+- Swift: `FrickDraftStore` syncs per-user/per-conversation `MessageDraft` rows over `FrickSyncSocket.subscribeObject` and `upsertObject`.
 - New `:frick-compose` Gradle module: `rememberFrickStream(socket, stream, key)` + `rememberFrickPresence(...)` + `UseFrickEvents` / `UseFrickStatus` Composables. Lives in its own module so the base `:frick` SDK stays Compose-agnostic.
+- Android: `FrickDraftStore` mirrors the React and Swift draft id convention and syncs `MessageDraft` rows through object subscriptions/upserts.
 - Web Push adapter (`createFrickWebPushAdapter`) rounds out the APNs/FCM trio. VAPID-authenticated ES256 JWT signing, per-tenant credential storage in `tenant_settings.push.webPush.encrypted`. Maps 410 / 404 → `push.unregistered`, 429 → `push.rateLimited`, etc.
 
 #### Phase 6 — Production lifecycle
 
 - Outbound email: `FrickEmailAdapter` interface + `createFrickTestEmailAdapter` (default) + `createFrickResendEmailAdapter` (Resend reference implementation, `RESEND_API_KEY` from env). `createFrickEmailRouter(...)` wraps every send with `frick.email.delivery` devtools telemetry, `redactEmail`-masked recipient logs, and convenience helpers `sendVerificationEmail` / `sendPasswordResetEmail`.
-- Composer drafts: `useDraft(conversationId)` in `@frick/react` persists composer text per `(user, conversation)` in `localStorage` with a 250ms debounce. Local-only for v1; cross-device drafts are a follow-up that needs a schema bump.
-- Web background sync: `apps/web/public/frick-sw.js` Service Worker handles the `frick-pending-appends` sync tag (posts `frick:flush` to clients) and push receive + `notificationclick` deep-link routing. `registerFrickBackgroundSync({ onFlush, onNavigate })` helper in `@frick/core` does the registration dance with graceful degradation when the Background Sync API is missing.
+- Composer drafts: `useDraft(conversationId)` in `@frick/react` persists composer text per `(user, conversation)` in `localStorage` with a 250ms debounce by default. Passing `{ sync: true }` uses the `MessageDraft` foundation object for cross-device drafts, with last-write-wins retry on version conflicts.
+- Web demo hardening: Vite serve/preview responses now include CSP and browser security headers. Preview uses a stricter no-`unsafe-inline`/no-`unsafe-eval` CSP; dev keeps the local HMR allowances Vite needs. Demo auth sessions live in `sessionStorage`, expired or malformed stored tokens are purged, and logout clears both stored session and browser push-registration state.
+- Web background sync: `apps/web/public/frick-sw.js` Service Worker handles the `frick-pending-appends` sync tag (posts `frick:flush` to clients) and push receive + `notificationclick` deep-link routing. Notification click targets are normalized to same-origin app routes before `postMessage` / `openWindow`. `registerFrickBackgroundSync({ onFlush, onNavigate })` helper in `@frick/core` does the registration dance with graceful degradation when the Background Sync API is missing.
 
 #### Protocol
 
 - Generator now emits a `FrickSchemaDescriptor` (Swift `enum`) and `FRICK_*` constant tables (Kotlin `internal val`s) alongside the existing DTOs: type-id → name and (typeId → fieldId → fieldName) for objects, streams, and events. Used by the native SDKs to decode packed Delta tuples back into named-field shapes.
+- `HelloPayload` gains an optional `sessionToken`. WebSocket clients authenticate with the Hello token or an `Authorization: Bearer ...` upgrade header; `sessionToken` URL query credentials are no longer accepted.
 
 ### Server (`@frick/server`)
 
+- Admin audit writes are fail-closed for tenant creation, tenant setting writes, account creation, job enqueue, search rebuild, and projection rebuild. Rebuild routes record the allow intent before non-rollbackable work starts.
 - **APNs push adapter** — HTTP/2 over `node:http2`, persistent per-tenant sessions, ES256 JWT signed from the tenant's stored `.p8` PEM and cached for ~50 minutes. Maps `Unregistered` / `BadDeviceToken` / `ExpiredProviderToken` onto the framework's revocation codes so the router tombstones the dead registration. Wire via `createFrickApnsAdapter()` in `ServerOptions.push.adapters`.
 - **FCM v1 push adapter** — `fcm.googleapis.com/v1/projects/{projectId}/messages:send` via `fetch`; service-account JWT exchanged for an OAuth2 access token and cached for `expires_in`. Maps `UNREGISTERED` / `INVALID_ARGUMENT` / `SENDER_ID_MISMATCH` onto revocation codes; preserves quota and server errors with stable codes. Wire via `createFrickFcmAdapter()`.
 - **Per-tenant push credentials** — stored in `tenant_settings` wrapped with AES-256-GCM. The encryption key comes from `FRICK_PUSH_CRED_KEY` (base64-encoded 32 bytes); when unset the adapters return a `push.credentials.disabled` skipped-delivery rather than running without encryption.

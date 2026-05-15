@@ -102,6 +102,88 @@ describe("/_frick/admin/accounts POST", () => {
     expect(envelope.error.code).toBe("storage.conflict");
   });
 
+  it("records audit rows for success, duplicate, and malformed create attempts", async () => {
+    app = await startServer({ adminToken: ADMIN_TOKEN });
+    const headers = { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" };
+    const validBody = JSON.stringify({
+      handle: "audited",
+      displayName: "Audited User",
+      password: "supersecret",
+    });
+
+    const first = await fetch(`${app.httpUrl}/_frick/admin/accounts`, {
+      method: "POST",
+      headers,
+      body: validBody,
+    });
+    expect(first.status).toBe(201);
+
+    const duplicate = await fetch(`${app.httpUrl}/_frick/admin/accounts`, {
+      method: "POST",
+      headers,
+      body: validBody,
+    });
+    expect(duplicate.status).toBe(409);
+
+    const malformed = await fetch(`${app.httpUrl}/_frick/admin/accounts`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ displayName: "No Handle", password: "supersecret" }),
+    });
+    expect(malformed.status).toBe(400);
+
+    const audit = await fetch(`${app.httpUrl}/_frick/admin/audit-log?action=accounts.create`, {
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+    });
+    expect(audit.status).toBe(200);
+    const auditBody = (await audit.json()) as {
+      entries: Array<{ action: string; target?: string; outcome: string; detail?: string }>;
+    };
+    expect(auditBody.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "accounts.create",
+          target: "_default/audited",
+          outcome: "allow",
+        }),
+        expect.objectContaining({
+          action: "accounts.create",
+          target: "_default/audited",
+          outcome: "deny",
+        }),
+        expect.objectContaining({
+          action: "accounts.create",
+          outcome: "error",
+        }),
+      ]),
+    );
+    const duplicateRow = auditBody.entries.find(
+      (entry) => entry.target === "_default/audited" && entry.outcome === "deny",
+    );
+    expect(duplicateRow?.detail).toContain("handleExists");
+  });
+
+  it("fails closed before creating an account when audit recording fails", async () => {
+    app = await startServer({ adminToken: ADMIN_TOKEN });
+    (app.store.adminAudit as unknown as { record: () => never }).record = () => {
+      throw new Error("audit unavailable");
+    };
+
+    const response = await fetch(`${app.httpUrl}/_frick/admin/accounts`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        handle: "auditfail",
+        displayName: "Audit Fail",
+        password: "supersecret",
+      }),
+    });
+
+    expect(response.status).toBe(500);
+    expect(app.store.accounts.readByIdentity("_default", "auditfail")).toBeUndefined();
+    expect(app.store.hasUser("_default", "user-auditfail")).toBe(false);
+  });
+
   it("same handle in different tenants both succeed", async () => {
     app = await startServer({ adminToken: ADMIN_TOKEN });
     const headers = { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" };

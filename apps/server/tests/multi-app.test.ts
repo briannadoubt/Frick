@@ -99,6 +99,17 @@ async function helloFrames(
   return frames;
 }
 
+async function authHeaders(httpUrl: string): Promise<Record<string, string>> {
+  const response = await fetch(`${httpUrl}/auth/dev-login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ userId: "user-ada" }),
+  });
+  expect(response.status).toBe(200);
+  const body = (await response.json()) as { sessionToken: string };
+  return { authorization: `Bearer ${body.sessionToken}` };
+}
+
 describe("multi-app server", () => {
   let app: RunningServer | undefined;
 
@@ -196,7 +207,9 @@ describe("multi-app server", () => {
       ],
     });
 
-    const response = await fetch(`${app.httpUrl}/_frick/inspect/apps`);
+    const response = await fetch(`${app.httpUrl}/_frick/inspect/apps`, {
+      headers: await authHeaders(app.httpUrl),
+    });
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
       apps: Array<{ id: string; basePath: string; schemaId: string }>;

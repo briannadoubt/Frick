@@ -32,17 +32,18 @@ self.addEventListener("sync", (event) => {
 self.addEventListener("push", (event) => {
   const data = event.data ? safeParse(event.data.text()) : {};
   const title = data?.title ?? "New message";
+  const deepLink = sanitizeNotificationDeepLink(data?.deepLink);
   const options = {
     body: data?.body ?? "Tap to open",
     tag: data?.tag,
-    data: data?.deepLink ? { deepLink: data.deepLink } : undefined,
+    data: deepLink ? { deepLink } : undefined,
   };
   event.waitUntil(self.registration.showNotification(title, options));
 });
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const target = event.notification.data?.deepLink;
+  const target = sanitizeNotificationDeepLink(event.notification.data?.deepLink);
   if (!target) return;
   event.waitUntil(
     self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
@@ -74,4 +75,29 @@ function safeParse(text) {
   } catch {
     return {};
   }
+}
+
+const allowedAppRoutePrefixes = ["/chat", "/conversation", "/conversations"];
+
+function sanitizeNotificationDeepLink(value) {
+  if (typeof value !== "string" || value.trim() !== value || value.length === 0 || value.startsWith("//")) {
+    return undefined;
+  }
+  let url;
+  try {
+    url = new URL(value, self.location.origin);
+  } catch {
+    return undefined;
+  }
+  if (url.origin !== self.location.origin || !isAllowedAppRoute(url.pathname)) {
+    return undefined;
+  }
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function isAllowedAppRoute(pathname) {
+  if (pathname === "/" || pathname === "/index.html") {
+    return true;
+  }
+  return allowedAppRoutePrefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
 }

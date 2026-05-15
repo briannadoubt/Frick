@@ -374,10 +374,23 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
     }
 
     fun logout() {
+        val session = _uiState.value.session
+        val registrationId = prefs.getString(PrefPushRegistrationId, null)
         streamJob?.cancel(); streamJob = null
         closeSocket()
-        frick.signOut()
-        _uiState.value = FoundationUiState()
+        _uiState.update { state -> state.copy(status = "Signing out", pushBusy = registrationId != null) }
+        viewModelScope.launch {
+            if (session != null && registrationId != null) {
+                FrickDemoHttp.unregisterPush(session, registrationId)
+            }
+            prefs.edit {
+                remove(PrefPushRegistrationId)
+                putBoolean(PrefPushEnabled, false)
+            }
+            FrickSyncWorker.cancel(getApplication())
+            frick.signOut()
+            _uiState.value = FoundationUiState()
+        }
     }
 
     private fun authenticate(

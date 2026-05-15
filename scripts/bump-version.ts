@@ -15,7 +15,7 @@
  * Emits the new version on stdout.
  */
 
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import process from "node:process";
@@ -61,7 +61,7 @@ const ANDROID_PACKAGES: Record<string, AndroidTarget> = {
   "android:frick": {
     kind: "android",
     path: "apps/android/frick/build.gradle.kts",
-    tagPrefix: "android-frick-v",
+    tagPrefix: "android-v",
   },
   "android:design": {
     kind: "android",
@@ -75,14 +75,23 @@ const SWIFT_PACKAGES: Record<string, SwiftTarget> = {
   "swift:design": { kind: "swift", tagPrefix: "swift-design-v" },
 };
 
+const TAG_PREFIX_RE = /^(?:android|android-design|swift|swift-design)-v$/;
+const SEMVER_PATTERN =
+  "(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)(?:-[0-9A-Za-z]+(?:\\.[0-9A-Za-z]+)*)?(?:\\+[0-9A-Za-z]+(?:\\.[0-9A-Za-z]+)*)?";
+
 function parseArgs(argv: string[]): Options {
   const opts: Partial<Options> = { commit: true };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--package" || a === "-p") {
-      opts.pkg = argv[++i];
+      const value = argv[i + 1];
+      if (!value) die("--package requires a value");
+      i++;
+      opts.pkg = value;
     } else if (a === "--release" || a === "-r") {
-      const v = argv[++i];
+      const v = argv[i + 1];
+      if (!v) die("--release requires a value");
+      i++;
       if (v !== "major" && v !== "minor" && v !== "patch") {
         die(`--release must be major|minor|patch, got: ${v}`);
       }
@@ -108,8 +117,52 @@ function die(msg: string): never {
   process.exit(2);
 }
 
+function git(args: string[], cwd?: string): string {
+  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+function gitOrEmpty(args: string[], cwd?: string): string {
+  try {
+    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return "";
+  }
+}
+
+function runGit(args: string[], cwd: string): void {
+  execFileSync("git", args, { cwd, stdio: "inherit" });
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function validateTagPrefix(prefix: string): string {
+  if (!TAG_PREFIX_RE.test(prefix)) {
+    die(`unexpected release tag prefix: ${prefix}`);
+  }
+  return prefix;
+}
+
+function verifyVersionTag(prefix: string, tag: string): string {
+  const safePrefix = validateTagPrefix(prefix);
+  const tagRe = new RegExp(`^${escapeRegExp(safePrefix)}${SEMVER_PATTERN}$`);
+  if (!tagRe.test(tag)) {
+    die(`expected ${safePrefix}<semver> tag, got: ${tag}`);
+  }
+  const commit = gitOrEmpty(["rev-parse", "--verify", "--end-of-options", `refs/tags/${tag}^{commit}`]);
+  if (!commit) {
+    die(`unknown release tag: ${tag}`);
+  }
+  return tag;
+}
+
+function versionTag(prefix: string, version: string): string {
+  return `${validateTagPrefix(prefix)}${version}`;
+}
+
 function repoRoot(): string {
-  return execSync("git rev-parse --show-toplevel", { encoding: "utf8" }).trim();
+  return git(["rev-parse", "--show-toplevel"]);
 }
 
 function resolveTarget(root: string, pkg: string): Target {
@@ -161,12 +214,17 @@ function bumpAndroid(
 ): { current: string; next: string } {
   const fullPath = resolve(root, target.path);
   const raw = readFileSync(fullPath, "utf8");
+  const frickVersionLine = /^val\s+frickVersion\s*=\s*"([^"]+)"$/m;
   const versionLine = /^version\s*=\s*"([^"]+)"$/m;
-  const match = raw.match(versionLine);
-  const current = match ? match[1] : "0.0.0";
+  const frickVersionMatch = raw.match(frickVersionLine);
+  const versionMatch = raw.match(versionLine);
+  const match = frickVersionMatch ?? versionMatch;
+  const current = match?.[1] ?? "0.0.0";
   const next = nextVersion(current, release);
   let updated: string;
-  if (match) {
+  if (frickVersionMatch) {
+    updated = raw.replace(frickVersionLine, `val frickVersion = "${next}"`);
+  } else if (versionMatch) {
     updated = raw.replace(versionLine, `version = "${next}"`);
   } else {
     // Insert at the top so it's discoverable.
@@ -177,14 +235,9 @@ function bumpAndroid(
 }
 
 function currentSwiftTag(prefix: string): string {
-  try {
-    return execSync(`git describe --tags --abbrev=0 --match '${prefix}*'`, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {
-    return "";
-  }
+  const safePrefix = validateTagPrefix(prefix);
+  const tag = gitOrEmpty(["describe", "--tags", "--abbrev=0", "--match", `${safePrefix}*`]);
+  return tag ? verifyVersionTag(safePrefix, tag) : "";
 }
 
 function bumpSwift(target: SwiftTarget, release: Release): { current: string; next: string } {
@@ -196,12 +249,9 @@ function bumpSwift(target: SwiftTarget, release: Release): { current: string; ne
 
 function commit(root: string, files: string[], pkg: string, version: string): void {
   if (files.length === 0) return;
-  execSync(`git add ${files.map((f) => JSON.stringify(f)).join(" ")}`, {
-    cwd: root,
-    stdio: "inherit",
-  });
+  runGit(["add", "--", ...files], root);
   const msg = `chore(release): ${pkg}@${version}`;
-  execSync(`git commit -m ${JSON.stringify(msg)}`, { cwd: root, stdio: "inherit" });
+  runGit(["commit", "-m", msg], root);
 }
 
 function main() {
@@ -221,7 +271,7 @@ function main() {
     const { current, next } = bumpAndroid(root, target, opts.release);
     process.stderr.write(`${opts.pkg}: ${current} -> ${next}\n`);
     if (opts.commit) commit(root, [target.path], opts.pkg, next);
-    process.stderr.write(`Suggested tag: ${target.tagPrefix}${next}\n`);
+    process.stderr.write(`Suggested tag: ${versionTag(target.tagPrefix, next)}\n`);
     process.stdout.write(`${next}\n`);
     return;
   }
@@ -229,10 +279,11 @@ function main() {
   // swift
   const { current, next } = bumpSwift(target, opts.release);
   process.stderr.write(`${opts.pkg}: ${current} -> ${next} (no version file)\n`);
+  const tag = versionTag(target.tagPrefix, next);
   process.stderr.write(
     `Swift packages are tag-only. After your release commit lands, run:\n` +
-      `  git tag ${target.tagPrefix}${next}\n` +
-      `  git push origin ${target.tagPrefix}${next}\n`,
+      `  git tag ${tag}\n` +
+      `  git push origin ${tag}\n`,
   );
   if (opts.commit) {
     process.stderr.write(`--no-commit was implied: nothing to commit for Swift\n`);

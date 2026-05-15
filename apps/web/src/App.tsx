@@ -63,6 +63,7 @@ import {
   createConversation,
   deriveInboxItems,
   login,
+  logout as logoutSession,
   nextReadReceiptPayload,
   projectionInboxRowsForUser,
   readReceiptsForConversation,
@@ -88,9 +89,10 @@ import {
 const defaultConversationId = "conversation-general";
 const demoHttpEndpoint = import.meta.env.VITE_FRICK_HTTP ?? "http://127.0.0.1:4099";
 const demoWsEndpoint = import.meta.env.VITE_FRICK_WS ?? syncEndpointForHttp(demoHttpEndpoint);
-const authSessionStorageKey = "frick-auth-session";
+export const authSessionStorageKey = "frick-auth-session";
 const webDeviceStorageKey = "frick-web-device-id";
 const webReplicaStorageKey = "frick-web-replica-id";
+type StorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
 function syncEndpointForHttp(httpEndpoint: string): string {
   const url = new URL(httpEndpoint);
@@ -109,8 +111,8 @@ export function App() {
   const [session, setSession] = useState<AuthSession | undefined>(() => readStoredSession());
   const [theme, setTheme] = useState<ThemePreference>(() =>
     resolveInitialTheme(
-      window.localStorage.getItem("frick-theme"),
-      window.matchMedia("(prefers-color-scheme: dark)").matches,
+      readLocalStorageItem("frick-theme"),
+      prefersDarkMode(),
     ),
   );
   const clientIdentity = useMemo(
@@ -123,17 +125,27 @@ export function App() {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    window.localStorage.setItem("frick-theme", theme);
+    writeLocalStorageItem("frick-theme", theme);
   }, [theme]);
 
   function acceptSession(nextSession: AuthSession) {
     setSession(nextSession);
-    window.localStorage.setItem(authSessionStorageKey, JSON.stringify(nextSession));
+    writeStoredSession(nextSession);
   }
 
   function logout() {
-    window.localStorage.removeItem(authSessionStorageKey);
+    const token = session?.sessionToken;
+    clearStoredUserState();
     setSession(undefined);
+    if (token) {
+      void logoutSession({
+        httpEndpoint: demoHttpEndpoint,
+        sessionToken: token,
+      }).catch(() => {
+        // Local sign-out should still succeed if the session was already
+        // expired or the network is unavailable.
+      });
+    }
   }
 
   return (
@@ -192,8 +204,8 @@ function AuthWorkspace({
   // Phase 3 — `useSignIn` / `useSignUp` own the HTTP request + bearer-token
   // wiring. The hooks call `client.setSession(...)` on success so the
   // surrounding `<FrickProvider>` reconnects with the new token; we still
-  // notify `onAuthenticated` so the App-level session state + localStorage
-  // mirror the live session.
+  // notify `onAuthenticated` so App-level state and sessionStorage mirror
+  // the live session.
   const { signIn, isPending: isSigningIn } = useSignIn();
   const { signUp: doSignUp, isPending: isSigningUp } = useSignUp();
   const isSubmitting = isSigningIn || isSigningUp;
@@ -1257,13 +1269,8 @@ function ChatWorkspace({
   );
 }
 
-function isDevEnvironment(): boolean {
-  // Vite's `import.meta.env.DEV` requires the `vite/client` types; rather
-  // than thread those into the workspace typecheck just for one flag, ask
-  // the browser whether we're on a dev-server host.
-  if (typeof window === "undefined") return false;
-  const host = window.location.hostname;
-  return host === "127.0.0.1" || host === "localhost";
+export function isDevEnvironment(env: { readonly DEV?: boolean } = import.meta.env): boolean {
+  return env.DEV === true;
 }
 
 /**
@@ -1614,7 +1621,7 @@ function AttachmentThumbnail({
 const pushRegistrationStorageKey = "frick-web-push-registration";
 
 function readStoredPushRegistration(): PushRegistration | undefined {
-  const raw = window.localStorage.getItem(pushRegistrationStorageKey);
+  const raw = readLocalStorageItem(pushRegistrationStorageKey);
   if (!raw) return undefined;
   try {
     const parsed = JSON.parse(raw) as Partial<PushRegistration>;
@@ -1626,48 +1633,181 @@ function readStoredPushRegistration(): PushRegistration | undefined {
       return parsed as PushRegistration;
     }
   } catch {
-    window.localStorage.removeItem(pushRegistrationStorageKey);
+    removeLocalStorageItem(pushRegistrationStorageKey);
   }
   return undefined;
 }
 
 function writeStoredPushRegistration(registration: PushRegistration): void {
-  window.localStorage.setItem(pushRegistrationStorageKey, JSON.stringify(registration));
+  writeLocalStorageItem(pushRegistrationStorageKey, JSON.stringify(registration));
 }
 
 function clearStoredPushRegistration(): void {
-  window.localStorage.removeItem(pushRegistrationStorageKey);
+  removeLocalStorageItem(pushRegistrationStorageKey);
 }
 
-function readStoredSession(): AuthSession | undefined {
-  const stored = window.localStorage.getItem(authSessionStorageKey);
-  if (!stored) {
+export function readStoredSession(
+  sessionStorage: StorageLike | undefined = browserStorage("sessionStorage"),
+  legacyLocalStorage: StorageLike | undefined = browserStorage("localStorage"),
+  now = new Date(),
+): AuthSession | undefined {
+  const storedSession = readStoredSessionFromStorage(sessionStorage, now);
+  if (storedSession.found) {
+    if (!storedSession.session) {
+      removeStorageItem(legacyLocalStorage, authSessionStorageKey);
+    }
+    return storedSession.session;
+  }
+
+  const legacySession = readStoredSessionFromStorage(legacyLocalStorage, now);
+  removeStorageItem(legacyLocalStorage, authSessionStorageKey);
+  if (!legacySession.session) {
     return undefined;
   }
-  try {
-    const parsed = JSON.parse(stored) as Partial<AuthSession>;
-    if (
-      typeof parsed.sessionToken === "string" &&
-      typeof parsed.userId === "string" &&
-      typeof parsed.deviceId === "string" &&
-      typeof parsed.replicaId === "string" &&
-      typeof parsed.schemaHash === "string" &&
-      typeof parsed.expiresAt === "string"
-    ) {
-      return parsed as AuthSession;
-    }
-  } catch {
-    window.localStorage.removeItem(authSessionStorageKey);
-  }
-  return undefined;
+
+  return writeStorageItem(sessionStorage, authSessionStorageKey, JSON.stringify(legacySession.session))
+    ? legacySession.session
+    : undefined;
+}
+
+export function writeStoredSession(
+  session: AuthSession,
+  sessionStorage: StorageLike | undefined = browserStorage("sessionStorage"),
+  legacyLocalStorage: StorageLike | undefined = browserStorage("localStorage"),
+): void {
+  writeStorageItem(sessionStorage, authSessionStorageKey, JSON.stringify(session));
+  removeStorageItem(legacyLocalStorage, authSessionStorageKey);
+}
+
+export function clearStoredSession(
+  sessionStorage: StorageLike | undefined = browserStorage("sessionStorage"),
+  legacyLocalStorage: StorageLike | undefined = browserStorage("localStorage"),
+): void {
+  removeStorageItem(sessionStorage, authSessionStorageKey);
+  removeStorageItem(legacyLocalStorage, authSessionStorageKey);
+}
+
+export function clearStoredUserState(
+  sessionStorage: StorageLike | undefined = browserStorage("sessionStorage"),
+  localStorage: StorageLike | undefined = browserStorage("localStorage"),
+): void {
+  clearStoredSession(sessionStorage, localStorage);
+  removeStorageItem(localStorage, pushRegistrationStorageKey);
 }
 
 function readOrCreateStoredId(storageKey: string, prefix: string): string {
-  const existing = window.localStorage.getItem(storageKey);
+  const existing = readLocalStorageItem(storageKey);
   if (existing) {
     return existing;
   }
   const next = `${prefix}-${crypto.randomUUID()}`;
-  window.localStorage.setItem(storageKey, next);
+  writeLocalStorageItem(storageKey, next);
   return next;
+}
+
+function readStoredSessionFromStorage(
+  storage: StorageLike | undefined,
+  now: Date,
+): { found: boolean; session?: AuthSession } {
+  const stored = readStorageItem(storage, authSessionStorageKey);
+  if (!stored) {
+    return { found: false };
+  }
+  const session = parseStoredSession(stored, now);
+  if (!session) {
+    removeStorageItem(storage, authSessionStorageKey);
+    return { found: true };
+  }
+  return { found: true, session };
+}
+
+function parseStoredSession(stored: string, now: Date): AuthSession | undefined {
+  try {
+    const parsed = JSON.parse(stored) as Partial<AuthSession>;
+    if (
+      typeof parsed.sessionToken !== "string" ||
+      typeof parsed.userId !== "string" ||
+      typeof parsed.deviceId !== "string" ||
+      typeof parsed.replicaId !== "string" ||
+      typeof parsed.schemaHash !== "string" ||
+      typeof parsed.expiresAt !== "string"
+    ) {
+      return undefined;
+    }
+    const expiresAtMs = Date.parse(parsed.expiresAt);
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= now.getTime()) {
+      return undefined;
+    }
+    return parsed as AuthSession;
+  } catch {
+    return undefined;
+  }
+}
+
+function readLocalStorageItem(key: string): string | null {
+  return readStorageItem(browserStorage("localStorage"), key);
+}
+
+function writeLocalStorageItem(key: string, value: string): void {
+  writeStorageItem(browserStorage("localStorage"), key, value);
+}
+
+function removeLocalStorageItem(key: string): void {
+  removeStorageItem(browserStorage("localStorage"), key);
+}
+
+function browserStorage(kind: "localStorage" | "sessionStorage"): StorageLike | undefined {
+  if (typeof window === "undefined") {
+    return undefined;
+  }
+  try {
+    return window[kind] ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readStorageItem(storage: StorageLike | undefined, key: string): string | null {
+  if (!storage) {
+    return null;
+  }
+  try {
+    return storage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStorageItem(storage: StorageLike | undefined, key: string, value: string): boolean {
+  if (!storage) {
+    return false;
+  }
+  try {
+    storage.setItem(key, value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function removeStorageItem(storage: StorageLike | undefined, key: string): void {
+  if (!storage) {
+    return;
+  }
+  try {
+    storage.removeItem(key);
+  } catch {
+    // Storage may be denied by browser privacy settings.
+  }
+}
+
+function prefersDarkMode(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return false;
+  }
+  try {
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  } catch {
+    return false;
+  }
 }

@@ -42,6 +42,7 @@ export interface HelloPayload {
   deviceId: string;
   schemaHash: string;
   knownCursors: Record<string, number>;
+  sessionToken?: string;
   clientCapabilities?: FrickClientCapabilities;
 }
 

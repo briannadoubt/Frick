@@ -98,7 +98,7 @@ describe("websocket subscription cap", () => {
   it("nacks subscriptions beyond maxSubscriptionsPerConnection", async () => {
     app = await startServer({ limits: { maxSubscriptionsPerConnection: 1 } });
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
-    const socket = await connect(`${app.url}?sessionToken=${encodeURIComponent(login.sessionToken)}`);
+    const socket = await connect(app.url, login.sessionToken);
 
     const frames: FrickFrame[] = [];
     socket.on("message", (data) => {
@@ -153,7 +153,7 @@ describe("pending append queue cap (server)", () => {
   it("nacks Append frames once the configured cap is reached", async () => {
     app = await startServer({ limits: { maxPendingAppendsPerClient: 0 } });
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
-    const socket = await connect(`${app.url}?sessionToken=${encodeURIComponent(login.sessionToken)}`);
+    const socket = await connect(app.url, login.sessionToken);
 
     const frames: FrickFrame[] = [];
     socket.on("message", (data) => frames.push(decodeFrame(data as Buffer)));
@@ -208,7 +208,7 @@ describe("websocket heartbeat timeout", () => {
       limits: { heartbeatIntervalSeconds: 0.05, heartbeatTimeoutSeconds: 0.1 },
     });
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
-    const socket = await connect(`${app.url}?sessionToken=${encodeURIComponent(login.sessionToken)}`);
+    const socket = await connect(app.url, login.sessionToken);
 
     const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
     await Promise.race([
@@ -222,7 +222,7 @@ describe("presence TTL clamping", () => {
   it("clamps presence TTL above presenceTtlMaxSeconds", async () => {
     app = await startServer({ limits: { presenceTtlMaxSeconds: 7 } });
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
-    const socket = await connect(`${app.url}?sessionToken=${encodeURIComponent(login.sessionToken)}`);
+    const socket = await connect(app.url, login.sessionToken);
 
     const frames: FrickFrame[] = [];
     socket.on("message", (data) => frames.push(decodeFrame(data as Buffer)));
@@ -268,7 +268,7 @@ describe("presence TTL clamping", () => {
     // row should expire on the very next read.
     app = await startServer({ limits: { presenceTtlMaxSeconds: 0.1, presenceTtlMinSeconds: 0.05 } });
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
-    const socket = await connect(`${app.url}?sessionToken=${encodeURIComponent(login.sessionToken)}`);
+    const socket = await connect(app.url, login.sessionToken);
 
     const frames: FrickFrame[] = [];
     socket.on("message", (data) => frames.push(decodeFrame(data as Buffer)));
@@ -321,8 +321,11 @@ async function startServer(options: { limits?: Parameters<typeof createFrickServ
   };
 }
 
-async function connect(url: string): Promise<WebSocket> {
-  const socket = new WebSocket(url);
+async function connect(url: string, sessionToken?: string): Promise<WebSocket> {
+  const socket = new WebSocket(
+    url,
+    sessionToken ? { headers: authHeaders(sessionToken) } : undefined,
+  );
   await new Promise<void>((resolve) => socket.once("open", resolve));
   return socket;
 }

@@ -35,7 +35,7 @@ Valid packages match the `name` field in any workspace `package.json`. Valid rel
 pnpm exec tsx scripts/bump-version.ts --package android:frick --release patch
 ```
 
-This edits `apps/android/frick/build.gradle.kts`, replacing or inserting the top-level `version = "X.Y.Z"` line, and emits a tag suggestion on stderr.
+This edits `apps/android/frick/build.gradle.kts`, replacing `val frickVersion = "X.Y.Z"` when present or inserting a top-level `version = "X.Y.Z"` line, and emits a tag suggestion on stderr. The publish workflow accepts only `android-vX.Y.Z` tags that match `frickVersion`.
 
 Supported Android packages: `android:frick`, `android:design`.
 

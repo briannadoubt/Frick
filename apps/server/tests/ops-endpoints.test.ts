@@ -36,7 +36,9 @@ describe("operational HTTP endpoints", () => {
 
   it("exposes /_frick/inspect/server in non-production with schema and runtime metadata", async () => {
     app = await startServer();
-    const response = await fetch(`${app.httpUrl}/_frick/inspect/server`);
+    const response = await fetch(`${app.httpUrl}/_frick/inspect/server`, {
+      headers: await inspectHeaders(),
+    });
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body).toMatchObject({
@@ -55,7 +57,9 @@ describe("operational HTTP endpoints", () => {
 
   it("exposes /_frick/inspect/migrations listing the applied ledger", async () => {
     app = await startServer();
-    const response = await fetch(`${app.httpUrl}/_frick/inspect/migrations`);
+    const response = await fetch(`${app.httpUrl}/_frick/inspect/migrations`, {
+      headers: await inspectHeaders(),
+    });
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(Array.isArray(body.applied)).toBe(true);
@@ -71,7 +75,9 @@ describe("operational HTTP endpoints", () => {
 
   it("exposes /_frick/inspect/db with a readiness flag and last-applied summary", async () => {
     app = await startServer();
-    const response = await fetch(`${app.httpUrl}/_frick/inspect/db`);
+    const response = await fetch(`${app.httpUrl}/_frick/inspect/db`, {
+      headers: await inspectHeaders(),
+    });
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.ready).toBe(true);
@@ -85,7 +91,9 @@ describe("operational HTTP endpoints", () => {
 
   it("/_frick/inspect/db reports an empty idempotency cache initially", async () => {
     app = await startServer();
-    const response = await fetch(`${app.httpUrl}/_frick/inspect/db`);
+    const response = await fetch(`${app.httpUrl}/_frick/inspect/db`, {
+      headers: await inspectHeaders(),
+    });
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.idempotencyCache).toEqual({
@@ -112,7 +120,9 @@ describe("operational HTTP endpoints", () => {
         },
       });
     }
-    const response = await fetch(`${app.httpUrl}/_frick/inspect/db`);
+    const response = await fetch(`${app.httpUrl}/_frick/inspect/db`, {
+      headers: await inspectHeaders(),
+    });
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.idempotencyCache.size).toBeGreaterThan(0);
@@ -137,7 +147,9 @@ describe("operational HTTP endpoints", () => {
         },
       });
     }
-    const response = await fetch(`${app.httpUrl}/_frick/inspect/db`);
+    const response = await fetch(`${app.httpUrl}/_frick/inspect/db`, {
+      headers: await inspectHeaders(),
+    });
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.idempotencyCache.capacity).toBe(2);
@@ -161,6 +173,35 @@ describe("operational HTTP endpoints", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("requires a valid session for inspection routes in non-production", async () => {
+    app = await startServer();
+    const response = await fetch(`${app.httpUrl}/_frick/inspect/server`);
+    expect(response.status).toBe(401);
+  });
+
+  it("requires the admin token for inspection routes in production", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "frick-ops-prod-inspect-"));
+    const dbPath = path.join(dir, "frick.sqlite");
+    const adminToken = "test-admin-token-1234567890ABCDEF1234567890ABCDEF";
+    try {
+      app = await startServer({
+        dbPath,
+        config: { env: "production", dbPath, inspectionEnabled: true, adminToken },
+      });
+      const denied = await fetch(`${app.httpUrl}/_frick/inspect/server`);
+      expect(denied.status).toBe(401);
+
+      const allowed = await fetch(`${app.httpUrl}/_frick/inspect/server`, {
+        headers: { authorization: `Bearer ${adminToken}` },
+      });
+      expect(allowed.status).toBe(200);
+    } finally {
+      await app?.close();
+      app = undefined;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 async function startServer(options: Parameters<typeof createFrickServer>[0] = {}) {
@@ -176,4 +217,16 @@ async function startServer(options: Parameters<typeof createFrickServer>[0] = {}
     store: server.store,
     close: server.close,
   };
+}
+
+async function inspectHeaders(): Promise<Record<string, string>> {
+  if (!app) throw new Error("server not started");
+  const response = await fetch(`${app.httpUrl}/auth/dev-login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ userId: "user-ada" }),
+  });
+  expect(response.status).toBe(200);
+  const body = (await response.json()) as { sessionToken: string };
+  return { authorization: `Bearer ${body.sessionToken}` };
 }

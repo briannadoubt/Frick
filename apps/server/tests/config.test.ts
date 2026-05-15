@@ -87,14 +87,13 @@ describe("loadFrickConfig", () => {
     expect(config.sessionTtlSeconds).toBe(60);
   });
 
-  it("logs a warning when demoAuthEnabled is forced on in production", () => {
-    const warnings: string[] = [];
-    const config = loadFrickConfig(
-      { env: "production", demoAuthEnabled: true, dbPath: "/var/lib/frick.sqlite" },
-      { env: {}, warn: (line) => warnings.push(line) },
-    );
-    expect(config.demoAuthEnabled).toBe(true);
-    expect(warnings.some((line) => line.includes("demoAuthEnabled=true in production"))).toBe(true);
+  it("throws FrickConfigError when demoAuthEnabled is forced on in production", () => {
+    expect(() =>
+      loadFrickConfig(
+        { env: "production", demoAuthEnabled: true, dbPath: "/var/lib/frick.sqlite" },
+        { env: {}, warn: () => {} },
+      ),
+    ).toThrow(FrickConfigError);
   });
 
   it("throws FrickConfigError when dbPath is ':memory:' in production", () => {

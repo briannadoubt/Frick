@@ -683,6 +683,16 @@ extension URLSessionWebSocketTask: FrickWebSocketTaskProtocol, @retroactive @unc
 /// mock factory that returns a fake task fed by hand.
 public protocol FrickWebSocketFactory: Sendable {
     func makeTask(url: URL) -> FrickWebSocketTaskProtocol
+    func makeTask(request: URLRequest) -> FrickWebSocketTaskProtocol
+}
+
+public extension FrickWebSocketFactory {
+    func makeTask(request: URLRequest) -> FrickWebSocketTaskProtocol {
+        guard let url = request.url else {
+            preconditionFailure("Frick WebSocket requests require a URL")
+        }
+        return makeTask(url: url)
+    }
 }
 
 public struct URLSessionWebSocketFactory: FrickWebSocketFactory {
@@ -694,6 +704,10 @@ public struct URLSessionWebSocketFactory: FrickWebSocketFactory {
 
     public func makeTask(url: URL) -> FrickWebSocketTaskProtocol {
         session.webSocketTask(with: url)
+    }
+
+    public func makeTask(request: URLRequest) -> FrickWebSocketTaskProtocol {
+        session.webSocketTask(with: request)
     }
 }
 
@@ -980,8 +994,8 @@ public actor FrickSyncSocket {
         guard !explicitlyClosed else { return }
         updateStatus { $0.state = .connecting; $0.lastError = nil }
 
-        let url = makeURL()
-        let newTask = factory.makeTask(url: url)
+        let request = makeRequest()
+        let newTask = factory.makeTask(request: request)
         self.task = newTask
         newTask.resume()
 
@@ -989,6 +1003,7 @@ public actor FrickSyncSocket {
         let hello = FrickFrame(kind: .hello, payload: .map([
             (.string("replicaId"), .string(replicaId)),
             (.string("deviceId"), .string(deviceId)),
+            (.string("sessionToken"), .string(sessionToken)),
             (.string("schemaHash"), .string(FrickSchema.schemaHash)),
             (.string("knownCursors"), .map([])),
             (.string("clientCapabilities"), clientCapabilities.asMsgPack()),
@@ -1333,8 +1348,17 @@ public actor FrickSyncSocket {
         // Force ws/wss scheme.
         if components.scheme == "http" { components.scheme = "ws" }
         else if components.scheme == "https" { components.scheme = "wss" }
-        components.queryItems = [URLQueryItem(name: "sessionToken", value: sessionToken)]
+        if let queryItems = components.queryItems {
+            let filtered = queryItems.filter { $0.name != "sessionToken" }
+            components.queryItems = filtered.isEmpty ? nil : filtered
+        }
         return components.url!
+    }
+
+    private func makeRequest() -> URLRequest {
+        var request = URLRequest(url: makeURL())
+        request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
+        return request
     }
 
     private func updateStatus(_ mutator: (inout MutableStatus) -> Void) {
@@ -1391,4 +1415,3 @@ public enum FrickSyncSocketError: Error, Equatable, Sendable {
     case helloAckTimeout
     case unexpectedFrame(Int)
 }
-

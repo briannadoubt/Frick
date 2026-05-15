@@ -12,11 +12,24 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
+import process from "node:process";
 
 const ROOT = resolve(new URL(".", import.meta.url).pathname, "..");
 const PACKAGE_GLOBS = ["packages", "apps"];
 
 const SOURCEMAP_BYTES_THRESHOLD = 512 * 1024; // 512 KB
+const LIFECYCLE_SCRIPT_NAMES = new Set([
+  "preinstall",
+  "install",
+  "postinstall",
+  "prepack",
+  "prepare",
+  "postpack",
+  "prepublish",
+  "prepublishOnly",
+  "publish",
+  "postpublish",
+]);
 const SUSPICIOUS_PATTERNS: { pattern: RegExp; reason: string }[] = [
   { pattern: /(^|\/)tests?\//, reason: "ships tests directory" },
   { pattern: /\.test\.(ts|tsx|js|jsx|mjs|cjs)$/, reason: "ships test file" },
@@ -40,6 +53,14 @@ const INTENTIONAL_EXCEPTIONS: Record<string, Record<string, string>> = {
   },
 };
 
+const INTENTIONAL_LIFECYCLE_EXCEPTIONS: Record<string, Record<string, string>> = {};
+
+type PackageJson = {
+  name?: string;
+  private?: boolean;
+  scripts?: Record<string, string>;
+};
+
 type PackFile = { path: string; size: number };
 
 type PackEntry = {
@@ -51,7 +72,7 @@ type PackEntry = {
 
 type Finding = {
   package: string;
-  kind: "suspicious-file" | "large-sourcemap" | "missing-readme";
+  kind: "suspicious-file" | "large-sourcemap" | "missing-readme" | "lifecycle-script";
   detail: string;
 };
 
@@ -78,23 +99,59 @@ function findPackageJsons(): string[] {
   return results;
 }
 
-function isPublishable(pkgJsonPath: string): { publishable: boolean; reason?: string; name?: string } {
+function readPackageJson(pkgJsonPath: string): PackageJson {
   const raw = readFileSync(pkgJsonPath, "utf8");
-  const pkg = JSON.parse(raw) as { name?: string; private?: boolean };
+  return JSON.parse(raw) as PackageJson;
+}
+
+function isPublishable(pkgJsonPath: string): {
+  publishable: boolean;
+  reason?: string;
+  name?: string;
+  scripts?: Record<string, string>;
+} {
+  const pkg = readPackageJson(pkgJsonPath);
   if (!pkg.name) return { publishable: false, reason: "no name" };
   if (!pkg.name.startsWith("@frick/")) return { publishable: false, reason: "not scoped @frick/", name: pkg.name };
   if (pkg.private === true) return { publishable: false, reason: "private", name: pkg.name };
-  return { publishable: true, name: pkg.name };
+  return {
+    publishable: true,
+    name: pkg.name,
+    ...(pkg.scripts ? { scripts: pkg.scripts } : {}),
+  };
+}
+
+function scrubbedPackEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env.NPM_TOKEN;
+  delete env.NODE_AUTH_TOKEN;
+  return env;
 }
 
 function pack(pkgDir: string): PackEntry | null {
-  const stdout = execFileSync("npm", ["pack", "--dry-run", "--json"], {
+  const stdout = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
     cwd: pkgDir,
     encoding: "utf8",
+    env: scrubbedPackEnv(),
     stdio: ["ignore", "pipe", "pipe"],
   });
   const parsed = JSON.parse(stdout) as PackEntry[];
   return parsed[0] ?? null;
+}
+
+function inspectLifecycleScripts(pkgName: string, scripts: Record<string, string> | undefined): Finding[] {
+  const exceptions = INTENTIONAL_LIFECYCLE_EXCEPTIONS[pkgName] ?? {};
+  const findings: Finding[] = [];
+  for (const scriptName of Object.keys(scripts ?? {}).sort()) {
+    if (!LIFECYCLE_SCRIPT_NAMES.has(scriptName)) continue;
+    if (exceptions[scriptName]) continue;
+    findings.push({
+      package: pkgName,
+      kind: "lifecycle-script",
+      detail: `package.json defines ${scriptName}`,
+    });
+  }
+  return findings;
 }
 
 function inspect(entry: PackEntry): Finding[] {
@@ -149,18 +206,25 @@ function main(): void {
       reports.push({
         name: status.name ?? pkgJsonPath,
         publishable: false,
-        reason: status.reason,
+        ...(status.reason ? { reason: status.reason } : {}),
         findings: [],
       });
       continue;
     }
+    const lifecycleFindings = inspectLifecycleScripts(status.name!, status.scripts);
     try {
       const entry = pack(pkgDir);
       if (!entry) {
-        reports.push({ name: status.name!, publishable: true, reason: "npm pack returned no entries", findings: [] });
+        allFindings.push(...lifecycleFindings);
+        reports.push({
+          name: status.name!,
+          publishable: true,
+          reason: "npm pack returned no entries",
+          findings: lifecycleFindings,
+        });
         continue;
       }
-      const findings = inspect(entry);
+      const findings = [...lifecycleFindings, ...inspect(entry)];
       allFindings.push(...findings);
       reports.push({
         name: entry.name,
@@ -171,11 +235,12 @@ function main(): void {
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      allFindings.push(...lifecycleFindings);
       reports.push({
         name: status.name!,
         publishable: true,
         reason: `npm pack failed: ${message}`,
-        findings: [],
+        findings: lifecycleFindings,
       });
     }
   }

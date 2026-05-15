@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createFrickServer } from "../src/server.js";
-import type { FrickSearchIndexDefinition } from "../src/search/types.js";
+import type {
+  FrickSearchAdapter,
+  FrickSearchIndexDefinition,
+  FrickSearchProjectInput,
+} from "../src/search/types.js";
 
 const ADMIN_TOKEN = "test-admin-token-1234567890ABCDEF1234567890ABCDEF";
 
@@ -88,20 +92,66 @@ describe("admin search rebuild route", () => {
     expect(body.error.details.reason).toBe("searchIndexNotFound");
     expect(body.error.details.index).toBe("no-such-index");
   });
+
+  it("fails closed before rebuilding when audit recording fails", async () => {
+    const rebuildCalls: string[] = [];
+    const conversationsIndex: FrickSearchIndexDefinition = {
+      name: "conversations-fts",
+      source: { kind: "object", type: "Conversation" },
+      project() {
+        return null;
+      },
+    };
+    const adapter: FrickSearchAdapter = {
+      id: "counting-search",
+      registerIndex() {},
+      upsert() {},
+      delete() {},
+      query() {
+        return { hits: [], total: 0 };
+      },
+      async rebuild(_tenantId: string, indexName: string, _source: AsyncIterable<FrickSearchProjectInput>) {
+        rebuildCalls.push(indexName);
+      },
+    };
+    app = await startServer({ indexes: [conversationsIndex], adapter });
+    (app.store.adminAudit as unknown as { record: () => never }).record = () => {
+      throw new Error("audit unavailable");
+    };
+
+    const rebuild = await fetch(
+      `${app.httpUrl}/_frick/admin/search/conversations-fts/rebuild`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+      },
+    );
+
+    expect(rebuild.status).toBe(500);
+    expect(rebuildCalls).toEqual([]);
+  });
 });
 
 async function startServer(
-  overrides: { indexes?: FrickSearchIndexDefinition[] } = {},
+  overrides: { indexes?: FrickSearchIndexDefinition[]; adapter?: FrickSearchAdapter } = {},
 ): Promise<{
   httpUrl: string;
   close: () => Promise<void>;
+  store: ReturnType<typeof createFrickServer>["store"];
   searchAdapter: ReturnType<typeof createFrickServer>["store"]["searchAdapter"];
 }> {
   const server = createFrickServer({
     port: 0,
     dbPath: ":memory:",
     config: { adminToken: ADMIN_TOKEN },
-    ...(overrides.indexes !== undefined ? { search: { indexes: overrides.indexes } } : {}),
+    ...(overrides.indexes !== undefined || overrides.adapter !== undefined
+      ? {
+          search: {
+            ...(overrides.indexes !== undefined ? { indexes: overrides.indexes } : {}),
+            ...(overrides.adapter !== undefined ? { adapter: overrides.adapter } : {}),
+          },
+        }
+      : {}),
   });
   await server.listen();
   const address = server.server.address();
@@ -111,6 +161,7 @@ async function startServer(
   return {
     httpUrl: `http://127.0.0.1:${address.port}`,
     close: server.close,
+    store: server.store,
     searchAdapter: server.store.searchAdapter,
   };
 }

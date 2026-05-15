@@ -89,6 +89,49 @@ describe("POST /push/registrations", () => {
     expect(response.status).toBe(400);
   });
 
+  it("rejects webPush registration tokens with unsafe endpoints", async () => {
+    app = await startServer();
+    const session = await devLogin(app.httpUrl, "user-ada");
+    const response = await fetch(`${app.httpUrl}/push/registrations`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${session.sessionToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        deviceId: "device-1",
+        platform: "webPush",
+        token: JSON.stringify({
+          endpoint: "http://127.0.0.1:8080/push",
+          keys: { p256dh: "p", auth: "a" },
+        }),
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect(app.store.pushRegistrations.listByUser(session.tenantId, session.userId)).toEqual([]);
+  });
+
+  it("accepts webPush registration tokens with public https endpoints", async () => {
+    app = await startServer();
+    const session = await devLogin(app.httpUrl, "user-ada");
+    const response = await fetch(`${app.httpUrl}/push/registrations`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${session.sessionToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        deviceId: "device-1",
+        platform: "webPush",
+        token: JSON.stringify({
+          endpoint: "https://push.example.test/p/abc",
+          keys: { p256dh: "p", auth: "a" },
+        }),
+      }),
+    });
+    expect(response.status).toBe(201);
+  });
+
   it("rejects missing fields with 400", async () => {
     app = await startServer();
     const session = await devLogin(app.httpUrl, "user-ada");

@@ -8,6 +8,7 @@ import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import dev.frick.client.FrickAuthenticationRequiredException
 import dev.frick.client.FrickClient
 import dev.frick.client.SQLiteFrickStorage
 import java.util.concurrent.TimeUnit
@@ -41,6 +42,8 @@ class FrickSyncWorker(
             Result.success()
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
+        } catch (auth: FrickAuthenticationRequiredException) {
+            Result.success()
         } catch (error: Throwable) {
             // Most failure modes (no network, server 5xx) are transient —
             // ask WorkManager to back-off and retry on its own schedule.
@@ -68,6 +71,10 @@ class FrickSyncWorker(
                 ExistingPeriodicWorkPolicy.KEEP,
                 request,
             )
+        }
+
+        fun cancel(context: Context) {
+            WorkManager.getInstance(context).cancelUniqueWork(UNIQUE_NAME)
         }
     }
 }
