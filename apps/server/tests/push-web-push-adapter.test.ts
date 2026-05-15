@@ -99,19 +99,27 @@ describe("web push adapter", () => {
     const env = { FRICK_PUSH_CRED_KEY: freshKey() };
     const { tenantSettings } = setupTenant(env);
     let observedAuth = "";
+    let observedBody: BodyInit | null | undefined;
     const fetchImpl: typeof fetch = async (url, init) => {
       observedAuth = String((init?.headers as Record<string, string>)?.authorization ?? "");
+      observedBody = init?.body;
       expect(String(url)).toBe("https://push.example.test/p/abc");
+      expect((init?.headers as Record<string, string>)?.["content-length"]).toBe("0");
       return new Response(null, { status: 201 });
     };
     const adapter = createFrickWebPushAdapter({ env, fetch: fetchImpl, resolveHostname: publicResolver });
     const delivery = await adapter.send(
-      intent,
+      {
+        ...intent,
+        body: { title: "Sensitive title", body: "Secret body", data: { secret: "do-not-send" } },
+        deepLink: "/conversations/secret",
+      },
       registration(JSON.stringify({ endpoint: "https://push.example.test/p/abc", keys: { p256dh: "p", auth: "a" } })),
       makeCtx(tenantSettings),
     );
     expect(delivery.status).toBe("delivered");
     expect(observedAuth).toMatch(/^vapid t=.+ k=fake-public-key$/);
+    expect(observedBody).toBe("");
   });
 
   it("translates 410 Gone to push.unregistered", async () => {

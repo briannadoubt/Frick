@@ -17,7 +17,7 @@ You write the schema once, in TypeScript, as a `FrickSchema` literal in `package
 Two consequences of "schema is canonical":
 
 1. **Stable ids matter more than names.** Every object, field, stream, and event has a numeric `id`. The framework tracks compatibility by id — renaming a field is safe, reusing an id is not.
-2. **Drift is detected, not tolerated.** `pnpm verify:generated` regenerates every artifact and fails CI if anything moved. There is no "I'll regenerate later."
+2. **Drift is detected, not tolerated.** `pnpm verify:generated` regenerates every tracked schema, fixture, and design artifact and fails CI if anything moved. There is no "I'll regenerate later."
 
 ## Walkthrough: add a Reaction object
 
@@ -65,7 +65,7 @@ pnpm fixtures:generate
 pnpm verify:generated
 ```
 
-`verify:generated` runs the regen end-to-end and fails if the working tree has uncommitted differences after — i.e. it's the same check CI runs.
+`verify:generated` runs schema, fixture, and design-token regeneration end-to-end and fails if the tracked generated outputs have uncommitted differences after — i.e. it's the same check CI runs.
 
 ### 3. Lint for breaking changes
 

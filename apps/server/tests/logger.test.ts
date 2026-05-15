@@ -79,6 +79,66 @@ describe("createConsoleLogger", () => {
     });
   });
 
+  it("redacts sensitive fields recursively while preserving safe nested primitives", () => {
+    const { logger, lines } = capture("debug");
+    logger.info("req", {
+      userId: "user-ada",
+      headers: {
+        authorization: "Bearer nested",
+        contentType: "application/json",
+      },
+      auth: {
+        apiKey: "api-secret",
+        passwordResetToken: "reset-secret",
+        safeCount: 2,
+      },
+      flags: {
+        enabled: true,
+        retryAfterMs: 250,
+      },
+    });
+
+    expect(lines[0].parsed).toMatchObject({
+      userId: "user-ada",
+      headers: {
+        authorization: "<redacted>",
+        contentType: "application/json",
+      },
+      auth: {
+        apiKey: "<redacted>",
+        passwordResetToken: "<redacted>",
+        safeCount: 2,
+      },
+      flags: {
+        enabled: true,
+        retryAfterMs: 250,
+      },
+    });
+  });
+
+  it("redacts common secret key names inside arrays", () => {
+    const { logger, lines } = capture("debug");
+    logger.info("push", {
+      credentials: [
+        {
+          publicKey: "public",
+          privateKey: "private",
+          clientSecret: "client-secret",
+          access_token: "access-secret",
+        },
+      ],
+    });
+
+    expect(lines[0].parsed.credentials).toEqual([
+      {
+        publicKey: "public",
+        privateKey: "<redacted>",
+        clientSecret: "<redacted>",
+        access_token: "<redacted>",
+      },
+    ]);
+  });
+
   describe("child", () => {
     it("inherits parent fields on every emission", () => {
       const { logger, lines } = capture("debug");

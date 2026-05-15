@@ -1,11 +1,11 @@
 /**
  * Tiny, opinionated structured logger for the Frick server.
  *
- * JSON-line output (one event per line, level-tagged). Fields that match
- * `REDACTED_FIELDS` are replaced with `"<redacted>"` so common secret-shaped
- * values can't accidentally end up in stdout. The redaction list is
- * intentionally small — it's a defense-in-depth check, not a substitute for
- * not passing secrets to the logger in the first place.
+ * JSON-line output (one event per line, level-tagged). Fields with
+ * secret-shaped names are replaced with `"<redacted>"` recursively so common
+ * credential values can't accidentally end up in stdout. Redaction is a
+ * defense-in-depth check, not a substitute for keeping secrets out of log
+ * fields in the first place.
  */
 
 import type { FrickConfig, FrickLogLevel } from "./config.js";
@@ -31,13 +31,43 @@ const LEVEL_PRIORITY: Record<FrickLogLevel, number> = {
   error: 40,
 };
 
-const REDACTED_FIELDS: ReadonlySet<string> = new Set([
-  "sessionToken",
-  "password",
-  "passwordHash",
-  "Authorization",
-  "authorization",
-]);
+const REDACTED_VALUE = "<redacted>";
+const SENSITIVE_FIELD_PATTERN = /(?:authorization|password|secret|token|api[-_]?key|private[-_]?key)/i;
+
+function redactField(key: string, value: unknown, seen: WeakSet<object>): unknown {
+  if (SENSITIVE_FIELD_PATTERN.test(key)) {
+    return REDACTED_VALUE;
+  }
+  return redactValue(value, seen);
+}
+
+function redactValue(value: unknown, seen: WeakSet<object>): unknown {
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+
+  if (value instanceof Date) {
+    return value;
+  }
+
+  if (seen.has(value)) {
+    return "[Circular]";
+  }
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    const redacted = value.map((item) => redactValue(item, seen));
+    seen.delete(value);
+    return redacted;
+  }
+
+  const redacted: Record<string, unknown> = {};
+  for (const [key, nestedValue] of Object.entries(value)) {
+    redacted[key] = redactField(key, nestedValue, seen);
+  }
+  seen.delete(value);
+  return redacted;
+}
 
 export interface ConsoleLoggerOptions {
   /** Override the output sinks (mostly for tests). Defaults to process std streams. */
@@ -62,8 +92,9 @@ export function createConsoleLogger(
         msg: message,
       };
       const merged: Record<string, unknown> = { ...inherited, ...(fields ?? {}) };
+      const seen = new WeakSet<object>();
       for (const [key, value] of Object.entries(merged)) {
-        record[key] = REDACTED_FIELDS.has(key) ? "<redacted>" : value;
+        record[key] = redactField(key, value, seen);
       }
       const line = JSON.stringify(record);
       if (level === "error" || level === "warn") {

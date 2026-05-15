@@ -21,9 +21,16 @@ export interface FrickCacheMetadata {
   schemaVersion: string;
   schemaRevision: number;
   schemaHash: string;
+  tenantId?: string;
+  userId?: string;
 }
 
-export type FrickCacheIncompatibleReason = "schemaIdMismatch" | "cacheTooOld";
+export interface FrickCacheScope {
+  tenantId?: string;
+  userId?: string;
+}
+
+export type FrickCacheIncompatibleReason = "schemaIdMismatch" | "cacheTooOld" | "sessionScopeMismatch";
 
 export class FrickCacheIncompatibleError extends Error {
   constructor(
@@ -48,21 +55,23 @@ export interface FrickCacheState {
 }
 
 export interface FrickLocalCache {
-  load(schema: FrickSchema): FrickCacheState;
-  saveObject(schema: FrickSchema, type: string, id: string, value: PlainObject, version: number): void;
-  saveStreamEvent(schema: FrickSchema, event: StreamEventInput): void;
-  saveCursor(schema: FrickSchema, key: string, cursor: number): void;
-  savePendingAppend(schema: FrickSchema, append: PendingAppend): void;
-  removePendingAppend(schema: FrickSchema, requestId: string): void;
+  load(schema: FrickSchema, scope?: FrickCacheScope): FrickCacheState;
+  saveObject(schema: FrickSchema, type: string, id: string, value: PlainObject, version: number, scope?: FrickCacheScope): void;
+  saveStreamEvent(schema: FrickSchema, event: StreamEventInput, scope?: FrickCacheScope): void;
+  saveCursor(schema: FrickSchema, key: string, cursor: number, scope?: FrickCacheScope): void;
+  savePendingAppend(schema: FrickSchema, append: PendingAppend, scope?: FrickCacheScope): void;
+  removePendingAppend(schema: FrickSchema, requestId: string, scope?: FrickCacheScope): void;
   clear(): void;
 }
 
-export function schemaIdentity(schema: FrickSchema): FrickCacheMetadata {
+export function schemaIdentity(schema: FrickSchema, scope: FrickCacheScope = {}): FrickCacheMetadata {
   return {
     schemaId: schema.schemaId,
     schemaVersion: schema.schemaVersion,
     schemaRevision: schema.schemaRevision,
     schemaHash: schema.hash,
+    ...(scope.tenantId !== undefined ? { tenantId: scope.tenantId } : {}),
+    ...(scope.userId !== undefined ? { userId: scope.userId } : {}),
   };
 }
 
@@ -93,17 +102,17 @@ export class MemoryFrickCache implements FrickLocalCache {
     }
   }
 
-  load(schema: FrickSchema): FrickCacheState {
+  load(schema: FrickSchema, scope: FrickCacheScope = {}): FrickCacheState {
     if (this.#metadata) {
-      const reason = compatibilityReason(this.#metadata, schema);
+      const reason = compatibilityReason(this.#metadata, schema, scope);
       if (reason) {
         throw new FrickCacheIncompatibleError(
           reason,
           { ...this.#metadata },
-          schemaIdentity(schema),
+          schemaIdentity(schema, scope),
           schema.minimumClientRevision,
           this.#pendingAppends.size,
-          incompatibilityMessage(reason, this.#metadata, schema),
+          incompatibilityMessage(reason, this.#metadata, schema, scope),
         );
       }
     }
@@ -116,8 +125,8 @@ export class MemoryFrickCache implements FrickLocalCache {
     };
   }
 
-  saveObject(schema: FrickSchema, type: string, id: string, value: PlainObject, version: number): void {
-    this.#writeMetadata(schema);
+  saveObject(schema: FrickSchema, type: string, id: string, value: PlainObject, version: number, scope: FrickCacheScope = {}): void {
+    this.#writeMetadata(schema, scope);
     this.#objects.set(objectKey(type, id), {
       type,
       id,
@@ -126,8 +135,8 @@ export class MemoryFrickCache implements FrickLocalCache {
     });
   }
 
-  saveStreamEvent(schema: FrickSchema, event: StreamEventInput): void {
-    this.#writeMetadata(schema);
+  saveStreamEvent(schema: FrickSchema, event: StreamEventInput, scope: FrickCacheScope = {}): void {
+    this.#writeMetadata(schema, scope);
     const key = streamKey(event.stream, event.streamId);
     const events = this.#streamEvents.get(key) ?? [];
     const existingIndex = events.findIndex((candidate) => candidate.eventId === event.eventId);
@@ -141,17 +150,17 @@ export class MemoryFrickCache implements FrickLocalCache {
     this.#streamEvents.set(key, events);
   }
 
-  saveCursor(schema: FrickSchema, key: string, cursor: number): void {
-    this.#writeMetadata(schema);
+  saveCursor(schema: FrickSchema, key: string, cursor: number, scope: FrickCacheScope = {}): void {
+    this.#writeMetadata(schema, scope);
     this.#cursors[key] = Math.max(this.#cursors[key] ?? 0, cursor);
   }
 
-  savePendingAppend(schema: FrickSchema, append: PendingAppend): void {
-    this.#writeMetadata(schema);
+  savePendingAppend(schema: FrickSchema, append: PendingAppend, scope: FrickCacheScope = {}): void {
+    this.#writeMetadata(schema, scope);
     this.#pendingAppends.set(append.requestId, clonePendingAppend(append));
   }
 
-  removePendingAppend(_schema: FrickSchema, requestId: string): void {
+  removePendingAppend(_schema: FrickSchema, requestId: string, _scope: FrickCacheScope = {}): void {
     this.#pendingAppends.delete(requestId);
   }
 
@@ -163,13 +172,15 @@ export class MemoryFrickCache implements FrickLocalCache {
     this.#metadata = undefined;
   }
 
-  #writeMetadata(schema: FrickSchema): void {
-    const next = schemaIdentity(schema);
+  #writeMetadata(schema: FrickSchema, scope: FrickCacheScope): void {
+    const next = schemaIdentity(schema, scope);
     if (
       this.#metadata &&
       this.#metadata.schemaId === next.schemaId &&
       this.#metadata.schemaHash === next.schemaHash &&
-      this.#metadata.schemaRevision === next.schemaRevision
+      this.#metadata.schemaRevision === next.schemaRevision &&
+      this.#metadata.tenantId === next.tenantId &&
+      this.#metadata.userId === next.userId
     ) {
       return;
     }
@@ -177,12 +188,22 @@ export class MemoryFrickCache implements FrickLocalCache {
   }
 }
 
-function compatibilityReason(cached: FrickCacheMetadata, schema: FrickSchema): FrickCacheIncompatibleReason | undefined {
+function compatibilityReason(
+  cached: FrickCacheMetadata,
+  schema: FrickSchema,
+  scope: FrickCacheScope,
+): FrickCacheIncompatibleReason | undefined {
   if (cached.schemaId !== schema.schemaId) {
     return "schemaIdMismatch";
   }
   if (cached.schemaRevision < schema.minimumClientRevision) {
     return "cacheTooOld";
+  }
+  if (
+    (scope.tenantId !== undefined && cached.tenantId !== scope.tenantId) ||
+    (scope.userId !== undefined && cached.userId !== scope.userId)
+  ) {
+    return "sessionScopeMismatch";
   }
   return undefined;
 }
@@ -191,12 +212,15 @@ function incompatibilityMessage(
   reason: FrickCacheIncompatibleReason,
   cached: FrickCacheMetadata,
   schema: FrickSchema,
+  scope: FrickCacheScope = {},
 ): string {
   switch (reason) {
     case "schemaIdMismatch":
       return `Cached schema id ${cached.schemaId} does not match current schema id ${schema.schemaId}`;
     case "cacheTooOld":
       return `Cached schema revision ${cached.schemaRevision} is below current minimum client revision ${schema.minimumClientRevision}`;
+    case "sessionScopeMismatch":
+      return `Cached session scope ${cached.tenantId ?? "unknown"}:${cached.userId ?? "unknown"} does not match current session scope ${scope.tenantId ?? "unknown"}:${scope.userId ?? "unknown"}`;
   }
 }
 

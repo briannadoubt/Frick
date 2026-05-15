@@ -362,14 +362,72 @@ describe("decide() deny-by-default for unrecognised actions", () => {
     }
   });
 
-  it("denies presence.write for an action with no explicit allow rule", () => {
+  it("allows custom presence writes so app policy hooks can tighten them", () => {
     const decision = decide(
-      { principal: stranger, action: "presence.write", resource: { kind: "presence", name: "Typing", key: "conversation-x" } },
+      {
+        principal: stranger,
+        action: "presence.write",
+        resource: { kind: "presence", name: "Typing", key: "conversation-x" },
+      },
       memberships,
+    );
+    expect(decision.allow).toBe(true);
+  });
+
+  it("denies TypingState access when the principal is not a known conversation member", () => {
+    const knownConversationMemberships: MembershipReader = {
+      hasUser: () => true,
+      hasConversation: (conversationId) => conversationId === "conversation-general",
+      isRoomMember: () => false,
+    };
+
+    const decision = decide(
+      {
+        principal: stranger,
+        action: "presence.read",
+        resource: {
+          kind: "presence",
+          name: "TypingState",
+          key: "conversation-general:user-stranger:device-1",
+        },
+      },
+      knownConversationMemberships,
     );
     expect(decision.allow).toBe(false);
     if (!decision.allow) {
-      expect(decision.reason).toBe("notAuthorizedForResource");
+      expect(decision.reason).toBe("notMember");
+    }
+  });
+
+  it("denies TypingState writes that claim another user id", () => {
+    const knownConversationMemberships: MembershipReader = {
+      hasUser: () => true,
+      hasConversation: (conversationId) => conversationId === "conversation-general",
+      isRoomMember: () => true,
+    };
+
+    const decision = decide(
+      {
+        principal: stranger,
+        action: "presence.write",
+        resource: {
+          kind: "presence",
+          name: "TypingState",
+          key: "conversation-general:user-ada:device-1",
+        },
+        context: {
+          value: {
+            isTyping: true,
+            userId: "user-ada",
+            conversationId: "conversation-general",
+          },
+        },
+      },
+      knownConversationMemberships,
+    );
+    expect(decision.allow).toBe(false);
+    if (!decision.allow) {
+      expect(decision.reason).toBe("ownerMismatch");
     }
   });
 

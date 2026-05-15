@@ -774,6 +774,59 @@ describe("foundation sync gateway", () => {
     abort.abort();
   });
 
+  it("does not stream SSE events from another tenant with the same stream key", async () => {
+    app = await startServer();
+    const a = await devLogin(app.httpUrl, { userId: "user-shared", tenantId: "tenant-a" });
+    const b = await devLogin(app.httpUrl, { userId: "user-shared", tenantId: "tenant-b" });
+    for (const tenantId of ["tenant-a", "tenant-b"]) {
+      app.store.upsertObject(tenantId, "Conversation", "conversation-general", {
+        kind: "channel",
+        title: "Tenant General",
+        createdBy: "user-shared",
+        lastMessageEventId: undefined,
+      });
+      app.store.upsertObject(tenantId, "RoomMember", `member-${tenantId}-shared`, {
+        conversationId: "conversation-general",
+        userId: "user-shared",
+        role: "owner",
+      });
+    }
+    const abort = new AbortController();
+    const response = await fetch(`${app.httpUrl}/streams/MessageStream/conversation-general/events?after=0`, {
+      headers: authHeaders(a.sessionToken),
+      signal: abort.signal,
+    });
+    expect(response.status).toBe(200);
+    expect(response.body).toBeTruthy();
+
+    const reader = response.body!.getReader();
+    expect((await readSseEvent(reader)).event).toBe("stream-page");
+
+    const deltaEvent = readSseEvent(reader);
+    const append = await fetch(`${app.httpUrl}/append`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders(b.sessionToken) },
+      body: JSON.stringify({
+        requestId: "request-sse-cross-tenant",
+        stream: "MessageStream",
+        key: "conversation-general",
+        event: "MessageSent",
+        payload: {
+          messageId: "message-sse-cross-tenant",
+          senderId: "user-shared",
+          body: "tenant-b only",
+          createdAt: "2026-05-09T00:00:00.000Z",
+        },
+      }),
+    });
+    expect(append.status).toBe(200);
+
+    await expect(withTimeout(deltaEvent, "unexpected cross-tenant SSE delta")).rejects.toThrow(
+      "unexpected cross-tenant SSE delta",
+    );
+    abort.abort();
+  });
+
   it("streams WebSocket appends over SSE", async () => {
     app = await startServer();
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
@@ -1304,7 +1357,7 @@ async function getInbox(httpUrl: string, sessionToken: string, userId: string): 
 
 async function devLogin(
   httpUrl: string,
-  body: { userId: string; deviceId?: string; replicaId?: string; platform?: string },
+  body: { userId: string; tenantId?: string; deviceId?: string; replicaId?: string; platform?: string },
 ): Promise<{
   schemaHash: string;
   sessionToken: string;

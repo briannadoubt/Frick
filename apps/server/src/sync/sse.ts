@@ -3,6 +3,7 @@ import type { FrickSchema } from "@frick/protocol";
 import type { StoredEvent } from "../storage/stream-store.js";
 
 export interface SseOpenInput {
+  tenantId: string;
   stream: string;
   key: string;
   events: StoredEvent[];
@@ -11,6 +12,7 @@ export interface SseOpenInput {
 
 interface SseClient {
   response: http.ServerResponse;
+  tenantId: string;
   stream: string;
   key: string;
   heartbeat?: ReturnType<typeof setInterval>;
@@ -39,7 +41,12 @@ export class SseRegistry {
       "x-frick-schema-hash": this.schema.hash,
     });
 
-    const client: SseClient = { response, stream: input.stream, key: input.key };
+    const client: SseClient = {
+      response,
+      tenantId: input.tenantId,
+      stream: input.stream,
+      key: input.key,
+    };
     this.#clients.add(client);
     response.on("close", () => {
       if (client.heartbeat) {
@@ -67,7 +74,11 @@ export class SseRegistry {
 
   publishStreamEvent(event: StoredEvent): void {
     for (const client of this.#clients) {
-      if (client.stream !== event.stream || client.key !== event.streamId) {
+      if (
+        client.tenantId !== event.tenantId ||
+        client.stream !== event.stream ||
+        client.key !== event.streamId
+      ) {
         continue;
       }
       this.#write(client, "delta", {

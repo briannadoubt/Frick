@@ -8,7 +8,31 @@
 import { describe, expect, test, vi } from "vitest";
 import { FrickObjectConflictError } from "@frick/core";
 import type { FrickErrorEnvelope } from "@frick/protocol";
-import { draftId, upsertDraftWithLwwRetry, useDraft } from "./draft.js";
+import { clearLocalDraftsForUser, draftId, upsertDraftWithLwwRetry, useDraft } from "./draft.js";
+
+class MemoryStorage {
+  readonly values = new Map<string, string>();
+
+  get length(): number {
+    return this.values.size;
+  }
+
+  key(index: number): string | null {
+    return Array.from(this.values.keys())[index] ?? null;
+  }
+
+  getItem(key: string): string | null {
+    return this.values.get(key) ?? null;
+  }
+
+  setItem(key: string, value: string): void {
+    this.values.set(key, value);
+  }
+
+  removeItem(key: string): void {
+    this.values.delete(key);
+  }
+}
 
 describe("draftId", () => {
   test("composes a stable `${userId}:${conversationId}` key per the cross-SDK convention", () => {
@@ -23,6 +47,23 @@ describe("draftId", () => {
 describe("useDraft", () => {
   test("exports the hook as a function", () => {
     expect(typeof useDraft).toBe("function");
+  });
+});
+
+describe("clearLocalDraftsForUser", () => {
+  test("removes only local draft keys for the selected user", () => {
+    const storage = new MemoryStorage();
+    storage.setItem("frick.draft.user-ada.convo-1", "draft one");
+    storage.setItem("frick.draft.user-ada.convo-2", "draft two");
+    storage.setItem("frick.draft.user-grace.convo-1", "keep");
+    storage.setItem("other", "keep");
+
+    clearLocalDraftsForUser("user-ada", storage);
+
+    expect(storage.getItem("frick.draft.user-ada.convo-1")).toBeNull();
+    expect(storage.getItem("frick.draft.user-ada.convo-2")).toBeNull();
+    expect(storage.getItem("frick.draft.user-grace.convo-1")).toBe("keep");
+    expect(storage.getItem("other")).toBe("keep");
   });
 });
 

@@ -72,6 +72,7 @@ export type FrickAction =
   | "object.write"
   | "stream.read"
   | "stream.append"
+  | "presence.read"
   | "presence.write"
   | "signal.send"
   | "signal.read"
@@ -238,6 +239,15 @@ export function decide(input: FrickPolicyInput, memberships: MembershipReader): 
     case "signal.send":
     case "signal.read":
       return decideSignalAccess(principal, resource.key, memberships);
+    case "presence.read":
+    case "presence.write":
+      return decidePresenceAccess(
+        principal,
+        resource.name,
+        resource.key,
+        input.context?.value,
+        memberships,
+      );
     case "projection.read": {
       // Projection subscribe is allowed for any authenticated principal in
       // the same tenant. Per-projection app-level policy can tighten this
@@ -311,6 +321,55 @@ function decideSignalAccess(
     return deny("notMember", `${principal.userId} is not a member of ${key}`);
   }
   return ALLOW;
+}
+
+function decidePresenceAccess(
+  principal: Principal,
+  name: string | undefined,
+  key: string | undefined,
+  value: unknown,
+  memberships: MembershipReader,
+): FrickDecision {
+  if (name !== "TypingState") {
+    return ALLOW;
+  }
+  const resource = typingStateResource(key, value);
+  for (const ownerId of resource.userIds) {
+    if (ownerId !== principal.userId) {
+      return deny("ownerMismatch", "TypingState userId must match the principal");
+    }
+  }
+  for (const conversationId of resource.conversationIds) {
+    if (
+      memberships.hasConversation?.(conversationId) &&
+      !memberships.isRoomMember(conversationId, principal.userId)
+    ) {
+      return deny("notMember", `${principal.userId} is not a member of ${conversationId}`);
+    }
+  }
+  return ALLOW;
+}
+
+function typingStateResource(
+  key: string | undefined,
+  value: unknown,
+): { conversationIds: Set<string>; userIds: Set<string> } {
+  const conversationIds = new Set<string>();
+  const userIds = new Set<string>();
+  if (key) {
+    const [conversationId, userId] = key.split(":");
+    if (conversationId) conversationIds.add(conversationId);
+    if (userId) userIds.add(userId);
+  }
+  if (isRecord(value)) {
+    if (typeof value.conversationId === "string") {
+      conversationIds.add(value.conversationId);
+    }
+    if (typeof value.userId === "string") {
+      userIds.add(value.userId);
+    }
+  }
+  return { conversationIds, userIds };
 }
 
 function decideSelfUserWrite(
@@ -457,6 +516,21 @@ export function assertCanSubscribe(
     }
     return;
   }
+  if (kind === "presence") {
+    const decision = decideWithHooks(
+      {
+        principal,
+        action: "presence.read",
+        resource: { kind: "presence", name, ...(key !== undefined ? { key } : {}) },
+      },
+      memberships,
+      hooks,
+    );
+    if (!decision.allow) {
+      throw new AuthorizationError(decision);
+    }
+    return;
+  }
   if (kind !== "stream") {
     return;
   }
@@ -520,6 +594,49 @@ export function assertCanWriteObject(
       action: "object.write",
       resource: { kind: "object", name: objectType, key: objectId, tenantId: principal.tenantId },
       ...(value !== undefined ? { context: { value } } : {}),
+    },
+    memberships,
+    hooks,
+  );
+  if (!decision.allow) {
+    throw new AuthorizationError(decision);
+  }
+}
+
+export function assertCanWritePresence(
+  principal: Principal,
+  presence: string,
+  key: string,
+  memberships: MembershipReader,
+  hooks?: readonly FrickPolicyHook[],
+  value?: Record<string, unknown>,
+): void {
+  const decision = decideWithHooks(
+    {
+      principal,
+      action: "presence.write",
+      resource: { kind: "presence", name: presence, key },
+      ...(value !== undefined ? { context: { value } } : {}),
+    },
+    memberships,
+    hooks,
+  );
+  if (!decision.allow) {
+    throw new AuthorizationError(decision);
+  }
+}
+
+export function assertCanQuerySearch(
+  principal: Principal,
+  indexName: string,
+  memberships: MembershipReader,
+  hooks?: readonly FrickPolicyHook[],
+): void {
+  const decision = decideWithHooks(
+    {
+      principal,
+      action: "search.query",
+      resource: { kind: "search", name: indexName, tenantId: principal.tenantId },
     },
     memberships,
     hooks,

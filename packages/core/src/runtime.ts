@@ -19,6 +19,7 @@ import {
 } from "@frick/protocol";
 import {
   MemoryFrickCache,
+  type FrickCacheScope,
   type FrickLocalCache,
   type PendingAppend,
 } from "./cache.js";
@@ -46,12 +47,13 @@ export interface SyncStatus {
   deviceId?: string | undefined;
   serverCapabilities?: FrickServerCapabilities;
   schemaCompatibility?: SchemaCompatibilityResult;
-  lastError?: FrickErrorEnvelope;
+  lastError?: FrickErrorEnvelope | undefined;
 }
 
 export interface FrickSession {
   schemaHash: string;
   sessionToken: string;
+  tenantId?: string;
   userId: string;
   deviceId: string;
   replicaId: string;
@@ -83,6 +85,13 @@ export class FrickClientLimitError extends Error {
     super(envelope.message);
     this.name = "FrickClientLimitError";
     this.envelope = envelope;
+  }
+}
+
+export class FrickUserStateClearedError extends Error {
+  constructor(message = "Frick user state was cleared") {
+    super(message);
+    this.name = "FrickUserStateClearedError";
   }
 }
 
@@ -200,19 +209,63 @@ export class FrickClient {
 
   setSession(session: FrickSession | null | undefined): void {
     const shouldReconnect = Boolean(this.#socket);
+    const nextSession = session ?? undefined;
+    const scopeChanged = sessionScope(this.#session) !== sessionScope(nextSession);
     if (shouldReconnect) {
       this.disconnect();
     }
-    this.#session = session ?? undefined;
-    this.#sessionToken = session?.sessionToken;
-    if (session) {
-      this.#replicaId = session.replicaId;
-      this.#deviceId = session.deviceId;
+    if (scopeChanged) {
+      this.clearUserState();
+    }
+    this.#session = nextSession;
+    this.#sessionToken = nextSession?.sessionToken;
+    if (nextSession) {
+      this.#replicaId = nextSession.replicaId;
+      this.#deviceId = nextSession.deviceId;
     }
     this.#setSessionStatus();
     if (shouldReconnect) {
       this.connect();
     }
+  }
+
+  clearUserState(): void {
+    const clearedError = new FrickUserStateClearedError();
+    for (const resolver of this.#appendResolvers.values()) {
+      resolver.reject(clearedError);
+    }
+    for (const pending of this.#pendingUpserts.values()) {
+      pending.reject(clearedError);
+    }
+    this.#appendResolvers.clear();
+    this.#pendingUpserts.clear();
+    this.#pendingAppends.clear();
+    this.#overlay.clear();
+    this.#objects.clear();
+    this.#streams.clear();
+    this.#projectionRows.clear();
+    this.#cache.clear();
+
+    for (const signal of this.#objectListSignals.values()) {
+      signal.set([]);
+    }
+    for (const signal of this.#streamSignals.values()) {
+      signal.set([]);
+    }
+    for (const signal of this.#presenceSignals.values()) {
+      signal.set(undefined);
+    }
+    for (const signal of this.#signalSignals.values()) {
+      signal.set([]);
+    }
+    for (const signal of this.#projectionSignals.values()) {
+      signal.set(new Map());
+    }
+    this.#setStatus({
+      cursors: {},
+      pendingMutations: 0,
+      lastError: undefined,
+    });
   }
 
   connect(): void {
@@ -532,7 +585,11 @@ export class FrickClient {
   }
 
   #hydrateFromCache(): void {
-    const cached = this.#cache.load(this.schema);
+    const scope = this.#cacheScope();
+    if (!scope) {
+      return;
+    }
+    const cached = this.#cache.load(this.schema, scope);
     for (const object of cached.objects) {
       this.#objects.set(objectKey(object.type, object.id), { ...object.value });
     }
@@ -625,7 +682,7 @@ export class FrickClient {
           pendingUpsert.resolve({ version: frame[1].version ?? 0 });
         } else {
           this.#pendingAppends.delete(requestId);
-          this.#cache.removePendingAppend(this.schema, requestId);
+          this.#cache.removePendingAppend(this.schema, requestId, this.#cacheScope());
           const resolver = this.#appendResolvers.get(requestId);
           if (resolver) {
             this.#appendResolvers.delete(requestId);
@@ -668,7 +725,7 @@ export class FrickClient {
           }
         } else {
           this.#pendingAppends.delete(requestId);
-          this.#cache.removePendingAppend(this.schema, requestId);
+          this.#cache.removePendingAppend(this.schema, requestId, this.#cacheScope());
           const resolver = this.#appendResolvers.get(requestId);
           if (resolver) {
             this.#appendResolvers.delete(requestId);
@@ -694,7 +751,7 @@ export class FrickClient {
 
   #storeObject(type: string, id: string, value: PlainObject, version: number): void {
     this.#objects.set(objectKey(type, id), { ...value });
-    this.#cache.saveObject(this.schema, type, id, value, version);
+    this.#cache.saveObject(this.schema, type, id, value, version, this.#cacheScope());
     this.#objectListSignals.get(type)?.set(this.#selectObjects(type));
   }
 
@@ -709,13 +766,13 @@ export class FrickClient {
     }
     events.sort((left, right) => left.sequence - right.sequence);
     this.#streams.set(id, events);
-    this.#cache.saveStreamEvent(this.schema, event);
+    this.#cache.saveStreamEvent(this.schema, event, this.#cacheScope());
     this.#streamSignals.get(id)?.set([...events]);
   }
 
   #trackPendingAppend(append: PendingAppend): void {
     this.#pendingAppends.set(append.requestId, append);
-    this.#cache.savePendingAppend(this.schema, append);
+    this.#cache.savePendingAppend(this.schema, append, this.#cacheScope());
     this.#setStatus({ pendingMutations: this.#pendingAppends.size });
   }
 
@@ -804,7 +861,7 @@ export class FrickClient {
   }
 
   #saveCursor(key: string, cursor: number): void {
-    this.#cache.saveCursor(this.schema, key, cursor);
+    this.#cache.saveCursor(this.schema, key, cursor, this.#cacheScope());
     this.#setStatus({
       cursors: {
         ...this.syncStatus.value.cursors,
@@ -825,8 +882,18 @@ export class FrickClient {
     });
   }
 
+  #cacheScope(): FrickCacheScope | undefined {
+    if (!this.#session) {
+      return undefined;
+    }
+    return {
+      ...(this.#session.tenantId !== undefined ? { tenantId: this.#session.tenantId } : {}),
+      userId: this.#session.userId,
+    };
+  }
+
   #webSocketEndpoint(): string {
-    return this.#endpoint;
+    return stripSessionTokenQuery(this.#endpoint);
   }
 
   /** HTTP endpoint used by REST helpers such as `loadOlder`. */
@@ -899,6 +966,22 @@ function splitSubscriptionKey(id: string): [name: string, key: string] {
   return [id.slice(0, separator), id.slice(separator + 1)];
 }
 
+function sessionScope(session: FrickSession | undefined): string | undefined {
+  if (!session) {
+    return undefined;
+  }
+  return `${session.tenantId ?? ""}\x00${session.userId}`;
+}
+
 function randomId(): string {
   return globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2);
+}
+
+function stripSessionTokenQuery(endpoint: string): string {
+  const url = new URL(endpoint);
+  if (!url.searchParams.has("sessionToken")) {
+    return endpoint;
+  }
+  url.searchParams.delete("sessionToken");
+  return url.toString();
 }

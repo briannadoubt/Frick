@@ -61,6 +61,8 @@ with `senderId: "user-grace"` posted from Ada's session.
 - `assertCanAppend` checks `payload.senderId === principal.userId` for
   `MessageSent` and `payload.userId === principal.userId` for
   `ReceiptAdvanced`, producing `ownerMismatch` denials.
+- `TypingState` presence writes reject user spoofing when the row key or
+  value carries a user id that differs from the session principal.
 - `assertBlobOwnership` requires the upload's `ownerId` to match the
   principal's `userId`, denying with `ownerMismatch`.
 
@@ -85,15 +87,16 @@ conversation's `MessageStream`).
   produce typed `FrickDecision` denials surfaced as `auth.forbidden`
   envelopes with `details.reason ∈ { notMember, notAuthorizedForResource,
   ownerMismatch, unauthenticated }`.
-- The SyncGateway uses the same primitives for WebSocket subscribe/append
-  frames before opening a delta channel.
+- The SyncGateway uses the same primitives for WebSocket subscribe/append,
+  signal, and presence frames before opening a delta channel or accepting a
+  write. Foundation `TypingState` presence is gated by conversation
+  membership when the conversation exists locally.
 
 **Known gaps.**
 
-- Signal subscriptions go through `assertCanSignal`, which is a no-op today.
-  Any authenticated principal can subscribe to any signal name/key.
-- The framework's authz primitives only recognise `MessageStream` membership.
-  App-specific streams currently bypass membership checks; this is
+- The framework's built-in authz primitives only recognise foundation
+  membership shapes (`MessageStream`, conversation-keyed signals, and
+  `TypingState`). App-specific streams, signals, and presence types are
   documented as the policy-hook extension point in `authz.ts`.
 
 ---

@@ -127,8 +127,9 @@ export function useDevSignIn(): (userId: string, opts?: { deviceId?: string; rep
 }
 
 /**
- * Clear the session. The client's WebSocket reconnects without a bearer
- * token, which the server treats as anonymous (most routes return 401).
+ * Clear the session and local user-scoped runtime/cache state. The
+ * client's WebSocket reconnects without a bearer token, which the server
+ * treats as anonymous (most routes return 401).
  */
 export function useSignOut(): () => void {
   const client = useFrick();

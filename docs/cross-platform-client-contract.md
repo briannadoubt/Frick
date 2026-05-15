@@ -92,6 +92,8 @@ A client lists names it strictly *requires* in `clientCapabilities.required`. Th
 
 `HelloPayload` carries an optional `sessionToken`. Clients authenticate WebSocket sessions by sending that Hello token or by using an `Authorization: Bearer ...` header on the upgrade request. The server does not authenticate `sessionToken` values from the WebSocket URL query string.
 
+After the WebSocket upgrade, the server accepts only `Hello` and `Ping` until it has sent a compatible `HelloAck`. Any other pre-handshake frame is rejected with a structured `Nack` using `code: "sync.protocolError"` and `details.reason: "handshakeRequired"`; write frames rejected this way are not persisted.
+
 ## Sync Diagnostics
 
 Each client runtime exposes diagnostic fields covering the same observable state. The TypeScript runtime surfaces them on `SyncStatus`; Swift exposes `FrickSyncStatus` plus an async status stream; Android exposes `FrickSyncStatus` through a `StateFlow`.
@@ -121,6 +123,8 @@ Each cache persists a single-row table (or in-memory record) of:
 - `schemaVersion`
 - `schemaRevision`
 - `schemaHash`
+- `tenantId`
+- `userId`
 
 ### Compatibility Rules
 
@@ -131,6 +135,7 @@ On load (TS) or via `verifyCacheCompatibility()` (Swift / Android), the SDK comp
 | No cached metadata | (first run) | Stamp current schema, return empty state |
 | Cached id matches, hash matches | exact | Use cache as-is |
 | Cached id matches, revision ≥ minimum, hash differs | revision-compatible | Use cache; clients may surface a warning |
+| Cached session scope differs | session-scope-mismatch | Refuse to load; clear or partition the cache before reconnecting |
 | Cached id differs from current id | `schemaIdMismatch` | Throw typed incompatible-cache error |
 | Cached revision < `minimumClientRevision` | `cacheTooOld` | Throw typed incompatible-cache error |
 
@@ -165,6 +170,10 @@ Pending appends are preserved across compatible reloads. When an incompatible-ca
 ## Object Upserts Over the Sync Socket
 
 Object upserts flow over the sync WebSocket via `FrameKind.ObjectUpsert`. The server honors the schema's `mergePolicy`: `lastWriteWins` accepts any write and increments the version, `versionPrecondition` requires `expectedVersion` to match the on-disk row and Nacks with `storage.conflict` otherwise. Successful upserts reply with an `Ack` carrying the new version. TypeScript exposes `FrickClient.upsertObject`, Swift exposes `FrickSyncSocket.upsertObject`, and Android exposes `FrickSyncSocket.upsertObject`; each queues or buffers writes while disconnected and flushes on reconnect.
+
+## Presence Authorization
+
+Presence subscriptions and writes over the sync WebSocket require an authenticated, active principal and run through the same structured authz envelope path as streams, objects, and signals. Foundation `TypingState` rows use the key shape `conversationId:userId:deviceId`; when the conversation is known locally, the server enforces conversation membership, and any user id present in the key or value must match the session principal. Failures Nack with `auth.forbidden` and `details.reason` such as `notMember` or `ownerMismatch`.
 
 ## Versioning
 

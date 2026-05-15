@@ -34,6 +34,8 @@ async function flushIdb(): Promise<void> {
 }
 
 describe("IndexedDBFrickCache", () => {
+  const tenantAdaScope = { tenantId: "tenant-a", userId: "user-ada" };
+
   it("round-trips objects, stream events, cursors, and pending appends", async () => {
     const cache = await openIndexedDBFrickCache({ indexedDB: factory, dbName });
 
@@ -72,6 +74,21 @@ describe("IndexedDBFrickCache", () => {
     expect(state.pendingAppends).toHaveLength(1);
     expect(state.pendingAppends[0]?.requestId).toBe("req-1");
 
+    (reopened as { close(): void }).close();
+  });
+
+  it("persists and enforces authenticated session cache scope", async () => {
+    const cache = await openIndexedDBFrickCache({ indexedDB: factory, dbName });
+    cache.saveObject(foundationSchema, "User", "user-ada", { displayName: "Ada" }, 1, tenantAdaScope);
+
+    await flushIdb();
+    (cache as { close(): void }).close();
+
+    const reopened = await openIndexedDBFrickCache({ indexedDB: factory, dbName });
+    expect(reopened.load(foundationSchema, tenantAdaScope).objects).toHaveLength(1);
+    expect(() =>
+      reopened.load(foundationSchema, { tenantId: "tenant-b", userId: "user-grace" }),
+    ).toThrow("Cached session scope");
     (reopened as { close(): void }).close();
   });
 

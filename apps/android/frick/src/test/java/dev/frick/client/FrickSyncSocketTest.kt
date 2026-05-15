@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.Response
 import okhttp3.WebSocket
@@ -74,6 +75,7 @@ class FrickSyncSocketTest {
     }
 
     private fun newSocket(
+        baseUrl: String = "http://${server.hostName}:${server.port}",
         config: FrickSyncSocketConfig = FrickSyncSocketConfig(
             replicaId = "test-replica",
             initialBackoffMs = 25,
@@ -81,7 +83,6 @@ class FrickSyncSocketTest {
             helloAckTimeoutMs = 2_000,
         ),
     ): FrickSyncSocket {
-        val baseUrl = "http://${server.hostName}:${server.port}"
         return FrickSyncSocket(
             baseUrl = baseUrl,
             sessionTokenProvider = { "test-token" },
@@ -120,13 +121,17 @@ class FrickSyncSocketTest {
     @Test
     fun websocketHandshakeCarriesAuthorizationHeaderWithoutSessionTokenQuery() = runBlocking {
         enqueueWebSocketHandler()
-        val socket = newSocket()
+        val socket = newSocket(
+            baseUrl = "http://${server.hostName}:${server.port}?sessionToken=secret&transport=websocket",
+        )
         try {
             val request = server.takeRequest(2, TimeUnit.SECONDS)
                 ?: error("no websocket handshake request")
 
             assertEquals("Bearer test-token", request.headers["Authorization"])
             assertEquals(null, request.url.queryParameter("sessionToken"))
+            assertEquals("websocket", request.url.queryParameter("transport"))
+            assertEquals("/_frick/sync", request.url.encodedPath)
         } finally {
             socket.close()
         }
@@ -434,6 +439,7 @@ class FrickSyncSocketTest {
                                     "message" to "version mismatch",
                                     "requestId" to requestId,
                                     "retryable" to false,
+                                    "details" to mapOf("reason" to "version-precondition"),
                                 ),
                             ),
                         )
@@ -457,6 +463,7 @@ class FrickSyncSocketTest {
             }
             assertNotNull(ex)
             assertEquals(FrickErrorCodes.StorageConflict, ex!!.envelope?.code)
+            assertEquals(JsonPrimitive("version-precondition"), ex.envelope?.details?.get("reason"))
         } finally {
             socket.close()
         }

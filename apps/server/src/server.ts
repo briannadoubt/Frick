@@ -19,6 +19,7 @@ import {
   SessionExpiredError,
   assertBlobOwnership,
   assertCanAppend,
+  assertCanQuerySearch,
   assertCanReadBlob,
   assertCanReadInbox,
   assertCanReadSignal,
@@ -61,7 +62,12 @@ import {
   type FrickSearchIndexRegistry,
   type FrickSearchProjectInput,
 } from "./search/types.js";
-import { MESSAGES_SEARCH_INDEX_NAME, createMessagesSearchIndex } from "./search/messages-index.js";
+import { createMessagesSearchIndex } from "./search/messages-index.js";
+import {
+  isReservedSearchField,
+  searchSourceFromHit,
+  stripSearchSourceFields,
+} from "./search/source-fields.js";
 import type { StoredAccount } from "./storage/account-store.js";
 import type { StoredSession } from "./storage/session-store.js";
 import { TenantAlreadyExistsError } from "./storage/tenant-store.js";
@@ -1118,6 +1124,14 @@ export function createFrickServer(options: ServerOptions = {}) {
         url.searchParams.forEach((value, key) => {
           query[key] = value;
         });
+        assertCanSubscribe(
+          principal,
+          "projection",
+          name,
+          query.key,
+          tenantMembershipReader(store, principal.tenantId),
+          policyHooks,
+        );
         if (name === "conversation-inbox" && query.userId !== undefined) {
           assertCanReadInbox(
             principal,
@@ -1162,18 +1176,27 @@ export function createFrickServer(options: ServerOptions = {}) {
           }
           limit = Math.min(MAX_SEARCH_LIMIT, Math.floor(parsed));
         }
-        // Authz: tenant scoping happens at the adapter call; framework-owned
-        // indexes with narrower visibility are filtered before returning.
+        assertCanQuerySearch(
+          principal,
+          indexName,
+          tenantMembershipReader(store, principal.tenantId),
+          policyHooks,
+        );
+        // Authz: tenant scoping happens at the adapter call; source-level
+        // visibility is filtered below before any hit leaves the server.
         const result = store.searchAdapter.query(principal.tenantId, {
           index: indexName,
           q,
           ...(filter !== undefined ? { filter } : {}),
-          limit: indexName === MESSAGES_SEARCH_INDEX_NAME ? MAX_SEARCH_LIMIT : limit,
+          limit: principal.scope === "admin" ? limit : MAX_SEARCH_LIMIT,
         });
-        const authorizedResult =
-          indexName === MESSAGES_SEARCH_INDEX_NAME
-            ? filterMessagesSearchResultForPrincipal(result, principal, store)
-            : result;
+        const authorizedResult = filterSearchResultForPrincipal(
+          result,
+          def,
+          principal,
+          store,
+          policyHooks,
+        );
         sendJson(response, 200, {
           schemaHash: store.schema.hash,
           index: indexName,
@@ -1500,6 +1523,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         }
         if (parts[4] === "events") {
           sse.open(response, {
+            tenantId: principal.tenantId,
             stream,
             key,
             events,
@@ -3223,6 +3247,9 @@ function parseSearchFilter(value: unknown): Record<string, string | number> | un
   }
   const out: Record<string, string | number> = {};
   for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (isReservedSearchField(key)) {
+      throw new Error(`filter.${key} is reserved`);
+    }
     if (typeof raw !== "string" && typeof raw !== "number") {
       throw new Error(`filter.${key} must be a string or number`);
     }
@@ -3231,19 +3258,112 @@ function parseSearchFilter(value: unknown): Record<string, string | number> | un
   return out;
 }
 
-function filterMessagesSearchResultForPrincipal(
+function filterSearchResultForPrincipal(
   result: FrickSearchResult,
+  def: FrickSearchIndexDefinition,
   principal: Principal,
   store: FrickStore,
+  policyHooks?: readonly FrickPolicyHook[],
 ): FrickSearchResult {
+  if (principal.scope === "admin") {
+    const hits = result.hits.map(stripSearchSourceFields);
+    return { hits, total: result.total };
+  }
   const hits = result.hits.filter((hit) => {
-    const conversationId = hit.fields.conversationId;
-    return (
-      typeof conversationId === "string" &&
-      store.isRoomMember(principal.tenantId, conversationId, principal.userId)
-    );
-  });
+    switch (def.source.kind) {
+      case "object":
+        return isSearchObjectHitVisible(hit, def.source.type, principal, store);
+      case "stream":
+        return isSearchStreamHitVisible(hit, def.source.type, principal, store, policyHooks);
+      case "projection":
+        return isSearchProjectionHitVisible(hit, def.source.name, principal, store, policyHooks);
+      default:
+        return false;
+    }
+  }).map(stripSearchSourceFields);
   return { hits, total: hits.length };
+}
+
+function isSearchObjectHitVisible(
+  hit: FrickSearchResult["hits"][number],
+  type: string,
+  principal: Principal,
+  store: FrickStore,
+): boolean {
+  const source = searchSourceFromHit(hit);
+  const objectId =
+    source.kind === "object" && source.type === type && source.id ? source.id : hit.docId;
+  const object = store.readObject(principal.tenantId, type, objectId);
+  return (
+    object !== undefined &&
+    store.isObjectVisibleToUser(principal.tenantId, type, object, principal.userId)
+  );
+}
+
+function isSearchStreamHitVisible(
+  hit: FrickSearchResult["hits"][number],
+  stream: string,
+  principal: Principal,
+  store: FrickStore,
+  policyHooks?: readonly FrickPolicyHook[],
+): boolean {
+  const source = searchSourceFromHit(hit);
+  const streamId =
+    source.kind === "stream" && source.type === stream && source.id
+      ? source.id
+      : typeof hit.fields.conversationId === "string"
+        ? hit.fields.conversationId
+        : undefined;
+
+  if (!streamId) {
+    return false;
+  }
+
+  try {
+    assertCanSubscribe(
+      principal,
+      "stream",
+      stream,
+      streamId,
+      tenantMembershipReader(store, principal.tenantId),
+      policyHooks,
+    );
+    return true;
+  } catch (error) {
+    if (error instanceof AuthorizationError) return false;
+    throw error;
+  }
+}
+
+function isSearchProjectionHitVisible(
+  hit: FrickSearchResult["hits"][number],
+  projection: string,
+  principal: Principal,
+  store: FrickStore,
+  policyHooks?: readonly FrickPolicyHook[],
+): boolean {
+  const source = searchSourceFromHit(hit);
+  const key = source.kind === "projection" && source.type === projection ? source.id : undefined;
+  if (!key) {
+    return false;
+  }
+  if (!policyHooks || policyHooks.length === 0) {
+    return false;
+  }
+  try {
+    assertCanSubscribe(
+      principal,
+      "projection",
+      projection,
+      key,
+      tenantMembershipReader(store, principal.tenantId),
+      policyHooks,
+    );
+    return true;
+  } catch (error) {
+    if (error instanceof AuthorizationError) return false;
+    throw error;
+  }
 }
 
 /**

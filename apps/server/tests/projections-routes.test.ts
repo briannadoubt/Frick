@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createFrickServer } from "../src/server.js";
+import { deny, type FrickPolicyHook } from "../src/authz.js";
+import type { FrickProjection } from "../src/projections/registry.js";
 
 const ADMIN_TOKEN = "test-admin-token-1234567890ABCDEF1234567890ABCDEF";
 
@@ -64,6 +66,24 @@ describe("/projections HTTP routes", () => {
       `${app.httpUrl}/projections/conversation-inbox?userId=user-grace`,
       { headers: authHeaders(login.sessionToken) },
     );
+
+    expect(response.status).toBe(403);
+    const body = await response.json();
+    expect(body.error.details.reason).toBe("notAuthorizedForResource");
+  });
+
+  it("applies custom projection policy hooks before HTTP reads", async () => {
+    const denyPrivateProjection: FrickPolicyHook = (input) =>
+      input.action === "projection.read" && input.resource.name === "private-projection"
+        ? deny("notAuthorizedForResource", "Projection is private")
+        : null;
+    app = await startServer({ policyHooks: [denyPrivateProjection] });
+    app.store.projections.register(privateProjection);
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    const response = await fetch(`${app.httpUrl}/projections/private-projection`, {
+      headers: authHeaders(login.sessionToken),
+    });
 
     expect(response.status).toBe(403);
     const body = await response.json();
@@ -190,7 +210,11 @@ describe("/projections HTTP routes", () => {
 });
 
 async function startServer(
-  overrides: { adminToken?: string; inspectionEnabled?: boolean } = {},
+  overrides: {
+    adminToken?: string;
+    inspectionEnabled?: boolean;
+    policyHooks?: readonly FrickPolicyHook[];
+  } = {},
 ) {
   const config: Record<string, unknown> = {};
   if (overrides.adminToken !== undefined) config.adminToken = overrides.adminToken;
@@ -200,6 +224,7 @@ async function startServer(
     port: 0,
     dbPath: ":memory:",
     config,
+    ...(overrides.policyHooks !== undefined ? { policyHooks: overrides.policyHooks } : {}),
   });
   await server.listen();
   const address = server.server.address();
@@ -229,3 +254,14 @@ async function devLogin(
 function authHeaders(sessionToken: string): Record<string, string> {
   return { authorization: `Bearer ${sessionToken}` };
 }
+
+const privateProjection: FrickProjection = {
+  name: "private-projection",
+  sources: [{ kind: "stream", type: "MessageStream" }],
+  handler: {
+    apply() {},
+    read() {
+      return [{ id: "private-row" }];
+    },
+  },
+};

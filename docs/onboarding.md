@@ -21,7 +21,7 @@ The primitives the schema defines are:
 - **Projections** — server-computed derived views over objects and streams; clients subscribe to the projection and receive deltas.
 - **Jobs** and **Blobs** — durable background work and content-addressed binary storage, both with the same schema-driven shape.
 
-Two properties tie it together. First, every artifact (server tables, client cache, generated DTOs, fixtures) is derived from the same schema AST, so drift is structurally impossible — `pnpm verify:generated` will fail CI if anything is regenerated. Second, the schema carries an identity (`schemaId`, `protocolVersion`, `schemaRevision`, `hash`) that clients send on every connection, so the server can reject incompatible clients before a single bad write hits storage.
+Two properties tie it together. First, protocol artifacts (server tables, client cache, generated DTOs, fixtures) are derived from the same schema AST, and tracked design-token outputs are generated from the canonical design definition. `pnpm verify:generated` regenerates both families and fails CI if anything moved. Second, the schema carries an identity (`schemaId`, `protocolVersion`, `schemaRevision`, `hash`) that clients send on every connection, so the server can reject incompatible clients before a single bad write hits storage.
 
 ## 15-minute tutorial
 
@@ -80,7 +80,7 @@ Most day-to-day work is one of these. Each links to the canonical reference.
 ## Troubleshooting
 
 - **"Schema hash mismatch" on client connect.** Your client cache was built against a different schema. Either regenerate with `pnpm schema:generate` (development), or bump `schemaRevision` so the client knows to discard and re-snapshot.
-- **`pnpm verify:generated` fails.** Generated artifacts and the schema have drifted. Run `pnpm schema:generate && pnpm fixtures:generate` and commit the regenerated files.
+- **`pnpm verify:generated` fails.** Generated artifacts have drifted. Run `pnpm schema:generate && pnpm fixtures:generate && pnpm design:generate` and commit the regenerated tracked files.
 - **`frick migrate status` shows pending migrations after a pull.** Run `pnpm cli migrate up`. In production this requires `--confirm-prod`; see [`docs/operations.md`](./operations.md).
 - **"Why can't I see this row I just wrote?"** Tenant boundary. The server scopes objects and streams by tenant id; a subscription with a different tenant context will never see the write. Check the connection's tenant header and verify the row's `tenantId` column.
 - **401 on `/_frick/inspect/*`.** Inspection routes require auth. In development, pass a normal session bearer from `/auth/dev-login`; in production, enable inspection deliberately and pass `FRICK_ADMIN_TOKEN` via `Authorization: Bearer …`.

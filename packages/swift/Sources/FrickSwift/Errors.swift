@@ -78,29 +78,51 @@ public struct FrickCacheMetadata: Codable, Equatable, Sendable {
     public let schemaVersion: String
     public let schemaRevision: Int
     public let schemaHash: String
+    public let tenantId: String?
+    public let userId: String?
 
-    public init(schemaId: String, schemaVersion: String, schemaRevision: Int, schemaHash: String) {
+    public init(
+        schemaId: String,
+        schemaVersion: String,
+        schemaRevision: Int,
+        schemaHash: String,
+        tenantId: String? = nil,
+        userId: String? = nil
+    ) {
         self.schemaId = schemaId
         self.schemaVersion = schemaVersion
         self.schemaRevision = schemaRevision
         self.schemaHash = schemaHash
+        self.tenantId = tenantId
+        self.userId = userId
     }
 }
 
 public extension FrickCacheMetadata {
     static var currentSchema: FrickCacheMetadata {
+        currentSchema()
+    }
+
+    static func currentSchema(tenantId: String? = nil, userId: String? = nil) -> FrickCacheMetadata {
         FrickCacheMetadata(
             schemaId: FrickSchema.schemaId,
             schemaVersion: FrickSchema.schemaVersion,
             schemaRevision: FrickSchema.schemaRevision,
-            schemaHash: FrickSchema.schemaHash
+            schemaHash: FrickSchema.schemaHash,
+            tenantId: tenantId,
+            userId: userId
         )
+    }
+
+    static func currentSchema(session: FrickSession?) -> FrickCacheMetadata {
+        currentSchema(tenantId: session?.tenantId, userId: session?.userId)
     }
 }
 
 public enum FrickCacheIncompatibilityReason: String, Codable, Equatable, Sendable {
     case schemaIdMismatch
     case cacheTooOld
+    case sessionScopeMismatch
 }
 
 public struct FrickCacheIncompatibleError: Error, Equatable, Sendable {
@@ -136,6 +158,12 @@ public enum FrickCacheCompatibility {
         }
         if cached.schemaRevision < minimumClientRevision {
             return .cacheTooOld
+        }
+        if current.tenantId != nil, cached.tenantId != current.tenantId {
+            return .sessionScopeMismatch
+        }
+        if current.userId != nil, cached.userId != current.userId {
+            return .sessionScopeMismatch
         }
         return nil
     }

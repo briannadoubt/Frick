@@ -4,13 +4,11 @@
  * Closes the third leg of the push trio next to APNs and FCM. The
  * adapter signs a per-endpoint VAPID JWT (ES256 over the credential's
  * private key), POSTs an empty body to the push subscription's
- * `endpoint`, and asks the browser-side Service Worker to fetch the
- * full payload from the server via the existing devtools / inspect
- * surface. (Full payload encryption per RFC 8291 is a non-trivial
- * follow-up and is intentionally not implemented here — for the first
- * iteration we route the consumer to the in-app feed for the actual
- * notification body, which is simpler and avoids shipping ECDH
- * primitives.)
+ * `endpoint`, and lets the browser-side Service Worker show a generic
+ * wake-up notification. Full payload encryption per RFC 8291 is a
+ * non-trivial follow-up and is intentionally not implemented here; the
+ * first iteration avoids sending title/body plaintext through the Web
+ * Push payload and routes users back to the authenticated app feed.
  *
  * The push registration's `token` field is a JSON-encoded string of the
  * browser's `PushSubscription` (`{ endpoint, keys: { p256dh, auth } }`)

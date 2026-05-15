@@ -4,9 +4,10 @@ Thanks for the PR! A few notes before you hit submit:
     so it slots cleanly into the CHANGELOG.
   - Run `pnpm test` and `pnpm typecheck` locally. CI runs both plus the
     native test suites on every PR.
-  - If you changed the foundation schema or any DTOs, run
-    `pnpm schema:generate` and `pnpm fixtures:generate` and commit the
-    regenerated artifacts. `pnpm verify:generated` enforces this in CI.
+  - If you changed the foundation schema, DTOs, fixtures, or design tokens,
+    run the matching generator (`pnpm schema:generate`,
+    `pnpm fixtures:generate`, or `pnpm design:generate`) and commit the
+    regenerated tracked artifacts. `pnpm verify:generated` enforces this in CI.
 -->
 
 ## Summary
@@ -31,7 +32,7 @@ Thanks for the PR! A few notes before you hit submit:
 <!-- How did you verify this? -->
 
 - [ ] `pnpm test` and `pnpm typecheck` pass locally
-- [ ] `pnpm verify:generated` passes (if schema or DTOs changed)
+- [ ] `pnpm verify:generated` passes (if schema, DTOs, fixtures, or design tokens changed)
 - [ ] `pnpm e2e:smoke` passes (if server behavior changed)
 - [ ] `pnpm swift:test` passes (if `packages/swift` or schema changed)
 - [ ] `pnpm android:build` passes (if `apps/android/frick` or schema changed)

@@ -13,15 +13,26 @@ import {
   FrickClient,
   FrickClientLimitError,
   FrickObjectConflictError,
+  FrickUserStateClearedError,
   MemoryFrickCache,
 } from "../src/index.js";
 
 const HELLO_ACK_FRAME_KIND = (FrameKind as typeof FrameKind & { HelloAck?: number }).HelloAck ?? 18;
+const tenantAdaSession = {
+  schemaHash: foundationSchema.hash,
+  sessionToken: "session-token-a",
+  tenantId: "tenant-a",
+  userId: "user-ada",
+  deviceId: "device-a",
+  replicaId: "replica-a",
+  expiresAt: "2026-05-09T13:00:00.000Z",
+};
+const tenantAdaScope = { tenantId: "tenant-a", userId: "user-ada" };
 
 describe("foundation runtime", () => {
   it("hydrates objects and stream events from local cache", () => {
     const cache = new MemoryFrickCache();
-    cache.saveObject(foundationSchema, "User", "user-ada", { displayName: "Ada Lovelace" }, 1);
+    cache.saveObject(foundationSchema, "User", "user-ada", { displayName: "Ada Lovelace" }, 1, tenantAdaScope);
     cache.saveStreamEvent(foundationSchema, {
       stream: "MessageStream",
       streamId: "conversation-general",
@@ -34,12 +45,96 @@ describe("foundation runtime", () => {
         body: "cached",
         createdAt: "2026-05-09T00:00:00.000Z",
       },
-    });
+    }, tenantAdaScope);
 
-    const client = new FrickClient({ endpoint: "ws://unused", schema: foundationSchema, cache });
+    const client = new FrickClient({
+      endpoint: "ws://unused",
+      schema: foundationSchema,
+      cache,
+      session: tenantAdaSession,
+    });
 
     expect(client.object("User", "user-ada")?.displayName).toBe("Ada Lovelace");
     expect(client.stream("MessageStream", "conversation-general").value).toHaveLength(1);
+  });
+
+  it("clears cached and pending user state when the session scope changes", async () => {
+    const cache = new MemoryFrickCache();
+    cache.saveObject(foundationSchema, "User", "user-ada", { displayName: "Ada Lovelace" }, 1, tenantAdaScope);
+    cache.saveStreamEvent(foundationSchema, {
+      stream: "MessageStream",
+      streamId: "conversation-general",
+      sequence: 1,
+      eventId: "event-1",
+      event: "MessageSent",
+      payload: {
+        messageId: "message-1",
+        senderId: "user-ada",
+        body: "cached",
+        createdAt: "2026-05-09T00:00:00.000Z",
+      },
+    }, tenantAdaScope);
+    cache.savePendingAppend(foundationSchema, {
+      requestId: "pending-1",
+      stream: "MessageStream",
+      key: "conversation-general",
+      event: "MessageSent",
+      payload: { body: "queued" },
+    }, tenantAdaScope);
+    const client = new FrickClient({
+      endpoint: "ws://unused",
+      schema: foundationSchema,
+      cache,
+      session: tenantAdaSession,
+    });
+    const users = client.objects("User");
+    const stream = client.stream("MessageStream", "conversation-general");
+    const pendingAppend = client
+      .append(
+        "MessageStream",
+        "conversation-general",
+        "MessageSent",
+        { body: "optimistic" },
+        { optimistic: { body: "optimistic" } },
+      )
+      .then(
+        () => undefined,
+        (error) => error,
+      );
+    const pendingUpsert = client
+      .upsertObject("User", "user-pending", { displayName: "Pending" }, undefined, { optimistic: true })
+      .then(
+        () => undefined,
+        (error) => error,
+      );
+
+    expect(users.value.length).toBeGreaterThan(0);
+    expect(stream.value.length).toBeGreaterThan(0);
+    expect(client.syncStatus.value.pendingMutations).toBeGreaterThan(0);
+
+    client.setSession({
+      schemaHash: foundationSchema.hash,
+      sessionToken: "session-token-b",
+      tenantId: "tenant-b",
+      userId: "user-grace",
+      deviceId: "device-b",
+      replicaId: "replica-b",
+      expiresAt: "2026-05-09T13:00:00.000Z",
+    });
+
+    expect(users.value).toEqual([]);
+    expect(stream.value).toEqual([]);
+    expect(client.object("User", "user-ada")).toBeUndefined();
+    expect(client.syncStatus.value.pendingMutations).toBe(0);
+    expect(client.syncStatus.value.cursors).toEqual({});
+    expect(cache.load(foundationSchema)).toEqual({
+      objects: [],
+      streamEvents: [],
+      cursors: {},
+      pendingAppends: [],
+    });
+    await expect(pendingAppend).resolves.toBeInstanceOf(FrickUserStateClearedError);
+    await expect(pendingUpsert).resolves.toBeInstanceOf(FrickUserStateClearedError);
   });
 
   it("queues appends while disconnected and tracks pending count", async () => {
@@ -143,7 +238,7 @@ describe("foundation runtime", () => {
   it("sends the session token in hello without putting it in websocket URLs", () => {
     const socket = TestWebSocket.prepare();
     const client = new FrickClient({
-      endpoint: "ws://test/_frick/sync?transport=websocket",
+      endpoint: "ws://test/_frick/sync?sessionToken=secret&transport=websocket",
       schema: foundationSchema,
       session: {
         schemaHash: foundationSchema.hash,
@@ -633,6 +728,24 @@ describe("memory cache schema compatibility", () => {
 
     expect(state.metadata?.schemaHash).toBe("old-but-compatible-hash");
     expect(state.objects).toHaveLength(1);
+  });
+
+  it("throws FrickCacheIncompatibleError when cached session scope differs", () => {
+    const cache = new MemoryFrickCache();
+    cache.saveObject(foundationSchema, "User", "user-ada", { displayName: "Ada" }, 1, tenantAdaScope);
+
+    expect(() =>
+      cache.load(foundationSchema, { tenantId: "tenant-b", userId: "user-grace" }),
+    ).toThrowError(FrickCacheIncompatibleError);
+    try {
+      cache.load(foundationSchema, { tenantId: "tenant-b", userId: "user-grace" });
+    } catch (error) {
+      if (!(error instanceof FrickCacheIncompatibleError)) {
+        throw error;
+      }
+      expect(error.reason).toBe("sessionScopeMismatch");
+      expect(error.pendingAppendCount).toBe(0);
+    }
   });
 
   it("clears all state including metadata", () => {

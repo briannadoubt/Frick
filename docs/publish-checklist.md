@@ -18,6 +18,8 @@ Companion docs:
 - [ ] `pnpm verify:release` exits 0
   - Emits one JSON Lines record per gate (test, typecheck,
     verify:generated, swift:test, android:build) plus a summary
+  - `verify:generated` regenerates schema DTOs, protocol fixtures, and
+    design-token outputs before checking for drift
   - Use `pnpm verify:release --skip-mobile` only when the host lacks
     Swift / Android toolchains (e.g. Linux CI)
 - [ ] `pnpm frick verify` exits 0 (re-runs the generated-artifact gate
@@ -52,6 +54,7 @@ Companion docs:
   `framework-vX.Y.Z` tag; there is no separate Swift registry push.
 - [ ] Android: bump `frickVersion` in `apps/android/frick/build.gradle.kts`,
   commit, push tag `android-vX.Y.Z`. The `Publish Android SDK` workflow
+  verifies generated artifacts, runs Android tests/lint/debug builds, then
   publishes the AAR to GitHub Packages at
   `dev.frick:frick-client:X.Y.Z`. Local dry-run:
   `cd apps/android && ./gradlew :frick:publishToMavenLocal`.

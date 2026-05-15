@@ -23,6 +23,12 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -144,14 +150,30 @@ data class FrickSyncSocketConfig(
 )
 
 internal fun buildSyncUrl(baseUrl: String): String {
-    val trimmed = baseUrl.trimEnd('/')
-    val withScheme = when {
-        trimmed.startsWith("ws://") || trimmed.startsWith("wss://") -> trimmed
-        trimmed.startsWith("https://") -> "wss://" + trimmed.removePrefix("https://")
-        trimmed.startsWith("http://") -> "ws://" + trimmed.removePrefix("http://")
-        else -> "ws://$trimmed"
+    val trimmed = baseUrl.trim()
+    val httpUrlText = when {
+        trimmed.startsWith("wss://") -> "https://" + trimmed.removePrefix("wss://")
+        trimmed.startsWith("ws://") -> "http://" + trimmed.removePrefix("ws://")
+        trimmed.startsWith("https://") || trimmed.startsWith("http://") -> trimmed
+        else -> "http://$trimmed"
     }
-    return "$withScheme/_frick/sync"
+    val parsed = httpUrlText.toHttpUrl()
+    val builder = parsed.newBuilder()
+        .removeAllQueryParameters("sessionToken")
+
+    val encodedPath = parsed.encodedPath.trimEnd('/')
+    if (encodedPath.isEmpty()) {
+        builder.encodedPath("/_frick/sync")
+    } else if (!encodedPath.endsWith("/_frick/sync")) {
+        builder.encodedPath("$encodedPath/_frick/sync")
+    }
+
+    val httpUrl = builder.build().toString()
+    return when {
+        httpUrl.startsWith("https://") -> "wss://" + httpUrl.removePrefix("https://")
+        httpUrl.startsWith("http://") -> "ws://" + httpUrl.removePrefix("http://")
+        else -> httpUrl
+    }
 }
 
 // ----- msgpack encode/decode helpers -----
@@ -818,13 +840,32 @@ class FrickSyncSocketException(message: String, cause: Throwable? = null) : IOEx
  */
 internal fun decodeErrorEnvelope(error: Map<String, Any?>?, outer: Map<String, Any?>): FrickErrorEnvelope {
     val source = error ?: outer
+    val details = (source.mapField("details") ?: outer.mapField("details"))
+        ?.mapValues { (_, value) -> value.toJsonElement() }
     return FrickErrorEnvelope(
         code = source.stringField("code") ?: outer.stringField("code") ?: "sync.protocolError",
         message = source.stringField("message") ?: outer.stringField("message") ?: "Sync nack",
         requestId = source.stringField("requestId") ?: outer.stringField("requestId") ?: "",
         retryable = (source["retryable"] as? Boolean) ?: false,
-        details = null,
+        details = details,
         schemaHash = source.stringField("schemaHash"),
         schemaRevision = source.intField("schemaRevision"),
     )
 }
+
+private fun Any?.toJsonElement(): JsonElement =
+    when (this) {
+        null -> JsonNull
+        is JsonElement -> this
+        is Boolean -> JsonPrimitive(this)
+        is Number -> JsonPrimitive(this)
+        is String -> JsonPrimitive(this)
+        is Map<*, *> -> JsonObject(
+            entries.associate { (key, value) ->
+                key.toString() to value.toJsonElement()
+            },
+        )
+        is Iterable<*> -> JsonArray(map { value -> value.toJsonElement() })
+        is Array<*> -> JsonArray(map { value -> value.toJsonElement() })
+        else -> JsonPrimitive(toString())
+    }

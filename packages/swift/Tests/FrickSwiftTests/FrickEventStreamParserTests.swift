@@ -1,4 +1,5 @@
 import XCTest
+import SQLite3
 @testable import FrickSwift
 
 final class FrickEventStreamParserTests: XCTestCase {
@@ -26,7 +27,10 @@ final class FrickEventStreamParserTests: XCTestCase {
 
     func testDevLoginPostsExpectedJsonAndStoresReturnedSession() async throws {
         FrickStreamingURLProtocol.reset()
-        FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-ada", token: "token-ada"), for: "/auth/dev-login")
+        FrickStreamingURLProtocol.enqueue(
+            devLoginResponse(userId: "user-ada", token: "token-ada", tenantId: "tenant-a"),
+            for: "/auth/dev-login"
+        )
         let client = try makeTestClient()
 
         let session = try await client.devLogin(
@@ -37,6 +41,7 @@ final class FrickEventStreamParserTests: XCTestCase {
         )
 
         XCTAssertEqual(session.sessionToken, "token-ada")
+        XCTAssertEqual(session.tenantId, "tenant-a")
         XCTAssertEqual(session.userId, "user-ada")
         XCTAssertEqual(client.currentSession?.sessionToken, "token-ada")
         let request = try XCTUnwrap(FrickStreamingURLProtocol.recordedRequests.first)
@@ -896,7 +901,7 @@ final class FrickEventStreamParserTests: XCTestCase {
         let storage = try FrickSQLiteStorage(path: ":memory:")
         XCTAssertNil(try storage.loadCacheMetadata())
 
-        let metadata = FrickCacheMetadata.currentSchema
+        let metadata = FrickCacheMetadata.currentSchema(tenantId: "tenant-a", userId: "user-ada")
         try storage.saveCacheMetadata(metadata)
         XCTAssertEqual(try storage.loadCacheMetadata(), metadata)
 
@@ -904,10 +909,48 @@ final class FrickEventStreamParserTests: XCTestCase {
             schemaId: metadata.schemaId,
             schemaVersion: "0.2.0",
             schemaRevision: 2,
-            schemaHash: "rolling-upgrade-hash"
+            schemaHash: "rolling-upgrade-hash",
+            tenantId: "tenant-b",
+            userId: "user-grace"
         )
         try storage.saveCacheMetadata(next)
         XCTAssertEqual(try storage.loadCacheMetadata(), next)
+    }
+
+    func testSQLiteStorageMigratesLegacyCacheMetadataWithoutClearingIt() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "frick-swift-migration-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appending(path: "frick.sqlite").path
+        try createLegacyCacheMetadataDatabase(path: path)
+
+        let storage = try FrickSQLiteStorage(path: path)
+
+        let metadata = try XCTUnwrap(storage.loadCacheMetadata())
+        XCTAssertEqual(metadata.schemaId, FrickSchema.schemaId)
+        XCTAssertNil(metadata.tenantId)
+        XCTAssertNil(metadata.userId)
+
+        try storage.saveCacheMetadata(.currentSchema(tenantId: "tenant-a", userId: "user-ada"))
+        XCTAssertEqual(try storage.loadCacheMetadata()?.tenantId, "tenant-a")
+        XCTAssertEqual(try storage.loadCacheMetadata()?.userId, "user-ada")
+    }
+
+    func testVerifyCacheCompatibilityStampsCurrentSessionScopeOnFirstRun() async throws {
+        FrickStreamingURLProtocol.reset()
+        FrickStreamingURLProtocol.enqueue(
+            devLoginResponse(userId: "user-ada", token: "token-ada", tenantId: "tenant-a"),
+            for: "/auth/dev-login"
+        )
+        let storage = try FrickSQLiteStorage(path: ":memory:")
+        let client = try makeTestClient(storage: storage)
+        _ = try await client.devLogin(userId: "user-ada")
+
+        let stamped = try client.verifyCacheCompatibility()
+
+        XCTAssertEqual(stamped.tenantId, "tenant-a")
+        XCTAssertEqual(stamped.userId, "user-ada")
+        XCTAssertEqual(try storage.loadCacheMetadata(), stamped)
     }
 
     func testClearCacheRemovesAllFrameworkState() throws {
@@ -982,6 +1025,52 @@ final class FrickEventStreamParserTests: XCTestCase {
         } catch let error as FrickCacheIncompatibleError {
             XCTAssertEqual(error.reason, .cacheTooOld)
             XCTAssertEqual(error.minimumClientRevision, 5)
+        }
+    }
+
+    func testVerifyCacheCompatibilityThrowsWhenSessionScopeDiffers() async throws {
+        FrickStreamingURLProtocol.reset()
+        FrickStreamingURLProtocol.enqueue(
+            devLoginResponse(userId: "user-grace", token: "token-grace", tenantId: "tenant-b"),
+            for: "/auth/dev-login"
+        )
+        let storage = try FrickSQLiteStorage(path: ":memory:")
+        try storage.saveCacheMetadata(.currentSchema(tenantId: "tenant-a", userId: "user-ada"))
+        try storage.appendPendingAppend(PendingAppend(requestId: "request-1", body: Data("x".utf8)))
+        let client = try makeTestClient(storage: storage)
+        _ = try await client.devLogin(userId: "user-grace")
+
+        do {
+            _ = try client.verifyCacheCompatibility()
+            XCTFail("expected FrickCacheIncompatibleError")
+        } catch let error as FrickCacheIncompatibleError {
+            XCTAssertEqual(error.reason, .sessionScopeMismatch)
+            XCTAssertEqual(error.cachedMetadata.tenantId, "tenant-a")
+            XCTAssertEqual(error.cachedMetadata.userId, "user-ada")
+            XCTAssertEqual(error.currentMetadata.tenantId, "tenant-b")
+            XCTAssertEqual(error.currentMetadata.userId, "user-grace")
+            XCTAssertEqual(error.pendingAppendCount, 1)
+        }
+    }
+
+    func testFetchMessagesRejectsCachedEventsWhenSessionScopeDiffers() async throws {
+        FrickStreamingURLProtocol.reset()
+        FrickStreamingURLProtocol.enqueue(
+            devLoginResponse(userId: "user-grace", token: "token-grace", tenantId: "tenant-b"),
+            for: "/auth/dev-login"
+        )
+        FrickStreamingURLProtocol.enqueue("", status: 500, for: "/streams/MessageStream/conversation-general")
+        let storage = try FrickSQLiteStorage(path: ":memory:")
+        try storage.saveCacheMetadata(.currentSchema(tenantId: "tenant-a", userId: "user-ada"))
+        try storage.saveStreamEvent(streamEvent(sequence: 1, eventId: "event-1", body: "cached for ada"))
+        let client = try makeTestClient(storage: storage)
+        _ = try await client.devLogin(userId: "user-grace")
+
+        do {
+            _ = try await client.fetchMessages()
+            XCTFail("expected FrickCacheIncompatibleError")
+        } catch let error as FrickCacheIncompatibleError {
+            XCTAssertEqual(error.reason, .sessionScopeMismatch)
         }
     }
 
@@ -1226,30 +1315,73 @@ private struct StreamEventsResponsePayload: Encodable {
     let data: [FrickStreamEvent]
 }
 
-private func makeTestClient(requestIdFactory: @escaping @Sendable () -> String = { UUID().uuidString }) throws -> FrickClient {
+private func makeTestClient(
+    storage: FrickStorage? = nil,
+    requestIdFactory: @escaping @Sendable () -> String = { UUID().uuidString }
+) throws -> FrickClient {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [FrickStreamingURLProtocol.self]
     let session = URLSession(configuration: configuration)
+    let resolvedStorage: FrickStorage
+    if let storage {
+        resolvedStorage = storage
+    } else {
+        resolvedStorage = try FrickSQLiteStorage(path: ":memory:")
+    }
     return FrickClient(
         baseURL: URL(string: "http://frick.test")!,
         session: session,
         streamingSession: session,
-        storage: try FrickSQLiteStorage(path: ":memory:"),
+        storage: resolvedStorage,
         requestIdFactory: requestIdFactory
     )
 }
 
-private func devLoginResponse(userId: String, token: String) -> String {
-    """
-    {
-      "schemaHash": "\(FrickSchema.schemaHash)",
-      "sessionToken": "\(token)",
-      "userId": "\(userId)",
-      "deviceId": "device-\(userId)",
-      "replicaId": "replica-\(userId)",
-      "expiresAt": "2026-05-09T12:00:00.000Z"
+private func devLoginResponse(userId: String, token: String, tenantId: String? = nil) -> String {
+    var fields = [
+        #""schemaHash": "\#(FrickSchema.schemaHash)""#,
+        #""sessionToken": "\#(token)""#,
+        #""userId": "\#(userId)""#,
+        #""deviceId": "device-\#(userId)""#,
+        #""replicaId": "replica-\#(userId)""#,
+        #""expiresAt": "2026-05-09T12:00:00.000Z""#,
+    ]
+    if let tenantId {
+        fields.insert(#""tenantId": "\#(tenantId)""#, at: 2)
     }
+    return "{\n" + fields.map { "  \($0)" }.joined(separator: ",\n") + "\n}"
+}
+
+private func createLegacyCacheMetadataDatabase(path: String) throws {
+    var database: OpaquePointer?
+    let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
+    guard sqlite3_open_v2(path, &database, flags, nil) == SQLITE_OK, let database else {
+        throw TestSQLiteError.open(database.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown sqlite error")
+    }
+    defer { sqlite3_close(database) }
+
+    let sql = """
+    CREATE TABLE frick_cache_metadata (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      schema_id TEXT NOT NULL,
+      schema_version TEXT NOT NULL,
+      schema_revision INTEGER NOT NULL,
+      schema_hash TEXT NOT NULL
+    );
+    INSERT INTO frick_cache_metadata (id, schema_id, schema_version, schema_revision, schema_hash)
+    VALUES (1, '\(FrickSchema.schemaId)', '\(FrickSchema.schemaVersion)', \(FrickSchema.schemaRevision), '\(FrickSchema.schemaHash)');
     """
+    var error: UnsafeMutablePointer<CChar>?
+    guard sqlite3_exec(database, sql, nil, nil, &error) == SQLITE_OK else {
+        let message = error.map { String(cString: $0) } ?? "unknown sqlite error"
+        sqlite3_free(error)
+        throw TestSQLiteError.exec(message)
+    }
+}
+
+private enum TestSQLiteError: Error {
+    case open(String)
+    case exec(String)
 }
 
 private func authResponse(userId: String, token: String, displayName: String, handle: String) -> String {

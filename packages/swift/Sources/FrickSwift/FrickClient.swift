@@ -40,6 +40,7 @@ public struct StreamEventsResponse: Decodable {
 public struct FrickSession: Codable, Equatable, Sendable {
     public let schemaHash: String?
     public let sessionToken: String
+    public let tenantId: String?
     public let userId: String
     public let displayName: String?
     public let handle: String?
@@ -50,6 +51,7 @@ public struct FrickSession: Codable, Equatable, Sendable {
     public init(
         schemaHash: String?,
         sessionToken: String,
+        tenantId: String? = nil,
         userId: String,
         displayName: String? = nil,
         handle: String? = nil,
@@ -59,6 +61,7 @@ public struct FrickSession: Codable, Equatable, Sendable {
     ) {
         self.schemaHash = schemaHash
         self.sessionToken = sessionToken
+        self.tenantId = tenantId
         self.userId = userId
         self.displayName = displayName
         self.handle = handle
@@ -459,9 +462,13 @@ public final class FrickSQLiteStorage: FrickStorage, @unchecked Sendable {
               schema_id TEXT NOT NULL,
               schema_version TEXT NOT NULL,
               schema_revision INTEGER NOT NULL,
-              schema_hash TEXT NOT NULL
+              schema_hash TEXT NOT NULL,
+              tenant_id TEXT,
+              user_id TEXT
             );
             """)
+        try ensureColumnExists(table: "frick_cache_metadata", column: "tenant_id", definition: "tenant_id TEXT")
+        try ensureColumnExists(table: "frick_cache_metadata", column: "user_id", definition: "user_id TEXT")
     }
 
     deinit {
@@ -573,7 +580,12 @@ public final class FrickSQLiteStorage: FrickStorage, @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         let rows = try query(
-            "SELECT schema_id, schema_version, schema_revision, schema_hash FROM frick_cache_metadata WHERE id = 1 LIMIT 1",
+            """
+            SELECT schema_id, schema_version, schema_revision, schema_hash, tenant_id, user_id
+            FROM frick_cache_metadata
+            WHERE id = 1
+            LIMIT 1
+            """,
             bindings: []
         )
         guard let row = rows.first,
@@ -587,7 +599,9 @@ public final class FrickSQLiteStorage: FrickStorage, @unchecked Sendable {
             schemaId: schemaId,
             schemaVersion: schemaVersion,
             schemaRevision: schemaRevision,
-            schemaHash: schemaHash
+            schemaHash: schemaHash,
+            tenantId: row[4].text,
+            userId: row[5].text
         )
     }
 
@@ -596,19 +610,23 @@ public final class FrickSQLiteStorage: FrickStorage, @unchecked Sendable {
         defer { lock.unlock() }
         try run(
             """
-            INSERT INTO frick_cache_metadata (id, schema_id, schema_version, schema_revision, schema_hash)
-            VALUES (1, ?, ?, ?, ?)
+            INSERT INTO frick_cache_metadata (id, schema_id, schema_version, schema_revision, schema_hash, tenant_id, user_id)
+            VALUES (1, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               schema_id = excluded.schema_id,
               schema_version = excluded.schema_version,
               schema_revision = excluded.schema_revision,
-              schema_hash = excluded.schema_hash
+              schema_hash = excluded.schema_hash,
+              tenant_id = excluded.tenant_id,
+              user_id = excluded.user_id
             """,
             bindings: [
                 .text(metadata.schemaId),
                 .text(metadata.schemaVersion),
                 .int(metadata.schemaRevision),
                 .text(metadata.schemaHash),
+                metadata.tenantId.map(SQLiteBinding.text) ?? .null,
+                metadata.userId.map(SQLiteBinding.text) ?? .null,
             ]
         )
     }
@@ -638,6 +656,16 @@ public final class FrickSQLiteStorage: FrickStorage, @unchecked Sendable {
             let message = error.map { String(cString: $0) } ?? "unknown sqlite error"
             sqlite3_free(error)
             throw SQLiteStorageError.exec(message)
+        }
+    }
+
+    private func ensureColumnExists(table: String, column: String, definition: String) throws {
+        let rows = try query("PRAGMA table_info(\(table))", bindings: [])
+        let exists = rows.contains { row in
+            row.count > 1 && row[1].text == column
+        }
+        if !exists {
+            try run("ALTER TABLE \(table) ADD COLUMN \(definition)", bindings: [])
         }
     }
 
@@ -706,6 +734,8 @@ public final class FrickSQLiteStorage: FrickStorage, @unchecked Sendable {
                 }
             case let .int(value):
                 result = sqlite3_bind_int64(statement, sqliteIndex, sqlite3_int64(value))
+            case .null:
+                result = sqlite3_bind_null(statement, sqliteIndex)
             }
             guard result == SQLITE_OK else {
                 throw SQLiteStorageError.bind(lastErrorMessage())
@@ -730,6 +760,7 @@ private enum SQLiteBinding {
     case text(String)
     case data(Data)
     case int(Int)
+    case null
 }
 
 private enum SQLiteValue {
@@ -916,26 +947,27 @@ public final class FrickClient: Sendable {
 
     @discardableResult
     public func verifyCacheCompatibility(
-        currentMetadata: FrickCacheMetadata = .currentSchema,
+        currentMetadata: FrickCacheMetadata? = nil,
         minimumClientRevision: Int = FrickSchema.minimumClientRevision
     ) throws -> FrickCacheMetadata {
+        let resolvedMetadata = currentMetadata ?? FrickCacheMetadata.currentSchema(session: currentSession)
         if let cached = try storage.loadCacheMetadata() {
             if let reason = FrickCacheCompatibility.reason(
                 cached: cached,
-                current: currentMetadata,
+                current: resolvedMetadata,
                 minimumClientRevision: minimumClientRevision
             ) {
                 throw FrickCacheIncompatibleError(
                     reason: reason,
                     cachedMetadata: cached,
-                    currentMetadata: currentMetadata,
+                    currentMetadata: resolvedMetadata,
                     minimumClientRevision: minimumClientRevision,
                     pendingAppendCount: (try? storage.loadPendingAppends().count) ?? 0
                 )
             }
         }
-        try storage.saveCacheMetadata(currentMetadata)
-        return currentMetadata
+        try storage.saveCacheMetadata(resolvedMetadata)
+        return resolvedMetadata
     }
 
     public func resetCache() throws {
@@ -1066,6 +1098,7 @@ public final class FrickClient: Sendable {
         try validate(response, data: data)
         let created = try decoder.decode(CreatedConversationResponse.self, from: data)
         try created.requireCompatibleSchema()
+        _ = try verifyCacheCompatibility()
         try storage.saveObjectData(type: "Conversation", id: created.conversation.id, data: encoder.encode(created.conversation), version: 0)
         for member in created.members {
             try storage.saveObjectData(type: "RoomMember", id: member.id, data: encoder.encode(member), version: 0)
@@ -1204,6 +1237,7 @@ public final class FrickClient: Sendable {
         try validate(response, data: data)
         let decoded = try decoder.decode(ObjectsResponse<Object>.self, from: data)
         try decoded.requireCompatibleSchema()
+        _ = try verifyCacheCompatibility()
         for object in decoded.data {
             if let id = extractId(from: object) {
                 try storage.saveObjectData(type: type, id: id, data: encoder.encode(object), version: 0)
@@ -1226,6 +1260,7 @@ public final class FrickClient: Sendable {
             try validate(response, data: data)
             let decoded = try decoder.decode(StreamEventsResponse.self, from: data)
             try decoded.requireCompatibleSchema()
+            _ = try verifyCacheCompatibility()
             for event in decoded.data {
                 try storage.saveStreamEvent(event)
             }
@@ -1236,7 +1271,7 @@ public final class FrickClient: Sendable {
             )
             return decoded.data
         } catch {
-            let cached = try storage.loadStreamEvents(stream: "MessageStream", key: conversationId)
+            let cached = try loadCompatibleStreamEvents(stream: "MessageStream", key: conversationId)
             if cached.isEmpty {
                 throw error
             }
@@ -1256,7 +1291,7 @@ public final class FrickClient: Sendable {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    var current = try storage.loadStreamEvents(stream: "MessageStream", key: conversationId)
+                    var current = try loadCompatibleStreamEvents(stream: "MessageStream", key: conversationId)
                     if !current.isEmpty {
                         continuation.yield(current)
                         try await advanceReadReceiptIfNeeded(
@@ -1343,6 +1378,7 @@ public final class FrickClient: Sendable {
         for event in parser.push(line) where event.event == "stream-page" || event.event == "delta" {
             let decoded = try decoder.decode(StreamEventsResponse.self, from: Data(event.data.utf8))
             try decoded.requireCompatibleSchema()
+            _ = try verifyCacheCompatibility()
             for streamEvent in decoded.data {
                 try storage.saveStreamEvent(streamEvent)
             }
@@ -1354,6 +1390,15 @@ public final class FrickClient: Sendable {
                 events: current
             )
         }
+    }
+
+    private func loadCompatibleStreamEvents(stream: String, key: String) throws -> [FrickStreamEvent] {
+        let hadMetadata = try storage.loadCacheMetadata() != nil
+        _ = try verifyCacheCompatibility()
+        guard hadMetadata else {
+            return []
+        }
+        return try storage.loadStreamEvents(stream: stream, key: key)
     }
 
     public func sendMessage(
@@ -1402,6 +1447,7 @@ public final class FrickClient: Sendable {
             try await sendAppend(append)
         } catch {
             if shouldQueueAppend(error) {
+                _ = try verifyCacheCompatibility()
                 try storage.appendPendingAppend(append)
                 return
             }
@@ -1437,6 +1483,7 @@ public final class FrickClient: Sendable {
 
     public func flushPendingAppends() async throws {
         _ = try requireAuthenticatedSession()
+        _ = try verifyCacheCompatibility()
         for append in try storage.loadPendingAppends() {
             try await sendAppend(append)
             try storage.removePendingAppend(requestId: append.requestId)

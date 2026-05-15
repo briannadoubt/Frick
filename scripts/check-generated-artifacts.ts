@@ -6,10 +6,15 @@ const generatedPaths = [
   "packages/swift/Sources/FrickSwift/Generated/FrickGenerated.swift",
   "apps/android/frick/src/main/java/dev/frick/client/FrickGenerated.kt",
   "packages/protocol/fixtures",
+  "packages/design-web/src/generated/tokens.css",
+  "packages/design-web/src/generated/tokens.ts",
+  "packages/design-swift/Sources/FrickDesign/Generated/FrickTokens.swift",
+  "apps/android/design/src/main/java/dev/frick/design/generated/FrickTokens.kt",
 ];
 
 execFileSync("pnpm", ["schema:generate"], { stdio: "inherit" });
 execFileSync("pnpm", ["fixtures:generate"], { stdio: "inherit" });
+execFileSync("pnpm", ["design:generate"], { stdio: "inherit" });
 
 try {
   const status = execFileSync("git", ["status", "--porcelain", "--", ...generatedPaths], { encoding: "utf8" });
@@ -18,6 +23,8 @@ try {
     throw new Error("Generated artifacts changed");
   }
 } catch {
-  console.error("Generated artifacts are out of date. Run pnpm schema:generate and pnpm fixtures:generate.");
+  console.error(
+    "Generated artifacts are out of date. Run pnpm schema:generate, pnpm fixtures:generate, and pnpm design:generate.",
+  );
   process.exit(1);
 }

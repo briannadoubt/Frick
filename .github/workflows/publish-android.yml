@@ -66,8 +66,29 @@ jobs:
 
       - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # android-actions/setup-android@v3
 
-      - name: Generate schema + design artifacts
-        run: pnpm schema:generate && pnpm design:generate
+      - name: Gradle cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            apps/android/.gradle
+          key: gradle-${{ runner.os }}-${{ hashFiles('apps/android/**/*.gradle*', 'apps/android/**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Generated artifacts in sync
+        run: pnpm verify:generated
+
+      - name: Android tests, lint, debug assemble
+        working-directory: apps/android
+        run: |
+          ./gradlew \
+            :frick:testDebugUnitTest :frick:lintDebug :frick:assembleDebug \
+            :frick-compose:lintDebug :frick-compose:assembleDebug \
+            :design:testDebugUnitTest :design:lintDebug :design:assembleDebug \
+            :app:lintDebug :app:assembleDebug \
+            --no-daemon
 
       - name: Publish to GitHub Packages
         working-directory: apps/android

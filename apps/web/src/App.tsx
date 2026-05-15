@@ -12,6 +12,7 @@ import {
   FileDropzone,
   FrickProvider,
   RequireAuth,
+  clearLocalDraftsForUser,
   useAppend,
   useDraft,
   useMessageActions,
@@ -93,6 +94,7 @@ export const authSessionStorageKey = "frick-auth-session";
 const webDeviceStorageKey = "frick-web-device-id";
 const webReplicaStorageKey = "frick-web-replica-id";
 type StorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+type KeyValueStorageLike = StorageLike & Pick<Storage, "length" | "key">;
 
 function syncEndpointForHttp(httpEndpoint: string): string {
   const url = new URL(httpEndpoint);
@@ -135,7 +137,8 @@ export function App() {
 
   function logout() {
     const token = session?.sessionToken;
-    clearStoredUserState();
+    const userId = session?.userId;
+    clearStoredUserState(undefined, undefined, userId);
     setSession(undefined);
     if (token) {
       void logoutSession({
@@ -1534,7 +1537,7 @@ function syncStatusLabel(
 }
 
 function syncStatusTooltip(
-  status: { connected: boolean; authenticated: boolean; lastError?: { code?: string } },
+  status: { connected: boolean; authenticated: boolean; lastError?: { code?: string } | undefined },
 ): string {
   const base = syncStatusLabel(status);
   if (status.lastError?.code) {
@@ -1677,9 +1680,13 @@ export function clearStoredSession(
 export function clearStoredUserState(
   sessionStorage: StorageLike | undefined = browserStorage("sessionStorage"),
   localStorage: StorageLike | undefined = browserStorage("localStorage"),
+  userId?: string,
 ): void {
   clearStoredSession(sessionStorage, localStorage);
   removeStorageItem(localStorage, pushRegistrationStorageKey);
+  if (userId) {
+    clearLocalDraftsForUser(userId, localStorage as KeyValueStorageLike | undefined);
+  }
 }
 
 function readOrCreateStoredId(storageKey: string, prefix: string): string {

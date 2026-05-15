@@ -65,6 +65,7 @@ const defaultAuthRequestTimeoutMs = 10_000;
 export interface AuthSession {
   schemaHash: string;
   sessionToken: string;
+  tenantId?: string;
   userId: string;
   deviceId: string;
   replicaId: string;

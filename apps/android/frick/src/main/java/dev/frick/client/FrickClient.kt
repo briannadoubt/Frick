@@ -115,6 +115,7 @@ data class FrickSession(
     val schemaHash: String,
     val sessionToken: String,
     val userId: String,
+    val tenantId: String? = null,
     val displayName: String? = null,
     val handle: String? = null,
     val deviceId: String,
@@ -244,6 +245,8 @@ data class FrickCacheMetadata(
     val schemaVersion: String,
     val schemaRevision: Int,
     val schemaHash: String,
+    val tenantId: String? = null,
+    val userId: String? = null,
 ) {
     companion object {
         val currentSchema: FrickCacheMetadata =
@@ -259,6 +262,7 @@ data class FrickCacheMetadata(
 enum class FrickCacheIncompatibilityReason {
     SCHEMA_ID_MISMATCH,
     CACHE_TOO_OLD,
+    SESSION_SCOPE_MISMATCH,
 }
 
 class FrickCacheIncompatibleException(
@@ -281,6 +285,12 @@ object FrickCacheCompatibility {
         }
         if (cached.schemaRevision < minimumClientRevision) {
             return FrickCacheIncompatibilityReason.CACHE_TOO_OLD
+        }
+        if (
+            (current.tenantId != null && cached.tenantId != current.tenantId) ||
+            (current.userId != null && cached.userId != current.userId)
+        ) {
+            return FrickCacheIncompatibilityReason.SESSION_SCOPE_MISMATCH
         }
         return null
     }
@@ -512,7 +522,14 @@ class SQLiteFrickStorage(
         synchronized(lock) {
             readableDatabase.query(
                 CACHE_METADATA_TABLE,
-                arrayOf(METADATA_SCHEMA_ID, METADATA_SCHEMA_VERSION, METADATA_SCHEMA_REVISION, METADATA_SCHEMA_HASH),
+                arrayOf(
+                    METADATA_SCHEMA_ID,
+                    METADATA_SCHEMA_VERSION,
+                    METADATA_SCHEMA_REVISION,
+                    METADATA_SCHEMA_HASH,
+                    METADATA_TENANT_ID,
+                    METADATA_USER_ID,
+                ),
                 "$METADATA_ID = ?",
                 arrayOf(CURRENT_METADATA_ID),
                 null,
@@ -526,6 +543,8 @@ class SQLiteFrickStorage(
                         schemaVersion = cursor.getString(cursor.getColumnIndexOrThrow(METADATA_SCHEMA_VERSION)),
                         schemaRevision = cursor.getInt(cursor.getColumnIndexOrThrow(METADATA_SCHEMA_REVISION)),
                         schemaHash = cursor.getString(cursor.getColumnIndexOrThrow(METADATA_SCHEMA_HASH)),
+                        tenantId = cursor.getNullableString(METADATA_TENANT_ID),
+                        userId = cursor.getNullableString(METADATA_USER_ID),
                     )
                 } else {
                     null
@@ -544,6 +563,8 @@ class SQLiteFrickStorage(
                     put(METADATA_SCHEMA_VERSION, metadata.schemaVersion)
                     put(METADATA_SCHEMA_REVISION, metadata.schemaRevision)
                     put(METADATA_SCHEMA_HASH, metadata.schemaHash)
+                    put(METADATA_TENANT_ID, metadata.tenantId)
+                    put(METADATA_USER_ID, metadata.userId)
                 },
             )
         }
@@ -611,7 +632,9 @@ class SQLiteFrickStorage(
               $METADATA_SCHEMA_ID TEXT NOT NULL,
               $METADATA_SCHEMA_VERSION TEXT NOT NULL,
               $METADATA_SCHEMA_REVISION INTEGER NOT NULL,
-              $METADATA_SCHEMA_HASH TEXT NOT NULL
+              $METADATA_SCHEMA_HASH TEXT NOT NULL,
+              $METADATA_TENANT_ID TEXT,
+              $METADATA_USER_ID TEXT
             )
             """.trimIndent(),
         )
@@ -621,10 +644,32 @@ class SQLiteFrickStorage(
         if (oldVersion < newVersion) {
             onCreate(database)
         }
+        if (oldVersion < 5) {
+            addColumnIfMissing(database, CACHE_METADATA_TABLE, METADATA_TENANT_ID, "TEXT")
+            addColumnIfMissing(database, CACHE_METADATA_TABLE, METADATA_USER_ID, "TEXT")
+        }
+    }
+
+    private fun addColumnIfMissing(database: SQLiteDatabase, table: String, column: String, definition: String) {
+        if (hasColumn(database, table, column)) {
+            return
+        }
+        database.execSQL("ALTER TABLE $table ADD COLUMN $column $definition")
+    }
+
+    private fun hasColumn(database: SQLiteDatabase, table: String, column: String): Boolean {
+        database.rawQuery("PRAGMA table_info($table)", null).use { cursor ->
+            while (cursor.moveToNext()) {
+                if (cursor.getString(cursor.getColumnIndexOrThrow("name")) == column) {
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     private companion object {
-        const val DATABASE_VERSION = 4
+        const val DATABASE_VERSION = 5
         const val OBJECTS_TABLE = "local_objects"
         const val STREAM_EVENTS_TABLE = "local_stream_events"
         const val PENDING_APPENDS_TABLE = "pending_appends"
@@ -650,6 +695,8 @@ class SQLiteFrickStorage(
         const val METADATA_SCHEMA_VERSION = "schema_version"
         const val METADATA_SCHEMA_REVISION = "schema_revision"
         const val METADATA_SCHEMA_HASH = "schema_hash"
+        const val METADATA_TENANT_ID = "tenant_id"
+        const val METADATA_USER_ID = "user_id"
         const val CURRENT_METADATA_ID = "current"
     }
 }
@@ -742,26 +789,27 @@ class FrickClient(
         currentMetadata: FrickCacheMetadata = FrickCacheMetadata.currentSchema,
         minimumClientRevision: Int = FRICK_MINIMUM_CLIENT_REVISION,
     ): FrickCacheMetadata {
+        val resolvedCurrentMetadata = currentMetadata.withSessionScope(storage.loadSession())
         val cached = storage.loadCacheMetadata()
         if (cached != null) {
             val reason = FrickCacheCompatibility.reason(
                 cached = cached,
-                current = currentMetadata,
+                current = resolvedCurrentMetadata,
                 minimumClientRevision = minimumClientRevision,
             )
             if (reason != null) {
                 throw FrickCacheIncompatibleException(
                     reason = reason,
                     cachedMetadata = cached,
-                    currentMetadata = currentMetadata,
+                    currentMetadata = resolvedCurrentMetadata,
                     minimumClientRevision = minimumClientRevision,
                     pendingAppendCount = storage.loadPendingAppends().size,
-                    message = incompatibilityMessage(reason, cached, currentMetadata, minimumClientRevision),
+                    message = incompatibilityMessage(reason, cached, resolvedCurrentMetadata, minimumClientRevision),
                 )
             }
         }
-        storage.saveCacheMetadata(currentMetadata)
-        return currentMetadata
+        storage.saveCacheMetadata(resolvedCurrentMetadata)
+        return resolvedCurrentMetadata
     }
 
     fun resetCache() {
@@ -840,6 +888,7 @@ class FrickClient(
     }
 
     suspend fun fetchUsers(): List<UserDto> = withContext(Dispatchers.IO) {
+        verifyCacheCompatibility()
         runCatching { flushPendingAppends() }
         val response = transport.get("/objects?type=User")
         val users = parseUsers(response)
@@ -848,6 +897,7 @@ class FrickClient(
     }
 
     suspend fun fetchConversations(): List<ConversationDto> = withContext(Dispatchers.IO) {
+        verifyCacheCompatibility()
         runCatching { flushPendingAppends() }
         val response = transport.get("/objects?type=Conversation")
         val conversations = parseConversations(response)
@@ -856,6 +906,7 @@ class FrickClient(
     }
 
     suspend fun fetchRoomMembers(): List<RoomMemberDto> = withContext(Dispatchers.IO) {
+        verifyCacheCompatibility()
         runCatching { flushPendingAppends() }
         val response = transport.get("/objects?type=RoomMember")
         val members = parseRoomMembers(response)
@@ -868,6 +919,7 @@ class FrickClient(
         kind: String = "group",
         participantUserIds: List<String> = emptyList(),
     ): CreatedConversation = withContext(Dispatchers.IO) {
+        verifyCacheCompatibility()
         val response = transport.post(
             path = "/conversations",
             body = frickJson.encodeToString(
@@ -991,6 +1043,7 @@ class FrickClient(
         readUserId: String? = null,
     ): List<FrickStreamEvent> =
         withContext(Dispatchers.IO) {
+            verifyCacheCompatibility()
             runCatching { flushPendingAppends() }
             try {
                 val events = parseStreamEvents(transport.get("/streams/MessageStream/$conversationId"))
@@ -1012,6 +1065,7 @@ class FrickClient(
         conversationId: String = "conversation-general",
         readUserId: String? = null,
     ): Flow<List<FrickStreamEvent>> = flow {
+        verifyCacheCompatibility()
         var current = storage.loadStreamEvents(stream = "MessageStream", key = conversationId)
         val after = current.maxOfOrNull { event -> event.sequence } ?: 0
         val parser = FrickEventStreamParser()
@@ -1070,6 +1124,7 @@ class FrickClient(
             sendAppend(append)
         } catch (error: Exception) {
             if (shouldQueueAppend(error)) {
+                verifyCacheCompatibility()
                 storage.appendPendingAppend(append)
                 return
             }
@@ -1094,6 +1149,7 @@ class FrickClient(
             sendAppend(append)
         } catch (error: Exception) {
             if (shouldQueueAppend(error)) {
+                verifyCacheCompatibility()
                 storage.appendPendingAppend(append)
                 return
             }
@@ -1144,6 +1200,7 @@ class FrickClient(
 
     suspend fun flushPendingAppends() {
         requireAuthenticatedSession()
+        verifyCacheCompatibility()
         for (append in storage.loadPendingAppends()) {
             sendAppend(append)
             storage.removePendingAppend(append.requestId)
@@ -1415,7 +1472,20 @@ private fun incompatibilityMessage(
             "Cached schema id ${cached.schemaId} does not match current schema id ${current.schemaId}"
         FrickCacheIncompatibilityReason.CACHE_TOO_OLD ->
             "Cached schema revision ${cached.schemaRevision} is below current minimum client revision $minimumClientRevision"
+        FrickCacheIncompatibilityReason.SESSION_SCOPE_MISMATCH ->
+            "Cached session scope ${cached.tenantId ?: "unknown"}:${cached.userId ?: "unknown"} does not match current session scope ${current.tenantId ?: "unknown"}:${current.userId ?: "unknown"}"
     }
+
+private fun FrickCacheMetadata.withSessionScope(session: FrickSession?): FrickCacheMetadata =
+    copy(
+        tenantId = tenantId ?: session?.tenantId,
+        userId = userId ?: session?.userId,
+    )
+
+private fun android.database.Cursor.getNullableString(columnName: String): String? {
+    val index = getColumnIndexOrThrow(columnName)
+    return if (isNull(index)) null else getString(index)
+}
 
 private fun shouldQueueAppend(error: Exception): Boolean =
     error !is FrickAuthenticationRequiredException &&

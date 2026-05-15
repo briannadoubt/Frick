@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createFrickServer } from "../src/server.js";
-import type { FrickLogger } from "../src/logger.js";
+import { createConsoleLogger, type FrickLogger } from "../src/logger.js";
 
 interface LogEntry {
   level: "debug" | "info" | "warn" | "error";
@@ -11,32 +11,20 @@ interface LogEntry {
 function createCapturingLogger(): { logger: FrickLogger; entries: LogEntry[] } {
   const entries: LogEntry[] = [];
 
-  function build(inherited: Record<string, unknown>): FrickLogger {
-    const REDACTED = new Set([
-      "sessionToken",
-      "password",
-      "passwordHash",
-      "Authorization",
-      "authorization",
-    ]);
-    function emit(level: LogEntry["level"], message: string, fields?: Record<string, unknown>): void {
-      const merged: Record<string, unknown> = { ...inherited, ...(fields ?? {}) };
-      const redacted: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(merged)) {
-        redacted[k] = REDACTED.has(k) ? "<redacted>" : v;
-      }
-      entries.push({ level, message, fields: redacted });
-    }
-    return {
-      debug: (m, f) => emit("debug", m, f),
-      info: (m, f) => emit("info", m, f),
-      warn: (m, f) => emit("warn", m, f),
-      error: (m, f) => emit("error", m, f),
-      child: (childFields) => build({ ...inherited, ...childFields }),
-    };
-  }
+  const capture = (line: string): void => {
+    const parsed = JSON.parse(line) as Record<string, unknown>;
+    const fields = { ...parsed };
+    delete fields.ts;
+    delete fields.level;
+    delete fields.msg;
+    const { level, msg } = parsed;
+    entries.push({ level: level as LogEntry["level"], message: String(msg), fields });
+  };
 
-  return { logger: build({}), entries };
+  return {
+    logger: createConsoleLogger({ logLevel: "debug" }, { out: capture, err: capture }),
+    entries,
+  };
 }
 
 interface Started {
@@ -130,8 +118,9 @@ describe("per-request logging", () => {
 
   it("child logger redacts sensitive inherited fields", () => {
     const { logger, entries } = createCapturingLogger();
-    logger.child({ password: "supersecret" }).info("login");
+    logger.child({ password: "supersecret", credentials: { privateKey: "pem", publicKey: "pub" } }).info("login");
     expect(entries[0].fields.password).toBe("<redacted>");
+    expect(entries[0].fields.credentials).toEqual({ privateKey: "<redacted>", publicKey: "pub" });
   });
 
   it("child logger merges parent and per-emission fields", () => {

@@ -45,6 +45,7 @@ import {
   type FrickSearchProjectInput,
 } from "./search/types.js";
 import { createSqliteFtsSearchAdapter } from "./search/sqlite-fts.js";
+import { withSearchSourceFields } from "./search/source-fields.js";
 import {
   DEFAULT_DEVTOOLS_EVENTS_MAX_ROWS,
   DEFAULT_DEVTOOLS_EVENTS_PRUNE_INTERVAL_MS,
@@ -737,7 +738,7 @@ export class FrickStore {
       }
       if (!doc) continue;
       try {
-        this.searchAdapter.upsert(input.tenantId, def.name, doc);
+        this.searchAdapter.upsert(input.tenantId, def.name, withSearchSourceFields(input, doc));
       } catch (error) {
         this.#logger.warn("frick.search.upsert_failed", {
           index: def.name,

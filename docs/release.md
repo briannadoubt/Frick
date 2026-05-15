@@ -7,7 +7,7 @@ Frick has independent per-package versions. A release usually covers one or a fe
 ## Flow
 
 1. **PR opened** against `main` with the change.
-2. **CI green** — `pnpm test`, `pnpm typecheck`, native build matrices (Swift, Android), generated-artifact drift check.
+2. **CI green** — `pnpm test`, `pnpm typecheck`, native build matrices (Swift, Android), generated-artifact drift check for schema, fixtures, and design tokens.
 3. **Bump version** for each package that changed. See the CLI commands below.
 4. **Regenerate the changelog** entry for the upcoming version.
 5. **Tag** the release in git.
@@ -87,7 +87,7 @@ per package after the tag lands. For Swift, push the tag — SwiftPM consumers r
 
 - [ ] `pnpm test` passes locally on a clean checkout of the tagged commit.
 - [ ] `pnpm typecheck` passes.
-- [ ] `pnpm verify:generated` reports no drift.
+- [ ] `pnpm verify:generated` reports no schema, fixture, or design-token drift.
 - [ ] `CHANGELOG.md` has a header for the version you are about to tag.
 - [ ] The version in `package.json` (or `build.gradle.kts`) matches the tag.
 - [ ] If `schemaRevision` was bumped, `@frick/protocol` got at least a minor bump and every other TS package that imports protocol types was rebuilt at least once.

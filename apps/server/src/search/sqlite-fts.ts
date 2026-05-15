@@ -9,6 +9,7 @@ import {
   type FrickSearchQuery,
   type FrickSearchResult,
 } from "./types.js";
+import { withSearchSourceFields } from "./source-fields.js";
 
 /**
  * Default search adapter: a single `search_indexes` table fronted by a
@@ -67,7 +68,7 @@ export function createSqliteFtsSearchAdapter(db: DatabaseSync): FrickSearchAdapt
       }
       for await (const input of source) {
         const doc = def.project(input);
-        if (doc) store.upsert(tenantId, indexName, doc);
+        if (doc) store.upsert(tenantId, indexName, withSearchSourceFields(input, doc));
       }
     },
   };

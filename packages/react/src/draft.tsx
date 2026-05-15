@@ -81,6 +81,11 @@ export interface DraftStorage {
   removeItem(key: string): void;
 }
 
+export interface DraftKeyValueStorage extends DraftStorage {
+  readonly length: number;
+  key(index: number): string | null;
+}
+
 export interface UseDraftOptions {
   /** Override the underlying storage. Defaults to `globalThis.localStorage`. */
   readonly storage?: DraftStorage;
@@ -164,6 +169,29 @@ export function useDraft(
   }, []);
 
   return { draft, setDraft, clear };
+}
+
+export function clearLocalDraftsForUser(
+  userId: string,
+  storage: DraftKeyValueStorage | undefined =
+    typeof localStorage !== "undefined" ? localStorage : undefined,
+): void {
+  if (!storage) return;
+  const prefix = `frick.draft.${userId}.`;
+  const keys: string[] = [];
+  try {
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (key?.startsWith(prefix)) {
+        keys.push(key);
+      }
+    }
+    for (const key of keys) {
+      storage.removeItem(key);
+    }
+  } catch {
+    // best-effort cleanup; storage can throw in private browsing modes.
+  }
 }
 
 /**

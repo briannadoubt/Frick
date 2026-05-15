@@ -7,11 +7,11 @@
 // every active client tab so the `FrickClient` in-page can drain its
 // IndexedDB-backed pending-append queue against the live socket.
 //
-// Push receive: on a `push` event, the worker fetches the latest
-// devtools event feed (the framework's existing inspect surface) to
-// resolve the actual notification body, then shows a system
-// notification. Apps that want a richer payload — and don't want a
-// roundtrip — can override this handler in their own SW.
+// Push receive: the framework Web Push adapter sends an empty wake-up
+// payload because encrypted Web Push bodies are not implemented yet.
+// This default handler accepts optional app-provided title/body/deepLink
+// fields when a custom sender supplies them, but the stock adapter falls
+// back to generic notification text and routes users back to the app.
 //
 // Vendored verbatim into `apps/web/public/` so Vite serves it from the
 // site root and the registration path stays `/frick-sw.js`.

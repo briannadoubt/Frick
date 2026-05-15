@@ -201,10 +201,22 @@ describe("sync gateway object upserts", () => {
     socket.close();
   });
 
-  it("nacks ObjectUpsert from an unauthenticated client with auth.unauthenticated", async () => {
+  it("nacks ObjectUpsert after an unauthenticated Hello with auth.unauthenticated", async () => {
     app = await startServer();
     const socket = new WebSocket(app.url);
     await new Promise<void>((resolve) => socket.once("open", resolve));
+    socket.send(
+      encodeFrame([
+        FrameKind.Hello,
+        {
+          replicaId: "replica-noauth",
+          deviceId: "device-noauth",
+          schemaHash: app.schemaHash,
+        },
+      ]),
+    );
+    const hello = await nextAck(socket);
+    expect(hello[0]).toBe(FrameKind.HelloAck);
 
     socket.send(
       encodeFrame([

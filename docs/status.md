@@ -27,7 +27,7 @@ For TypeScript/server/CLI/web changes, run:
 ```bash
 pnpm test
 pnpm typecheck
-pnpm verify:generated
+pnpm verify:generated   # schema DTOs, protocol fixtures, and design tokens
 ```
 
 For native changes, also run the relevant native check:

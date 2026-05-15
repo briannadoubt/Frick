@@ -11,6 +11,14 @@ import type { AuthSession } from "@frick/core/chat";
 class MemoryStorage {
   readonly values = new Map<string, string>();
 
+  get length(): number {
+    return this.values.size;
+  }
+
+  key(index: number): string | null {
+    return Array.from(this.values.keys())[index] ?? null;
+  }
+
   getItem(key: string): string | null {
     return this.values.get(key) ?? null;
   }
@@ -96,6 +104,8 @@ describe("stored auth sessions", () => {
     const localStorage = new MemoryStorage();
     sessionStorage.setItem(authSessionStorageKey, JSON.stringify(validSession));
     localStorage.setItem(authSessionStorageKey, JSON.stringify(validSession));
+    localStorage.setItem("frick.draft.user-ada.conversation-general", "secret draft");
+    localStorage.setItem("frick.draft.user-grace.conversation-general", "other draft");
     localStorage.setItem(
       pushRegistrationStorageKey,
       JSON.stringify({
@@ -108,10 +118,12 @@ describe("stored auth sessions", () => {
       }),
     );
 
-    clearStoredUserState(sessionStorage, localStorage);
+    clearStoredUserState(sessionStorage, localStorage, "user-ada");
 
     expect(sessionStorage.getItem(authSessionStorageKey)).toBeNull();
     expect(localStorage.getItem(authSessionStorageKey)).toBeNull();
     expect(localStorage.getItem(pushRegistrationStorageKey)).toBeNull();
+    expect(localStorage.getItem("frick.draft.user-ada.conversation-general")).toBeNull();
+    expect(localStorage.getItem("frick.draft.user-grace.conversation-general")).toBe("other draft");
   });
 });

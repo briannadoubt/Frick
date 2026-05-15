@@ -137,6 +137,7 @@ class FrickEventStreamParserTest {
                     {
                       "schemaHash": "$FRICK_SCHEMA_HASH",
                       "sessionToken": "session-token-ada",
+                      "tenantId": "tenant-alpha",
                       "userId": "user-ada",
                       "deviceId": "android-device",
                       "replicaId": "android-replica",
@@ -158,6 +159,7 @@ class FrickEventStreamParserTest {
             FrickSession(
                 schemaHash = FRICK_SCHEMA_HASH,
                 sessionToken = "session-token-ada",
+                tenantId = "tenant-alpha",
                 userId = "user-ada",
                 deviceId = "android-device",
                 replicaId = "android-replica",
@@ -770,6 +772,36 @@ class FrickEventStreamParserTest {
     }
 
     @Test
+    fun queuedAppendStampsCurrentSessionScope() = runBlocking {
+        val transport = FakeFrickTransport(failingPosts = 1)
+        val storage = MemoryFrickStorage(
+            session = testSession(tenantId = "tenant-alpha", userId = "user-ada"),
+        )
+        val client = FrickClient(
+            transport = transport,
+            storage = storage,
+            replicaId = "android-test",
+            requestIdFactory = { "request-1" },
+        )
+
+        client.append(
+            stream = "MessageStream",
+            key = "conversation-general",
+            event = "MessageSent",
+            payload = mapOf("body" to "Queued"),
+        )
+
+        assertEquals(
+            FrickCacheMetadata.currentSchema.copy(
+                tenantId = "tenant-alpha",
+                userId = "user-ada",
+            ),
+            storage.loadCacheMetadata(),
+        )
+        assertEquals(listOf("request-1"), storage.pendingAppends.map { append -> append.requestId })
+    }
+
+    @Test
     fun streamsMessageSnapshotsAndDeltasFromSseTransport() = runBlocking {
         val transport = FakeFrickTransport(
             streamChunks = listOf(
@@ -872,13 +904,19 @@ class FrickEventStreamParserTest {
 
     @Test
     fun verifyCacheCompatibilityStampsMetadataOnFirstRun() {
-        val storage = MemoryFrickStorage()
+        val storage = MemoryFrickStorage(
+            session = testSession(tenantId = "tenant-alpha", userId = "user-ada"),
+        )
         val client = FrickClient(transport = FakeFrickTransport(), storage = storage)
 
         val stamped = client.verifyCacheCompatibility()
 
-        assertEquals(FrickCacheMetadata.currentSchema, stamped)
-        assertEquals(FrickCacheMetadata.currentSchema, storage.loadCacheMetadata())
+        val expected = FrickCacheMetadata.currentSchema.copy(
+            tenantId = "tenant-alpha",
+            userId = "user-ada",
+        )
+        assertEquals(expected, stamped)
+        assertEquals(expected, storage.loadCacheMetadata())
     }
 
     @Test
@@ -927,6 +965,60 @@ class FrickEventStreamParserTest {
         } catch (error: FrickCacheIncompatibleException) {
             assertEquals(FrickCacheIncompatibilityReason.CACHE_TOO_OLD, error.reason)
             assertEquals(5, error.minimumClientRevision)
+        }
+    }
+
+    @Test
+    fun verifyCacheCompatibilityThrowsOnSessionScopeMismatch() {
+        val storage = MemoryFrickStorage(
+            session = testSession(tenantId = "tenant-beta", userId = "user-grace"),
+        ).apply {
+            saveCacheMetadata(
+                FrickCacheMetadata.currentSchema.copy(
+                    tenantId = "tenant-alpha",
+                    userId = "user-ada",
+                ),
+            )
+            appendPendingAppend(PendingAppend(requestId = "request-1", body = "{}"))
+        }
+        val client = FrickClient(transport = FakeFrickTransport(), storage = storage)
+
+        try {
+            client.verifyCacheCompatibility()
+            fail("expected FrickCacheIncompatibleException")
+        } catch (error: FrickCacheIncompatibleException) {
+            assertEquals(FrickCacheIncompatibilityReason.SESSION_SCOPE_MISMATCH, error.reason)
+            assertEquals("tenant-alpha", error.cachedMetadata.tenantId)
+            assertEquals("user-ada", error.cachedMetadata.userId)
+            assertEquals("tenant-beta", error.currentMetadata.tenantId)
+            assertEquals("user-grace", error.currentMetadata.userId)
+            assertEquals(1, error.pendingAppendCount)
+        }
+    }
+
+    @Test
+    fun fetchMessagesRejectsCachedEventsForMismatchedSessionScope() = runBlocking {
+        val storage = MemoryFrickStorage(
+            session = testSession(tenantId = "tenant-beta", userId = "user-grace"),
+        ).apply {
+            saveCacheMetadata(
+                FrickCacheMetadata.currentSchema.copy(
+                    tenantId = "tenant-alpha",
+                    userId = "user-ada",
+                ),
+            )
+            saveStreamEvent(streamEvent(sequence = 1, eventId = "event-tenant-alpha", body = "private"))
+        }
+        val client = FrickClient(
+            transport = FakeFrickTransport(failGets = true),
+            storage = storage,
+        )
+
+        try {
+            client.fetchMessages()
+            fail("expected FrickCacheIncompatibleException")
+        } catch (error: FrickCacheIncompatibleException) {
+            assertEquals(FrickCacheIncompatibilityReason.SESSION_SCOPE_MISMATCH, error.reason)
         }
     }
 
@@ -1121,12 +1213,14 @@ private class MemoryFrickStorage(
 }
 
 private fun testSession(
+    tenantId: String? = null,
     userId: String = "user-ada",
     token: String = "session-token-ada",
 ): FrickSession =
     FrickSession(
         schemaHash = FRICK_SCHEMA_HASH,
         sessionToken = token,
+        tenantId = tenantId,
         userId = userId,
         deviceId = "android-device",
         replicaId = "android-replica",

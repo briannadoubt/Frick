@@ -30,6 +30,7 @@ import {
   MemoryFrickCache,
   type CachedObject,
   type FrickCacheState,
+  type FrickCacheScope,
   type FrickLocalCache,
   type FrickCacheMetadata,
   type PendingAppend,
@@ -78,36 +79,36 @@ class IndexedDBFrickCache implements FrickLocalCache {
     this.#mirror = new MemoryFrickCache(initial);
   }
 
-  load(schema: FrickSchema): FrickCacheState {
-    return this.#mirror.load(schema);
+  load(schema: FrickSchema, scope?: FrickCacheScope): FrickCacheState {
+    return this.#mirror.load(schema, scope);
   }
 
-  saveObject(schema: FrickSchema, type: string, id: string, value: PlainObject, version: number): void {
-    this.#mirror.saveObject(schema, type, id, value, version);
-    this.#writeMetadata(schema);
+  saveObject(schema: FrickSchema, type: string, id: string, value: PlainObject, version: number, scope?: FrickCacheScope): void {
+    this.#mirror.saveObject(schema, type, id, value, version, scope);
+    this.#writeMetadata(schema, scope);
     this.#put(STORE_OBJECTS, `${type}\x00${id}`, { type, id, value, version });
   }
 
-  saveStreamEvent(schema: FrickSchema, event: StreamEventInput): void {
-    this.#mirror.saveStreamEvent(schema, event);
-    this.#writeMetadata(schema);
+  saveStreamEvent(schema: FrickSchema, event: StreamEventInput, scope?: FrickCacheScope): void {
+    this.#mirror.saveStreamEvent(schema, event, scope);
+    this.#writeMetadata(schema, scope);
     this.#put(STORE_EVENTS, event.eventId, event);
   }
 
-  saveCursor(schema: FrickSchema, key: string, cursor: number): void {
-    this.#mirror.saveCursor(schema, key, cursor);
-    this.#writeMetadata(schema);
+  saveCursor(schema: FrickSchema, key: string, cursor: number, scope?: FrickCacheScope): void {
+    this.#mirror.saveCursor(schema, key, cursor, scope);
+    this.#writeMetadata(schema, scope);
     this.#put(STORE_CURSORS, key, cursor);
   }
 
-  savePendingAppend(schema: FrickSchema, append: PendingAppend): void {
-    this.#mirror.savePendingAppend(schema, append);
-    this.#writeMetadata(schema);
+  savePendingAppend(schema: FrickSchema, append: PendingAppend, scope?: FrickCacheScope): void {
+    this.#mirror.savePendingAppend(schema, append, scope);
+    this.#writeMetadata(schema, scope);
     this.#put(STORE_PENDING, append.requestId, append);
   }
 
-  removePendingAppend(schema: FrickSchema, requestId: string): void {
-    this.#mirror.removePendingAppend(schema, requestId);
+  removePendingAppend(schema: FrickSchema, requestId: string, scope?: FrickCacheScope): void {
+    this.#mirror.removePendingAppend(schema, requestId, scope);
     this.#delete(STORE_PENDING, requestId);
   }
 
@@ -128,12 +129,14 @@ class IndexedDBFrickCache implements FrickLocalCache {
     this.#db.close();
   }
 
-  #writeMetadata(schema: FrickSchema): void {
+  #writeMetadata(schema: FrickSchema, scope: FrickCacheScope = {}): void {
     const metadata: FrickCacheMetadata = {
       schemaId: schema.schemaId,
       schemaVersion: schema.schemaVersion,
       schemaRevision: schema.schemaRevision,
       schemaHash: schema.hash,
+      ...(scope.tenantId !== undefined ? { tenantId: scope.tenantId } : {}),
+      ...(scope.userId !== undefined ? { userId: scope.userId } : {}),
     };
     this.#put(STORE_META, META_KEY, metadata);
   }

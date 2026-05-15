@@ -61,6 +61,42 @@ describe("websocket authorization parity", () => {
     socket.close();
   });
 
+  it("nacks pre-Hello append frames and does not write storage", async () => {
+    app = await startServer();
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const socket = new WebSocket(app.url, {
+      headers: { authorization: `Bearer ${login.sessionToken}` },
+    });
+    await new Promise<void>((resolve) => socket.once("open", resolve));
+
+    socket.send(
+      encodeFrame([
+        FrameKind.Append,
+        {
+          requestId: "request-pre-hello-append",
+          stream: "MessageStream",
+          key: "conversation-general",
+          event: "MessageSent",
+          payload: {
+            messageId: "message-pre-hello-append",
+            senderId: "user-ada",
+            body: "must not store before hello",
+            createdAt: "2026-05-09T00:00:00.000Z",
+          },
+        },
+      ]),
+    );
+
+    const frame = await nextFrame(socket);
+    expect(frame[0]).toBe(FrameKind.Nack);
+    expect(frame[1]).toMatchObject({
+      requestId: "request-pre-hello-append",
+      code: "sync.protocolError",
+    });
+    expect(app.store.readEvents("MessageStream", "conversation-general", 0)).toHaveLength(0);
+    socket.close();
+  });
+
   it("does not authenticate websocket sessions from the sessionToken query parameter", async () => {
     app = await startServer();
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
@@ -292,6 +328,111 @@ describe("websocket authorization parity", () => {
       details: { reason: "notMember" },
     });
     socket.close();
+  });
+
+  it("nacks TypingState presence subscriptions from non-members", async () => {
+    app = await startServer();
+    app.store.upsertObject("User", "user-mallory", {
+      displayName: "Mallory",
+      avatarBlobId: undefined,
+    });
+    const malloryLogin = await devLogin(app.httpUrl, { userId: "user-mallory" });
+    const socket = await connectAndHello(app.url, malloryLogin.sessionToken);
+
+    socket.send(
+      encodeFrame([
+        FrameKind.Subscribe,
+        {
+          subscriptionId: "sub-presence-mallory",
+          kind: "presence",
+          name: "TypingState",
+          key: "conversation-general:user-mallory:device-test",
+        },
+      ]),
+    );
+
+    const frame = await nextFrame(socket);
+    expect(frame[0]).toBe(FrameKind.Nack);
+    expect(frame[1]).toMatchObject({
+      requestId: "sub-presence-mallory",
+      code: "auth.forbidden",
+    });
+    expect(frame[1].error).toMatchObject({
+      code: "auth.forbidden",
+      details: { reason: "notMember" },
+    });
+    socket.close();
+  });
+
+  it("nacks TypingState presence writes from non-members and member owner spoofing", async () => {
+    app = await startServer();
+    app.store.upsertObject("User", "user-mallory", {
+      displayName: "Mallory",
+      avatarBlobId: undefined,
+    });
+    const malloryLogin = await devLogin(app.httpUrl, { userId: "user-mallory" });
+    const mallorySocket = await connectAndHello(app.url, malloryLogin.sessionToken);
+
+    mallorySocket.send(
+      encodeFrame([
+        FrameKind.PresenceSet,
+        {
+          requestId: "request-presence-mallory",
+          name: "TypingState",
+          key: "conversation-general:user-mallory:device-test",
+          value: {
+            isTyping: true,
+            conversationId: "conversation-general",
+            userId: "user-mallory",
+            deviceId: "device-test",
+          },
+        },
+      ]),
+    );
+
+    const malloryFrame = await nextFrame(mallorySocket);
+    expect(malloryFrame[0]).toBe(FrameKind.Nack);
+    expect(malloryFrame[1]).toMatchObject({
+      requestId: "request-presence-mallory",
+      code: "auth.forbidden",
+    });
+    expect(malloryFrame[1].error).toMatchObject({
+      details: { reason: "notMember" },
+    });
+    expect(app.store.readPresence("TypingState", "conversation-general:user-mallory:device-test")).toBeUndefined();
+    mallorySocket.close();
+
+    const adaLogin = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const adaSocket = await connectAndHello(app.url, adaLogin.sessionToken);
+
+    adaSocket.send(
+      encodeFrame([
+        FrameKind.PresenceSet,
+        {
+          requestId: "request-presence-spoof",
+          name: "TypingState",
+          key: "conversation-general:user-grace:device-test",
+          value: {
+            isTyping: true,
+            conversationId: "conversation-general",
+            userId: "user-grace",
+            deviceId: "device-test",
+          },
+        },
+      ]),
+    );
+
+    const spoofFrame = await nextFrame(adaSocket);
+    expect(spoofFrame[0]).toBe(FrameKind.Nack);
+    expect(spoofFrame[1]).toMatchObject({
+      requestId: "request-presence-spoof",
+      code: "auth.forbidden",
+    });
+    expect(spoofFrame[1].error).toMatchObject({
+      details: { reason: "ownerMismatch" },
+    });
+    expect(app.store.readPresence("TypingState", "conversation-general:user-grace:device-test")).toBeUndefined();
+    adaSocket.close();
   });
 
   it("rejects websocket writes when the session tenant is archived after socket authentication", async () => {

@@ -31,6 +31,7 @@ import {
   assertCanSignal,
   assertCanSubscribe,
   assertCanWriteObject,
+  assertCanWritePresence,
   AuthenticationError,
   AuthorizationError,
   tenantMembershipReader,
@@ -73,6 +74,7 @@ export class SyncGateway {
   readonly #policyHooks: readonly FrickPolicyHook[];
   readonly #pendingAppendCounts = new WeakMap<SyncClient, number>();
   readonly #lastSeenAt = new WeakMap<SyncClient, number>();
+  readonly #completedHandshakes = new WeakSet<SyncClient>();
   /**
    * Per-connection resolved {@link FrickLimits}. Populated once at attach
    * time when we know the principal's tenant id, then re-used across every
@@ -496,6 +498,28 @@ export class SyncGateway {
   }
 
   #handleFrame(client: SyncClient, frame: FrickFrame): void {
+    if (
+      !this.#completedHandshakes.has(client) &&
+      frame[0] !== FrameKind.Hello &&
+      frame[0] !== FrameKind.Ping
+    ) {
+      const requestId = requestIdForPreHelloFrame(frame);
+      const envelope = createFrickErrorEnvelope({
+        code: "sync.protocolError",
+        message: "Hello handshake required before sync frames",
+        requestId,
+        retryable: false,
+        details: { reason: "handshakeRequired" },
+        schemaHash: this.store.schema.hash,
+        schemaRevision: this.store.schema.schemaRevision,
+      });
+      sendFrame(client.socket, [
+        FrameKind.Nack,
+        { requestId, error: envelope, code: envelope.code, message: envelope.message },
+      ]);
+      return;
+    }
+
     switch (frame[0]) {
       case FrameKind.Hello: {
         if (!this.#authenticateHelloSession(client, frame[1].sessionToken)) {
@@ -740,6 +764,7 @@ export class SyncGateway {
         serverCapabilities: defaultServerCapabilities(schema),
       },
     ]);
+    this.#completedHandshakes.add(client);
     sendFrame(client.socket, [FrameKind.Schema, schema]);
   }
 
@@ -922,6 +947,21 @@ export class SyncGateway {
     if (!principal) {
       return;
     }
+    try {
+      assertCanWritePresence(
+        principal,
+        payload.name,
+        payload.key,
+        tenantMembershipReader(this.store, principal.tenantId),
+        this.#policyHooks,
+        payload.value,
+      );
+    } catch (error) {
+      if (this.#sendAuthNack(client, payload.requestId, error)) {
+        return;
+      }
+      throw error;
+    }
     const presence = presenceByName(this.store.schema, payload.name);
     const ttlSeconds = presence.ttlMs / 1000;
     const clampedSeconds = clampTtlSeconds(
@@ -951,6 +991,20 @@ export class SyncGateway {
     const principal = this.#activePrincipalForFrame(client, payload.requestId);
     if (!principal) {
       return;
+    }
+    try {
+      assertCanWritePresence(
+        principal,
+        payload.name,
+        payload.key,
+        tenantMembershipReader(this.store, principal.tenantId),
+        this.#policyHooks,
+      );
+    } catch (error) {
+      if (this.#sendAuthNack(client, payload.requestId, error)) {
+        return;
+      }
+      throw error;
     }
     this.store.clearPresence(principal.tenantId, payload.name, payload.key);
     this.#fanOutPresenceDelta(principal.tenantId, payload.name, payload.key, [], [payload.key]);
@@ -1158,6 +1212,22 @@ function bearerTokenFromRequest(request: IncomingMessage): string | undefined {
   const raw = request.headers.authorization;
   const auth = Array.isArray(raw) ? raw[0] : raw;
   return /^Bearer\s+(.+)$/i.exec(auth ?? "")?.[1];
+}
+
+function requestIdForPreHelloFrame(frame: FrickFrame): string {
+  switch (frame[0]) {
+    case FrameKind.Subscribe:
+    case FrameKind.CursorCommit:
+      return frame[1].subscriptionId;
+    case FrameKind.Append:
+    case FrameKind.ObjectUpsert:
+    case FrameKind.PresenceSet:
+    case FrameKind.PresenceClear:
+    case FrameKind.SignalSend:
+      return frame[1].requestId;
+    default:
+      return "pre-hello";
+  }
 }
 
 function filterProjectionChangesForPrincipal(

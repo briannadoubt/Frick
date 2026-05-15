@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createFrickServer } from "../src/server.js";
+import type { FrickPolicyHook } from "../src/authz.js";
+import type { FrickSearchIndexDefinition } from "../src/search/types.js";
 
 let app: Awaited<ReturnType<typeof startServer>> | undefined;
 
@@ -130,6 +132,96 @@ describe("POST /search with the built-in messages-fts index", () => {
     expect(result.body.total).toBe(0);
   });
 
+  it("filters custom object index hits to drafts owned by the caller", async () => {
+    const draftIndex: FrickSearchIndexDefinition = {
+      name: "drafts-fts",
+      source: { kind: "object", type: "MessageDraft" },
+      project(input) {
+        const object = input.object;
+        if (!object) return null;
+        const body = typeof object.value.body === "string" ? object.value.body : "";
+        if (!body) return null;
+        return {
+          docId: `draft-doc-${object.id}`,
+          text: body,
+          fields: {
+            userId: typeof object.value.userId === "string" ? object.value.userId : "",
+            conversationId:
+              typeof object.value.conversationId === "string" ? object.value.conversationId : "",
+          },
+        };
+      },
+    };
+    app = await startServer({ indexes: [draftIndex] });
+    const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
+    app.store.upsertObject("_default", "MessageDraft", "user-ada:conversation-general", {
+      userId: "user-ada",
+      conversationId: "conversation-general",
+      body: "violet launch checklist",
+      updatedAt: 1_700_000_000_000,
+    });
+    app.store.upsertObject("_default", "MessageDraft", "user-grace:conversation-general", {
+      userId: "user-grace",
+      conversationId: "conversation-general",
+      body: "violet private notes",
+      updatedAt: 1_700_000_000_001,
+    });
+
+    const result = await postSearch(app.httpUrl, ada.sessionToken, {
+      index: "drafts-fts",
+      q: "violet",
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body.hits.map((hit: { docId: string }) => hit.docId)).toEqual([
+      "draft-doc-user-ada:conversation-general",
+    ]);
+    expect(Object.keys(result.body.hits[0].fields)).not.toContain("__frickSourceKind");
+    expect(result.body.total).toBe(1);
+  });
+
+  it("filters custom object index hits to conversations where the caller is a member", async () => {
+    const conversationsIndex: FrickSearchIndexDefinition = {
+      name: "conversations-fts",
+      source: { kind: "object", type: "Conversation" },
+      project(input) {
+        const object = input.object;
+        if (!object) return null;
+        const title = typeof object.value.title === "string" ? object.value.title : "";
+        if (!title) return null;
+        return {
+          docId: object.id,
+          text: title,
+          fields: { conversationId: object.id },
+        };
+      },
+    };
+    app = await startServer({ indexes: [conversationsIndex] });
+    const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
+    app.store.upsertObject("_default", "User", "user-mallory", {
+      displayName: "Mallory",
+      avatarBlobId: undefined,
+    });
+    const mallory = await devLogin(app.httpUrl, { userId: "user-mallory" });
+    const visibleConvId = await createConversation(app.httpUrl, ada.sessionToken, "opal visible room");
+    const hiddenConvId = await createConversation(app.httpUrl, ada.sessionToken, "opal hidden room");
+    app.store.upsertObject("_default", "RoomMember", `member-${visibleConvId}-mallory`, {
+      conversationId: visibleConvId,
+      userId: "user-mallory",
+      role: "member",
+    });
+
+    const result = await postSearch(app.httpUrl, mallory.sessionToken, {
+      index: "conversations-fts",
+      q: "opal",
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body.hits.map((hit: { docId: string }) => hit.docId)).toEqual([visibleConvId]);
+    expect(result.body.hits.map((hit: { docId: string }) => hit.docId)).not.toContain(hiddenConvId);
+    expect(result.body.total).toBe(1);
+  });
+
   it("orders more-relevant hits ahead of less-relevant ones", async () => {
     app = await startServer();
     const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
@@ -215,6 +307,27 @@ describe("POST /search with the built-in messages-fts index", () => {
     expect(response.status).toBe(401);
   });
 
+  it("runs search.query policy hooks before querying an index", async () => {
+    const denySearch: FrickPolicyHook = (input) =>
+      input.action === "search.query" && input.resource.name === "messages-fts"
+        ? {
+            allow: false,
+            reason: "notAuthorizedForResource",
+            publicMessage: "Search disabled for this principal",
+          }
+        : null;
+    app = await startServer({ policyHooks: [denySearch] });
+    const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    const result = await postSearch(app.httpUrl, ada.sessionToken, {
+      index: "messages-fts",
+      q: "anything",
+    });
+
+    expect(result.status).toBe(403);
+    expect(result.body.error.details.reason).toBe("notAuthorizedForResource");
+  });
+
   it("exposes /_frick/inspect/search when inspection is enabled", async () => {
     app = await startServer({ inspectionEnabled: true });
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
@@ -233,7 +346,11 @@ describe("POST /search with the built-in messages-fts index", () => {
 });
 
 async function startServer(
-  overrides: { inspectionEnabled?: boolean } = {},
+  overrides: {
+    inspectionEnabled?: boolean;
+    indexes?: FrickSearchIndexDefinition[];
+    policyHooks?: FrickPolicyHook[];
+  } = {},
 ): Promise<{
   httpUrl: string;
   store: ReturnType<typeof createFrickServer>["store"];
@@ -242,7 +359,13 @@ async function startServer(
   const config: Record<string, unknown> = {};
   if (overrides.inspectionEnabled !== undefined)
     config.inspectionEnabled = overrides.inspectionEnabled;
-  const server = createFrickServer({ port: 0, dbPath: ":memory:", config });
+  const server = createFrickServer({
+    port: 0,
+    dbPath: ":memory:",
+    config,
+    ...(overrides.indexes !== undefined ? { search: { indexes: overrides.indexes } } : {}),
+    ...(overrides.policyHooks !== undefined ? { policyHooks: overrides.policyHooks } : {}),
+  });
   await server.listen();
   const address = server.server.address();
   if (!address || typeof address === "string") {
