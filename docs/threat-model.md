@@ -216,9 +216,9 @@ one user's local push-registration state into the next login.
   demo app. Preview builds use a no-`unsafe-inline` / no-`unsafe-eval`
   policy; the dev server keeps the `script-src`, `style-src`, and local
   `connect-src` allowances Vite needs for React refresh and HMR.
-- The demo stores auth sessions in `sessionStorage`, migrates valid legacy
-  `localStorage` sessions once, and deletes expired, malformed, or migrated
-  localStorage bearer tokens.
+- The demo keeps live auth sessions in memory only. Startup and sign-in purge
+  any legacy `sessionStorage` / `localStorage` bearer tokens instead of
+  restoring or migrating them, so reloading the demo requires re-auth.
 - Logout clears browser-held user state before the best-effort server
   logout request, including the stored session and web push-registration
   marker.
@@ -233,8 +233,8 @@ one user's local push-registration state into the next login.
 - The dev-server CSP is intentionally weaker than preview so HMR keeps
   working. Use preview or a production host to audit the stricter policy.
 - Bearer tokens are still readable by same-origin JavaScript while a session
-  is active; CSP reduces XSS blast radius but does not make bearer tokens
-  HttpOnly.
+  is active in memory; CSP reduces XSS blast radius but does not make bearer
+  tokens HttpOnly.
 
 ---
 

@@ -36,13 +36,12 @@ const validSession: AuthSession = {
 const pushRegistrationStorageKey = "frick-web-push-registration";
 
 describe("stored auth sessions", () => {
-  test("restores valid unexpired sessions from sessionStorage", () => {
+  test("purges valid unexpired sessions from sessionStorage instead of restoring bearer tokens", () => {
     const sessionStorage = new MemoryStorage();
     sessionStorage.setItem(authSessionStorageKey, JSON.stringify(validSession));
 
-    expect(readStoredSession(sessionStorage, undefined, new Date("2026-05-09T12:00:00.000Z"))).toEqual(
-      validSession,
-    );
+    expect(readStoredSession(sessionStorage, undefined, new Date("2026-05-09T12:00:00.000Z"))).toBeUndefined();
+    expect(sessionStorage.getItem(authSessionStorageKey)).toBeNull();
   });
 
   test("clears expired sessions instead of restoring bearer tokens", () => {
@@ -64,26 +63,25 @@ describe("stored auth sessions", () => {
     expect(sessionStorage.getItem(authSessionStorageKey)).toBeNull();
   });
 
-  test("migrates valid legacy localStorage sessions into sessionStorage", () => {
+  test("purges valid legacy localStorage sessions instead of migrating bearer tokens", () => {
     const sessionStorage = new MemoryStorage();
     const localStorage = new MemoryStorage();
     localStorage.setItem(authSessionStorageKey, JSON.stringify(validSession));
 
-    expect(readStoredSession(sessionStorage, localStorage, new Date("2026-05-09T12:00:00.000Z"))).toEqual(
-      validSession,
-    );
-    expect(sessionStorage.getItem(authSessionStorageKey)).toBe(JSON.stringify(validSession));
+    expect(readStoredSession(sessionStorage, localStorage, new Date("2026-05-09T12:00:00.000Z"))).toBeUndefined();
+    expect(sessionStorage.getItem(authSessionStorageKey)).toBeNull();
     expect(localStorage.getItem(authSessionStorageKey)).toBeNull();
   });
 
-  test("writes new sessions only to sessionStorage and clears localStorage leftovers", () => {
+  test("does not persist new bearer sessions and clears localStorage leftovers", () => {
     const sessionStorage = new MemoryStorage();
     const localStorage = new MemoryStorage();
+    sessionStorage.setItem(authSessionStorageKey, JSON.stringify(validSession));
     localStorage.setItem(authSessionStorageKey, JSON.stringify(validSession));
 
     writeStoredSession(validSession, sessionStorage, localStorage);
 
-    expect(sessionStorage.getItem(authSessionStorageKey)).toBe(JSON.stringify(validSession));
+    expect(sessionStorage.getItem(authSessionStorageKey)).toBeNull();
     expect(localStorage.getItem(authSessionStorageKey)).toBeNull();
   });
 

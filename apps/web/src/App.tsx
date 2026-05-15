@@ -204,8 +204,8 @@ function AuthWorkspace({
   // Phase 3 — `useSignIn` / `useSignUp` own the HTTP request + bearer-token
   // wiring. The hooks call `client.setSession(...)` on success so the
   // surrounding `<FrickProvider>` reconnects with the new token; we still
-  // notify `onAuthenticated` so App-level state and sessionStorage mirror
-  // the live session.
+  // notify `onAuthenticated` so App-level state mirrors the live session.
+  // The bearer token stays in memory and is not persisted to browser storage.
   const { signIn, isPending: isSigningIn } = useSignIn();
   const { signUp: doSignUp, isPending: isSigningUp } = useSignUp();
   const isSubmitting = isSigningIn || isSigningUp;
@@ -1649,34 +1649,21 @@ function clearStoredPushRegistration(): void {
 export function readStoredSession(
   sessionStorage: StorageLike | undefined = browserStorage("sessionStorage"),
   legacyLocalStorage: StorageLike | undefined = browserStorage("localStorage"),
-  now = new Date(),
+  _now = new Date(),
 ): AuthSession | undefined {
-  const storedSession = readStoredSessionFromStorage(sessionStorage, now);
-  if (storedSession.found) {
-    if (!storedSession.session) {
-      removeStorageItem(legacyLocalStorage, authSessionStorageKey);
-    }
-    return storedSession.session;
-  }
-
-  const legacySession = readStoredSessionFromStorage(legacyLocalStorage, now);
+  // Older demo builds persisted full AuthSession payloads. Keep this path as
+  // a startup scrubber so stored bearer tokens are not revived on reload.
+  removeStorageItem(sessionStorage, authSessionStorageKey);
   removeStorageItem(legacyLocalStorage, authSessionStorageKey);
-  if (!legacySession.session) {
-    return undefined;
-  }
-
-  return writeStorageItem(sessionStorage, authSessionStorageKey, JSON.stringify(legacySession.session))
-    ? legacySession.session
-    : undefined;
+  return undefined;
 }
 
 export function writeStoredSession(
-  session: AuthSession,
+  _session: AuthSession,
   sessionStorage: StorageLike | undefined = browserStorage("sessionStorage"),
   legacyLocalStorage: StorageLike | undefined = browserStorage("localStorage"),
 ): void {
-  writeStorageItem(sessionStorage, authSessionStorageKey, JSON.stringify(session));
-  removeStorageItem(legacyLocalStorage, authSessionStorageKey);
+  clearStoredSession(sessionStorage, legacyLocalStorage);
 }
 
 export function clearStoredSession(
@@ -1703,45 +1690,6 @@ function readOrCreateStoredId(storageKey: string, prefix: string): string {
   const next = `${prefix}-${crypto.randomUUID()}`;
   writeLocalStorageItem(storageKey, next);
   return next;
-}
-
-function readStoredSessionFromStorage(
-  storage: StorageLike | undefined,
-  now: Date,
-): { found: boolean; session?: AuthSession } {
-  const stored = readStorageItem(storage, authSessionStorageKey);
-  if (!stored) {
-    return { found: false };
-  }
-  const session = parseStoredSession(stored, now);
-  if (!session) {
-    removeStorageItem(storage, authSessionStorageKey);
-    return { found: true };
-  }
-  return { found: true, session };
-}
-
-function parseStoredSession(stored: string, now: Date): AuthSession | undefined {
-  try {
-    const parsed = JSON.parse(stored) as Partial<AuthSession>;
-    if (
-      typeof parsed.sessionToken !== "string" ||
-      typeof parsed.userId !== "string" ||
-      typeof parsed.deviceId !== "string" ||
-      typeof parsed.replicaId !== "string" ||
-      typeof parsed.schemaHash !== "string" ||
-      typeof parsed.expiresAt !== "string"
-    ) {
-      return undefined;
-    }
-    const expiresAtMs = Date.parse(parsed.expiresAt);
-    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= now.getTime()) {
-      return undefined;
-    }
-    return parsed as AuthSession;
-  } catch {
-    return undefined;
-  }
 }
 
 function readLocalStorageItem(key: string): string | null {
