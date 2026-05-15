@@ -60,6 +60,8 @@ export interface FrickSession {
 
 export interface FrickClientOptions {
   endpoint: string;
+  /** Optional HTTP endpoint for REST/SSE helpers. Defaults to the WebSocket origin. */
+  httpEndpoint?: string;
   schema?: FrickSchema;
   cache?: FrickLocalCache;
   /** Initial reconnect delay, in ms. Subsequent attempts back off up to {@link maxReconnectDelayMs}. */
@@ -129,6 +131,7 @@ export class FrickClient {
   });
 
   readonly #endpoint: string;
+  readonly #httpEndpoint: string;
   readonly #cache: FrickLocalCache;
   #replicaId: string;
   #deviceId: string;
@@ -172,6 +175,7 @@ export class FrickClient {
 
   constructor(options: FrickClientOptions) {
     this.#endpoint = options.endpoint;
+    this.#httpEndpoint = options.httpEndpoint ?? resolveHttpEndpoint(options.endpoint);
     this.schema = options.schema ?? foundationSchema;
     this.#cache = options.cache ?? new MemoryFrickCache();
     this.#session = options.session ?? undefined;
@@ -829,9 +833,9 @@ export class FrickClient {
     return url.toString();
   }
 
-  /** HTTP origin derived from the WebSocket endpoint. Used by `loadOlder`. */
+  /** HTTP endpoint used by REST helpers such as `loadOlder`. */
   get httpEndpoint(): string {
-    return resolveHttpEndpoint(this.#endpoint);
+    return this.#httpEndpoint;
   }
 
   /**

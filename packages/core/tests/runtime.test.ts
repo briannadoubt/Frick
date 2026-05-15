@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   FrameKind,
   decodeFrame,
@@ -168,6 +168,27 @@ describe("foundation runtime", () => {
         deviceId: "device-web",
       }),
     );
+  });
+
+  it("uses explicit HTTP endpoint overrides for scrollback reads", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ data: [] }), { status: 200 }) as never,
+    );
+    const client = new FrickClient({
+      endpoint: "ws://socket.example.test/_frick/sync",
+      httpEndpoint: "https://api.example.test/frick",
+      schema: foundationSchema,
+    });
+
+    try {
+      await client.loadOlder("MessageStream", "conversation-general", 10, 20);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(
+        "https://api.example.test/frick/streams/MessageStream/conversation-general?before=20&limit=10",
+      );
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   it("sends client capabilities in the hello frame", () => {

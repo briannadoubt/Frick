@@ -9,7 +9,7 @@ struct FrickDemoApp: App {
         // Register the background-refresh handler before SwiftUI builds
         // the scene — iOS requires the registration during launch.
         FrickBackgroundSync.register {
-            FrickClient()
+            FrickClient(baseURL: DemoEndpoint.baseURL)
         }
     }
 

@@ -86,10 +86,24 @@ import {
 } from "@frick/core/chat";
 
 const defaultConversationId = "conversation-general";
-const demoHttpEndpoint = "http://127.0.0.1:4099";
+const demoHttpEndpoint = import.meta.env.VITE_FRICK_HTTP ?? "http://127.0.0.1:4099";
+const demoWsEndpoint = import.meta.env.VITE_FRICK_WS ?? syncEndpointForHttp(demoHttpEndpoint);
 const authSessionStorageKey = "frick-auth-session";
 const webDeviceStorageKey = "frick-web-device-id";
 const webReplicaStorageKey = "frick-web-replica-id";
+
+function syncEndpointForHttp(httpEndpoint: string): string {
+  const url = new URL(httpEndpoint);
+  if (url.protocol === "https:") {
+    url.protocol = "wss:";
+  } else if (url.protocol === "http:") {
+    url.protocol = "ws:";
+  }
+  url.pathname = `${url.pathname.replace(/\/$/, "")}/_frick/sync`;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
 
 export function App() {
   const [session, setSession] = useState<AuthSession | undefined>(() => readStoredSession());
@@ -129,7 +143,11 @@ export function App() {
           run from inside the auth screen. The provider tolerates a
           null session; the WebSocket reconnects with the new bearer
           token automatically when the session prop changes. */}
-      <FrickProvider endpoint="ws://127.0.0.1:4099/_frick/sync" session={session ?? null}>
+      <FrickProvider
+        endpoint={demoWsEndpoint}
+        httpEndpoint={demoHttpEndpoint}
+        session={session ?? null}
+      >
         <RequireAuth
           fallback={
             <AuthWorkspace
@@ -666,7 +684,7 @@ function ChatWorkspace({
       if (pushRegistration) {
         await revokePushDevice({
           httpEndpoint,
-          registrationId: pushRegistration.id,
+          registrationId: pushRegistration.registrationId,
           sessionToken: session.sessionToken,
         });
         setPushRegistration(undefined);
@@ -1600,7 +1618,11 @@ function readStoredPushRegistration(): PushRegistration | undefined {
   if (!raw) return undefined;
   try {
     const parsed = JSON.parse(raw) as Partial<PushRegistration>;
-    if (typeof parsed.id === "string" && typeof parsed.deviceId === "string" && typeof parsed.platform === "string") {
+    if (
+      typeof parsed.registrationId === "string" &&
+      typeof parsed.deviceId === "string" &&
+      typeof parsed.platform === "string"
+    ) {
       return parsed as PushRegistration;
     }
   } catch {

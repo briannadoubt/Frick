@@ -128,7 +128,7 @@ export interface SearchResponse {
 }
 
 export interface PushRegistration {
-  id: string;
+  registrationId: string;
   deviceId: string;
   platform: string;
   environment?: string;
@@ -312,8 +312,7 @@ export async function syncDemoAttachmentMetadata({
   sessionToken?: string | undefined;
   fetchImpl?: FetchImpl | undefined;
 }): Promise<SyncedBlobMetadata | undefined> {
-  const baseUrl = `${httpEndpoint.replace(/\/$/, "")}/`;
-  const createResponse = await fetchImpl(new URL("/blobs", baseUrl), {
+  const createResponse = await fetchImpl(frickHttpUrl(httpEndpoint, "blobs"), {
     method: "POST",
     headers: authorizedHeaders(sessionToken, { "content-type": "application/json" }),
     body: JSON.stringify(createBlobMetadataPayload(attachment, ownerId)),
@@ -323,7 +322,7 @@ export async function syncDemoAttachmentMetadata({
     throw new Error(`Blob metadata create returned ${createResponse.status}`);
   }
 
-  const readResponse = await fetchImpl(new URL(`/blobs/${encodeURIComponent(attachment.blobId)}`, baseUrl), {
+  const readResponse = await fetchImpl(frickHttpUrl(httpEndpoint, `blobs/${encodeURIComponent(attachment.blobId)}`), {
     headers: authorizedHeaders(sessionToken),
   });
   if (readResponse.status === 404) {
@@ -350,9 +349,8 @@ export async function syncDemoAttachment({
   sessionToken?: string | undefined;
   fetchImpl?: FetchImpl | undefined;
 }): Promise<{ metadata: BlobMetadataCreatePayload; downloadedBytes?: Uint8Array }> {
-  const baseUrl = `${httpEndpoint.replace(/\/$/, "")}/`;
   const metadata = createBlobMetadataPayload(attachment, ownerId);
-  const metadataResponse = await fetchImpl(new URL("/blobs", baseUrl), {
+  const metadataResponse = await fetchImpl(frickHttpUrl(httpEndpoint, "blobs"), {
     method: "POST",
     headers: authorizedHeaders(sessionToken, { "content-type": "application/json" }),
     body: JSON.stringify(metadata),
@@ -362,7 +360,7 @@ export async function syncDemoAttachment({
     throw new Error(`Blob metadata create returned ${metadataResponse.status}`);
   }
 
-  const contentUrl = new URL(`/blobs/${encodeURIComponent(attachment.blobId)}/content`, baseUrl);
+  const contentUrl = frickHttpUrl(httpEndpoint, `blobs/${encodeURIComponent(attachment.blobId)}/content`);
   const uploadResponse = await fetchImpl(contentUrl, {
     method: "PUT",
     headers: authorizedHeaders(sessionToken, { "content-type": attachment.mimeType }),
@@ -459,7 +457,6 @@ export async function searchMessages({
   limit?: number | undefined;
   fetchImpl?: FetchImpl | undefined;
 }): Promise<SearchResponse> {
-  const baseUrl = `${httpEndpoint.replace(/\/$/, "")}/`;
   const body: Record<string, unknown> = {
     index: "messages-fts",
     q,
@@ -468,7 +465,7 @@ export async function searchMessages({
   if (conversationId) {
     body.filter = { conversationId };
   }
-  const response = await fetchImpl(new URL("/search", baseUrl), {
+  const response = await fetchImpl(frickHttpUrl(httpEndpoint, "search"), {
     method: "POST",
     headers: authorizedHeaders(sessionToken, { "content-type": "application/json" }),
     body: JSON.stringify(body),
@@ -496,8 +493,7 @@ export async function registerPushDevice({
   sessionToken?: string | undefined;
   fetchImpl?: FetchImpl | undefined;
 }): Promise<PushRegistration> {
-  const baseUrl = `${httpEndpoint.replace(/\/$/, "")}/`;
-  const response = await fetchImpl(new URL("/push/registrations", baseUrl), {
+  const response = await fetchImpl(frickHttpUrl(httpEndpoint, "push/registrations"), {
     method: "POST",
     headers: authorizedHeaders(sessionToken, { "content-type": "application/json" }),
     body: JSON.stringify({ deviceId, token, platform, environment }),
@@ -520,9 +516,8 @@ export async function revokePushDevice({
   sessionToken?: string | undefined;
   fetchImpl?: FetchImpl | undefined;
 }): Promise<void> {
-  const baseUrl = `${httpEndpoint.replace(/\/$/, "")}/`;
   const response = await fetchImpl(
-    new URL(`/push/registrations/${encodeURIComponent(registrationId)}`, baseUrl),
+    frickHttpUrl(httpEndpoint, `push/registrations/${encodeURIComponent(registrationId)}`),
     {
       method: "DELETE",
       headers: authorizedHeaders(sessionToken),
@@ -557,8 +552,7 @@ export async function uploadImageAttachment({
     mimeType,
     contentHash,
   };
-  const baseUrl = `${httpEndpoint.replace(/\/$/, "")}/`;
-  const metadataResponse = await fetchImpl(new URL("/blobs", baseUrl), {
+  const metadataResponse = await fetchImpl(frickHttpUrl(httpEndpoint, "blobs"), {
     method: "POST",
     headers: authorizedHeaders(sessionToken, { "content-type": "application/json" }),
     body: JSON.stringify(createBlobMetadataPayload(metadata, ownerId)),
@@ -566,9 +560,9 @@ export async function uploadImageAttachment({
   if (!metadataResponse.ok) {
     throw new Error(await authErrorMessage(metadataResponse, "Blob metadata"));
   }
-  const contentUrl = new URL(
-    `/blobs/${encodeURIComponent(blobId)}/content?ownerId=${encodeURIComponent(ownerId)}`,
-    baseUrl,
+  const contentUrl = frickHttpUrl(
+    httpEndpoint,
+    `blobs/${encodeURIComponent(blobId)}/content?ownerId=${encodeURIComponent(ownerId)}`,
   );
   const uploadResponse = await fetchImpl(contentUrl, {
     method: "PUT",
@@ -610,13 +604,12 @@ export async function createConversation({
   sessionToken?: string | undefined;
   fetchImpl?: FetchImpl | undefined;
 }): Promise<CreatedConversationResponse> {
-  const baseUrl = `${httpEndpoint.replace(/\/$/, "")}/`;
   const body = {
     ...(title !== undefined ? { title } : {}),
     ...(kind !== undefined ? { kind } : {}),
     ...(participantUserIds !== undefined ? { participantUserIds } : {}),
   };
-  const response = await fetchImpl(new URL("/conversations", baseUrl), {
+  const response = await fetchImpl(frickHttpUrl(httpEndpoint, "conversations"), {
     method: "POST",
     headers: authorizedHeaders(sessionToken, { "content-type": "application/json" }),
     body: JSON.stringify(body),
@@ -644,8 +637,7 @@ export async function devLogin({
   platform?: string | undefined;
   fetchImpl?: FetchImpl | undefined;
 }): Promise<AuthSession> {
-  const baseUrl = `${httpEndpoint.replace(/\/$/, "")}/`;
-  const response = await fetchImpl(new URL("/auth/dev-login", baseUrl), {
+  const response = await fetchImpl(frickHttpUrl(httpEndpoint, "auth/dev-login"), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ userId, deviceId, replicaId, platform }),
@@ -769,8 +761,12 @@ function formatBytes(byteLength: number): string {
 }
 
 function signalUrl(httpEndpoint: string, name: string, key: string): URL {
+  return frickHttpUrl(httpEndpoint, `signals/${encodeURIComponent(name)}/${encodeURIComponent(key)}`);
+}
+
+function frickHttpUrl(httpEndpoint: string, path: string): URL {
   const baseUrl = `${httpEndpoint.replace(/\/$/, "")}/`;
-  return new URL(`/signals/${encodeURIComponent(name)}/${encodeURIComponent(key)}`, baseUrl);
+  return new URL(path.replace(/^\/+/, ""), baseUrl);
 }
 
 async function postAuthSession({
@@ -788,7 +784,6 @@ async function postAuthSession({
   fetchImpl: FetchImpl;
   timeoutMs: number;
 }): Promise<AuthSession> {
-  const baseUrl = `${httpEndpoint.replace(/\/$/, "")}/`;
   const abortController = timeoutMs > 0 ? new AbortController() : undefined;
   const timeoutId =
     abortController === undefined
@@ -799,7 +794,7 @@ async function postAuthSession({
 
   let response: Response;
   try {
-    response = await fetchImpl(new URL(path, baseUrl), {
+    response = await fetchImpl(frickHttpUrl(httpEndpoint, path), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(withoutUndefined(body)),

@@ -16,6 +16,14 @@ android {
         targetSdk = 37
         versionCode = 1
         versionName = "0.1.0"
+        val frickBaseUrl = (project.findProperty("frick.baseUrl") as String?)
+            ?: System.getenv("FRICK_BASE_URL")
+            ?: "http://10.0.2.2:4099"
+        buildConfigField("String", "FRICK_BASE_URL", "\"$frickBaseUrl\"")
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     compileOptions {

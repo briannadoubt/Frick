@@ -724,7 +724,14 @@ describe("push registration helpers", () => {
     const fetchImpl = async (input: URL, init?: RequestInit) => {
       calls.push({ url: input.toString(), init });
       return new Response(
-        JSON.stringify({ registration: { id: "reg-1", deviceId: "device-web", platform: "test" } }),
+        JSON.stringify({
+          registration: {
+            registrationId: "reg-1",
+            deviceId: "device-web",
+            platform: "test",
+            environment: "production",
+          },
+        }),
         { status: 201 },
       );
     };
@@ -737,7 +744,12 @@ describe("push registration helpers", () => {
         sessionToken: "session-token",
         fetchImpl,
       }),
-    ).resolves.toEqual({ id: "reg-1", deviceId: "device-web", platform: "test" });
+    ).resolves.toEqual({
+      registrationId: "reg-1",
+      deviceId: "device-web",
+      platform: "test",
+      environment: "production",
+    });
 
     expect(calls[0]?.url).toBe("http://127.0.0.1:4099/push/registrations");
     expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
@@ -746,6 +758,32 @@ describe("push registration helpers", () => {
       platform: "test",
       environment: "production",
     });
+  });
+
+  test("registerPushDevice preserves explicit HTTP endpoint base paths", async () => {
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    const fetchImpl = async (input: URL, init?: RequestInit) => {
+      calls.push({ url: input.toString(), init });
+      return new Response(
+        JSON.stringify({
+          registration: {
+            registrationId: "reg-1",
+            deviceId: "device-web",
+            platform: "test",
+          },
+        }),
+        { status: 201 },
+      );
+    };
+
+    await registerPushDevice({
+      httpEndpoint: "https://api.example.test/frick",
+      deviceId: "device-web",
+      token: "tok-123",
+      fetchImpl,
+    });
+
+    expect(calls[0]?.url).toBe("https://api.example.test/frick/push/registrations");
   });
 
   test("revokePushDevice DELETEs and swallows 404 responses", async () => {

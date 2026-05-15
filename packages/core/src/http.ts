@@ -4,8 +4,9 @@
  * {@link FrickClient.loadOlder} and by the `@frick/react` provider to
  * derive a default `httpEndpoint` when the consumer doesn't pass one.
  *
- * Strips path, search, and hash so the result is a clean origin suitable
- * for relative-URL composition.
+ * For WebSocket endpoints, strips path, search, and hash so the result is a
+ * clean origin suitable for relative-URL composition. Explicit HTTP(S)
+ * endpoints keep their path so apps can mount Frick under a subpath.
  */
 export function resolveHttpEndpoint(endpoint: string): string {
   const url = new URL(endpoint);

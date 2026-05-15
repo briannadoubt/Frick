@@ -15,13 +15,13 @@ import java.util.concurrent.TimeUnit
 /**
  * Background sync drain for the Android demo. WorkManager wakes the
  * worker periodically (every ~15 minutes, the OS minimum) and we run
- * `FrickClient.flushPendingAppends()` against the live socket. The
- * pending-append queue is durable in SQLite ([FrickSQLiteStorage]) so
+ * `FrickClient.flushPendingAppends()` to replay queued appends over
+ * HTTP. The pending-append queue is durable in SQLite ([SQLiteFrickStorage]) so
  * any messages typed offline catch up on the next opportunity.
  *
- * Constraint: requires unmetered network so we don't burn mobile data
- * on a background drain. Apps that want to drain on cellular can drop
- * the constraint when scheduling.
+ * Constraint: requires a connected network. This permits metered
+ * networks; apps that want Wi-Fi-only drains can switch the scheduled
+ * constraint to [NetworkType.UNMETERED].
  *
  * Registered from [MainActivity.onCreate] via [FrickSyncWorker.schedule].
  */
@@ -34,8 +34,8 @@ class FrickSyncWorker(
         // FrickClient's positional ctor takes `baseUrl: String`, not a
         // Context — wire the SQLite-backed storage explicitly so the
         // drain reads the same pending-append queue the foreground VM
-        // does. (Defaults to the emulator-friendly `10.0.2.2:4099`.)
-        val client = FrickClient(storage = SQLiteFrickStorage(applicationContext))
+        // does, while using the demo's configured server endpoint.
+        val client = FrickClient(baseUrl = DemoBaseUrl, storage = SQLiteFrickStorage(applicationContext))
         return try {
             client.flushPendingAppends()
             Result.success()

@@ -40,17 +40,25 @@ export function FrickProvider({
   client,
   session,
 }: FrickProviderProps) {
+  const resolvedHttpEndpoint = client?.httpEndpoint ?? httpEndpoint ?? resolveHttpEndpoint(endpoint);
   const frick = useMemo(
-    () => client ?? new FrickClient({ endpoint, schema, ...(session !== undefined ? { session } : {}) }),
-    [client, endpoint, schema],
+    () =>
+      client ??
+      new FrickClient({
+        endpoint,
+        httpEndpoint: resolvedHttpEndpoint,
+        schema,
+        ...(session !== undefined ? { session } : {}),
+      }),
+    [client, endpoint, resolvedHttpEndpoint, schema],
   );
   const value = useMemo(
     () => ({
       client: frick,
-      httpEndpoint: httpEndpoint ?? resolveHttpEndpoint(endpoint),
+      httpEndpoint: resolvedHttpEndpoint,
       session: session === null ? undefined : session ?? frick.session,
     }),
-    [frick, endpoint, httpEndpoint, session],
+    [frick, resolvedHttpEndpoint, session],
   );
 
   useEffect(() => {
@@ -288,7 +296,7 @@ export function useOptionalEndpoint<T = unknown>(path: string): OptionalEndpoint
 
   useEffect(() => {
     const controller = new AbortController();
-    const url = new URL(path, `${httpEndpoint.replace(/\/$/, "")}/`);
+    const url = frickHttpUrl(httpEndpoint, path);
     setState((current) => ({ ...current, loading: true }));
 
     fetch(url, createAuthorizedFetchInit(session, { signal: controller.signal }))
@@ -336,6 +344,10 @@ export function inboxEndpointPath(userId?: string): string {
   }
   const query = new URLSearchParams({ userId });
   return `/inbox?${query.toString()}`;
+}
+
+function frickHttpUrl(httpEndpoint: string, path: string): URL {
+  return new URL(path.replace(/^\/+/, ""), `${httpEndpoint.replace(/\/$/, "")}/`);
 }
 
 export function resolveHttpEndpoint(endpoint: string): string {

@@ -31,7 +31,7 @@ internal const val DemoReplicaId = "android-demo"
 internal const val DemoPlatform = "android"
 internal const val DefaultConversationId = "conversation-general"
 internal const val ChatDestinationId = "chat"
-internal const val DemoBaseUrl = "http://10.0.2.2:4099"
+internal val DemoBaseUrl: String = BuildConfig.FRICK_BASE_URL
 private const val TypingDebounceMs = 800L
 private const val PrefsName = "frick-demo-prefs"
 private const val PrefPushRegistrationId = "push.registrationId"
@@ -117,7 +117,7 @@ internal data class FoundationUiState(
 
 internal class FoundationViewModel(application: Application) : AndroidViewModel(application) {
     private val storage = SQLiteFrickStorage(application)
-    private val frick = FrickClient(storage = storage)
+    private val frick = FrickClient(baseUrl = DemoBaseUrl, storage = storage)
     private val prefs = application.getSharedPreferences(PrefsName, Context.MODE_PRIVATE)
     private var streamJob: Job? = null
     private var socket: FrickSyncSocket? = null
@@ -218,7 +218,7 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
                     )
                     if (result != null) {
                         prefs.edit {
-                            putString(PrefPushRegistrationId, result.id)
+                            putString(PrefPushRegistrationId, result.registrationId)
                             putBoolean(PrefPushEnabled, true)
                         }
                         _uiState.update { state -> state.copy(pushEnabled = true, status = "Push registered") }

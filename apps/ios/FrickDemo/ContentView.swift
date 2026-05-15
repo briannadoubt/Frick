@@ -3,6 +3,21 @@ import FrickSwift
 import Observation
 import SwiftUI
 
+enum DemoEndpoint {
+    static var baseURL: URL {
+        let fallback = URL(string: "http://127.0.0.1:4099")!
+        if let override = ProcessInfo.processInfo.environment["FRICK_ENDPOINT"],
+           let url = URL(string: override) {
+            return url
+        }
+        if let configured = Bundle.main.object(forInfoDictionaryKey: "FrickEndpoint") as? String,
+           let url = URL(string: configured) {
+            return url
+        }
+        return fallback
+    }
+}
+
 enum AuthMode: String, CaseIterable {
     case login
     case signUp
@@ -63,7 +78,7 @@ final class FoundationModel {
     var isAuthenticating = false
 
     @ObservationIgnored
-    private let client = FrickClient()
+    private let client = FrickClient(baseURL: DemoEndpoint.baseURL)
     @ObservationIgnored
     private let deviceId = "ios-demo-device"
     @ObservationIgnored
@@ -203,7 +218,7 @@ final class FoundationModel {
         socket = opened
         socketStatusTask = Task { [weak self] in
             for await update in await opened.statusUpdates() {
-                await self?.applySyncStatus(update)
+                self?.applySyncStatus(update)
             }
         }
         // The wire's Delta + PresenceDelta events are consumed by the
@@ -316,7 +331,7 @@ final class FoundationModel {
     }
 
     private func postPushRegistration(sessionToken: String, deviceId: String, token: String) async throws -> String {
-        let url = URL(string: "http://127.0.0.1:4099/push/registrations")!
+        let url = DemoEndpoint.baseURL.appendingPathComponent("push/registrations")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
@@ -333,7 +348,7 @@ final class FoundationModel {
         }
         let parsed = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         let registration = parsed?["registration"] as? [String: Any]
-        guard let id = registration?["id"] as? String else {
+        guard let id = registration?["registrationId"] as? String else {
             throw URLError(.badServerResponse)
         }
         return id
@@ -343,7 +358,7 @@ final class FoundationModel {
         guard let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
             throw URLError(.badURL)
         }
-        let url = URL(string: "http://127.0.0.1:4099/push/registrations/\(encoded)")!
+        let url = DemoEndpoint.baseURL.appendingPathComponent("push/registrations/\(encoded)")
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
         request.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "authorization")

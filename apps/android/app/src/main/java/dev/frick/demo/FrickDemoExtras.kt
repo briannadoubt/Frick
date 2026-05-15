@@ -10,14 +10,16 @@ import org.json.JSONObject
 
 // FrickDemoExtras — thin HTTP helpers that the SDK does not yet expose.
 //
-// The round-10b FrickSyncSocket adds WebSocket subscribe/append/upsert, but
-// presence-write and push registration are still HTTP-only on the server side.
-// Rather than touch the SDK, the demo issues these requests directly with
-// HttpURLConnection (no extra dependency) and the active session token.
+// FrickSyncSocket covers realtime subscribe/append/upsert and presence writes.
+// Push registration/revocation remain HTTP-only in the demo, so these helpers
+// issue those requests directly with HttpURLConnection (no extra dependency)
+// and the active session token.
 
-internal data class PushRegistrationResult(val id: String)
+internal data class PushRegistrationResult(val registrationId: String)
 
 internal object FrickDemoHttp {
+    private val baseUrl = DemoBaseUrl.trimEnd('/')
+
     fun registerPush(
         session: FrickSession,
         deviceId: String,
@@ -33,12 +35,16 @@ internal object FrickDemoHttp {
         val response = postJson(session, "/push/registrations", body) ?: return null
         val parsed = JSONObject(response)
         val registration = parsed.optJSONObject("registration") ?: return null
-        val id = registration.optString("id")
-        return if (id.isNullOrEmpty()) null else PushRegistrationResult(id = id)
+        val registrationId = registration.optString("registrationId")
+        return if (registrationId.isNullOrEmpty()) {
+            null
+        } else {
+            PushRegistrationResult(registrationId = registrationId)
+        }
     }
 
     fun unregisterPush(session: FrickSession, registrationId: String): Boolean {
-        val url = URL("$DemoBaseUrl/push/registrations/$registrationId")
+        val url = url("/push/registrations/$registrationId")
         val connection = url.openConnection() as HttpURLConnection
         return try {
             connection.requestMethod = "DELETE"
@@ -55,7 +61,7 @@ internal object FrickDemoHttp {
     }
 
     private fun postJson(session: FrickSession, path: String, body: String): String? {
-        val url = URL("$DemoBaseUrl$path")
+        val url = url(path)
         val connection = url.openConnection() as HttpURLConnection
         return try {
             connection.requestMethod = "POST"
@@ -78,4 +84,6 @@ internal object FrickDemoHttp {
             connection.disconnect()
         }
     }
+
+    private fun url(path: String): URL = URL("$baseUrl/${path.trimStart('/')}")
 }
