@@ -19,6 +19,18 @@ authoring guide — it walks through `frick init` and the `frick scaffold`
 commands that produce a Frick application skeleton compatible with this
 runbook.
 
+## Web demo security headers
+
+The Vite dev and preview servers attach the demo app's CSP and browser
+security headers automatically. `pnpm --filter @frick/web build` also
+emits those strict preview headers to `apps/web/dist/_headers`, which
+static hosts such as Netlify and Cloudflare Pages can apply at the site
+root. Set `VITE_FRICK_HTTP` and, when the WebSocket endpoint differs from
+the derived default, `VITE_FRICK_WS` before building so `connect-src`
+matches the production server rather than the local demo defaults. If
+your deployment platform ignores `_headers`, copy the generated values
+into the web server or CDN configuration before serving the demo to users.
+
 ## Runtime modes
 
 The server reads `FRICK_ENV` (defaulting to `development`). Allowed values:

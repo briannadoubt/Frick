@@ -216,6 +216,8 @@ one user's local push-registration state into the next login.
   demo app. Preview builds use a no-`unsafe-inline` / no-`unsafe-eval`
   policy; the dev server keeps the `script-src`, `style-src`, and local
   `connect-src` allowances Vite needs for React refresh and HMR.
+- `pnpm --filter @frick/web build` emits the same strict preview header set
+  to `dist/_headers` for static hosts that honor root `_headers` files.
 - The demo keeps live auth sessions in memory only. Startup and sign-in purge
   any legacy `sessionStorage` / `localStorage` bearer tokens instead of
   restoring or migrating them, so reloading the demo requires re-auth.
@@ -227,9 +229,8 @@ one user's local push-registration state into the next login.
 
 **Known gaps.**
 
-- These headers cover the Vite-served demo surface. Apps that deploy Frick
-  behind another web server must carry equivalent headers in that server or
-  CDN config.
+- Hosts that do not honor `dist/_headers` must carry equivalent headers in
+  that server or CDN config.
 - The dev-server CSP is intentionally weaker than preview so HMR keeps
   working. Use preview or a production host to audit the stricter policy.
 - Bearer tokens are still readable by same-origin JavaScript while a session

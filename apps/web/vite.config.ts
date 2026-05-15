@@ -1,6 +1,10 @@
 import react from "@vitejs/plugin-react";
-import { defineConfig, loadEnv, type ConfigEnv } from "vite";
-import { buildWebSecurityHeaders, type WebSecurityHeaderOptions } from "./src/security-headers.js";
+import { defineConfig, loadEnv, type ConfigEnv, type Plugin } from "vite";
+import {
+  buildWebSecurityHeaders,
+  formatStaticWebSecurityHeaders,
+  type WebSecurityHeaderOptions,
+} from "./src/security-headers.js";
 
 const defaultDemoHttpEndpoint = "http://127.0.0.1:4099";
 
@@ -8,7 +12,7 @@ export default defineConfig((env) => {
   const endpoints = resolveDemoEndpoints(env);
 
   return {
-    plugins: [react()],
+    plugins: [react(), emitStaticSecurityHeaders(endpoints)],
     server: {
       headers: buildWebSecurityHeaders({ ...endpoints, command: "serve" }),
     },
@@ -17,6 +21,22 @@ export default defineConfig((env) => {
     },
   };
 });
+
+function emitStaticSecurityHeaders(endpoints: Omit<WebSecurityHeaderOptions, "command">): Plugin {
+  return {
+    name: "frick-static-security-headers",
+    apply: "build",
+    generateBundle() {
+      this.emitFile({
+        type: "asset",
+        fileName: "_headers",
+        source: formatStaticWebSecurityHeaders(
+          buildWebSecurityHeaders({ ...endpoints, command: "preview" }),
+        ),
+      });
+    },
+  };
+}
 
 function resolveDemoEndpoints(env: ConfigEnv): Omit<WebSecurityHeaderOptions, "command"> {
   const loaded = loadEnv(env.mode, process.cwd(), "");

@@ -1,6 +1,10 @@
 import { describe, expect, test } from "vitest";
 import { isDevEnvironment } from "./App.js";
-import { buildWebSecurityHeaders, buildWebContentSecurityPolicy } from "./security-headers.js";
+import {
+  buildWebSecurityHeaders,
+  buildWebContentSecurityPolicy,
+  formatStaticWebSecurityHeaders,
+} from "./security-headers.js";
 
 describe("web demo security headers", () => {
   test("serves a strict CSP for preview builds", () => {
@@ -45,6 +49,22 @@ describe("web demo security headers", () => {
     expect(headers["permissions-policy"]).toContain("camera=()");
     expect(headers["cross-origin-opener-policy"]).toBe("same-origin");
     expect(headers["service-worker-allowed"]).toBe("/");
+  });
+
+  test("formats build-time static host headers with canonical names", () => {
+    const headersFile = formatStaticWebSecurityHeaders(
+      buildWebSecurityHeaders({
+        command: "preview",
+        demoHttpEndpoint: "https://demo.example.test",
+        demoWsEndpoint: "wss://demo.example.test/_frick/sync",
+      }),
+    );
+
+    expect(headersFile).toContain("/*\n  Content-Security-Policy: default-src 'self'");
+    expect(headersFile).toContain("  X-Content-Type-Options: nosniff");
+    expect(headersFile).toContain("  Service-Worker-Allowed: /");
+    expect(headersFile).not.toContain("'unsafe-inline'");
+    expect(headersFile).not.toContain("'unsafe-eval'");
   });
 
   test("does not enable devtools just because a production preview runs on localhost", () => {

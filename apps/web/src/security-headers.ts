@@ -27,6 +27,14 @@ export function buildWebSecurityHeaders(options: WebSecurityHeaderOptions): Reco
   };
 }
 
+export function formatStaticWebSecurityHeaders(headers: Record<string, string>): string {
+  return [
+    "/*",
+    ...Object.entries(headers).map(([name, value]) => `  ${canonicalHeaderName(name)}: ${value}`),
+    "",
+  ].join("\n");
+}
+
 export function buildWebContentSecurityPolicy(options: WebSecurityHeaderOptions): string {
   const isDevServer = options.command === "serve";
   const connectSources = [
@@ -77,4 +85,17 @@ function originFor(value: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function canonicalHeaderName(name: string): string {
+  const knownNames: Record<string, string> = {
+    "content-security-policy": "Content-Security-Policy",
+    "x-content-type-options": "X-Content-Type-Options",
+    "referrer-policy": "Referrer-Policy",
+    "permissions-policy": "Permissions-Policy",
+    "cross-origin-opener-policy": "Cross-Origin-Opener-Policy",
+    "cross-origin-resource-policy": "Cross-Origin-Resource-Policy",
+    "service-worker-allowed": "Service-Worker-Allowed",
+  };
+  return knownNames[name] ?? name;
 }
