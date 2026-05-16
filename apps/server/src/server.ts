@@ -327,6 +327,7 @@ export function createFrickServer(options: ServerOptions = {}) {
   const wss = new WebSocketServer({
     server,
     path: "/_frick/sync",
+    maxPayload: limits.maxWebSocketFrameBytes,
     verifyClient: (info, callback) => {
       const origin = typeof info.origin === "string" && info.origin.length > 0 ? info.origin : undefined;
       if (isOriginAllowed(origin, config.allowedOrigins)) {
@@ -880,6 +881,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           throw principal;
         }
         store.deleteSession(token);
+        gateway.closeSession(token);
         sendAuthJson(response, 200, { ok: true });
       } catch (error) {
         sendErrorWithMetrics(response, error, "logout_rejected");
@@ -1162,11 +1164,12 @@ export function createFrickServer(options: ServerOptions = {}) {
         const body = await readJsonBody(request, tenantLimits.maxHttpBodyBytes);
         const indexName = requireString(body.index, "index");
         const q = requireString(body.q, "q");
+        assertSearchTextWithinLimit(q, tenantLimits.maxSearchQueryBytes);
         const def = store.searchIndexes.get(indexName);
         if (!def) {
           throw new SearchIndexNotFoundError(indexName);
         }
-        const filter = parseSearchFilter(body.filter);
+        const filter = parseSearchFilter(body.filter, tenantLimits);
         const rawLimit = body.limit;
         let limit = DEFAULT_SEARCH_LIMIT;
         if (rawLimit !== undefined) {
@@ -1184,12 +1187,17 @@ export function createFrickServer(options: ServerOptions = {}) {
         );
         // Authz: tenant scoping happens at the adapter call; source-level
         // visibility is filtered below before any hit leaves the server.
-        const result = store.searchAdapter.query(principal.tenantId, {
-          index: indexName,
-          q,
-          ...(filter !== undefined ? { filter } : {}),
-          limit: principal.scope === "admin" ? limit : MAX_SEARCH_LIMIT,
-        });
+        let result: FrickSearchResult;
+        try {
+          result = store.searchAdapter.query(principal.tenantId, {
+            index: indexName,
+            q,
+            ...(filter !== undefined ? { filter } : {}),
+            limit: principal.scope === "admin" ? limit : MAX_SEARCH_LIMIT,
+          });
+        } catch {
+          throw new InvalidSearchQueryError();
+        }
         const authorizedResult = filterSearchResultForPrincipal(
           result,
           def,
@@ -1506,20 +1514,31 @@ export function createFrickServer(options: ServerOptions = {}) {
         const beforeParam = url.searchParams.get("before");
         const limitParam = url.searchParams.get("limit");
         let events;
+        let cursor = Number.isFinite(after) ? after : 0;
+        let hasMore = false;
         if (beforeParam !== null) {
           // Backwards page for scrollback. `before` is exclusive; `limit`
           // defaults to 50 and is clamped server-side to [1, 500].
           const before = Number(beforeParam);
-          const limit = limitParam !== null ? Number(limitParam) : 50;
+          const limit = parseStreamPageLimit(limitParam, 50, Math.min(500, tenantLimits.maxStreamPageSize));
           events = store.readEventsBefore(
             principal.tenantId,
             stream,
             key,
             Number.isFinite(before) ? before : Number.MAX_SAFE_INTEGER,
-            Number.isFinite(limit) ? limit : 50,
+            limit,
           );
+          cursor = events.at(-1)?.sequence ?? cursor;
         } else {
-          events = store.readEvents(principal.tenantId, stream, key, Number.isFinite(after) ? after : 0);
+          const limit = parseStreamPageLimit(
+            limitParam,
+            tenantLimits.maxStreamPageSize,
+            tenantLimits.maxStreamPageSize,
+          );
+          const page = store.readEvents(principal.tenantId, stream, key, cursor, limit + 1);
+          hasMore = page.length > limit;
+          events = page.slice(0, limit);
+          cursor = events.at(-1)?.sequence ?? cursor;
         }
         if (parts[4] === "events") {
           sse.open(response, {
@@ -1527,7 +1546,8 @@ export function createFrickServer(options: ServerOptions = {}) {
             stream,
             key,
             events,
-            cursor: Number.isFinite(after) ? after : 0,
+            cursor,
+            hasMore,
           });
           return;
         }
@@ -1536,6 +1556,8 @@ export function createFrickServer(options: ServerOptions = {}) {
           stream,
           key,
           data: events,
+          cursor,
+          hasMore,
         });
       } catch (error) {
         sendErrorWithMetrics(response, error, "stream_rejected");
@@ -1822,6 +1844,19 @@ class SearchIndexNotFoundError extends Error {
 }
 
 /**
+ * Thrown by `POST /search` when a search adapter rejects the query syntax.
+ * The wrapped adapter error is deliberately not exposed because SQLite FTS
+ * errors can include implementation-specific parser details.
+ */
+class InvalidSearchQueryError extends Error {
+  readonly reason = "invalidSearchQuery";
+  constructor() {
+    super("Invalid search query");
+    this.name = "InvalidSearchQueryError";
+  }
+}
+
+/**
  * Validate body.tenantId at an auth boundary. Returns the normalized tenant
  * id. If the caller supplied a `tenantId` field at all (even empty string),
  * it must match {@link validateTenantId}'s strict regex; if omitted, the
@@ -1950,6 +1985,9 @@ function sendError(response: http.ServerResponse, error: unknown, requestId: str
     details.reason = error.reason;
     details.index = error.index;
   }
+  if (error instanceof InvalidSearchQueryError) {
+    details.reason = error.reason;
+  }
   if (error instanceof FrickLimitError) {
     details.limit = error.limit;
     details.configuredMax = error.configuredMax;
@@ -1993,6 +2031,9 @@ function httpErrorCode(error: unknown): FrickErrorCode {
     return "blob.unsupportedContentType";
   }
   if (error instanceof AdminAuditWriteError) {
+    return "sync.protocolError";
+  }
+  if (error instanceof InvalidSearchQueryError) {
     return "sync.protocolError";
   }
   if (error instanceof FrickLimitError) {
@@ -3240,22 +3281,83 @@ function isProtectedPath(pathname: string): boolean {
  * and booleans are rejected so the SQLite adapter's `json_extract(...)`
  * lookup never has to coerce.
  */
-function parseSearchFilter(value: unknown): Record<string, string | number> | undefined {
+function parseSearchFilter(value: unknown, limits: FrickLimits): Record<string, string | number> | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "object" || Array.isArray(value)) {
     throw new Error("filter must be an object");
   }
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length > limits.maxSearchFilterFields) {
+    throw new FrickLimitError({
+      limit: "maxSearchFilterFields",
+      actualValue: entries.length,
+      configuredMax: limits.maxSearchFilterFields,
+    });
+  }
   const out: Record<string, string | number> = {};
-  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+  for (const [key, raw] of entries) {
+    assertSearchFilterKey(key, limits.maxSearchFilterKeyBytes);
     if (isReservedSearchField(key)) {
       throw new Error(`filter.${key} is reserved`);
+    }
+    if (typeof raw === "number" && !Number.isFinite(raw)) {
+      throw new Error(`filter.${key} must be a finite number`);
     }
     if (typeof raw !== "string" && typeof raw !== "number") {
       throw new Error(`filter.${key} must be a string or number`);
     }
+    assertSearchFilterValueWithinLimit(raw, limits.maxSearchFilterValueBytes);
     out[key] = raw;
   }
   return out;
+}
+
+function assertSearchTextWithinLimit(value: string, maxBytes: number): void {
+  const actualValue = Buffer.byteLength(value, "utf8");
+  if (actualValue > maxBytes) {
+    throw new FrickLimitError({
+      limit: "maxSearchQueryBytes",
+      actualValue,
+      configuredMax: maxBytes,
+    });
+  }
+}
+
+function assertSearchFilterKey(key: string, maxBytes: number): void {
+  const actualValue = Buffer.byteLength(key, "utf8");
+  if (actualValue > maxBytes) {
+    throw new FrickLimitError({
+      limit: "maxSearchFilterKeyBytes",
+      actualValue,
+      configuredMax: maxBytes,
+    });
+  }
+  if (!/^[A-Za-z0-9_-]+$/.test(key)) {
+    throw new Error("filter key has invalid shape");
+  }
+}
+
+function assertSearchFilterValueWithinLimit(value: string | number, maxBytes: number): void {
+  const actualValue = Buffer.byteLength(String(value), "utf8");
+  if (actualValue > maxBytes) {
+    throw new FrickLimitError({
+      limit: "maxSearchFilterValueBytes",
+      actualValue,
+      configuredMax: maxBytes,
+    });
+  }
+}
+
+function parseStreamPageLimit(value: string | null, defaultLimit: number, configuredMax: number): number {
+  const max = Math.max(1, Math.floor(configuredMax));
+  if (value === null) {
+    return Math.max(1, Math.min(max, Math.floor(defaultLimit)));
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return Math.max(1, Math.min(max, Math.floor(defaultLimit)));
+  }
+  return Math.max(1, Math.min(max, Math.floor(parsed)));
 }
 
 function filterSearchResultForPrincipal(

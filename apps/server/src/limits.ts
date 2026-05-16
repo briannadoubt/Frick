@@ -17,6 +17,14 @@ export interface FrickLimits {
   maxSubscriptionsPerConnection: number;
   /** Maximum page size for stream pagination. */
   maxStreamPageSize: number;
+  /** Maximum UTF-8 byte length of a POST /search q value. */
+  maxSearchQueryBytes: number;
+  /** Maximum number of exact-match filter fields on a POST /search request. */
+  maxSearchFilterFields: number;
+  /** Maximum UTF-8 byte length of each POST /search filter key. */
+  maxSearchFilterKeyBytes: number;
+  /** Maximum UTF-8 byte length of each POST /search filter stringified value. */
+  maxSearchFilterValueBytes: number;
   /** Maximum number of unacknowledged appends queued per client. */
   maxPendingAppendsPerClient: number;
   /** Maximum bytes per inbound WebSocket frame before msgpack decode. */
@@ -41,6 +49,10 @@ export const DEFAULT_FRICK_LIMITS: FrickLimits = Object.freeze({
   maxBlobBytes: 25_000_000,
   maxSubscriptionsPerConnection: 256,
   maxStreamPageSize: 500,
+  maxSearchQueryBytes: 4_096,
+  maxSearchFilterFields: 16,
+  maxSearchFilterKeyBytes: 128,
+  maxSearchFilterValueBytes: 512,
   maxPendingAppendsPerClient: 1_000,
   maxWebSocketFrameBytes: 524_288,
   presenceTtlMinSeconds: 5,

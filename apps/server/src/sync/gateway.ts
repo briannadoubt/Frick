@@ -34,6 +34,7 @@ import {
   assertCanWritePresence,
   AuthenticationError,
   AuthorizationError,
+  SessionExpiredError,
   tenantMembershipReader,
   type FrickPolicyHook,
   type Principal,
@@ -75,6 +76,7 @@ export class SyncGateway {
   readonly #pendingAppendCounts = new WeakMap<SyncClient, number>();
   readonly #lastSeenAt = new WeakMap<SyncClient, number>();
   readonly #completedHandshakes = new WeakSet<SyncClient>();
+  readonly #clientsBySessionToken = new Map<string, Set<SyncClient>>();
   /**
    * Per-connection resolved {@link FrickLimits}. Populated once at attach
    * time when we know the principal's tenant id, then re-used across every
@@ -139,9 +141,16 @@ export class SyncGateway {
 
   attach(): void {
     this.wss.on("connection", (socket, request) => {
-      const principal = this.#principalFromRequest(request);
-      const client: SyncClient = { socket, subscriptions: new Map(), ...(principal ? { principal } : {}) };
+      const sessionToken = bearerTokenFromRequest(request);
+      const principal = sessionToken ? this.#principalFromSessionToken(sessionToken) : undefined;
+      const client: SyncClient = {
+        socket,
+        subscriptions: new Map(),
+        ...(principal ? { principal } : {}),
+        ...(principal && sessionToken ? { sessionToken } : {}),
+      };
       this.#subscriptions.addClient(client);
+      if (principal && sessionToken) this.#addSessionClient(sessionToken, client);
       if (principal) this.#bumpTenantCount(principal.tenantId, +1);
       this.#pendingAppendCounts.set(client, 0);
       this.#lastSeenAt.set(client, Date.now());
@@ -178,10 +187,16 @@ export class SyncGateway {
         this.#lastSeenAt.set(client, Date.now());
         this.#handleRawFrame(client, socket, payload as Buffer);
       });
+      socket.on("error", () => {
+        // Protocol-level closes (for example ws maxPayload violations) are
+        // expected to emit on the socket before the close event finishes the
+        // normal cleanup path.
+      });
       socket.on("close", () => {
         clearInterval(heartbeat);
         this.#heartbeatTimers.delete(heartbeat);
         this.#subscriptions.removeClient(client);
+        this.#removeSessionClient(client);
         if (client.principal) this.#bumpTenantCount(client.principal.tenantId, -1);
         this.#activeConnections = Math.max(0, this.#activeConnections - 1);
         this.#connectionsGauge?.set(this.#activeConnections);
@@ -203,10 +218,26 @@ export class SyncGateway {
       clearInterval(timer);
     }
     this.#heartbeatTimers.clear();
+    this.#clientsBySessionToken.clear();
     this.#projections?.setDeltaListener(undefined);
     this.#clusterUnsubscribe?.();
     this.#clusterUnsubscribe = undefined;
     this.#subscriptions.closeAll();
+  }
+
+  closeSession(sessionToken: string): void {
+    const clients = this.#clientsBySessionToken.get(sessionToken);
+    if (!clients) {
+      return;
+    }
+    for (const client of [...clients]) {
+      try {
+        client.socket.close(1008, "Session revoked");
+      } catch {
+        client.socket.terminate();
+      }
+    }
+    this.#clientsBySessionToken.delete(sessionToken);
   }
 
   /**
@@ -724,16 +755,17 @@ export class SyncGateway {
     if (payload.kind === "stream") {
       const key = requireKey(payload);
       const cursor = payload.cursor ?? 0;
-      const events = this.store
-        .readEvents(principal.tenantId, payload.name, key, cursor)
-        .map((event) => packStreamEvent(this.store.schema, event));
+      const pageLimit = clientLimits.maxStreamPageSize;
+      const page = this.store.readEvents(principal.tenantId, payload.name, key, cursor, pageLimit + 1);
+      const hasMore = page.length > pageLimit;
+      const events = page.slice(0, pageLimit).map((event) => packStreamEvent(this.store.schema, event));
       sendFrame(client.socket, [
         FrameKind.StreamPage,
         {
           subscriptionId: payload.subscriptionId,
           events,
           cursor: events.at(-1)?.[2] ?? cursor,
-          hasMore: false,
+          hasMore,
         },
       ]);
       return;
@@ -1093,10 +1125,41 @@ export class SyncGateway {
   }
 
   #activePrincipalForFrame(client: SyncClient, requestId: string): Principal | undefined {
-    const principal = client.principal;
+    let principal = client.principal;
     if (!principal) {
       this.#sendAuthNack(client, requestId, new AuthenticationError("Missing session token"));
       return undefined;
+    }
+    if (client.sessionToken) {
+      const active = this.#principalFromActiveSessionToken(client.sessionToken);
+      if (active instanceof AuthenticationError) {
+        this.#sendAuthNack(client, requestId, active);
+        try {
+          client.socket.close(1008, active.message);
+        } catch {
+          // socket already closing
+        }
+        return undefined;
+      }
+      if (!samePrincipal(principal, active)) {
+        this.#sendAuthNack(
+          client,
+          requestId,
+          new AuthorizationError({
+            allow: false,
+            reason: "notAuthorizedForResource",
+            publicMessage: "Session principal changed",
+          }),
+        );
+        try {
+          client.socket.close(1008, "Session principal changed");
+        } catch {
+          // socket already closing
+        }
+        return undefined;
+      }
+      client.principal = active;
+      principal = active;
     }
     if (!this.#isPrincipalActive(principal)) {
       this.#sendAuthNack(client, requestId, new AuthenticationError("Tenant is archived"));
@@ -1132,12 +1195,11 @@ export class SyncGateway {
         });
         return false;
       }
+      this.#setClientSession(client, sessionToken, principal);
       return true;
     }
 
-    client.principal = principal;
-    this.#bumpTenantCount(principal.tenantId, +1);
-    this.#clientLimits.set(client, resolveTenantLimits(principal.tenantId, this.store, this.#limits));
+    this.#setClientSession(client, sessionToken, principal);
     return true;
   }
 
@@ -1167,27 +1229,64 @@ export class SyncGateway {
     }
   }
 
-  #principalFromRequest(request: IncomingMessage): Principal | undefined {
-    const token = bearerTokenFromRequest(request);
-    if (!token) {
-      return undefined;
-    }
-    return this.#principalFromSessionToken(token);
+  #principalFromSessionToken(token: string): Principal | undefined {
+    const principal = this.#principalFromActiveSessionToken(token);
+    return principal instanceof AuthenticationError ? undefined : principal;
   }
 
-  #principalFromSessionToken(token: string): Principal | undefined {
+  #principalFromActiveSessionToken(token: string): Principal | AuthenticationError {
     const session = this.store.readActiveSession(token);
-    if (session && !this.#isTenantActive(session.tenantId)) {
-      return undefined;
+    if (!session) {
+      const stale = this.store.readAnySession(token);
+      if (stale && Date.parse(stale.expiresAt) <= Date.now()) {
+        return new SessionExpiredError();
+      }
+      return new AuthenticationError("Invalid or expired session token");
     }
-    return session
-      ? {
-          userId: session.userId,
-          deviceId: session.deviceId,
-          replicaId: session.replicaId,
-          tenantId: session.tenantId,
-        }
-      : undefined;
+    if (!this.#isTenantActive(session.tenantId)) {
+      return new AuthenticationError("Tenant is archived");
+    }
+    return {
+      userId: session.userId,
+      deviceId: session.deviceId,
+      replicaId: session.replicaId,
+      tenantId: session.tenantId,
+    };
+  }
+
+  #setClientSession(client: SyncClient, sessionToken: string, principal: Principal): void {
+    if (!client.principal) {
+      this.#bumpTenantCount(principal.tenantId, +1);
+    }
+    if (client.sessionToken !== sessionToken) {
+      this.#removeSessionClient(client);
+      client.sessionToken = sessionToken;
+      this.#addSessionClient(sessionToken, client);
+    }
+    client.principal = principal;
+    this.#clientLimits.set(client, resolveTenantLimits(principal.tenantId, this.store, this.#limits));
+  }
+
+  #addSessionClient(sessionToken: string, client: SyncClient): void {
+    let clients = this.#clientsBySessionToken.get(sessionToken);
+    if (!clients) {
+      clients = new Set();
+      this.#clientsBySessionToken.set(sessionToken, clients);
+    }
+    clients.add(client);
+  }
+
+  #removeSessionClient(client: SyncClient): void {
+    const token = client.sessionToken;
+    if (!token) {
+      return;
+    }
+    const clients = this.#clientsBySessionToken.get(token);
+    clients?.delete(client);
+    if (clients && clients.size === 0) {
+      this.#clientsBySessionToken.delete(token);
+    }
+    delete client.sessionToken;
   }
 
   #isPrincipalActive(principal: Principal): boolean {

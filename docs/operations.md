@@ -68,6 +68,32 @@ Validation errors throw `FrickConfigError` at startup, before any port is
 opened. Unknown env values (e.g. `FRICK_ENV=staging`) are fatal — the
 server refuses to boot.
 
+## Runtime limits
+
+`createFrickServer({ limits })` accepts partial `FrickLimits` overrides. Any
+omitted field falls back to the framework default. These limits are enforced
+inside the server and should complement, not replace, reverse-proxy request
+and connection caps.
+
+| Limit | Default | Applies to |
+| --- | ---: | --- |
+| `maxHttpBodyBytes` | 5,000,000 | JSON request bodies |
+| `maxStreamAppendPayloadBytes` | 256,000 | encoded stream append payloads |
+| `maxBlobBytes` | 25,000,000 | blob upload bodies |
+| `maxSubscriptionsPerConnection` | 256 | active subscriptions per WebSocket |
+| `maxStreamPageSize` | 500 | forward HTTP, SSE, and WebSocket stream pages |
+| `maxSearchQueryBytes` | 4,096 | `POST /search` query text |
+| `maxSearchFilterFields` | 16 | exact-match search filter field count |
+| `maxSearchFilterKeyBytes` | 128 | each search filter key |
+| `maxSearchFilterValueBytes` | 512 | each search filter value after stringification |
+| `maxPendingAppendsPerClient` | 1,000 | queued appends per WebSocket client |
+| `maxWebSocketFrameBytes` | 524,288 | inbound WebSocket frame payloads |
+
+Forward stream reads return at most `maxStreamPageSize` events by default and
+include `cursor` plus `hasMore` so clients can continue from the last delivered
+sequence. Oversized WebSocket frames are rejected by the `ws` parser before
+MessagePack decode and the connection is closed.
+
 ## Health vs. ready
 
 There are two unauthenticated endpoints for orchestrators:

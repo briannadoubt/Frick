@@ -285,6 +285,75 @@ describe("POST /search with the built-in messages-fts index", () => {
     expect(result.body.total).toBe(0);
   });
 
+  it("rejects search queries above the configured byte limit", async () => {
+    app = await startServer({ limits: { maxSearchQueryBytes: 8 } });
+    const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    const result = await postSearch(app.httpUrl, ada.sessionToken, {
+      index: "messages-fts",
+      q: "123456789",
+    });
+
+    expect(result.status).toBe(413);
+    expect(result.body.error.code).toBe("rateLimit.exceeded");
+    expect(result.body.error.details).toMatchObject({
+      limit: "maxSearchQueryBytes",
+      configuredMax: 8,
+      actualValue: 9,
+    });
+  });
+
+  it("rejects oversized search filters before querying the adapter", async () => {
+    app = await startServer({
+      limits: {
+        maxSearchFilterFields: 1,
+        maxSearchFilterKeyBytes: 8,
+        maxSearchFilterValueBytes: 8,
+      },
+    });
+    const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    const tooManyFields = await postSearch(app.httpUrl, ada.sessionToken, {
+      index: "messages-fts",
+      q: "anything",
+      filter: { a: "1", b: "2" },
+    });
+    expect(tooManyFields.status).toBe(413);
+    expect(tooManyFields.body.error.details.limit).toBe("maxSearchFilterFields");
+
+    const keyTooLarge = await postSearch(app.httpUrl, ada.sessionToken, {
+      index: "messages-fts",
+      q: "anything",
+      filter: { oversized: "1" },
+    });
+    expect(keyTooLarge.status).toBe(413);
+    expect(keyTooLarge.body.error.details.limit).toBe("maxSearchFilterKeyBytes");
+
+    const valueTooLarge = await postSearch(app.httpUrl, ada.sessionToken, {
+      index: "messages-fts",
+      q: "anything",
+      filter: { a: "123456789" },
+    });
+    expect(valueTooLarge.status).toBe(413);
+    expect(valueTooLarge.body.error.details.limit).toBe("maxSearchFilterValueBytes");
+  });
+
+  it("returns a sanitized invalid-search envelope when the adapter rejects a query", async () => {
+    app = await startServer();
+    const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    const result = await postSearch(app.httpUrl, ada.sessionToken, {
+      index: "messages-fts",
+      q: '"unterminated',
+    });
+
+    expect(result.status).toBe(400);
+    expect(result.body.error.code).toBe("sync.protocolError");
+    expect(result.body.error.message).toBe("Invalid search query");
+    expect(result.body.error.details.reason).toBe("invalidSearchQuery");
+    expect(JSON.stringify(result.body)).not.toMatch(/SQLite|fts|MATCH|unterminated/i);
+  });
+
   it("returns 404 envelope for an unknown index", async () => {
     app = await startServer();
     const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
@@ -349,6 +418,7 @@ async function startServer(
   overrides: {
     inspectionEnabled?: boolean;
     indexes?: FrickSearchIndexDefinition[];
+    limits?: Parameters<typeof createFrickServer>[0]["limits"];
     policyHooks?: FrickPolicyHook[];
   } = {},
 ): Promise<{
@@ -364,6 +434,7 @@ async function startServer(
     dbPath: ":memory:",
     config,
     ...(overrides.indexes !== undefined ? { search: { indexes: overrides.indexes } } : {}),
+    ...(overrides.limits !== undefined ? { limits: overrides.limits } : {}),
     ...(overrides.policyHooks !== undefined ? { policyHooks: overrides.policyHooks } : {}),
   });
   await server.listen();

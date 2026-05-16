@@ -8,6 +8,7 @@ export interface SseOpenInput {
   key: string;
   events: StoredEvent[];
   cursor: number;
+  hasMore?: boolean;
 }
 
 interface SseClient {
@@ -61,7 +62,7 @@ export class SseRegistry {
       key: input.key,
       data: input.events,
       cursor: input.events.at(-1)?.sequence ?? input.cursor,
-      hasMore: false,
+      hasMore: input.hasMore ?? false,
     });
 
     if (this.#heartbeatMs > 0) {

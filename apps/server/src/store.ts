@@ -763,13 +763,25 @@ export class FrickStore {
     this.projections.notify(event, ctx);
   }
 
-  readEvents(stream: string, streamId: string, after: number): StoredEvent[];
-  readEvents(tenantId: string, stream: string, streamId: string, after: number): StoredEvent[];
-  readEvents(a: string, b: string, c: string | number, d?: number): StoredEvent[] {
-    if (d !== undefined) {
-      return this.streams.read(a, b, c as string, d);
+  readEvents(stream: string, streamId: string, after: number, limit?: number): StoredEvent[];
+  readEvents(
+    tenantId: string,
+    stream: string,
+    streamId: string,
+    after: number,
+    limit?: number,
+  ): StoredEvent[];
+  readEvents(
+    a: string,
+    b: string,
+    c: string | number,
+    d?: number,
+    e?: number,
+  ): StoredEvent[] {
+    if (typeof c === "number") {
+      return this.streams.read(DEFAULT_TENANT_ID, a, b, c, d);
     }
-    return this.streams.read(DEFAULT_TENANT_ID, a, b, c as number);
+    return this.streams.read(a, b, c, d ?? 0, e);
   }
 
   /**

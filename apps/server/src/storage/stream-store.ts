@@ -123,14 +123,33 @@ export class StreamStore {
     }));
   }
 
-  read(tenantId: string, stream: string, streamId: string, after: number): StoredEvent[] {
-    const rows = this.db
-      .prepare(
-        `SELECT packed FROM stream_events
-          WHERE tenant_id = ? AND stream_type = ? AND stream_id = ? AND sequence > ?
-          ORDER BY sequence ASC`,
-      )
-      .all(tenantId, stream, streamId, after) as unknown as EventRow[];
+  read(
+    tenantId: string,
+    stream: string,
+    streamId: string,
+    after: number,
+    limit?: number,
+  ): StoredEvent[] {
+    const clamped =
+      limit === undefined ? undefined : Math.max(1, Math.floor(Number.isFinite(limit) ? limit : 1));
+    const rows = (
+      clamped === undefined
+        ? this.db
+            .prepare(
+              `SELECT packed FROM stream_events
+                WHERE tenant_id = ? AND stream_type = ? AND stream_id = ? AND sequence > ?
+                ORDER BY sequence ASC`,
+            )
+            .all(tenantId, stream, streamId, after)
+        : this.db
+            .prepare(
+              `SELECT packed FROM stream_events
+                WHERE tenant_id = ? AND stream_type = ? AND stream_id = ? AND sequence > ?
+                ORDER BY sequence ASC
+                LIMIT ?`,
+            )
+            .all(tenantId, stream, streamId, after, clamped)
+    ) as unknown as EventRow[];
     return rows.map((row) => ({
       ...unpackStreamEvent(this.schema, decode(row.packed) as PackedStreamEvent),
       tenantId,

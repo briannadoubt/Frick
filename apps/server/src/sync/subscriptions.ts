@@ -6,6 +6,7 @@ export interface SyncClient {
   socket: WebSocket;
   subscriptions: Map<string, SubscribePayload>;
   principal?: Principal;
+  sessionToken?: string;
 }
 
 export class SubscriptionRegistry {

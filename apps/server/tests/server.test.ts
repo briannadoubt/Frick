@@ -660,6 +660,53 @@ describe("foundation sync gateway", () => {
     socket.close();
   });
 
+  it("bounds WebSocket stream subscription pages", async () => {
+    app = await startServer({ limits: { maxStreamPageSize: 2 } });
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+    await postAppend(app.httpUrl, login.sessionToken, "request-ws-page-1", "ws one");
+    await postAppend(app.httpUrl, login.sessionToken, "request-ws-page-2", "ws two");
+    await postAppend(app.httpUrl, login.sessionToken, "request-ws-page-3", "ws three");
+    const socket = await connectWithSession(app.url, login.sessionToken);
+
+    const hello = expectHelloAckThenSchema(socket);
+    socket.send(
+      encodeFrame([
+        FrameKind.Hello,
+        {
+          replicaId: "replica-1",
+          deviceId: "device-1",
+          schemaHash: foundationSchema.hash,
+          knownCursors: {},
+        },
+      ]),
+    );
+    await hello;
+
+    socket.send(
+      encodeFrame([
+        FrameKind.Subscribe,
+        {
+          subscriptionId: "sub-messages-page",
+          kind: "stream",
+          name: "MessageStream",
+          key: "conversation-general",
+          cursor: 0,
+        },
+      ]),
+    );
+
+    const page = await nextFrame(socket);
+    expect(page[0]).toBe(FrameKind.StreamPage);
+    expect(page[1]).toMatchObject({
+      subscriptionId: "sub-messages-page",
+      cursor: 2,
+      hasMore: true,
+    });
+    const payload = page[1] as { events: Array<[number, string, number, ...unknown[]]> };
+    expect(payload.events.map((event) => event[2])).toEqual([1, 2]);
+    socket.close();
+  });
+
   it("fans out HTTP appends to WebSocket stream subscribers", async () => {
     app = await startServer();
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
@@ -771,6 +818,31 @@ describe("foundation sync gateway", () => {
     const delta = await withTimeout(deltaEvent, "expected SSE delta from HTTP append");
     expect(delta.event).toBe("delta");
     expect(JSON.parse(delta.data).data[0].payload.body).toBe("hello over sse");
+    abort.abort();
+  });
+
+  it("bounds the initial SSE stream page", async () => {
+    app = await startServer({ limits: { maxStreamPageSize: 2 } });
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+    await postAppend(app.httpUrl, login.sessionToken, "request-sse-page-1", "sse one");
+    await postAppend(app.httpUrl, login.sessionToken, "request-sse-page-2", "sse two");
+    await postAppend(app.httpUrl, login.sessionToken, "request-sse-page-3", "sse three");
+
+    const abort = new AbortController();
+    const response = await fetch(`${app.httpUrl}/streams/MessageStream/conversation-general/events?after=0`, {
+      headers: authHeaders(login.sessionToken),
+      signal: abort.signal,
+    });
+    expect(response.status).toBe(200);
+    expect(response.body).toBeTruthy();
+
+    const reader = response.body!.getReader();
+    const page = await readSseEvent(reader);
+    expect(page.event).toBe("stream-page");
+    const payload = JSON.parse(page.data);
+    expect(payload.data.map((event: { sequence: number }) => event.sequence)).toEqual([1, 2]);
+    expect(payload.cursor).toBe(2);
+    expect(payload.hasMore).toBe(true);
     abort.abort();
   });
 
@@ -981,6 +1053,33 @@ describe("foundation sync gateway", () => {
       }),
     });
     expect(appendResponse.status).toBe(403);
+  });
+
+  it("bounds forward HTTP stream pages and reports cursor state", async () => {
+    app = await startServer({ limits: { maxStreamPageSize: 2 } });
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    await postAppend(app.httpUrl, login.sessionToken, "request-http-page-1", "page one");
+    await postAppend(app.httpUrl, login.sessionToken, "request-http-page-2", "page two");
+    await postAppend(app.httpUrl, login.sessionToken, "request-http-page-3", "page three");
+
+    const firstResponse = await fetch(`${app.httpUrl}/streams/MessageStream/conversation-general?after=0`, {
+      headers: authHeaders(login.sessionToken),
+    });
+    expect(firstResponse.status).toBe(200);
+    const first = await firstResponse.json();
+    expect(first.data.map((event: { sequence: number }) => event.sequence)).toEqual([1, 2]);
+    expect(first.cursor).toBe(2);
+    expect(first.hasMore).toBe(true);
+
+    const secondResponse = await fetch(`${app.httpUrl}/streams/MessageStream/conversation-general?after=2`, {
+      headers: authHeaders(login.sessionToken),
+    });
+    expect(secondResponse.status).toBe(200);
+    const second = await secondResponse.json();
+    expect(second.data.map((event: { sequence: number }) => event.sequence)).toEqual([3]);
+    expect(second.cursor).toBe(3);
+    expect(second.hasMore).toBe(false);
   });
 
   it("creates, lists, and reads blob metadata over HTTP", async () => {
@@ -1256,7 +1355,9 @@ describe("foundation sync gateway", () => {
   });
 });
 
-async function startServer(options: { sseHeartbeatMs?: number } = {}) {
+async function startServer(
+  options: { sseHeartbeatMs?: number; limits?: Parameters<typeof createFrickServer>[0]["limits"] } = {},
+) {
   const server = createFrickServer({ port: 0, dbPath: ":memory:", ...options });
   await server.listen();
   const address = server.server.address();

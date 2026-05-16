@@ -94,6 +94,10 @@ A client lists names it strictly *requires* in `clientCapabilities.required`. Th
 
 After the WebSocket upgrade, the server accepts only `Hello` and `Ping` until it has sent a compatible `HelloAck`. Any other pre-handshake frame is rejected with a structured `Nack` using `code: "sync.protocolError"` and `details.reason: "handshakeRequired"`; write frames rejected this way are not persisted.
 
+Authenticated WebSocket sessions are tied back to the server session row. Logout closes active sockets for that session with policy close code `1008`, and every privileged WebSocket frame revalidates the session before authorization and persistence.
+
+Forward stream pages are bounded by the server's `maxStreamPageSize` limit. HTTP stream reads, SSE initial pages, and WebSocket `StreamPage` frames include `cursor` and `hasMore`; clients should request the next page from the returned cursor when `hasMore` is true.
+
 ## Sync Diagnostics
 
 Each client runtime exposes diagnostic fields covering the same observable state. The TypeScript runtime surfaces them on `SyncStatus`; Swift exposes `FrickSyncStatus` plus an async status stream; Android exposes `FrickSyncStatus` through a `StateFlow`.

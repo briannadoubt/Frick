@@ -88,6 +88,38 @@ describe("FrickStore foundation storage", () => {
     expect(store.readEvents("MessageStream", "conversation-general", 0)).toHaveLength(1);
   });
 
+  it("bounds forward event reads when a limit is provided", () => {
+    store = new FrickStore({ path: ":memory:", seed: true });
+
+    for (let i = 1; i <= 5; i++) {
+      store.appendEvent({
+        requestId: `request-forward-${i}`,
+        replicaId: "replica-1",
+        stream: "MessageStream",
+        streamId: "conversation-general",
+        event: "MessageSent",
+        payload: {
+          messageId: `message-forward-${i}`,
+          senderId: "user-ada",
+          body: `forward ${i}`,
+          createdAt: "2026-05-09T00:00:00.000Z",
+        },
+      });
+    }
+
+    const events = store.readEvents("MessageStream", "conversation-general", 1, 2);
+    expect(events.map((event) => event.sequence)).toEqual([2, 3]);
+
+    const tenantEvents = store.readEvents(
+      "_default",
+      "MessageStream",
+      "conversation-general",
+      2,
+      2,
+    );
+    expect(tenantEvents.map((event) => event.sequence)).toEqual([3, 4]);
+  });
+
   it("deduplicates appends by replica and request id", () => {
     store = new FrickStore({ path: ":memory:", seed: true });
 

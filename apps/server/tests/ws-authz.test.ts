@@ -30,6 +30,60 @@ describe("websocket authorization parity", () => {
     socket.close();
   });
 
+  it("closes active websocket sessions when the session logs out over HTTP", async () => {
+    app = await startServer();
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const socket = await connectAndHello(app.url, login.sessionToken);
+    const closed = onceClosed(socket);
+
+    const logout = await fetch(`${app.httpUrl}/auth/logout`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${login.sessionToken}` },
+    });
+
+    expect(logout.status).toBe(200);
+    await expect(withTimeout(closed, "expected logout to close websocket")).resolves.toEqual({
+      code: 1008,
+    });
+  });
+
+  it("revalidates websocket sessions before writes after server-side revocation", async () => {
+    app = await startServer();
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const socket = await connectAndHello(app.url, login.sessionToken);
+    const closed = onceClosed(socket);
+
+    app.store.deleteSession(login.sessionToken);
+    socket.send(
+      encodeFrame([
+        FrameKind.Append,
+        {
+          requestId: "request-revoked-session-append",
+          stream: "MessageStream",
+          key: "conversation-general",
+          event: "MessageSent",
+          payload: {
+            messageId: "message-revoked-session",
+            senderId: "user-ada",
+            body: "must not store after revocation",
+            createdAt: "2026-05-09T00:00:00.000Z",
+          },
+        },
+      ]),
+    );
+
+    const frame = await nextFrame(socket);
+    expect(frame[0]).toBe(FrameKind.Nack);
+    expect(frame[1]).toMatchObject({
+      requestId: "request-revoked-session-append",
+      code: "auth.unauthenticated",
+    });
+    expect(app.store.readEvents("MessageStream", "conversation-general", 0)).toHaveLength(0);
+    await expect(withTimeout(closed, "expected revoked session to close websocket")).resolves.toEqual({
+      code: 1008,
+    });
+  });
+
   it("authenticates an initially anonymous websocket from Hello.sessionToken", async () => {
     app = await startServer();
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
@@ -604,6 +658,19 @@ async function expectHelloAckThenSchema(socket: WebSocket): Promise<HelloAckPayl
     };
     socket.on("message", onMessage);
   });
+}
+
+async function onceClosed(socket: WebSocket): Promise<{ code: number }> {
+  return new Promise((resolve) => {
+    socket.once("close", (code) => resolve({ code }));
+  });
+}
+
+async function withTimeout<T>(promise: Promise<T>, message: string, timeoutMs = 2000): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_resolve, reject) => setTimeout(() => reject(new Error(message)), timeoutMs)),
+  ]);
 }
 
 async function devLogin(

@@ -250,17 +250,21 @@ to exhaust server memory.
 
 **Today.**
 
-- No body size limits — `readJsonBody` and `readRawBody` buffer everything.
-- No connection cap on the WebSocket server.
-- No per-principal subscription cap.
+- HTTP JSON bodies, blob uploads, stream append payloads, WebSocket frames,
+  subscription counts, pending append queues, search queries, search filters,
+  and forward stream pages are bounded by `FrickLimits`.
+- WebSocket inbound frames are capped by `maxWebSocketFrameBytes` before
+  MessagePack decode; oversized frames are closed by the WebSocket parser.
+- Forward stream backlogs for HTTP reads, SSE initial pages, and WebSocket
+  subscriptions are page-limited and return `cursor` / `hasMore`.
+- No global connection cap on the WebSocket or SSE servers.
 - Idempotency cache (see Replay above) and stream-store rows grow without
   pruning.
 
-**Known gap.** All of the above are flagged for a dedicated production-
-hardening slice (slice 10). Operators must enforce limits at a reverse
-proxy / WAF for now.
-
-WebSocket inbound frames are capped at `FrickLimits.maxWebSocketFrameBytes` (default 512KB). Oversized frames are rejected with `rateLimit.exceeded` before msgpack decode, and the connection is closed.
+**Known gap.** Operators should still enforce global request-rate,
+connection-count, and bandwidth limits at a reverse proxy / WAF. Server-side
+SSE admission control, per-principal connection caps, and durable retention
+policies remain production-hardening follow-ups.
 
 ---
 

@@ -17,7 +17,7 @@ afterEach(async () => {
 });
 
 describe("websocket inbound frame-size cap", () => {
-  it("nacks frames larger than maxWebSocketFrameBytes and closes the socket", async () => {
+  it("rejects frames larger than maxWebSocketFrameBytes before application decode", async () => {
     app = await startServer({ limits: { maxWebSocketFrameBytes: 1024 } });
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
     const socket = await connect(app.url, login.sessionToken);
@@ -33,26 +33,14 @@ describe("websocket inbound frame-size cap", () => {
     const oversized = Buffer.alloc(2048, 0xab);
     socket.send(oversized);
 
-    await waitForFrameCount(frames, 1);
-    const nack = frames[0]!;
-    expect(nack[0]).toBe(FrameKind.Nack);
-    expect(nack[1]).toMatchObject({
-      requestId: "frame",
-      error: expect.objectContaining({
-        code: "rateLimit.exceeded",
-        details: expect.objectContaining({
-          limit: "maxWebSocketFrameBytes",
-          configuredMax: 1024,
-        }),
-      }),
-    });
-
-    await Promise.race([
+    const close = await Promise.race([
       closed,
       new Promise((_resolve, reject) =>
         setTimeout(() => reject(new Error("socket was not closed")), 2000),
       ),
     ]);
+    expect(close).toEqual({ code: 1009 });
+    expect(frames).toHaveLength(0);
   });
 
   it("accepts a frame at exactly the configured limit", async () => {
