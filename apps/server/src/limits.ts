@@ -31,8 +31,16 @@ export interface FrickLimits {
   maxWebSocketFrameBytes: number;
   /** Maximum concurrently accepted WebSocket connections. */
   maxWebSocketConnections: number;
+  /** Maximum bytes ws may buffer for an outbound client before the server closes it. */
+  maxWebSocketOutboundBufferedBytes: number;
   /** Maximum concurrently open Server-Sent Events connections. */
   maxSseConnections: number;
+  /** Maximum bytes an SSE response may buffer before the server closes it. */
+  maxSseOutboundBufferedBytes: number;
+  /** Maximum auth attempts per fixed window for one route + tenant + identity/IP bucket. */
+  maxAuthAttemptsPerWindow: number;
+  /** Fixed auth-attempt rate-limit window, in milliseconds. */
+  authRateLimitWindowMs: number;
   /** Lower bound (inclusive) for presence record TTL, in seconds. */
   presenceTtlMinSeconds: number;
   /** Upper bound (inclusive) for presence record TTL, in seconds. */
@@ -60,7 +68,11 @@ export const DEFAULT_FRICK_LIMITS: FrickLimits = Object.freeze({
   maxPendingAppendsPerClient: 1_000,
   maxWebSocketFrameBytes: 524_288,
   maxWebSocketConnections: 10_000,
+  maxWebSocketOutboundBufferedBytes: 1_048_576,
   maxSseConnections: 10_000,
+  maxSseOutboundBufferedBytes: 1_048_576,
+  maxAuthAttemptsPerWindow: 30,
+  authRateLimitWindowMs: 300_000,
   presenceTtlMinSeconds: 5,
   presenceTtlMaxSeconds: 600,
   signalTtlMinSeconds: 1,

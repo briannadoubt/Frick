@@ -21,17 +21,20 @@ interface SseClient {
 
 export interface SseRegistryOptions {
   heartbeatMs?: number;
+  maxBufferedBytes?: number;
 }
 
 export class SseRegistry {
   readonly #clients = new Set<SseClient>();
   readonly #heartbeatMs: number;
+  readonly #maxBufferedBytes: number;
 
   constructor(
     private readonly schema: FrickSchema,
     options: SseRegistryOptions = {},
   ) {
     this.#heartbeatMs = options.heartbeatMs ?? 15_000;
+    this.#maxBufferedBytes = options.maxBufferedBytes ?? 1_048_576;
   }
 
   get connectionCount(): number {
@@ -107,11 +110,32 @@ export class SseRegistry {
   }
 
   #write(client: SseClient, event: string, payload: unknown): void {
-    client.response.write(`event: ${event}\n`);
-    client.response.write(`data: ${JSON.stringify(payload)}\n\n`);
+    this.#writeRaw(client, `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
   }
 
   #writeComment(client: SseClient, comment: string): void {
-    client.response.write(`: ${comment}\n\n`);
+    this.#writeRaw(client, `: ${comment}\n\n`);
+  }
+
+  #writeRaw(client: SseClient, chunk: string): void {
+    if (client.response.writableLength > this.#maxBufferedBytes) {
+      this.#closeClient(client);
+      return;
+    }
+    const accepted = client.response.write(chunk);
+    if (!accepted || client.response.writableLength > this.#maxBufferedBytes) {
+      this.#closeClient(client);
+    }
+  }
+
+  #closeClient(client: SseClient): void {
+    if (client.heartbeat) {
+      clearInterval(client.heartbeat);
+      delete client.heartbeat;
+    }
+    this.#clients.delete(client);
+    if (!client.response.destroyed) {
+      client.response.destroy();
+    }
   }
 }

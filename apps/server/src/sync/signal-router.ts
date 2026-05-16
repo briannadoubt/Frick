@@ -8,6 +8,7 @@ export function routeSignal(
   subscriptions: SubscriptionRegistry,
   payload: SignalPayload,
   tenantId: string,
+  options: { maxBufferedAmount?: number } = {},
 ): void {
   if (store.tenants.get(tenantId)?.archivedAt !== undefined) {
     return;
@@ -23,6 +24,6 @@ export function routeSignal(
     ) {
       continue;
     }
-    sendFrame(client.socket, [FrameKind.SignalDeliver, { envelope }]);
+    sendFrame(client.socket, [FrameKind.SignalDeliver, { envelope }], options);
   }
 }

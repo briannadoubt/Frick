@@ -89,14 +89,22 @@ and connection caps.
 | `maxPendingAppendsPerClient` | 1,000 | queued appends per WebSocket client |
 | `maxWebSocketFrameBytes` | 524,288 | inbound WebSocket frame payloads |
 | `maxWebSocketConnections` | 10,000 | concurrently accepted WebSocket connections |
+| `maxWebSocketOutboundBufferedBytes` | 1,048,576 | queued outbound bytes per WebSocket client |
 | `maxSseConnections` | 10,000 | concurrently open SSE connections |
+| `maxSseOutboundBufferedBytes` | 1,048,576 | queued outbound bytes per SSE response |
+| `maxAuthAttemptsPerWindow` | 30 | attempts per `/auth/signup`, `/auth/login`, or `/auth/dev-login` route + tenant + identity/IP bucket |
+| `authRateLimitWindowMs` | 300,000 | fixed auth-attempt rate-limit window |
 
 Forward stream reads return at most `maxStreamPageSize` events by default and
 include `cursor` plus `hasMore` so clients can continue from the last delivered
 sequence. Oversized WebSocket frames are rejected by the `ws` parser before
 MessagePack decode and the connection is closed. WebSocket connections over
 `maxWebSocketConnections` are closed with code `1013`; SSE requests over
-`maxSseConnections` return `429 rateLimit.exceeded`.
+`maxSseConnections` return `429 rateLimit.exceeded`. Slow clients whose
+WebSocket or SSE outbound buffers exceed their configured caps are closed
+rather than allowed to accumulate unbounded queued data. Auth attempts over
+`maxAuthAttemptsPerWindow` in the current fixed window also return
+`429 rateLimit.exceeded`.
 
 ## Health vs. ready
 

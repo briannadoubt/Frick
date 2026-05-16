@@ -342,6 +342,93 @@ describe("auth-flow: session response hardening", () => {
   });
 });
 
+describe("auth-flow: abuse controls", () => {
+  it("rate-limits repeated login attempts for the same tenant and identity", async () => {
+    app = await startServer({
+      limits: { maxAuthAttemptsPerWindow: 2, authRateLimitWindowMs: 60_000 },
+    });
+
+    const signup = await fetch(`${app.httpUrl}/auth/signup`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        displayName: "Limited User",
+        handle: "limited-user",
+        password: "correcthorsebattery",
+        tenantId: "tenant-limit",
+      }),
+    });
+    expect(signup.status).toBe(201);
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await fetch(`${app.httpUrl}/auth/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          identity: "limited-user",
+          password: "wrong-password",
+          tenantId: "tenant-limit",
+        }),
+      });
+      expect(response.status).toBe(401);
+    }
+
+    const limited = await fetch(`${app.httpUrl}/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        identity: "limited-user",
+        password: "wrong-password",
+        tenantId: "tenant-limit",
+      }),
+    });
+    const body = await limited.json();
+
+    expect(limited.status).toBe(429);
+    expect(body.error.code).toBe("rateLimit.exceeded");
+    expect(body.error.details?.limit).toBe("maxAuthAttemptsPerWindow");
+  });
+
+  it("keeps auth rate-limit buckets isolated by route and tenant", async () => {
+    app = await startServer({
+      limits: { maxAuthAttemptsPerWindow: 1, authRateLimitWindowMs: 60_000 },
+    });
+
+    const tenantAFirst = await fetch(`${app.httpUrl}/auth/dev-login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ userId: "user-rate", tenantId: "tenant-a" }),
+    });
+    expect(tenantAFirst.status).toBe(200);
+
+    const tenantALimited = await fetch(`${app.httpUrl}/auth/dev-login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ userId: "user-rate", tenantId: "tenant-a" }),
+    });
+    expect(tenantALimited.status).toBe(429);
+
+    const tenantB = await fetch(`${app.httpUrl}/auth/dev-login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ userId: "user-rate", tenantId: "tenant-b" }),
+    });
+    expect(tenantB.status).toBe(200);
+
+    const signupSameIdentity = await fetch(`${app.httpUrl}/auth/signup`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        displayName: "Route Bucket User",
+        handle: "user-rate",
+        password: "correcthorsebattery",
+        tenantId: "tenant-a",
+      }),
+    });
+    expect(signupSameIdentity.status).toBe(201);
+  });
+});
+
 async function startServer(options: Parameters<typeof createFrickServer>[0] = {}) {
   const server = createFrickServer({ port: 0, dbPath: ":memory:", ...options });
   await server.listen();

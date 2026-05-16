@@ -255,6 +255,7 @@ export function createFrickServer(options: ServerOptions = {}) {
   const limits = mergeLimits(options.limits);
   const metrics = options.metrics ?? createInMemoryMetrics();
   const startedAtPerf = performance.now();
+  const authAttemptLimiter = new FixedWindowAuthAttemptLimiter();
 
   function sendErrorWithMetrics(
     response: http.ServerResponse,
@@ -339,7 +340,10 @@ export function createFrickServer(options: ServerOptions = {}) {
   });
   const sse = new SseRegistry(
     store.schema,
-    options.sseHeartbeatMs === undefined ? {} : { heartbeatMs: options.sseHeartbeatMs },
+    {
+      ...(options.sseHeartbeatMs === undefined ? {} : { heartbeatMs: options.sseHeartbeatMs }),
+      maxBufferedBytes: limits.maxSseOutboundBufferedBytes,
+    },
   );
   const gateway = new SyncGateway(wss, store, {
     onStreamEvent: (event) => sse.publishStreamEvent(event),
@@ -770,6 +774,13 @@ export function createFrickServer(options: ServerOptions = {}) {
         const password = normalizePassword(requireString(body.password, "password"));
         const tenantId = resolveAuthTenantId(body.tenantId);
         ensureTenantAllowed(store, config, tenantId);
+        authAttemptLimiter.check({
+          route: "/auth/signup",
+          tenantId,
+          identity: handle,
+          clientIp: clientIpFromRequest(request),
+          limits,
+        });
         const platform = parsePlatform(typeof body.platform === "string" ? body.platform : "web");
         const deviceId = typeof body.deviceId === "string" && body.deviceId.length > 0 ? body.deviceId : `device-${randomToken(12)}`;
         const replicaId = typeof body.replicaId === "string" && body.replicaId.length > 0 ? body.replicaId : `replica-${randomToken(12)}`;
@@ -796,6 +807,13 @@ export function createFrickServer(options: ServerOptions = {}) {
         const password = requireString(body.password, "password");
         const tenantId = resolveAuthTenantId(body.tenantId);
         ensureTenantAllowed(store, config, tenantId);
+        authAttemptLimiter.check({
+          route: "/auth/login",
+          tenantId,
+          identity,
+          clientIp: clientIpFromRequest(request),
+          limits,
+        });
         const account = store.verifyAccountPassword(tenantId, identity, password);
         if (!account) {
           throw new AuthenticationError("Invalid handle or password");
@@ -830,6 +848,13 @@ export function createFrickServer(options: ServerOptions = {}) {
         const userId = requireString(body.userId, "userId");
         const tenantId = resolveAuthTenantId(body.tenantId);
         ensureTenantAllowed(store, config, tenantId);
+        authAttemptLimiter.check({
+          route: "/auth/dev-login",
+          tenantId,
+          identity: userId,
+          clientIp: clientIpFromRequest(request),
+          limits,
+        });
         // Dev-login: in the default tenant, seed users (user-ada, user-grace)
         // exist; on first dev-login in any other tenant, create the user
         // object on the fly so explicit-tenant tests don't need a separate
@@ -1796,6 +1821,62 @@ class AccountNotFoundError extends Error {
   }
 }
 
+interface AuthAttemptLimitInput {
+  route: "/auth/signup" | "/auth/login" | "/auth/dev-login";
+  tenantId: string;
+  identity?: string;
+  clientIp: string;
+  limits: FrickLimits;
+}
+
+class FixedWindowAuthAttemptLimiter {
+  private readonly buckets = new Map<string, { count: number; resetAt: number }>();
+  private lastPruneAt = 0;
+
+  check(input: AuthAttemptLimitInput): void {
+    const max = Math.max(1, Math.floor(input.limits.maxAuthAttemptsPerWindow));
+    const windowMs = Math.max(1, Math.floor(input.limits.authRateLimitWindowMs));
+    const now = Date.now();
+    this.pruneExpired(now, windowMs);
+    const key = authAttemptKey(input);
+    const current = this.buckets.get(key);
+    if (!current || current.resetAt <= now) {
+      this.buckets.set(key, { count: 1, resetAt: now + windowMs });
+      return;
+    }
+    const nextCount = current.count + 1;
+    current.count = nextCount;
+    if (nextCount > max) {
+      throw new FrickLimitError({
+        limit: "maxAuthAttemptsPerWindow",
+        actualValue: nextCount,
+        configuredMax: max,
+      });
+    }
+  }
+
+  private pruneExpired(now: number, windowMs: number): void {
+    if (now - this.lastPruneAt < windowMs) {
+      return;
+    }
+    this.lastPruneAt = now;
+    for (const [key, bucket] of this.buckets) {
+      if (bucket.resetAt <= now) {
+        this.buckets.delete(key);
+      }
+    }
+  }
+}
+
+function authAttemptKey(input: AuthAttemptLimitInput): string {
+  const actor = input.identity?.trim().toLowerCase() || `ip:${input.clientIp}`;
+  return `${input.route}\0${input.tenantId}\0${actor}`;
+}
+
+function clientIpFromRequest(request: http.IncomingMessage): string {
+  return request.socket.remoteAddress ?? "unknown";
+}
+
 class AdminAuditWriteError extends Error {
   readonly reason = "adminAuditWriteFailed";
   constructor(cause: unknown) {
@@ -1847,6 +1928,16 @@ class SearchIndexNotFoundError extends Error {
   constructor(name: string) {
     super(`Search index "${name}" not found`);
     this.name = "SearchIndexNotFoundError";
+    this.index = name;
+  }
+}
+
+class SearchIndexRebuildUnsupportedError extends Error {
+  readonly reason = "projectionSourceUnsupported";
+  readonly index: string;
+  constructor(name: string) {
+    super(`Search index "${name}" cannot be rebuilt from a generic projection source`);
+    this.name = "SearchIndexRebuildUnsupportedError";
     this.index = name;
   }
 }
@@ -1993,6 +2084,10 @@ function sendError(response: http.ServerResponse, error: unknown, requestId: str
     details.reason = error.reason;
     details.index = error.index;
   }
+  if (error instanceof SearchIndexRebuildUnsupportedError) {
+    details.reason = error.reason;
+    details.index = error.index;
+  }
   if (error instanceof InvalidSearchQueryError) {
     details.reason = error.reason;
   }
@@ -2020,7 +2115,9 @@ function sendError(response: http.ServerResponse, error: unknown, requestId: str
 }
 
 function httpLimitStatus(error: FrickLimitError): number {
-  return error.limit === "maxSseConnections" ? 429 : 413;
+  return error.limit === "maxSseConnections" || error.limit === "maxAuthAttemptsPerWindow"
+    ? 429
+    : 413;
 }
 
 function httpErrorCode(error: unknown): FrickErrorCode {
@@ -3008,6 +3105,15 @@ async function handleAdminRoute(
       });
       throw new SearchIndexNotFoundError(indexName);
     }
+    if (def.source.kind === "projection") {
+      strictAudit({
+        action: "search.rebuild",
+        target: indexName,
+        outcome: "deny",
+        detail: { reason: "projectionSourceUnsupported" },
+      });
+      throw new SearchIndexRebuildUnsupportedError(indexName);
+    }
     try {
       const normalizedTenant = normalizeTenantId(tenantId);
       const source = sourceIterableForIndex(store, def, normalizedTenant);
@@ -3485,10 +3591,9 @@ function isSearchProjectionHitVisible(
  * search index's declared source primitive for the admin rebuild route.
  * - `object` sources iterate `store.listObjects(tenantId, type)`.
  * - `stream` sources iterate `store.streams.listAllByStreamType(tenantId, type)`.
- * - `projection` sources are not yet supported here — projections own their
- *   storage shape, so a generic iterator can't enumerate rows in v1. Apps
- *   that need rebuild for a projection-backed index can supply a custom
- *   adapter or fall through the on-write indexing path.
+ * Projection sources are rejected by the admin rebuild route before this
+ * iterator is constructed. Projections own their storage shape, so a generic
+ * iterator cannot enumerate rows safely in v1.
  */
 async function* sourceIterableForIndex(
   store: FrickStore,
@@ -3521,8 +3626,6 @@ async function* sourceIterableForIndex(
     }
     return;
   }
-  // projection — no generic enumerator yet. Yield nothing; adapter will end
-  // up clearing the index. Documented as a known gap.
 }
 
 function parsePlatform(platform: string): "web" | "ios" | "android" | "server" {

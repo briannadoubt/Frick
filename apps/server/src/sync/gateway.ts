@@ -257,6 +257,12 @@ export class SyncGateway {
     return this.#clientLimits.get(client) ?? this.#limits;
   }
 
+  #sendFrame(client: SyncClient, frame: FrickFrame): boolean {
+    return sendFrame(client.socket, frame, {
+      maxBufferedAmount: this.#limitsFor(client).maxWebSocketOutboundBufferedBytes,
+    });
+  }
+
   /**
    * Adjust the per-tenant subscriber refcount and, when a tenant
    * transitions between absent and present, push the updated set down
@@ -308,7 +314,7 @@ export class SyncGateway {
       if (changes.length === 0) {
         continue;
       }
-      sendFrame(subscriber.socket, [
+      this.#sendFrame(subscriber, [
         FrameKind.ProjectionDelta,
         { projection: notice.projection, changes },
       ]);
@@ -327,7 +333,7 @@ export class SyncGateway {
         return;
       }
       try {
-        sendFrame(socket, [FrameKind.Ping, { sentAt: Date.now() }]);
+        this.#sendFrame(client, [FrameKind.Ping, { sentAt: Date.now() }]);
       } catch {
         // socket already closing
       }
@@ -372,7 +378,7 @@ export class SyncGateway {
       if (!principal || !this.#isPrincipalActive(principal) || principal.tenantId !== event.tenantId) {
         continue;
       }
-      sendFrame(subscriber.socket, [FrameKind.Delta, { objects: [], events: [packed], cursor: event.sequence }]);
+      this.#sendFrame(subscriber, [FrameKind.Delta, { objects: [], events: [packed], cursor: event.sequence }]);
     }
   }
 
@@ -393,7 +399,7 @@ export class SyncGateway {
       if (visibleObjects.length === 0) {
         continue;
       }
-      sendFrame(subscriber.socket, [
+      this.#sendFrame(subscriber, [
         FrameKind.Delta,
         { objects: packObjects(this.store, type, visibleObjects), events: [], cursor },
       ]);
@@ -431,6 +437,7 @@ export class SyncGateway {
           this.#subscriptions,
           { requestId: envelope.requestId, name: envelope.name, key: envelope.key, value: envelope.value },
           envelope.tenantId,
+          { maxBufferedAmount: this.#limits.maxWebSocketOutboundBufferedBytes },
         );
         return;
       case "projectionDelta":
@@ -459,7 +466,9 @@ export class SyncGateway {
   }
 
   publishSignal(name: string, key: string, value: PlainObject, tenantId: string, requestId = "http"): void {
-    routeSignal(this.store, this.#subscriptions, { requestId, name, key, value }, tenantId);
+    routeSignal(this.store, this.#subscriptions, { requestId, name, key, value }, tenantId, {
+      maxBufferedAmount: this.#limits.maxWebSocketOutboundBufferedBytes,
+    });
     if (this.#clusterBus) {
       this.#clusterBus.publish({
         kind: "signal",
@@ -486,7 +495,7 @@ export class SyncGateway {
           configuredMax: this.#limits.maxWebSocketFrameBytes,
         },
       });
-      sendFrame(socket, [
+      this.#sendFrame(client, [
         FrameKind.Nack,
         {
           requestId: "frame",
@@ -524,7 +533,7 @@ export class SyncGateway {
         requestId: "unknown",
         retryable: false,
       });
-      sendFrame(socket, [
+      this.#sendFrame(client, [
         FrameKind.Nack,
         {
           requestId: "unknown",
@@ -552,7 +561,7 @@ export class SyncGateway {
         schemaHash: this.store.schema.hash,
         schemaRevision: this.store.schema.schemaRevision,
       });
-      sendFrame(client.socket, [
+      this.#sendFrame(client, [
         FrameKind.Nack,
         { requestId, error: envelope, code: envelope.code, message: envelope.message },
       ]);
@@ -591,7 +600,7 @@ export class SyncGateway {
               schemaHash: targetSchema.hash,
               schemaRevision: targetSchema.schemaRevision,
             });
-            sendFrame(client.socket, [
+            this.#sendFrame(client, [
               FrameKind.Nack,
               {
                 requestId: "hello",
@@ -629,7 +638,7 @@ export class SyncGateway {
             schemaHash: targetSchema.hash,
             schemaRevision: targetSchema.schemaRevision,
           });
-          sendFrame(client.socket, [
+          this.#sendFrame(client, [
             FrameKind.Nack,
             {
               requestId: "hello",
@@ -656,7 +665,7 @@ export class SyncGateway {
             schemaHash: targetSchema.hash,
             schemaRevision: targetSchema.schemaRevision,
           });
-          sendFrame(client.socket, [
+          this.#sendFrame(client, [
             FrameKind.Nack,
             {
               requestId: "hello",
@@ -690,10 +699,10 @@ export class SyncGateway {
         this.#handleSignal(client, frame[1]);
         return;
       case FrameKind.CursorCommit:
-        sendFrame(client.socket, [FrameKind.Ack, { requestId: frame[1].subscriptionId, cursor: frame[1].cursor }]);
+        this.#sendFrame(client, [FrameKind.Ack, { requestId: frame[1].subscriptionId, cursor: frame[1].cursor }]);
         return;
       case FrameKind.Ping:
-        sendFrame(client.socket, [FrameKind.Pong, { sentAt: frame[1].sentAt, receivedAt: Date.now() }]);
+        this.#sendFrame(client, [FrameKind.Pong, { sentAt: frame[1].sentAt, receivedAt: Date.now() }]);
         return;
       default:
         return;
@@ -720,7 +729,7 @@ export class SyncGateway {
           configuredMax: clientLimits.maxSubscriptionsPerConnection,
         },
       });
-      sendFrame(client.socket, [
+      this.#sendFrame(client, [
         FrameKind.Nack,
         { requestId: payload.subscriptionId, error: envelope, code: envelope.code, message: envelope.message },
       ]);
@@ -736,7 +745,7 @@ export class SyncGateway {
           retryable: false,
           details: { reason: "projectionNotFound", projection: payload.name },
         });
-        sendFrame(client.socket, [
+        this.#sendFrame(client, [
           FrameKind.Nack,
           { requestId: payload.subscriptionId, error: envelope, code: envelope.code, message: envelope.message },
         ]);
@@ -767,7 +776,7 @@ export class SyncGateway {
       const page = this.store.readEvents(principal.tenantId, payload.name, key, cursor, pageLimit + 1);
       const hasMore = page.length > pageLimit;
       const events = page.slice(0, pageLimit).map((event) => packStreamEvent(this.store.schema, event));
-      sendFrame(client.socket, [
+      this.#sendFrame(client, [
         FrameKind.StreamPage,
         {
           subscriptionId: payload.subscriptionId,
@@ -785,7 +794,7 @@ export class SyncGateway {
         payload.name,
         this.store.listObjectsForUser(principal.tenantId, payload.name, principal.userId),
       );
-      sendFrame(client.socket, [FrameKind.Snapshot, { subscriptionId: payload.subscriptionId, objects, cursor: 0 }]);
+      this.#sendFrame(client, [FrameKind.Snapshot, { subscriptionId: payload.subscriptionId, objects, cursor: 0 }]);
     }
   }
 
@@ -794,7 +803,7 @@ export class SyncGateway {
     schemaCompatibility: SchemaCompatibilityResult,
     schema: FrickSchema = this.store.schema,
   ): void {
-    sendFrame(client.socket, [
+    this.#sendFrame(client, [
       FrameKind.HelloAck,
       {
         schemaHash: schema.hash,
@@ -805,7 +814,7 @@ export class SyncGateway {
       },
     ]);
     this.#completedHandshakes.add(client);
-    sendFrame(client.socket, [FrameKind.Schema, schema]);
+    this.#sendFrame(client, [FrameKind.Schema, schema]);
   }
 
   #handleAppend(client: SyncClient, payload: AppendPayload): void {
@@ -827,7 +836,7 @@ export class SyncGateway {
           configuredMax: clientLimits.maxPendingAppendsPerClient,
         },
       });
-      sendFrame(client.socket, [
+      this.#sendFrame(client, [
         FrameKind.Nack,
         { requestId: payload.requestId, error: envelope, code: envelope.code, message: envelope.message },
       ]);
@@ -846,7 +855,7 @@ export class SyncGateway {
           configuredMax: clientLimits.maxStreamAppendPayloadBytes,
         },
       });
-      sendFrame(client.socket, [
+      this.#sendFrame(client, [
         FrameKind.Nack,
         { requestId: payload.requestId, error: envelope, code: envelope.code, message: envelope.message },
       ]);
@@ -880,7 +889,7 @@ export class SyncGateway {
         event: payload.event,
         payload: payload.payload,
       });
-      sendFrame(client.socket, [FrameKind.Ack, { requestId: payload.requestId, cursor: result.event.sequence }]);
+      this.#sendFrame(client, [FrameKind.Ack, { requestId: payload.requestId, cursor: result.event.sequence }]);
 
       if (result.created) {
         this.publishStreamEvent(result.event);
@@ -914,7 +923,7 @@ export class SyncGateway {
           configuredMax: clientLimits.maxPendingAppendsPerClient,
         },
       });
-      sendFrame(client.socket, [
+      this.#sendFrame(client, [
         FrameKind.Nack,
         { requestId: payload.requestId, error: envelope, code: envelope.code, message: envelope.message },
       ]);
@@ -948,7 +957,7 @@ export class SyncGateway {
           value: payload.value,
           ...(payload.expectedVersion !== undefined ? { expectedVersion: payload.expectedVersion } : {}),
         });
-        sendFrame(client.socket, [
+        this.#sendFrame(client, [
           FrameKind.Ack,
           { requestId: payload.requestId, version: result.nextVersion },
         ]);
@@ -969,7 +978,7 @@ export class SyncGateway {
             schemaHash: this.store.schema.hash,
             schemaRevision: this.store.schema.schemaRevision,
           });
-          sendFrame(client.socket, [
+          this.#sendFrame(client, [
             FrameKind.Nack,
             { requestId: payload.requestId, error: envelope, code: envelope.code, message: envelope.message },
           ]);
@@ -1024,7 +1033,7 @@ export class SyncGateway {
         cleared: [],
       });
     }
-    sendFrame(client.socket, [FrameKind.Ack, { requestId: payload.requestId }]);
+    this.#sendFrame(client, [FrameKind.Ack, { requestId: payload.requestId }]);
   }
 
   #handlePresenceClear(client: SyncClient, payload: PresenceClearPayload): void {
@@ -1058,7 +1067,7 @@ export class SyncGateway {
         cleared: [payload.key],
       });
     }
-    sendFrame(client.socket, [FrameKind.Ack, { requestId: payload.requestId }]);
+    this.#sendFrame(client, [FrameKind.Ack, { requestId: payload.requestId }]);
   }
 
   /**
@@ -1082,7 +1091,7 @@ export class SyncGateway {
       if (!principal || !this.#isPrincipalActive(principal) || principal.tenantId !== tenantId) {
         continue;
       }
-      sendFrame(subscriber.socket, [
+      this.#sendFrame(subscriber, [
         FrameKind.PresenceDelta,
         { subscriptionId: subscription.subscriptionId, records: packed, cleared: [...cleared] },
       ]);
@@ -1109,8 +1118,10 @@ export class SyncGateway {
       throw error;
     }
     this.store.enqueueSignal(principal.tenantId, payload.name, payload.key, payload.value);
-    routeSignal(this.store, this.#subscriptions, payload, principal.tenantId);
-    sendFrame(client.socket, [FrameKind.Ack, { requestId: payload.requestId }]);
+    routeSignal(this.store, this.#subscriptions, payload, principal.tenantId, {
+      maxBufferedAmount: this.#limitsFor(client).maxWebSocketOutboundBufferedBytes,
+    });
+    this.#sendFrame(client, [FrameKind.Ack, { requestId: payload.requestId }]);
   }
 
   #sendAuthNack(client: SyncClient, requestId: string, error: unknown): boolean {
@@ -1125,7 +1136,7 @@ export class SyncGateway {
       retryable: false,
       details: { reason: error.decision.reason },
     });
-    sendFrame(client.socket, [
+    this.#sendFrame(client, [
       FrameKind.Nack,
       { requestId, error: envelope, code: envelope.code, message: envelope.message },
     ]);
@@ -1226,7 +1237,7 @@ export class SyncGateway {
       retryable: false,
       details: { reason: input.reason },
     });
-    sendFrame(client.socket, [
+    this.#sendFrame(client, [
       FrameKind.Nack,
       { requestId: "hello", error: envelope, code: envelope.code, message: envelope.message },
     ]);

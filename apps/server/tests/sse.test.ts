@@ -9,18 +9,28 @@ class FakeResponse extends EventEmitter {
   headers: Record<string, string> | undefined;
   chunks: string[] = [];
   ended = false;
+  destroyed = false;
+  writableLength = 0;
+  writeResults: boolean[] = [];
 
   writeHead(status: number, headers: Record<string, string>): void {
     this.status = status;
     this.headers = headers;
   }
 
-  write(chunk: string): void {
+  write(chunk: string): boolean {
     this.chunks.push(chunk);
+    this.writableLength += Buffer.byteLength(chunk);
+    return this.writeResults.shift() ?? true;
   }
 
   end(): void {
     this.ended = true;
+    this.emit("close");
+  }
+
+  destroy(): void {
+    this.destroyed = true;
     this.emit("close");
   }
 }
@@ -58,5 +68,38 @@ describe("SseRegistry", () => {
     expect(payload.cursor).toBe(2);
     expect(payload.hasMore).toBe(true);
     registry.closeAll();
+  });
+
+  it("closes an SSE client when write reports backpressure", () => {
+    const registry = new SseRegistry(foundationSchema, { heartbeatMs: 0, maxBufferedBytes: 1_000 });
+    const response = new FakeResponse();
+    response.writeResults = [false];
+
+    registry.open(response as never, {
+      tenantId: "_default",
+      stream: "MessageStream",
+      key: "conversation-general",
+      events: [],
+      cursor: 0,
+    });
+
+    expect(registry.connectionCount).toBe(0);
+    expect(response.ended || response.destroyed).toBe(true);
+  });
+
+  it("closes an SSE client when writableLength exceeds the configured cap", () => {
+    const registry = new SseRegistry(foundationSchema, { heartbeatMs: 0, maxBufferedBytes: 8 });
+    const response = new FakeResponse();
+
+    registry.open(response as never, {
+      tenantId: "_default",
+      stream: "MessageStream",
+      key: "conversation-general",
+      events: [],
+      cursor: 0,
+    });
+
+    expect(registry.connectionCount).toBe(0);
+    expect(response.ended || response.destroyed).toBe(true);
   });
 });

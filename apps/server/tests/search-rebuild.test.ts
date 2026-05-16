@@ -93,6 +93,51 @@ describe("admin search rebuild route", () => {
     expect(body.error.details.index).toBe("no-such-index");
   });
 
+  it("rejects projection-backed rebuilds instead of clearing the index", async () => {
+    const rebuildCalls: string[] = [];
+    const projectionIndex: FrickSearchIndexDefinition = {
+      name: "inbox-fts",
+      source: { kind: "projection", name: "conversation-inbox" },
+      project(input) {
+        const row = input.projectionRow?.value;
+        const conversationId = typeof row?.conversationId === "string" ? row.conversationId : "";
+        if (!conversationId) return null;
+        return { docId: conversationId, text: conversationId };
+      },
+    };
+    const adapter: FrickSearchAdapter = {
+      id: "counting-search",
+      registerIndex() {},
+      upsert() {},
+      delete() {},
+      query() {
+        return { hits: [], total: 0 };
+      },
+      async rebuild(_tenantId: string, indexName: string, _source: AsyncIterable<FrickSearchProjectInput>) {
+        rebuildCalls.push(indexName);
+      },
+    };
+    app = await startServer({ indexes: [projectionIndex], adapter });
+
+    const rebuild = await fetch(
+      `${app.httpUrl}/_frick/admin/search/inbox-fts/rebuild`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+      },
+    );
+
+    expect(rebuild.status).toBe(400);
+    const body = (await rebuild.json()) as {
+      error: { details: { reason: string; index: string } };
+    };
+    expect(body.error.details).toMatchObject({
+      reason: "projectionSourceUnsupported",
+      index: "inbox-fts",
+    });
+    expect(rebuildCalls).toEqual([]);
+  });
+
   it("fails closed before rebuilding when audit recording fails", async () => {
     const rebuildCalls: string[] = [];
     const conversationsIndex: FrickSearchIndexDefinition = {
