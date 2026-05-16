@@ -1,5 +1,5 @@
-import "./generated/tokens.css";
-import "./components.css";
+import "../src/generated/tokens.css";
+import "../src/components.css";
 
 export * from "./provider.js";
 export * from "./icons.js";

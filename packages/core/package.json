@@ -2,18 +2,37 @@
   "name": "@frick/core",
   "version": "0.0.0",
   "type": "module",
-  "exports": {
-    ".": "./src/index.ts",
-    "./chat": "./src/chat.ts",
-    "./errors": "./src/generated/errors.ts"
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bri/Frick.git",
+    "directory": "packages/core"
   },
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./chat": {
+      "types": "./dist/chat.d.ts",
+      "import": "./dist/chat.js",
+      "default": "./dist/chat.js"
+    },
+    "./errors": {
+      "types": "./dist/generated/errors.d.ts",
+      "import": "./dist/generated/errors.js",
+      "default": "./dist/generated/errors.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
   "files": [
-    "src",
+    "dist",
     "README.md"
   ],
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "provenance": true
   },
   "dependencies": {
     "@frick/protocol": "workspace:*"

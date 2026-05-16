@@ -138,12 +138,6 @@ importers:
       lucide-react:
         specifier: ^0.556.0
         version: 0.556.0(react@19.2.6)
-      react:
-        specifier: ^19.2.0
-        version: 19.2.6
-      react-dom:
-        specifier: ^19.2.0
-        version: 19.2.6(react@19.2.6)
     devDependencies:
       '@types/react':
         specifier: ^19.2.7
@@ -151,6 +145,12 @@ importers:
       '@types/react-dom':
         specifier: ^19.2.3
         version: 19.2.3(@types/react@19.2.14)
+      react:
+        specifier: ^19.2.0
+        version: 19.2.6
+      react-dom:
+        specifier: ^19.2.0
+        version: 19.2.6(react@19.2.6)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -169,13 +169,13 @@ importers:
       '@frick/react':
         specifier: workspace:*
         version: link:../react
-      react:
-        specifier: ^19.2.0
-        version: 19.2.6
     devDependencies:
       '@types/react':
         specifier: ^19.2.7
         version: 19.2.14
+      react:
+        specifier: ^19.2.0
+        version: 19.2.6
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -198,13 +198,13 @@ importers:
       '@frick/protocol':
         specifier: workspace:*
         version: link:../protocol
-      react:
-        specifier: ^19.2.0
-        version: 19.2.6
     devDependencies:
       '@types/react':
         specifier: ^19.2.7
         version: 19.2.14
+      react:
+        specifier: ^19.2.0
+        version: 19.2.6
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

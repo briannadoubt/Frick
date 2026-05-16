@@ -2,7 +2,7 @@
 
 This is the operator-facing checklist for cutting a Frick framework release. The policy (semver rules, deprecation windows, surface stability) lives in [`versioning.md`](versioning.md).
 
-Frick has independent per-package versions. A release usually covers one or a few packages, not all of them.
+Frick has independent per-package versions. A release usually covers one or a few packages, not all of them. The `framework-v*` tag is a repository cut marker for changelog and automation; it does not require every npm package version to equal the tag version.
 
 ## Flow
 
@@ -11,7 +11,7 @@ Frick has independent per-package versions. A release usually covers one or a fe
 3. **Bump version** for each package that changed. See the CLI commands below.
 4. **Regenerate the changelog** entry for the upcoming version.
 5. **Tag** the release in git.
-6. **Publish** manually — operators run `pnpm publish` per package; native artifacts are released through their own channels.
+6. **Publish** by pushing the release tag. The npm workflow publishes missing TS package versions through npm trusted publishing with provenance; native artifacts are released through their own channels.
 
 Steps 3-5 are also done by the release operator on a clean `main` checkout after the PR lands. Do **not** publish from a feature branch.
 
@@ -75,21 +75,31 @@ The `framework-v*` tag is what `scripts/changelog.ts` keys on for the next relea
 
 ## Publishing
 
-The framework does **not** auto-publish. Operators run:
+TypeScript packages publish from `.github/workflows/publish-npm.yml` when a `framework-v*` tag is pushed. The workflow:
 
-```sh
-pnpm --filter @frick/protocol publish --access public
+- accepts only strict SemVer `framework-v<version>` tags that point at a commit on `origin/main`,
+- has `contents: read` and `id-token: write` permissions only,
+- uses pinned GitHub Actions,
+- runs the same TypeScript/generated-artifact/pack hygiene gates as CI, and
+- packs each missing package with `pnpm pack` so workspace dependencies are rewritten, then publishes that tarball with `npm publish --provenance`.
+
+Before the first automated npm release, configure npm trusted publishing for each public package (`@frick/protocol`, `@frick/core`, `@frick/design`, `@frick/react`, `@frick/design-web`, `@frick/devtools`) to trust this repository and workflow path:
+
+```text
+publish-npm.yml
 ```
 
-per package after the tag lands. For Swift, push the tag — SwiftPM consumers resolve from git. For Android, run the Maven publish task from the Android workspace (out of scope for this repo).
+npm's trusted-publisher form asks for the workflow filename, not the full `.github/workflows/` path. Each public package manifest must include repository metadata for the GitHub repository running the workflow (`git+https://github.com/<owner>/<repo>.git`) plus its workspace directory; the workflow fails before publishing if it does not match. Do not use long-lived `NPM_TOKEN` or `NODE_AUTH_TOKEN` secrets for framework package publishing. For Swift, push the tag — SwiftPM consumers resolve from git. For Android, push the matching `android-v*` tag and let the Android publish workflow release the Maven artifact.
 
 ## Pre-publish sanity checklist
 
 - [ ] `pnpm test` passes locally on a clean checkout of the tagged commit.
 - [ ] `pnpm typecheck` passes.
 - [ ] `pnpm verify:generated` reports no schema, fixture, or design-token drift.
+- [ ] `pnpm release:dry-run` passes.
 - [ ] `CHANGELOG.md` has a header for the version you are about to tag.
-- [ ] The version in `package.json` (or `build.gradle.kts`) matches the tag.
+- [ ] Every package being shipped has the intended bumped version; Android `build.gradle.kts` versions still match their `android-v*` tags.
+- [ ] npm trusted publishing is configured for every public TypeScript package being shipped.
 - [ ] If `schemaRevision` was bumped, `@frick/protocol` got at least a minor bump and every other TS package that imports protocol types was rebuilt at least once.
 - [ ] Deprecated APIs being removed in this release were marked deprecated at least one full minor ago.
 

@@ -2,16 +2,28 @@
   "name": "@frick/design",
   "version": "0.0.0",
   "type": "module",
-  "exports": {
-    ".": "./src/index.ts"
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bri/Frick.git",
+    "directory": "packages/design"
   },
-  "types": "./src/index.ts",
+  "main": "./dist-types/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist-types/index.d.ts",
+      "import": "./dist-types/index.js",
+      "default": "./dist-types/index.js"
+    }
+  },
+  "types": "./dist-types/index.d.ts",
   "files": [
-    "src",
+    "dist-types",
+    "dist",
     "README.md"
   ],
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "provenance": true
   },
   "scripts": {
     "check": "tsx src/scripts/check.ts",

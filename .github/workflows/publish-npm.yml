@@ -1,0 +1,170 @@
+name: Publish npm Packages
+
+# Runs on `framework-vX.Y.Z` tag pushes after the release commit lands on
+# main. npm trusted publishing must be configured per package for this exact
+# workflow file in npm before the first release.
+on:
+  push:
+    tags:
+      - 'framework-v*'
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-npm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish to npm with provenance
+    if: ${{ startsWith(github.ref, 'refs/tags/framework-v') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # actions/checkout@v4
+
+      - name: Verify npm release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          const refName = process.env.GITHUB_REF_NAME ?? "";
+          const semverPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|[\dA-Za-z-]*[A-Za-z-][\dA-Za-z-]*)(?:\.(?:0|[1-9]\d*|[\dA-Za-z-]*[A-Za-z-][\dA-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
+          if (!refName.startsWith("framework-v") || !semverPattern.test(refName.slice("framework-v".length))) {
+            throw new Error(`Expected framework-v<semver> tag, got ${refName}`);
+          }
+          NODE
+          if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then
+            git fetch --no-tags --prune --unshallow origin +refs/heads/main:refs/remotes/origin/main
+          else
+            git fetch --no-tags --prune origin +refs/heads/main:refs/remotes/origin/main
+          fi
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "Release tag ${GITHUB_REF_NAME} must point at a commit on origin/main" >&2
+            exit 1
+          fi
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # pnpm/action-setup@v4
+        with:
+          version: 10.0.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Verify npm supports trusted publishing
+        run: |
+          npm --version
+          node --input-type=module <<'NODE'
+          import { execFileSync } from "node:child_process";
+
+          const version = execFileSync("npm", ["--version"], { encoding: "utf8" }).trim();
+          const [major, minor, patch] = version.split(".").map(Number);
+          const ok = major > 11 || (major === 11 && (minor > 5 || (minor === 5 && patch >= 1)));
+          if (!ok) {
+            throw new Error(`npm ${version} does not support trusted publishing; need >= 11.5.1`);
+          }
+          NODE
+
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Generated artifacts in sync
+        run: pnpm verify:generated
+
+      - name: Release dry-run
+        run: pnpm release:dry-run
+
+      - name: Verify publish manifests request provenance
+        shell: bash
+        env:
+          NPM_CONFIG_PROVENANCE: "true"
+          EXPECTED_REPOSITORY_URL: "git+https://github.com/${{ github.repository }}.git"
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+
+          const packageDirs = [
+            "packages/protocol",
+            "packages/core",
+            "packages/design",
+            "packages/react",
+            "packages/design-web",
+            "packages/devtools",
+          ];
+
+          for (const dir of packageDirs) {
+            const manifest = JSON.parse(readFileSync(`${dir}/package.json`, "utf8"));
+            const expectedRepository = {
+              type: "git",
+              url: process.env.EXPECTED_REPOSITORY_URL,
+              directory: dir,
+            };
+            if (manifest.private === true) {
+              throw new Error(`${manifest.name} is unexpectedly private in npm publish list`);
+            }
+            if (manifest.publishConfig?.access !== "public") {
+              throw new Error(`${manifest.name} must publish with public access`);
+            }
+            if (manifest.publishConfig.provenance !== true) {
+              throw new Error(`${manifest.name} publishConfig.provenance must be true`);
+            }
+            if (
+              manifest.repository?.type !== expectedRepository.type ||
+              manifest.repository?.url !== expectedRepository.url ||
+              manifest.repository?.directory !== expectedRepository.directory
+            ) {
+              throw new Error(`${manifest.name} repository metadata must equal ${JSON.stringify(expectedRepository)}`);
+            }
+          }
+          NODE
+
+      - name: Publish missing package versions
+        shell: bash
+        env:
+          NPM_CONFIG_IGNORE_SCRIPTS: "true"
+        run: |
+          set -euo pipefail
+          package_dirs=(
+            packages/protocol
+            packages/core
+            packages/design
+            packages/react
+            packages/design-web
+            packages/devtools
+          )
+
+          for package_dir in "${package_dirs[@]}"; do
+            name="$(node -p "JSON.parse(require('fs').readFileSync('${package_dir}/package.json', 'utf8')).name")"
+            version="$(node -p "JSON.parse(require('fs').readFileSync('${package_dir}/package.json', 'utf8')).version")"
+            if npm view "${name}@${version}" version >/dev/null 2>&1; then
+              echo "${name}@${version} is already published; skipping"
+              continue
+            fi
+
+            echo "Packing ${name}@${version}"
+            pack_dir="$(mktemp -d)"
+            pack_json="$(pnpm --dir "${package_dir}" pack --pack-destination "${pack_dir}" --json)"
+            tarball="$(PACK_JSON="${pack_json}" node --input-type=module <<'NODE'
+            const parsed = JSON.parse(process.env.PACK_JSON ?? "[]");
+            const entry = Array.isArray(parsed) ? parsed[0] : parsed;
+            if (!entry?.filename) {
+              throw new Error("pnpm pack did not return a tarball filename");
+            }
+            process.stdout.write(entry.filename);
+            NODE
+            )"
+
+            echo "Publishing ${name}@${version}"
+            npm publish "${tarball}" --provenance --access public
+          done

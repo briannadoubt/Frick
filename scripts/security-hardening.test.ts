@@ -5,11 +5,36 @@ function read(path: string): string {
   return readFileSync(path, "utf8");
 }
 
+const PUBLIC_NPM_PACKAGE_DIRS = [
+  "packages/protocol",
+  "packages/core",
+  "packages/design",
+  "packages/react",
+  "packages/design-web",
+  "packages/devtools",
+];
+
+const PRIVATE_WORKSPACE_PACKAGE_DIRS = ["apps/cli", "apps/server", "apps/web"];
+const PUBLIC_REPOSITORY_URL = "git+https://github.com/bri/Frick.git";
+
+function workflowPackageDirs(workflow: string): string[] {
+  const match = workflow.match(/package_dirs=\(\n(?<body>[\s\S]*?)\n\s*\)/);
+  if (!match?.groups?.body) return [];
+  return match.groups.body
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+function workflowActionUses(workflows: string): string[] {
+  return Array.from(workflows.matchAll(/^\s*-?\s*uses:\s*([^\s#]+)/gm), (match) => match[1] ?? "");
+}
+
 describe("release hardening", () => {
   test("npm pack dry-runs ignore lifecycle scripts and scrub publish tokens", () => {
     const source = read("scripts/release-dry-run.ts");
 
-    expect(source).toContain('"--ignore-scripts"');
+    expect(source).toContain("NPM_CONFIG_IGNORE_SCRIPTS");
     expect(source).toContain("NPM_TOKEN");
     expect(source).toContain("NODE_AUTH_TOKEN");
   });
@@ -43,12 +68,63 @@ describe("release hardening", () => {
   test("GitHub workflows pin action SHAs and gate Android publishing to version tags", () => {
     const ci = read(".github/workflows/ci.yml");
     const publishAndroid = read(".github/workflows/publish-android.yml");
-    const workflows = `${ci}\n${publishAndroid}`;
+    const publishNpm = read(".github/workflows/publish-npm.yml");
+    const workflows = `${ci}\n${publishAndroid}\n${publishNpm}`;
 
-    expect(workflows).not.toMatch(/uses:\s+[-\w/]+@v\d+\b/);
+    expect(workflowActionUses(workflows).filter((use) => !/@[0-9a-f]{40}$/.test(use))).toEqual([]);
     expect(publishAndroid).not.toContain("workflow_dispatch");
     expect(publishAndroid).toContain("if: ${{ startsWith(github.ref, 'refs/tags/android-v') }}");
     expect(publishAndroid).toContain("android-v${frickVersion}");
+  });
+
+  test("npm publishing uses trusted provenance on framework version tags", () => {
+    const publishNpm = read(".github/workflows/publish-npm.yml");
+
+    expect(publishNpm).not.toContain("workflow_dispatch");
+    expect(publishNpm).toContain("tags:");
+    expect(publishNpm).toContain("'framework-v*'");
+    expect(publishNpm).toContain("id-token: write");
+    expect(publishNpm).toContain("contents: read");
+    expect(publishNpm).not.toContain("NPM_TOKEN");
+    expect(publishNpm).not.toContain("NODE_AUTH_TOKEN");
+    expect(publishNpm).toContain("version: 10.0.0");
+    expect(publishNpm).toContain("pnpm install --frozen-lockfile --ignore-scripts");
+    expect(publishNpm).toContain("semverPattern");
+    expect(publishNpm).toContain("pnpm --dir \"${package_dir}\" pack");
+    expect(publishNpm).toContain("Array.isArray(parsed) ? parsed[0] : parsed");
+    expect(publishNpm).toContain('npm publish "${tarball}" --provenance --access public');
+    expect(publishNpm).toContain("Verify npm release tag");
+    expect(publishNpm).toContain("must point at a commit on origin/main");
+    expect(publishNpm).toContain("publishConfig.provenance");
+    expect(publishNpm).toContain("EXPECTED_REPOSITORY_URL");
+  });
+
+  test("publishable npm packages opt in to provenance metadata", () => {
+    for (const packageDir of PUBLIC_NPM_PACKAGE_DIRS) {
+      const manifest = JSON.parse(read(`${packageDir}/package.json`)) as {
+        private?: boolean;
+        publishConfig?: { access?: string; provenance?: boolean };
+        repository?: { type?: string; url?: string; directory?: string };
+      };
+
+      expect(manifest.private).not.toBe(true);
+      expect(manifest.publishConfig?.access).toBe("public");
+      expect(manifest.publishConfig?.provenance).toBe(true);
+      expect(manifest.repository).toEqual({
+        type: "git",
+        url: PUBLIC_REPOSITORY_URL,
+        directory: packageDir,
+      });
+    }
+  });
+
+  test("npm publish workflow package list matches the public TypeScript package set", () => {
+    const publishNpm = read(".github/workflows/publish-npm.yml");
+
+    expect(workflowPackageDirs(publishNpm)).toEqual(PUBLIC_NPM_PACKAGE_DIRS);
+    for (const packageDir of PRIVATE_WORKSPACE_PACKAGE_DIRS) {
+      expect(publishNpm).not.toContain(packageDir);
+    }
   });
 
   test("Android version bump tags match the publish workflow guard", () => {

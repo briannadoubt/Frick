@@ -23,6 +23,7 @@ A new framework version **does not** imply a new schema revision. A release that
 | `@frick/react` | TypeScript | `packages/react/package.json` |
 | `@frick/design` | TypeScript | `packages/design/package.json` |
 | `@frick/design-web` | TypeScript | `packages/design-web/package.json` |
+| `@frick/devtools` | TypeScript | `packages/devtools/package.json` |
 | `@frick/server` | TypeScript | `apps/server/package.json` |
 | `@frick/web` | TypeScript | `apps/web/package.json` |
 | `@frick/cli` | TypeScript | `apps/cli/package.json` |
@@ -81,6 +82,12 @@ These are the exports an application author may depend on. Breaking changes requ
   - error envelope decoding helpers
 - `@frick/react`:
   - `useProjection`, `useFrickClient`
+- `@frick/design`:
+  - design token definition, resolver, validation, and generator exports
+- `@frick/design-web`:
+  - exported React design primitives and generated CSS token contract
+- `@frick/devtools`:
+  - `FrickDevtools` React component and documented props
 - `@frick/server`:
   - `createServer`, `FrickStore` constructor, runtime config types
   - HTTP route mounts under `/_frick/*` (admin routes excluded from compat — see below)

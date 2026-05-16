@@ -97,6 +97,9 @@ A multi-commit rollout that lifts the client SDKs from "you can hand-write it" t
 
 ### Repository
 
+- npm publishing is now tag-driven through a pinned-action GitHub Actions workflow that accepts only `framework-v*` tags on `main`, uses npm trusted publishing with OIDC provenance, and publishes the public TypeScript packages from packed `dist` entrypoints.
+- `pnpm release:dry-run` now fails publishable packages that expose TypeScript source entrypoints or point manifest fields at files missing from the packed tarball.
+- Root `pnpm test`, `pnpm server`, `pnpm web`, and `pnpm cli` build public package entrypoints first so fresh checkouts work with the npm-style `dist` exports.
 - `pnpm verify:generated` now regenerates and checks schema DTOs, protocol fixtures, and tracked design-token outputs; the Android publish workflow runs that drift gate plus Android tests/lint/debug builds before publishing to GitHub Packages.
 - Apache License 2.0 (`LICENSE`).
 - `.gitignore` now excludes `*.p8`, `*.pem`, `*-service-account.json`, and `.env*` so credential files can't be committed by accident.

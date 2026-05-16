@@ -25,15 +25,21 @@ Companion docs:
 - [ ] `pnpm frick verify` exits 0 (re-runs the generated-artifact gate
   via the published CLI; useful as a spot check that the CLI still works)
 - [ ] `pnpm release:dry-run` exits 0
-  - Runs `npm pack --dry-run --json` per publishable package and flags
+  - Runs `pnpm pack --json` per publishable package with lifecycle scripts
+    disabled by config, then flags
     suspicious manifest entries (test files, fixtures, large sourcemaps,
-    lifecycle hooks, missing README). Fix any findings before bumping.
+    lifecycle hooks, missing README), TypeScript source entrypoints,
+    unreplaced `workspace:` runtime dependencies, and relative JS/DTS imports
+    missing from the packed tarball. Fix any findings before bumping.
 
 ## Bump
 
 - [ ] `pnpm exec tsx scripts/bump-version.ts --package @frick/protocol --release <type>`
 - [ ] Repeat for each affected package (`@frick/core`, `@frick/react`,
-  `@frick/design`, `@frick/design-web`, `@frick/cli` if shipping)
+  `@frick/design`, `@frick/design-web`, `@frick/devtools`)
+  - `@frick/cli`, `@frick/server`, and `@frick/web` remain private workspace
+    packages and are excluded from npm publishing until deliberately made
+    public.
 - [ ] `pnpm changelog --output CHANGELOG.md` — then manually move the
   `Unreleased` entries under the new version heading
 - [ ] Commit: `chore(release): vX.Y.Z`
@@ -42,13 +48,32 @@ Companion docs:
 
 - [ ] `git tag framework-vX.Y.Z`
 - [ ] `git push origin main framework-vX.Y.Z`
-- [ ] For each TS package, in dependency order:
+- [ ] Confirm the `Publish npm Packages` workflow starts for the
+  `framework-vX.Y.Z` tag.
+  - It must run from `.github/workflows/publish-npm.yml`, verify the tag is
+    on `origin/main`, use `id-token: write`, and publish with npm provenance.
+  - The `framework-vX.Y.Z` tag is the release cut marker for automation and
+    changelog ranges; independently versioned npm packages do not have to use
+    `X.Y.Z` unless that package is being bumped to the same version.
+  - Before the first automated npm release, configure npm trusted publishing
+    for each public package in npm (`@frick/protocol`, `@frick/core`,
+    `@frick/design`, `@frick/react`, `@frick/design-web`,
+    `@frick/devtools`) to trust this repository and workflow filename
+    (`publish-npm.yml`).
+  - Confirm each package's npm metadata uses the repository URL
+    `git+https://github.com/<owner>/<repo>.git` for the repository running
+    the workflow and includes the package's workspace directory.
+  - Do not add `NPM_TOKEN` or `NODE_AUTH_TOKEN`; package publishing is OIDC
+    based.
+- [ ] Confirm the workflow publishes or explicitly skips each package version
+  in dependency order:
   ```
-  pnpm --filter @frick/protocol publish --access public
-  pnpm --filter @frick/core      publish --access public
-  pnpm --filter @frick/design    publish --access public
-  pnpm --filter @frick/react     publish --access public
-  pnpm --filter @frick/design-web publish --access public
+  @frick/protocol
+  @frick/core
+  @frick/design
+  @frick/react
+  @frick/design-web
+  @frick/devtools
   ```
 - [ ] Swift: tagging is the publish step. SPM consumers pin to the
   `framework-vX.Y.Z` tag; there is no separate Swift registry push.
@@ -65,9 +90,16 @@ Companion docs:
 - [ ] Smoke-test the published packages:
   ```
   mkdir /tmp/test && cd /tmp/test
-  pnpm dlx @frick/cli init test-app
+  npm init -y
+  pnpm add @frick/protocol@X.Y.Z @frick/core@X.Y.Z @frick/react@X.Y.Z
+  pnpm add @frick/design@X.Y.Z @frick/design-web@X.Y.Z @frick/devtools@X.Y.Z
+  node --input-type=module -e 'await Promise.all([
+    import("@frick/protocol"), import("@frick/core"), import("@frick/react"),
+    import("@frick/design"), import("@frick/design-web"), import("@frick/devtools")
+  ])'
   ```
-  Confirm the scaffolded project boots and `frick verify` passes.
+  Use the exact versions the workflow published; omit packages that were
+  already published and skipped for this release.
 - [ ] Announce in the team channel with a link to the GitHub Release
 
 ## Rollback

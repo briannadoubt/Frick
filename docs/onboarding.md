@@ -31,7 +31,7 @@ Prerequisites: Node 24+, pnpm 10+, git. No Xcode or Android SDK needed for this 
 git clone <this-repo> frick && cd frick
 pnpm install
 pnpm schema:generate
-pnpm test                       # ~30s; should pass clean
+pnpm test                       # builds package entrypoints, then runs tests
 ```
 
 Open three terminals. In the first, start the server:

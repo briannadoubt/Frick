@@ -2,21 +2,34 @@
   "name": "@frick/design-web",
   "version": "0.0.0",
   "type": "module",
-  "exports": {
-    ".": "./src/index.tsx"
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bri/Frick.git",
+    "directory": "packages/design-web"
   },
-  "types": "./src/index.tsx",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
   "files": [
-    "src",
+    "dist",
+    "!dist/*.test.d.ts",
+    "!dist/*.test.js",
+    "src/components.css",
+    "src/generated/tokens.css",
     "README.md"
   ],
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "provenance": true
   },
   "dependencies": {
-    "lucide-react": "^0.556.0",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "lucide-react": "^0.556.0"
   },
   "peerDependencies": {
     "react": ">=18",
@@ -25,6 +38,8 @@
   "devDependencies": {
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.8"
   }
