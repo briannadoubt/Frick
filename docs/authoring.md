@@ -79,6 +79,14 @@ Once you have an app skeleton, grow it with the `scaffold` family:
   new file under `src/projections/<name>.ts` and wires it into `src/server.ts`
   via the projection markers.
 
+Search indexes registered through `createFrickServer({ search: { indexes } })`
+are indexed by the framework, but query access is conservative. The built-in
+`messages-fts` index and indexes whose source is a foundation primitive with
+framework visibility checks keep tenant-user access. Indexes over custom app
+objects, streams, or projections require an explicit `policyHooks` allow for
+the `search.query` action before tenant users can query them; admin principals
+can still query for inspection and operations.
+
 For schema evolution and the migration story, see
 [operations.md](./operations.md#backup-and-restore) and the framework
 hardening spec in `internal/`.

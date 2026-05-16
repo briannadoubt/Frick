@@ -73,7 +73,7 @@ Most day-to-day work is one of these. Each links to the canonical reference.
 - **Add a new object type.** Edit `packages/protocol/src/foundation.ts` (or your app's `src/schema.ts`), add the `objects[]` entry with a stable id and stable field ids, run `pnpm schema:generate`, then add server handlers if you need custom mutation logic. See [Schema author tutorial](./schema-author-tutorial.md).
 - **Add a new stream event.** Add an entry to `events[]` and reference it from the relevant `streams[].events` array. Events are immutable — once shipped, never change a field id or type.
 - **Add a projection.** Run `pnpm cli scaffold projection <Name>` inside a scaffolded app. It creates `src/projections/<name>.ts` and wires it into `src/server.ts` via the marker comments. See [`docs/authoring.md`](./authoring.md).
-- **Add a search index.** Declare an `indexes[]` entry on the object. Indexes are framework-managed; you don't write the migration.
+- **Add a search index.** Declare an `indexes[]` entry on the object. Indexes are framework-managed; you don't write the migration. Custom app-source search indexes require a `search.query` policy hook allow before tenant users can query them.
 - **Register a push adapter.** Push transports plug into the server's extension registry. See `apps/server/src/extensions/` and [`docs/operations.md`](./operations.md) for the registration contract.
 - **Write a custom job.** Add a `jobs[]` entry to the schema. The server framework gives you a typed handler signature and durable retry semantics.
 

@@ -61,10 +61,13 @@ A multi-commit rollout that lifts the client SDKs from "you can hand-write it" t
 ### Server (`@frick/server`)
 
 - Structured logger redaction now recurses through nested fields and redacts common secret-shaped names such as tokens, passwords, authorization headers, API keys, and private keys.
+- Auth sessions now store a SHA-256 digest of the bearer token in SQLite instead of the raw replayable token; the migration rebuilds `auth_sessions`, revoking pre-existing sessions.
 - `POST /search` now applies source-level visibility to custom search indexes before returning hits; object-backed hits are checked against object visibility, stream/projection hits without provable source identity fail closed, and framework-reserved source fields are not exposed.
+- Custom app-source search indexes now fail closed for tenant users until an app policy hook explicitly allows `search.query`; built-in and foundation-backed indexes with framework visibility proof keep their existing access, and admin principals can still query for operations.
 - Admin audit writes are fail-closed for tenant creation, tenant setting writes, account creation, job enqueue, search rebuild, and projection rebuild. Rebuild routes record the allow intent before non-rollbackable work starts.
 - Logout now closes active WebSocket sessions for the revoked session token, and privileged WebSocket frames revalidate the backing session row before writes or subscriptions.
 - Forward stream pages are bounded by `maxStreamPageSize` across HTTP, SSE initial pages, and WebSocket subscriptions; responses include `cursor` and `hasMore` for continuation.
+- WebSocket and SSE admission are bounded by `maxWebSocketConnections` and `maxSseConnections`.
 - Search requests now enforce query/filter size limits and return a sanitized `sync.protocolError` envelope for invalid adapter query syntax instead of leaking SQLite/FTS parser details.
 - **APNs push adapter** — HTTP/2 over `node:http2`, persistent per-tenant sessions, ES256 JWT signed from the tenant's stored `.p8` PEM and cached for ~50 minutes. Maps `Unregistered` / `BadDeviceToken` / `ExpiredProviderToken` onto the framework's revocation codes so the router tombstones the dead registration. Wire via `createFrickApnsAdapter()` in `ServerOptions.push.adapters`.
 - **FCM v1 push adapter** — `fcm.googleapis.com/v1/projects/{projectId}/messages:send` via `fetch`; service-account JWT exchanged for an OAuth2 access token and cached for `expires_in`. Maps `UNREGISTERED` / `INVALID_ARGUMENT` / `SENDER_ID_MISMATCH` onto revocation codes; preserves quota and server errors with stable codes. Wire via `createFrickFcmAdapter()`.

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
 export interface StoredSession {
@@ -21,7 +22,7 @@ export interface CreateSessionInput {
 }
 
 interface SessionRow {
-  session_token: string;
+  session_token_digest: string;
   tenant_id: string;
   user_id: string;
   device_id: string;
@@ -39,11 +40,11 @@ export class SessionStore {
     this.db
       .prepare(
         `INSERT INTO auth_sessions
-          (session_token, tenant_id, user_id, device_id, replica_id, expires_at, created_at, last_seen_at)
+          (session_token_digest, tenant_id, user_id, device_id, replica_id, expires_at, created_at, last_seen_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
-        input.sessionToken,
+        sessionTokenDigest(input.sessionToken),
         input.tenantId,
         input.userId,
         input.deviceId,
@@ -66,9 +67,10 @@ export class SessionStore {
   }
 
   readActive(sessionToken: string): StoredSession | undefined {
+    const digest = sessionTokenDigest(sessionToken);
     const row = this.db
-      .prepare("SELECT * FROM auth_sessions WHERE session_token = ?")
-      .get(sessionToken) as SessionRow | undefined;
+      .prepare("SELECT * FROM auth_sessions WHERE session_token_digest = ?")
+      .get(digest) as SessionRow | undefined;
     if (!row) {
       return undefined;
     }
@@ -79,10 +81,10 @@ export class SessionStore {
 
     const now = new Date().toISOString();
     this.db
-      .prepare("UPDATE auth_sessions SET last_seen_at = ? WHERE session_token = ?")
-      .run(now, sessionToken);
+      .prepare("UPDATE auth_sessions SET last_seen_at = ? WHERE session_token_digest = ?")
+      .run(now, digest);
 
-    return fromRow({ ...row, last_seen_at: now });
+    return fromRow({ ...row, last_seen_at: now }, sessionToken);
   }
 
   /**
@@ -92,22 +94,22 @@ export class SessionStore {
    */
   readAny(sessionToken: string): StoredSession | undefined {
     const row = this.db
-      .prepare("SELECT * FROM auth_sessions WHERE session_token = ?")
-      .get(sessionToken) as SessionRow | undefined;
-    return row ? fromRow(row) : undefined;
+      .prepare("SELECT * FROM auth_sessions WHERE session_token_digest = ?")
+      .get(sessionTokenDigest(sessionToken)) as SessionRow | undefined;
+    return row ? fromRow(row, sessionToken) : undefined;
   }
 
   delete(sessionToken: string): boolean {
     const result = this.db
-      .prepare("DELETE FROM auth_sessions WHERE session_token = ?")
-      .run(sessionToken);
+      .prepare("DELETE FROM auth_sessions WHERE session_token_digest = ?")
+      .run(sessionTokenDigest(sessionToken));
     return result.changes > 0;
   }
 }
 
-function fromRow(row: SessionRow): StoredSession {
+function fromRow(row: SessionRow, sessionToken: string): StoredSession {
   return {
-    sessionToken: row.session_token,
+    sessionToken,
     tenantId: row.tenant_id,
     userId: row.user_id,
     deviceId: row.device_id,
@@ -116,4 +118,8 @@ function fromRow(row: SessionRow): StoredSession {
     createdAt: row.created_at,
     lastSeenAt: row.last_seen_at,
   };
+}
+
+function sessionTokenDigest(sessionToken: string): string {
+  return createHash("sha256").update(sessionToken, "utf8").digest("hex");
 }

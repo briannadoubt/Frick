@@ -846,6 +846,35 @@ describe("foundation sync gateway", () => {
     abort.abort();
   });
 
+  it("rejects SSE connections above maxSseConnections", async () => {
+    app = await startServer({ limits: { maxSseConnections: 1 } });
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const abort = new AbortController();
+    const first = await fetch(`${app.httpUrl}/streams/MessageStream/conversation-general/events?after=0`, {
+      headers: authHeaders(login.sessionToken),
+      signal: abort.signal,
+    });
+    expect(first.status).toBe(200);
+    expect(first.body).toBeTruthy();
+    const reader = first.body!.getReader();
+    expect((await readSseEvent(reader)).event).toBe("stream-page");
+
+    const second = await fetch(`${app.httpUrl}/streams/MessageStream/conversation-general/events?after=0`, {
+      headers: authHeaders(login.sessionToken),
+    });
+    expect(second.status).toBe(429);
+    const body = await second.json();
+    expect(body.error).toMatchObject({
+      code: "rateLimit.exceeded",
+      details: {
+        limit: "maxSseConnections",
+        configuredMax: 1,
+        actualValue: 2,
+      },
+    });
+    abort.abort();
+  });
+
   it("does not stream SSE events from another tenant with the same stream key", async () => {
     app = await startServer();
     const a = await devLogin(app.httpUrl, { userId: "user-shared", tenantId: "tenant-a" });

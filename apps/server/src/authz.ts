@@ -1,4 +1,5 @@
 import { DEFAULT_TENANT_ID } from "./tenant.js";
+import type { FrickSearchIndexDefinition } from "./search/types.js";
 
 export interface Principal {
   userId: string;
@@ -111,6 +112,13 @@ const FOUNDATION_DIRECT_WRITE_DENIED_OBJECTS = new Set([
 ]);
 
 const FOUNDATION_OWNER_SCOPED_OBJECTS = new Set(["MessageDraft", "ScheduledMessage"]);
+const BUILT_IN_FOUNDATION_SEARCH_INDEXES = new Set(["messages-fts"]);
+const FOUNDATION_SEARCH_STREAMS_WITH_SOURCE_VISIBILITY = new Set(["MessageStream"]);
+const FOUNDATION_SEARCH_OBJECTS_WITH_SOURCE_VISIBILITY = new Set([
+  "Conversation",
+  "RoomMember",
+  "MessageDraft",
+]);
 
 export function deny(
   reason: Exclude<FrickDecisionReason, "allow">,
@@ -132,6 +140,12 @@ export function deny(
  *
  * Hooks are intentionally synchronous in v1 — async policy will be a
  * separate extension once we have a use case that needs it.
+ *
+ * Exception: custom app-source search indexes fail closed until a hook
+ * explicitly returns {@link ALLOW} for `search.query` on that index. Deny
+ * decisions still win. This keeps the default hook model tightening-only
+ * while giving apps a deliberate opt-in for search surfaces the framework
+ * cannot prove safe by source visibility alone.
  */
 export type FrickPolicyHook = (input: FrickPolicyInput) => FrickDecision | null;
 
@@ -255,10 +269,11 @@ export function decide(input: FrickPolicyInput, memberships: MembershipReader): 
       return ALLOW;
     }
     case "search.query": {
-      // Search queries are allowed for any authenticated principal within
-      // their own tenant. The route layer scopes results to
-      // `principal.tenantId` and applies built-in membership filtering for
-      // framework indexes such as `messages-fts`.
+      // Base search auth only proves authentication and tenant scope. The
+      // route-level assertCanQuerySearch wrapper below adds index-specific
+      // defaults: built-in/foundation-backed indexes with source visibility
+      // proof are queryable, while custom app-source indexes require an
+      // explicit allow from an app policy hook.
       return ALLOW;
     }
     case "object.write": {
@@ -423,8 +438,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Runs registered policy hooks after the framework's default decision. See
- * {@link FrickPolicyHook} for the semantics.
+ * Runs registered policy hooks after the framework's default decision. This
+ * helper only allows hooks to tighten an already-allowed decision; search's
+ * explicit app-index opt-in is handled by `explicitSearchPolicyAllow`.
  */
 export function applyPolicyHooks(
   baseline: FrickDecision,
@@ -629,21 +645,93 @@ export function assertCanWritePresence(
 export function assertCanQuerySearch(
   principal: Principal,
   indexName: string,
+  index: FrickSearchIndexDefinition,
   memberships: MembershipReader,
   hooks?: readonly FrickPolicyHook[],
 ): void {
-  const decision = decideWithHooks(
-    {
-      principal,
-      action: "search.query",
-      resource: { kind: "search", name: indexName, tenantId: principal.tenantId },
+  const input: FrickPolicyInput = {
+    principal,
+    action: "search.query",
+    resource: { kind: "search", name: indexName, tenantId: principal.tenantId },
+    context: {
+      sourceKind: index.source.kind,
+      sourceName: searchIndexSourceName(index),
+      defaultTenantAccess: hasDefaultTenantSearchAccess(indexName, index),
     },
-    memberships,
-    hooks,
-  );
+  };
+  const baseline = decide(input, memberships);
+  let decision: FrickDecision;
+  if (
+    !baseline.allow ||
+    principal.scope === "admin" ||
+    hasDefaultTenantSearchAccess(indexName, index)
+  ) {
+    decision = applyPolicyHooks(baseline, input, hooks);
+  } else {
+    decision = explicitSearchPolicyAllow(input, hooks);
+  }
   if (!decision.allow) {
     throw new AuthorizationError(decision);
   }
+}
+
+function hasDefaultTenantSearchAccess(
+  indexName: string,
+  index: FrickSearchIndexDefinition,
+): boolean {
+  if (BUILT_IN_FOUNDATION_SEARCH_INDEXES.has(indexName)) {
+    return true;
+  }
+  switch (index.source.kind) {
+    case "stream":
+      return FOUNDATION_SEARCH_STREAMS_WITH_SOURCE_VISIBILITY.has(index.source.type);
+    case "object":
+      return FOUNDATION_SEARCH_OBJECTS_WITH_SOURCE_VISIBILITY.has(index.source.type);
+    case "projection":
+      return false;
+    default:
+      return false;
+  }
+}
+
+function searchIndexSourceName(index: FrickSearchIndexDefinition): string {
+  switch (index.source.kind) {
+    case "stream":
+    case "object":
+      return index.source.type;
+    case "projection":
+      return index.source.name;
+    default:
+      return "";
+  }
+}
+
+function explicitSearchPolicyAllow(
+  input: FrickPolicyInput,
+  hooks: readonly FrickPolicyHook[] | undefined,
+): FrickDecision {
+  if (!hooks || hooks.length === 0) {
+    return deny(
+      "notAuthorizedForResource",
+      "Search index requires an explicit app policy allow",
+    );
+  }
+  let allowed = false;
+  for (const hook of hooks) {
+    const verdict = hook(input);
+    if (verdict && !verdict.allow) {
+      return verdict;
+    }
+    if (verdict?.allow) {
+      allowed = true;
+    }
+  }
+  return allowed
+    ? ALLOW
+    : deny(
+        "notAuthorizedForResource",
+        "Search index requires an explicit app policy allow",
+      );
 }
 
 export function assertCanReadSignal(

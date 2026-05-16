@@ -88,11 +88,15 @@ and connection caps.
 | `maxSearchFilterValueBytes` | 512 | each search filter value after stringification |
 | `maxPendingAppendsPerClient` | 1,000 | queued appends per WebSocket client |
 | `maxWebSocketFrameBytes` | 524,288 | inbound WebSocket frame payloads |
+| `maxWebSocketConnections` | 10,000 | concurrently accepted WebSocket connections |
+| `maxSseConnections` | 10,000 | concurrently open SSE connections |
 
 Forward stream reads return at most `maxStreamPageSize` events by default and
 include `cursor` plus `hasMore` so clients can continue from the last delivered
 sequence. Oversized WebSocket frames are rejected by the `ws` parser before
-MessagePack decode and the connection is closed.
+MessagePack decode and the connection is closed. WebSocket connections over
+`maxWebSocketConnections` are closed with code `1013`; SSE requests over
+`maxSseConnections` return `429 rateLimit.exceeded`.
 
 ## Health vs. ready
 

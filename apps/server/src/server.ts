@@ -1182,6 +1182,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         assertCanQuerySearch(
           principal,
           indexName,
+          def,
           tenantMembershipReader(store, principal.tenantId),
           policyHooks,
         );
@@ -1541,6 +1542,13 @@ export function createFrickServer(options: ServerOptions = {}) {
           cursor = events.at(-1)?.sequence ?? cursor;
         }
         if (parts[4] === "events") {
+          if (sse.connectionCount >= tenantLimits.maxSseConnections) {
+            throw new FrickLimitError({
+              limit: "maxSseConnections",
+              actualValue: sse.connectionCount + 1,
+              configuredMax: tenantLimits.maxSseConnections,
+            });
+          }
           sse.open(response, {
             tenantId: principal.tenantId,
             stream,
@@ -1926,7 +1934,7 @@ function sendAuthJson(response: http.ServerResponse, status: number, body: unkno
 function sendError(response: http.ServerResponse, error: unknown, requestId: string): void {
   const status =
     error instanceof FrickLimitError
-      ? 413
+      ? httpLimitStatus(error)
       : error instanceof BlobValidationRejectedError
         ? 415
         : error instanceof AdminAuditWriteError
@@ -2009,6 +2017,10 @@ function sendError(response: http.ServerResponse, error: unknown, requestId: str
     requestId: envelope.requestId,
     retryable: envelope.retryable,
   });
+}
+
+function httpLimitStatus(error: FrickLimitError): number {
+  return error.limit === "maxSseConnections" ? 429 : 413;
 }
 
 function httpErrorCode(error: unknown): FrickErrorCode {

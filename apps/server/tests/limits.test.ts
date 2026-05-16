@@ -26,6 +26,8 @@ describe("FrickLimits", () => {
       "maxSearchFilterValueBytes",
       "maxPendingAppendsPerClient",
       "maxWebSocketFrameBytes",
+      "maxWebSocketConnections",
+      "maxSseConnections",
       "presenceTtlMinSeconds",
       "presenceTtlMaxSeconds",
       "signalTtlMinSeconds",

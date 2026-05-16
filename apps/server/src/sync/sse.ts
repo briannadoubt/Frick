@@ -34,6 +34,10 @@ export class SseRegistry {
     this.#heartbeatMs = options.heartbeatMs ?? 15_000;
   }
 
+  get connectionCount(): number {
+    return this.#clients.size;
+  }
+
   open(response: http.ServerResponse, input: SseOpenInput): void {
     response.writeHead(200, {
       "content-type": "text/event-stream; charset=utf-8",

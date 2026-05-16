@@ -141,6 +141,19 @@ export class SyncGateway {
 
   attach(): void {
     this.wss.on("connection", (socket, request) => {
+      socket.on("error", () => {
+        // Protocol-level closes (for example ws maxPayload violations) are
+        // expected to emit on the socket before the close event finishes the
+        // normal cleanup path.
+      });
+      if (this.#activeConnections >= this.#limits.maxWebSocketConnections) {
+        try {
+          socket.close(1013, "WebSocket connection limit exceeded");
+        } catch {
+          socket.terminate();
+        }
+        return;
+      }
       const sessionToken = bearerTokenFromRequest(request);
       const principal = sessionToken ? this.#principalFromSessionToken(sessionToken) : undefined;
       const client: SyncClient = {
@@ -186,11 +199,6 @@ export class SyncGateway {
       socket.on("message", (payload) => {
         this.#lastSeenAt.set(client, Date.now());
         this.#handleRawFrame(client, socket, payload as Buffer);
-      });
-      socket.on("error", () => {
-        // Protocol-level closes (for example ws maxPayload violations) are
-        // expected to emit on the socket before the close event finishes the
-        // normal cleanup path.
       });
       socket.on("close", () => {
         clearInterval(heartbeat);

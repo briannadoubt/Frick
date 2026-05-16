@@ -17,6 +17,24 @@ afterEach(async () => {
 });
 
 describe("websocket inbound frame-size cap", () => {
+  it("closes connections above maxWebSocketConnections", async () => {
+    app = await startServer({ limits: { maxWebSocketConnections: 1 } });
+    const first = await connect(app.url);
+    const second = new WebSocket(app.url);
+    const closed = new Promise<{ code: number }>((resolve) =>
+      second.once("close", (code) => resolve({ code })),
+    );
+
+    const close = await Promise.race([
+      closed,
+      new Promise((_resolve, reject) =>
+        setTimeout(() => reject(new Error("second socket was not closed")), 2000),
+      ),
+    ]);
+    expect(close).toEqual({ code: 1013 });
+    first.close();
+  });
+
   it("rejects frames larger than maxWebSocketFrameBytes before application decode", async () => {
     app = await startServer({ limits: { maxWebSocketFrameBytes: 1024 } });
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });

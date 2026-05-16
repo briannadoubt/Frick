@@ -41,7 +41,7 @@ export function exportDataSubject(
 
   const sessions = db
     .prepare(
-      `SELECT session_token, user_id, device_id, replica_id, expires_at, created_at, last_seen_at
+      `SELECT user_id, device_id, replica_id, expires_at, created_at, last_seen_at
          FROM auth_sessions WHERE tenant_id = ? AND user_id = ?
          ORDER BY created_at ASC`,
     )

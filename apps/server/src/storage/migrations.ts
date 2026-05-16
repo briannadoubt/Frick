@@ -673,6 +673,35 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
       CREATE INDEX idx_admin_audit_log_chain ON admin_audit_log (id, entry_hash);
     `,
   },
+  {
+    // Session hardening: store a stable SHA-256 digest of the bearer token
+    // instead of the replayable raw token. Framework migrations are SQL-only
+    // and SQLite does not expose SHA-256, so existing sessions are revoked
+    // during the rebuild rather than copied forward with raw tokens intact.
+    // New sessions are inserted through SessionStore, which computes the
+    // digest in application code.
+    id: "0013_auth_session_token_digests",
+    schemaRevision: 1,
+    description: "Replace raw auth session bearer tokens with SHA-256 token digests.",
+    sql: `
+      CREATE TABLE auth_sessions_new (
+        session_token_digest TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL DEFAULT '_default',
+        user_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        replica_id TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL
+      );
+
+      DROP TABLE auth_sessions;
+      ALTER TABLE auth_sessions_new RENAME TO auth_sessions;
+
+      CREATE INDEX idx_auth_sessions_tenant_user
+        ON auth_sessions (tenant_id, user_id, expires_at DESC);
+    `,
+  },
 ];
 
 /** Names of all framework tables (and indexes) the runner manages. Used by the

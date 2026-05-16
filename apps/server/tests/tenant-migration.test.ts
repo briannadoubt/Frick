@@ -11,13 +11,15 @@ describe("0003_tenant_boundary migration", () => {
   it("backfills existing rows with the default tenant id", () => {
     const db = openDb();
 
-    // Apply migrations through 0002 only — 0006 depends on the tenant_id
-    // column added by 0003, so we also defer it.
+    // Apply migrations through 0002 only. Later migrations depend on the
+    // tenant_id columns added by 0003, so this fixture must stop before it.
+    const tenantMigrationIndex = FRAMEWORK_MIGRATIONS.findIndex(
+      (migration) => migration.id === "0003_tenant_boundary",
+    );
+    expect(tenantMigrationIndex).toBeGreaterThan(0);
     runFrameworkMigrations(db, {
       supportedSchemaRevision: foundationSchema.schemaRevision,
-      migrations: FRAMEWORK_MIGRATIONS.filter(
-        (m) => m.id !== "0003_tenant_boundary" && m.id !== "0006_jobs_lifecycle",
-      ),
+      migrations: FRAMEWORK_MIGRATIONS.slice(0, tenantMigrationIndex),
     });
 
     // Seed pre-tenant rows.

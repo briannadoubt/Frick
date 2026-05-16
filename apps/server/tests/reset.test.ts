@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { foundationSchema } from "@frick/protocol";
 import {
+  FRAMEWORK_MIGRATIONS,
   FRAMEWORK_TABLES,
   listAppliedMigrations,
   runFrameworkMigrations,
@@ -39,8 +40,8 @@ describe("resetFrickDatabase", () => {
     const result = runFrameworkMigrations(db, {
       supportedSchemaRevision: foundationSchema.schemaRevision,
     });
-    expect(result.applied).toHaveLength(12);
-    expect(listAppliedMigrations(db)).toHaveLength(12);
+    expect(result.applied).toHaveLength(FRAMEWORK_MIGRATIONS.length);
+    expect(listAppliedMigrations(db)).toHaveLength(FRAMEWORK_MIGRATIONS.length);
     db.close();
   });
 

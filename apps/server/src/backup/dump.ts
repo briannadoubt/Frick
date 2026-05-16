@@ -58,7 +58,7 @@ interface TableSpec {
 const TABLE_ORDER: readonly TableSpec[] = [
   { name: "tenants", tenantScoped: false, infraOnly: true, orderBy: "tenant_id ASC" },
   { name: "auth_accounts", tenantScoped: true, orderBy: "tenant_id ASC, user_id ASC" },
-  { name: "auth_sessions", tenantScoped: true, orderBy: "tenant_id ASC, session_token ASC" },
+  { name: "auth_sessions", tenantScoped: true, orderBy: "tenant_id ASC, session_token_digest ASC" },
   { name: "objects", tenantScoped: true, orderBy: "tenant_id ASC, object_type ASC, object_id ASC" },
   {
     name: "stream_events",

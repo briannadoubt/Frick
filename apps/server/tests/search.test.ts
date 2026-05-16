@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { foundationSchema, validateSchema, type FrickSchema } from "@frick/protocol";
 import { createFrickServer } from "../src/server.js";
-import type { FrickPolicyHook } from "../src/authz.js";
+import { ALLOW, type FrickPolicyHook } from "../src/authz.js";
 import type { FrickSearchIndexDefinition } from "../src/search/types.js";
 
 let app: Awaited<ReturnType<typeof startServer>> | undefined;
+const ADMIN_TOKEN = "test-admin-token-1234567890ABCDEF1234567890ABCDEF";
 
 afterEach(async () => {
   await app?.close();
@@ -397,6 +399,65 @@ describe("POST /search with the built-in messages-fts index", () => {
     expect(result.body.error.details.reason).toBe("notAuthorizedForResource");
   });
 
+  it("does not expose custom app-source indexes to tenant users by default", async () => {
+    app = await startServer({ indexes: [notesIndex()], schema: schemaWithNote() });
+    const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
+    app.store.upsertObject("_default", "Note", "note-1", {
+      body: "cerulean custom note",
+    });
+
+    const result = await postSearch(app.httpUrl, ada.sessionToken, {
+      index: "notes-fts",
+      q: "cerulean",
+    });
+
+    expect(result.status).toBe(403);
+    expect(result.body.error.details.reason).toBe("notAuthorizedForResource");
+  });
+
+  it("allows custom app-source indexes when a search policy hook explicitly allows them", async () => {
+    const allowNotesSearch: FrickPolicyHook = (input) =>
+      input.action === "search.query" && input.resource.name === "notes-fts" ? ALLOW : null;
+    app = await startServer({
+      indexes: [notesIndex()],
+      policyHooks: [allowNotesSearch],
+      schema: schemaWithNote(),
+    });
+    const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
+    app.store.upsertObject("_default", "Note", "note-1", {
+      body: "cerulean custom note",
+    });
+
+    const result = await postSearch(app.httpUrl, ada.sessionToken, {
+      index: "notes-fts",
+      q: "cerulean",
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body.hits.map((hit: { docId: string }) => hit.docId)).toEqual(["note-1"]);
+    expect(result.body.total).toBe(1);
+  });
+
+  it("lets admin principals query custom app-source indexes", async () => {
+    app = await startServer({
+      adminToken: ADMIN_TOKEN,
+      indexes: [notesIndex()],
+      schema: schemaWithNote(),
+    });
+    app.store.upsertObject("_default", "Note", "note-1", {
+      body: "cerulean custom note",
+    });
+
+    const result = await postSearch(app.httpUrl, ADMIN_TOKEN, {
+      index: "notes-fts",
+      q: "cerulean",
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body.hits.map((hit: { docId: string }) => hit.docId)).toEqual(["note-1"]);
+    expect(result.body.total).toBe(1);
+  });
+
   it("exposes /_frick/inspect/search when inspection is enabled", async () => {
     app = await startServer({ inspectionEnabled: true });
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
@@ -416,10 +477,12 @@ describe("POST /search with the built-in messages-fts index", () => {
 
 async function startServer(
   overrides: {
+    adminToken?: string;
     inspectionEnabled?: boolean;
     indexes?: FrickSearchIndexDefinition[];
     limits?: Parameters<typeof createFrickServer>[0]["limits"];
     policyHooks?: FrickPolicyHook[];
+    schema?: FrickSchema;
   } = {},
 ): Promise<{
   httpUrl: string;
@@ -427,12 +490,14 @@ async function startServer(
   close: () => Promise<void>;
 }> {
   const config: Record<string, unknown> = {};
+  if (overrides.adminToken !== undefined) config.adminToken = overrides.adminToken;
   if (overrides.inspectionEnabled !== undefined)
     config.inspectionEnabled = overrides.inspectionEnabled;
   const server = createFrickServer({
     port: 0,
     dbPath: ":memory:",
     config,
+    ...(overrides.schema !== undefined ? { schema: overrides.schema } : {}),
     ...(overrides.indexes !== undefined ? { search: { indexes: overrides.indexes } } : {}),
     ...(overrides.limits !== undefined ? { limits: overrides.limits } : {}),
     ...(overrides.policyHooks !== undefined ? { policyHooks: overrides.policyHooks } : {}),
@@ -446,6 +511,35 @@ async function startServer(
     httpUrl: `http://127.0.0.1:${address.port}`,
     store: server.store,
     close: server.close,
+  };
+}
+
+function schemaWithNote(): FrickSchema {
+  const next = structuredClone(foundationSchema);
+  next.hash = `${next.hash}-search-note`;
+  next.objects.push({
+    id: 99,
+    name: "Note",
+    fields: [{ id: 1, name: "body", kind: "string", required: true }],
+    indexes: [],
+  });
+  return validateSchema(next);
+}
+
+function notesIndex(): FrickSearchIndexDefinition {
+  return {
+    name: "notes-fts",
+    source: { kind: "object", type: "Note" },
+    project(input) {
+      const object = input.object;
+      if (!object) return null;
+      const body = typeof object.value.body === "string" ? object.value.body : "";
+      if (!body) return null;
+      return {
+        docId: object.id,
+        text: body,
+      };
+    },
   };
 }
 

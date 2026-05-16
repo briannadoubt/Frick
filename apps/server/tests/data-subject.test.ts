@@ -218,22 +218,14 @@ function seedRowsInto(store: FrickStore): void {
     password: "correcthorse",
   });
 
-  store.db
-    .prepare(
-      `INSERT INTO auth_sessions
-         (session_token, tenant_id, user_id, device_id, replica_id, expires_at, created_at, last_seen_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      "sess-erase",
-      TENANT,
-      USER,
-      "device-1",
-      "replica-1",
-      "2099-01-01T00:00:00.000Z",
-      "2026-01-01T00:00:00.000Z",
-      "2026-01-01T00:00:00.000Z",
-    );
+  store.createSession({
+    sessionToken: "sess-erase",
+    tenantId: TENANT,
+    userId: USER,
+    deviceId: "device-1",
+    replicaId: "replica-1",
+    expiresAt: "2099-01-01T00:00:00.000Z",
+  });
 
   store.db
     .prepare(

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { isFrickErrorEnvelope } from "@frick/protocol";
 import { createFrickServer } from "../src/server.js";
@@ -309,6 +310,36 @@ describe("auth-flow: session response hardening", () => {
     expect(afterLogout.status).toBe(401);
     expect(body.error.code).toBe("auth.unauthenticated");
   });
+
+  it("stores only a digest of session bearer tokens in SQLite", async () => {
+    app = await startServer();
+
+    const login = await fetch(`${app.httpUrl}/auth/dev-login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ userId: "user-ada" }),
+    });
+    expect(login.status).toBe(200);
+    const session = (await login.json()) as { sessionToken: string };
+
+    const db = app.store.rawDatabase();
+    const columns = db
+      .prepare(`PRAGMA table_info(auth_sessions)`)
+      .all() as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).not.toContain("session_token");
+    expect(columns.map((column) => column.name)).toContain("session_token_digest");
+
+    const row = db.prepare(`SELECT * FROM auth_sessions`).get() as Record<string, unknown>;
+    expect(Object.values(row)).not.toContain(session.sessionToken);
+    expect(row.session_token_digest).toBe(
+      createHash("sha256").update(session.sessionToken, "utf8").digest("hex"),
+    );
+
+    const authenticated = await fetch(`${app.httpUrl}/inbox?userId=user-ada`, {
+      headers: { authorization: `Bearer ${session.sessionToken}` },
+    });
+    expect(authenticated.status).toBe(200);
+  });
 });
 
 async function startServer(options: Parameters<typeof createFrickServer>[0] = {}) {
@@ -320,6 +351,7 @@ async function startServer(options: Parameters<typeof createFrickServer>[0] = {}
   }
   return {
     httpUrl: `http://127.0.0.1:${address.port}`,
+    store: server.store,
     close: server.close,
   };
 }

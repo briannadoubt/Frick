@@ -20,9 +20,11 @@ server.
 
 **Today.**
 
-- Session tokens are random 256-bit values (`randomBytes(32).toString("base64url")`),
-  stored server-side in `auth_sessions` with `expiresAt`. The token itself
-  carries no claims — every request hits the DB to validate.
+- Session tokens are random 256-bit values (`randomBytes(32).toString("base64url")`).
+  The server stores only a SHA-256 token digest in `auth_sessions` with
+  `expiresAt`; the raw bearer is returned once at session creation and then
+  used only as lookup input. The token itself carries no claims — every
+  request hits the DB to validate.
 - Sessions are time-bounded by `sessionTtlSeconds` (default 7 days, configurable
   per environment). Expired sessions return the `auth.sessionExpired` envelope
   on the next protected request, prompting clients to prompt re-login.
@@ -98,6 +100,30 @@ conversation's `MessageStream`).
   membership shapes (`MessageStream`, conversation-keyed signals, and
   `TypingState`). App-specific streams, signals, and presence types are
   documented as the policy-hook extension point in `authz.ts`.
+
+---
+
+## Search index exposure
+
+**Threat.** A tenant user queries a custom app-provided full-text index whose
+source object, stream, or projection has app-specific visibility semantics the
+framework cannot prove.
+
+**Today.**
+
+- `POST /search` requires authentication, resolves the index before querying,
+  and scopes adapter calls to `principal.tenantId`.
+- The built-in `messages-fts` index keeps default tenant-user access and is
+  filtered through `MessageStream` membership before hits leave the server.
+- App-provided indexes backed by foundation sources with framework visibility
+  checks, such as `Conversation`, `RoomMember`, `MessageDraft`, and
+  `MessageStream`, can be queried by tenant users and still pass through
+  source-level hit filtering.
+- App-provided indexes over custom app sources are denied to tenant users by
+  default. Apps must register a `policyHooks` handler that returns an explicit
+  allow for the `search.query` action and target index. Deny hooks still win.
+- Admin principals can query custom search indexes for inspection and
+  operational workflows.
 
 ---
 
@@ -252,19 +278,19 @@ to exhaust server memory.
 
 - HTTP JSON bodies, blob uploads, stream append payloads, WebSocket frames,
   subscription counts, pending append queues, search queries, search filters,
-  and forward stream pages are bounded by `FrickLimits`.
+  forward stream pages, WebSocket connections, and SSE connections are bounded
+  by `FrickLimits`.
 - WebSocket inbound frames are capped by `maxWebSocketFrameBytes` before
   MessagePack decode; oversized frames are closed by the WebSocket parser.
 - Forward stream backlogs for HTTP reads, SSE initial pages, and WebSocket
   subscriptions are page-limited and return `cursor` / `hasMore`.
-- No global connection cap on the WebSocket or SSE servers.
+- No per-principal connection cap.
 - Idempotency cache (see Replay above) and stream-store rows grow without
   pruning.
 
-**Known gap.** Operators should still enforce global request-rate,
-connection-count, and bandwidth limits at a reverse proxy / WAF. Server-side
-SSE admission control, per-principal connection caps, and durable retention
-policies remain production-hardening follow-ups.
+**Known gap.** Operators should still enforce request-rate, connection-count,
+and bandwidth limits at a reverse proxy / WAF. Per-principal connection caps
+and durable retention policies remain production-hardening follow-ups.
 
 ---
 
