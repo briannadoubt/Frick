@@ -8,6 +8,13 @@ export {
   type FrickAppResolution,
 } from "./apps/registry.js";
 export {
+  createFrickProjectModule,
+  projectModuleToAppDefinition,
+  type FrickProjectManifest,
+  type FrickProjectModule,
+  type FrickProjectModuleInput,
+} from "./platform/project.js";
+export {
   FRAMEWORK_MIGRATIONS,
   FrickMigrationChecksumError,
   FrickMigrationError,
