@@ -97,6 +97,9 @@ A multi-commit rollout that lifts the client SDKs from "you can hand-write it" t
 
 ### Repository
 
+- Added the first Frick Platform runtime boundary: project modules can supply
+  schema/manifest metadata, and the server can mount authenticated Fricken
+  Dashboard routes plus project/schema metadata at `/_frick/dashboard`.
 - Added `@frick/agent-kit`, a publishable agent compatibility pack with a
   `frick-agent-kit install` CLI, Codex/Claude/Cursor plugin surfaces, Frick
   skills, subagent profiles, Cursor rules, and a shared app spine template for

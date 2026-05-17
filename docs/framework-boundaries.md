@@ -14,6 +14,10 @@ Status: Contract baseline audit.
 - `apps/android/frick`: Android/Kotlin client SDK module.
 - `apps/android/design`: Android/Kotlin design module.
 - `apps/server`: Frick server runtime. Intended public baseline API is `createFrickServer` plus documented server options; route internals are not public API. A package entry point/export map still needs to formalize this before release.
+- Mounted dashboard routes under `/_frick/dashboard` and documented
+  `/_frick/dashboard/api/*` responses are operator-facing surfaces. Internal
+  route helper modules under `apps/server/src/dashboard/*` remain private
+  implementation unless exported from `apps/server/src/index.ts`.
 
 ## Internal Framework Modules
 
@@ -36,7 +40,11 @@ Demo apps prove framework behavior. They must not contain protocol, auth/session
 ## Local Tooling
 
 - `apps/cli`: operational and scaffolding CLI. Command behavior is public only when documented in `apps/cli/README.md` or `docs/operations.md`; implementation imports from `apps/server/src/*` remain internal until the server package has a formal exported API.
-- `apps/dev-dashboard`: static local dashboard served by `frick dashboard`. It may read documented `/health`, `/ready`, and `/_frick/inspect/*` endpoints, but it must not create an alternate operational API or become a required production component.
+- `apps/dev-dashboard`: static dashboard app served locally by `frick dashboard`
+  and mountable by the server at `/_frick/dashboard`. It may read documented
+  `/health`, `/ready`, `/_frick/inspect/*`, and `/_frick/dashboard/api/*`
+  endpoints, but it must not create an alternate operational API or become the
+  only way to operate a Frick deployment.
 
 ## Generated Files
 

@@ -176,6 +176,15 @@ static console that reads `/health`, `/ready`, and the authenticated
 `--endpoint <url>` to point it at another server, and use its Dev Login flow or
 paste a bearer token before opening inspection-backed panels.
 
+For production deployments, the Frick server can mount Fricken Dashboard at
+`/_frick/dashboard`. Mounted mode is the preferred production shape because the
+dashboard shares the server origin and security headers. Static dashboard
+assets contain no sensitive data and may be served without auth; data-bearing
+dashboard APIs under `/_frick/dashboard/api/*` require auth. In production,
+those APIs require the configured admin bearer until the dashboard capability
+system lands. In development, a valid session bearer from `/auth/dev-login` can
+read the dashboard APIs.
+
 For agents that need live runtime context, `frick mcp` runs a stdio MCP server
 owned by the same CLI. It defaults to read-only and exposes documented health,
 readiness, inspection, stream-read, job, schema, and structured-error
