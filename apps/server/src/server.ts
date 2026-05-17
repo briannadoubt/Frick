@@ -46,6 +46,12 @@ import {
   type FrickAppDefinition,
   type FrickAppRegistry,
 } from "./apps/registry.js";
+import {
+  createFrickProjectModule,
+  projectModuleToAppDefinition,
+  type FrickProjectModule,
+  type FrickProjectModuleInput,
+} from "./platform/project.js";
 import { SseRegistry } from "./sync/sse.js";
 import {
   createFrickProjectionRegistry,
@@ -211,6 +217,13 @@ export interface ServerOptions {
    */
   schema?: FrickSchema;
   /**
+   * Project module loaded by the platform runtime. This is the preferred
+   * Firebase-like app boundary: project code supplies schema and metadata,
+   * while Frick owns the runtime. Existing `schema` and `apps` options remain
+   * supported and take precedence for backwards compatibility.
+   */
+  project?: FrickProjectModule | FrickProjectModuleInput;
+  /**
    * Mount multiple Frick "apps" on the same server. Each app gets a URL
    * prefix; `GET <basePath>/schema` returns that app's schema, and Hello
    * compatibility uses the app whose schemaId the client advertises.
@@ -256,6 +269,8 @@ export function createFrickServer(options: ServerOptions = {}) {
   const metrics = options.metrics ?? createInMemoryMetrics();
   const startedAtPerf = performance.now();
   const authAttemptLimiter = new FixedWindowAuthAttemptLimiter();
+  const project = options.project ? createFrickProjectModule(options.project) : undefined;
+  const runtimeSchema = options.schema ?? project?.schema ?? foundationSchema;
 
   function sendErrorWithMetrics(
     response: http.ServerResponse,
@@ -277,7 +292,7 @@ export function createFrickServer(options: ServerOptions = {}) {
   }
   const store = new FrickStore({
     path: options.dbPath ?? process.env.FRICK_DB_PATH ?? defaultDatabasePath(),
-    schema: options.schema ?? foundationSchema,
+    schema: runtimeSchema,
     projections,
     searchIndexes,
     ...(options.search?.adapter !== undefined ? { searchAdapter: options.search.adapter } : {}),
@@ -293,10 +308,12 @@ export function createFrickServer(options: ServerOptions = {}) {
   }
   // App registry: in single-app mode (no `options.apps`), synthesize a root
   // app exposing the store's schema so request resolution always succeeds.
+  const defaultApp: FrickAppDefinition =
+    project && options.schema === undefined
+      ? projectModuleToAppDefinition(project)
+      : { id: "foundation", schema: store.schema, basePath: "" };
   const appRegistry: FrickAppRegistry = createFrickAppRegistry(
-    options.apps ?? [
-      { id: "foundation", schema: store.schema, basePath: "" },
-    ],
+    options.apps ?? [defaultApp],
   );
   const extensions = createFrickExtensionRegistry(options.extensions);
   // Precompute the admin token fingerprint once so audit-log inserts don't
