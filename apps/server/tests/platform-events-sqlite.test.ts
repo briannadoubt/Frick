@@ -1,0 +1,79 @@
+import { DatabaseSync } from "node:sqlite";
+import { foundationSchema } from "@frick/protocol";
+import { afterEach, describe, expect, it } from "vitest";
+import { definePlatformEventPipelineConformance } from "./platform-events.conformance.js";
+import { SqlitePlatformEventPipeline } from "../src/platform-events/sqlite.js";
+import { initializeStorage } from "../src/storage/schema.js";
+import { FrickStore } from "../src/store.js";
+
+let db: DatabaseSync | undefined;
+let store: FrickStore | undefined;
+
+function openPipeline(now = () => new Date("2026-05-17T00:00:00.000Z")) {
+  db = new DatabaseSync(":memory:");
+  initializeStorage(db, foundationSchema.schemaRevision);
+  return new SqlitePlatformEventPipeline(db, {
+    retentionMs: 60 * 60 * 1000,
+    maxRows: 10_000,
+    now,
+  });
+}
+
+afterEach(() => {
+  store?.close();
+  store = undefined;
+  db?.close();
+  db = undefined;
+});
+
+definePlatformEventPipelineConformance({
+  name: "sqlite",
+  async create() {
+    return openPipeline();
+  },
+});
+
+describe("SQLite platform events", () => {
+  it("FrickStore exposes the default SQLite platform event pipeline", async () => {
+    store = new FrickStore({ path: ":memory:", seed: false });
+
+    const receipt = await store.platformEvents.publish({
+      family: "jobs.lifecycle",
+      name: "job.completed",
+      source: "test",
+      tenantId: "_default",
+      payload: { jobType: "Example" },
+    });
+
+    const [delivery] = await store.platformEvents.claim("dashboard");
+    expect(delivery?.event.id).toBe(receipt.id);
+    expect(delivery?.event.payload).toEqual({ jobType: "Example" });
+  });
+
+  it("prunes old rows by retention and caps newest rows", async () => {
+    const now = new Date("2026-05-17T00:00:00.000Z");
+    const pipeline = openPipeline(() => now);
+    await pipeline.publish({
+      family: "analytics.user_event",
+      name: "old.event",
+      source: "test",
+      occurredAt: "2026-05-16T00:00:00.000Z",
+    });
+    await pipeline.publish({
+      family: "analytics.user_event",
+      name: "fresh.one",
+      source: "test",
+    });
+    await pipeline.publish({
+      family: "analytics.user_event",
+      name: "fresh.two",
+      source: "test",
+    });
+
+    const result = pipeline.prune({ retentionMs: 60 * 60 * 1000, maxRows: 1 });
+
+    expect(result.prunedByAge).toBe(1);
+    expect(result.prunedByCap).toBe(1);
+    expect((await pipeline.health()).retained).toBe(1);
+  });
+});

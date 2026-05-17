@@ -52,6 +52,12 @@ import {
   DEFAULT_DEVTOOLS_EVENTS_RETENTION_MS,
   DevToolsEventStore,
 } from "./devtools/event-store.js";
+import {
+  DEFAULT_PLATFORM_EVENTS_MAX_ROWS,
+  DEFAULT_PLATFORM_EVENTS_PRUNE_INTERVAL_MS,
+  DEFAULT_PLATFORM_EVENTS_RETENTION_MS,
+  SqlitePlatformEventPipeline,
+} from "./platform-events/sqlite.js";
 import { DEFAULT_TENANT_ID } from "./tenant.js";
 
 /**
@@ -149,6 +155,24 @@ export interface StoreOptions {
    * disable the timer (prune still runs once at construction).
    */
   devtoolsEventsPruneIntervalMs?: number;
+  /**
+   * Retention window (ms) for the platform event pipeline. Older rows are
+   * dropped by the prune timer. Defaults to
+   * {@link DEFAULT_PLATFORM_EVENTS_RETENTION_MS} (7 days).
+   */
+  platformEventsRetentionMs?: number;
+  /**
+   * Hard upper bound on the size of the `platform_events` table, applied after
+   * the age-based sweep. Defaults to
+   * {@link DEFAULT_PLATFORM_EVENTS_MAX_ROWS}.
+   */
+  platformEventsMaxRows?: number;
+  /**
+   * Interval between background platform-event prune passes. Defaults to
+   * {@link DEFAULT_PLATFORM_EVENTS_PRUNE_INTERVAL_MS} (15 min). Set to `0` to
+   * disable the timer (prune still runs once at construction).
+   */
+  platformEventsPruneIntervalMs?: number;
 }
 
 export interface CreatedConversation {
@@ -181,6 +205,7 @@ export class FrickStore {
   readonly adminAudit: AdminAuditStore;
   readonly pushRegistrations: PushRegistrationStore;
   readonly devtoolsEvents: DevToolsEventStore;
+  readonly platformEvents: SqlitePlatformEventPipeline;
   readonly projections: FrickProjectionRegistry;
   readonly searchAdapter: FrickSearchAdapter;
   readonly searchIndexes: FrickSearchIndexRegistry;
@@ -204,6 +229,7 @@ export class FrickStore {
   readonly #idempotencyKeyMaxRows: number;
   #pruneTimer: ReturnType<typeof setInterval> | undefined;
   #devtoolsPruneTimer: ReturnType<typeof setInterval> | undefined;
+  #platformEventsPruneTimer: ReturnType<typeof setInterval> | undefined;
   #closed = false;
 
   constructor(options: StoreOptions) {
@@ -246,6 +272,11 @@ export class FrickStore {
         options.devtoolsEventsRetentionMs ?? DEFAULT_DEVTOOLS_EVENTS_RETENTION_MS,
       maxRows: options.devtoolsEventsMaxRows ?? DEFAULT_DEVTOOLS_EVENTS_MAX_ROWS,
     });
+    this.platformEvents = new SqlitePlatformEventPipeline(this.#db, {
+      retentionMs:
+        options.platformEventsRetentionMs ?? DEFAULT_PLATFORM_EVENTS_RETENTION_MS,
+      maxRows: options.platformEventsMaxRows ?? DEFAULT_PLATFORM_EVENTS_MAX_ROWS,
+    });
     this.projections = options.projections ?? createFrickProjectionRegistry();
     this.searchAdapter = options.searchAdapter ?? createSqliteFtsSearchAdapter(this.#db);
     this.searchIndexes = options.searchIndexes ?? createFrickSearchIndexRegistry();
@@ -282,6 +313,17 @@ export class FrickStore {
       );
       this.#devtoolsPruneTimer.unref?.();
     }
+
+    this.#safePlatformEventsPrune();
+    const platformEventsIntervalMs =
+      options.platformEventsPruneIntervalMs ?? DEFAULT_PLATFORM_EVENTS_PRUNE_INTERVAL_MS;
+    if (platformEventsIntervalMs > 0) {
+      this.#platformEventsPruneTimer = setInterval(
+        () => this.#safePlatformEventsPrune(),
+        platformEventsIntervalMs,
+      );
+      this.#platformEventsPruneTimer.unref?.();
+    }
   }
 
   close(): void {
@@ -297,6 +339,10 @@ export class FrickStore {
       clearInterval(this.#devtoolsPruneTimer);
       this.#devtoolsPruneTimer = undefined;
     }
+    if (this.#platformEventsPruneTimer) {
+      clearInterval(this.#platformEventsPruneTimer);
+      this.#platformEventsPruneTimer = undefined;
+    }
     this.#db.close();
   }
 
@@ -308,6 +354,20 @@ export class FrickStore {
       // eslint-disable-next-line no-console
       console.warn(
         `[frick] devtools_events prune failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  #safePlatformEventsPrune(): void {
+    if (this.#closed) return;
+    try {
+      this.platformEvents.prune();
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[frick] platform_events prune failed: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );

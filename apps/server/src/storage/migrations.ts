@@ -702,6 +702,61 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
         ON auth_sessions (tenant_id, user_id, expires_at DESC);
     `,
   },
+  {
+    // Platform event pipeline: append-only framework events for analytics,
+    // telemetry, audit consumers, async aggregation, and export. `id` is the
+    // durable sequence; `event_id` is the stable envelope id exposed to
+    // consumers. Delivery state is per consumer so one worker's ack/dead-letter
+    // never hides the event from a different named consumer.
+    //
+    // Idempotency keys are tenant-scoped. SQLite treats NULLs as distinct in
+    // UNIQUE indexes, so the index uses ifnull(tenant_id, '') to make the
+    // null-tenant scope dedupe correctly too.
+    id: "0014_platform_events",
+    schemaRevision: 1,
+    description: "Create platform event pipeline tables.",
+    sql: `
+      CREATE TABLE IF NOT EXISTS platform_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id TEXT NOT NULL UNIQUE,
+        schema_version INTEGER NOT NULL,
+        accepted_at TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        family TEXT NOT NULL,
+        name TEXT NOT NULL,
+        source TEXT NOT NULL,
+        tenant_id TEXT,
+        account_id TEXT,
+        subject_id TEXT,
+        trace_id TEXT,
+        idempotency_key TEXT,
+        payload TEXT NOT NULL,
+        attributes TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX idx_platform_events_tenant_idempotency
+        ON platform_events (ifnull(tenant_id, ''), idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
+      CREATE INDEX idx_platform_events_family_at ON platform_events (family, occurred_at DESC);
+      CREATE INDEX idx_platform_events_tenant_at ON platform_events (tenant_id, occurred_at DESC);
+
+      CREATE TABLE IF NOT EXISTS platform_event_deliveries (
+        consumer TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        available_at TEXT NOT NULL,
+        claimed_at TEXT,
+        acked_at TEXT,
+        dead_lettered_at TEXT,
+        last_error TEXT,
+        PRIMARY KEY (consumer, event_id)
+      );
+      CREATE INDEX idx_platform_event_deliveries_status_available
+        ON platform_event_deliveries (consumer, status, available_at);
+      CREATE INDEX idx_platform_event_deliveries_event
+        ON platform_event_deliveries (event_id);
+    `,
+  },
 ];
 
 /** Names of all framework tables (and indexes) the runner manages. Used by the
@@ -729,6 +784,8 @@ export const FRAMEWORK_TABLES: readonly string[] = [
   "search_index_fts",
   "tenant_settings",
   "devtools_events",
+  "platform_events",
+  "platform_event_deliveries",
 ];
 
 export interface MigrationRunResult {
