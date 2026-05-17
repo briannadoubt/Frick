@@ -165,6 +165,33 @@ export function definePlatformEventPipelineConformance(
       }
     });
 
+    it("does not let stale acks overwrite retry or dead-letter states", async () => {
+      const pipeline = await harness.create();
+      try {
+        const retryReceipt = await pipeline.publish({ ...baseEvent, idempotencyKey: "stale-ack-retry" });
+        await pipeline.claim("analytics-worker");
+        await pipeline.retry("analytics-worker", retryReceipt.id, {
+          error: "temporary failure",
+          availableAt: "2099-01-01T00:00:00.000Z",
+        });
+        await pipeline.ack("analytics-worker", retryReceipt.id);
+        const [retryDelivery] = await pipeline.claim("analytics-worker", {
+          availableAt: "2099-01-01T00:00:00.000Z",
+        });
+        expect(retryDelivery?.event.id).toBe(retryReceipt.id);
+
+        const deadLetterReceipt = await pipeline.publish({ ...baseEvent, idempotencyKey: "stale-ack-dead-letter" });
+        await pipeline.claim("analytics-worker");
+        await pipeline.deadLetter("analytics-worker", deadLetterReceipt.id, { error: "bad payload" });
+        await pipeline.ack("analytics-worker", deadLetterReceipt.id);
+        const health = await pipeline.health();
+        expect(health.deadLettered).toBe(1);
+      } finally {
+        await harness.close?.(pipeline);
+        await pipeline.close();
+      }
+    });
+
     it("snapshots payloads and attributes at publish time", async () => {
       const pipeline = await harness.create();
       try {

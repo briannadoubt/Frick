@@ -115,7 +115,7 @@ export class MemoryPlatformEventPipeline implements PlatformEventPipeline {
 
   async ack(consumer: string, eventId: string): Promise<void> {
     const delivery = this.#consumerState(consumer).get(eventId);
-    if (!delivery) return;
+    if (!delivery || delivery.status !== "claimed") return;
     delivery.status = "acked";
   }
 
