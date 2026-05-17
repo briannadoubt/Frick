@@ -106,6 +106,82 @@ describe("platform project runtime", () => {
   });
 });
 
+describe("mounted dashboard", () => {
+  it("serves dashboard HTML without embedding sensitive data", async () => {
+    app = await startServer();
+    const response = await fetch(`${app.httpUrl}/_frick/dashboard`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/html");
+    const html = await response.text();
+    expect(html).toContain("Fricken Dashboard");
+    expect(html).toContain('href="dashboard.css"');
+    expect(html).toContain('src="dashboard.js"');
+    expect(html).not.toContain("sessionToken");
+    expect(html).not.toContain("adminToken");
+  });
+
+  it("requires authentication for dashboard metadata", async () => {
+    app = await startServer();
+    const response = await fetch(`${app.httpUrl}/_frick/dashboard/api/metadata`);
+
+    expect(response.status).toBe(401);
+  });
+
+  it("serves dashboard metadata API when authenticated", async () => {
+    app = await startServer();
+    const response = await fetch(`${app.httpUrl}/_frick/dashboard/api/metadata`, {
+      headers: await inspectHeaders(app.httpUrl),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.project.schemaId).toBe("frick-foundation");
+    expect(body.resources).toContainEqual({
+      kind: "object",
+      name: "User",
+      fieldCount: 2,
+      indexCount: 1,
+    });
+  });
+
+  it("requires production admin bearer for dashboard metadata in production", async () => {
+    const adminToken = "test-admin-token-1234567890ABCDEF1234567890ABCDEF";
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const path = await import("node:path");
+    const dir = mkdtempSync(path.join(tmpdir(), "frick-dashboard-prod-"));
+    const dbPath = path.join(dir, "frick.sqlite");
+    try {
+      app = await startServer({
+        dbPath,
+        config: {
+          env: "production",
+          dbPath,
+          demoAuthEnabled: false,
+          inspectionEnabled: false,
+          adminToken,
+        },
+      });
+
+      const shell = await fetch(`${app.httpUrl}/_frick/dashboard`);
+      expect(shell.status).toBe(200);
+
+      const denied = await fetch(`${app.httpUrl}/_frick/dashboard/api/metadata`);
+      expect(denied.status).toBe(401);
+
+      const allowed = await fetch(`${app.httpUrl}/_frick/dashboard/api/metadata`, {
+        headers: { authorization: `Bearer ${adminToken}` },
+      });
+      expect(allowed.status).toBe(200);
+    } finally {
+      await app?.close();
+      app = undefined;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 async function startServer(options: Parameters<typeof createFrickServer>[0] = {}) {
   const server = createFrickServer({
     port: 0,

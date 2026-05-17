@@ -52,6 +52,7 @@ import {
   type FrickProjectModule,
   type FrickProjectModuleInput,
 } from "./platform/project.js";
+import { handleDashboardRoute } from "./dashboard/routes.js";
 import { SseRegistry } from "./sync/sse.js";
 import {
   createFrickProjectionRegistry,
@@ -316,6 +317,16 @@ export function createFrickServer(options: ServerOptions = {}) {
   const appRegistry: FrickAppRegistry = createFrickAppRegistry(
     options.apps ?? [defaultApp],
   );
+  const runtimeProject =
+    project ??
+    createFrickProjectModule({
+      manifest: {
+        id: defaultApp.id,
+        name: defaultApp.id,
+        displayName: defaultApp.id === "foundation" ? "Frick Foundation" : defaultApp.id,
+      },
+      schema: store.schema,
+    });
   const extensions = createFrickExtensionRegistry(options.extensions);
   // Precompute the admin token fingerprint once so audit-log inserts don't
   // hash on every request. SHA-256 truncated to 12 hex chars: short enough to
@@ -533,6 +544,21 @@ export function createFrickServer(options: ServerOptions = {}) {
       }
       response.writeHead(204);
       response.end();
+      return;
+    }
+
+    if (
+      await handleDashboardRoute({
+        request,
+        response,
+        url,
+        project: runtimeProject,
+        appRegistry,
+        authenticate: () => inspectionPrincipalFromRequest(request, url, store, config),
+        sendJson: (status, body) => sendJson(response, status, body),
+        sendError: (error, requestId) => sendErrorWithMetrics(response, error, requestId),
+      })
+    ) {
       return;
     }
 
