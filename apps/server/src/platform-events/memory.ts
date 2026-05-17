@@ -31,6 +31,7 @@ export class MemoryPlatformEventPipeline implements PlatformEventPipeline {
   readonly #now: () => Date;
   readonly #events: PlatformEventEnvelope[] = [];
   readonly #idempotency = new Map<string, PlatformEventEnvelope>();
+  readonly #acceptedAt = new Map<string, string>();
   readonly #deliveries = new Map<string, Map<string, DeliveryState>>();
   #sequence = 0;
 
@@ -40,13 +41,14 @@ export class MemoryPlatformEventPipeline implements PlatformEventPipeline {
 
   async publish(input: PlatformEventInput): Promise<PlatformEventPublishReceipt> {
     const normalized = normalizePlatformEventInput(input, this.#now);
+    const acceptedAt = this.#now().toISOString();
     if (normalized.idempotencyKey) {
-      const existing = this.#idempotency.get(normalized.idempotencyKey);
+      const existing = this.#idempotency.get(idempotencyScope(normalized.tenantId, normalized.idempotencyKey));
       if (existing) {
         return {
           id: existing.id,
           sequence: existing.sequence,
-          acceptedAt: this.#now().toISOString(),
+          acceptedAt: this.#acceptedAt.get(existing.id) ?? acceptedAt,
           duplicate: true,
         };
       }
@@ -56,15 +58,17 @@ export class MemoryPlatformEventPipeline implements PlatformEventPipeline {
       ...normalized,
       id: randomUUID(),
       sequence: ++this.#sequence,
+      acceptedAt,
     };
     this.#events.push(event);
+    this.#acceptedAt.set(event.id, acceptedAt);
     if (event.idempotencyKey) {
-      this.#idempotency.set(event.idempotencyKey, event);
+      this.#idempotency.set(idempotencyScope(event.tenantId, event.idempotencyKey), event);
     }
     return {
       id: event.id,
       sequence: event.sequence,
-      acceptedAt: this.#now().toISOString(),
+      acceptedAt,
       duplicate: false,
     };
   }
@@ -79,7 +83,7 @@ export class MemoryPlatformEventPipeline implements PlatformEventPipeline {
         state.set(event.id, {
           status: "pending",
           attempt: 0,
-          availableAt: event.occurredAt,
+          availableAt: event.acceptedAt,
           claimedAt: undefined,
           lastError: undefined,
         });
@@ -121,7 +125,7 @@ export class MemoryPlatformEventPipeline implements PlatformEventPipeline {
     options: PlatformEventRetryOptions,
   ): Promise<void> {
     const delivery = this.#consumerState(consumer).get(eventId);
-    if (!delivery) return;
+    if (!delivery || delivery.status === "acked" || delivery.status === "dead_lettered") return;
     delivery.status = "retry";
     delivery.availableAt = options.availableAt ?? this.#now().toISOString();
     delivery.claimedAt = undefined;
@@ -134,7 +138,7 @@ export class MemoryPlatformEventPipeline implements PlatformEventPipeline {
     options: PlatformEventDeadLetterOptions,
   ): Promise<void> {
     const delivery = this.#consumerState(consumer).get(eventId);
-    if (!delivery) return;
+    if (!delivery || delivery.status === "acked" || delivery.status === "dead_lettered") return;
     delivery.status = "dead_lettered";
     delivery.lastError = options.error;
   }
@@ -158,6 +162,12 @@ export class MemoryPlatformEventPipeline implements PlatformEventPipeline {
       }),
       { pending: 0, claimed: 0, deadLettered: 0 },
     );
+    const claimedEventIds = new Set<string>();
+    for (const deliveries of this.#deliveries.values()) {
+      for (const eventId of deliveries.keys()) {
+        claimedEventIds.add(eventId);
+      }
+    }
     return {
       adapter: this.adapter,
       ok: true,
@@ -165,6 +175,7 @@ export class MemoryPlatformEventPipeline implements PlatformEventPipeline {
       claimed: aggregate.claimed,
       deadLettered: aggregate.deadLettered,
       retained: this.#events.length,
+      unclaimed: Math.max(0, this.#events.length - claimedEventIds.size),
       consumers,
     };
   }
@@ -172,6 +183,7 @@ export class MemoryPlatformEventPipeline implements PlatformEventPipeline {
   async close(): Promise<void> {
     this.#events.length = 0;
     this.#idempotency.clear();
+    this.#acceptedAt.clear();
     this.#deliveries.clear();
   }
 
@@ -209,4 +221,8 @@ function clampBatchSize(value: number | undefined): number {
   if (value === undefined) return 100;
   if (!Number.isFinite(value) || value <= 0) return 100;
   return Math.min(1000, Math.floor(value));
+}
+
+function idempotencyScope(tenantId: string | null, idempotencyKey: string): string {
+  return `${tenantId ?? ""}\u0000${idempotencyKey}`;
 }

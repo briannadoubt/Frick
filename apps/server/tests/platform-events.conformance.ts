@@ -129,5 +129,80 @@ export function definePlatformEventPipelineConformance(
         await pipeline.close();
       }
     });
+
+    it("scopes idempotency keys by tenant", async () => {
+      const pipeline = await harness.create();
+      try {
+        const tenantA = await pipeline.publish({ ...baseEvent, idempotencyKey: "shared-key", tenantId: "tenant-a" });
+        const tenantB = await pipeline.publish({ ...baseEvent, idempotencyKey: "shared-key", tenantId: "tenant-b" });
+
+        expect(tenantB.id).not.toBe(tenantA.id);
+        expect(tenantB.duplicate).toBe(false);
+        const deliveries = await pipeline.claim("analytics-worker", { batchSize: 10 });
+        expect(deliveries.map((delivery) => delivery.event.tenantId).sort()).toEqual(["tenant-a", "tenant-b"]);
+      } finally {
+        await harness.close?.(pipeline);
+        await pipeline.close();
+      }
+    });
+
+    it("does not retry or dead-letter terminal deliveries", async () => {
+      const pipeline = await harness.create();
+      try {
+        const receipt = await pipeline.publish(baseEvent);
+        await pipeline.claim("analytics-worker");
+        await pipeline.ack("analytics-worker", receipt.id);
+
+        await pipeline.retry("analytics-worker", receipt.id, { error: "too late" });
+        await pipeline.deadLetter("analytics-worker", receipt.id, { error: "also too late" });
+
+        expect(await pipeline.claim("analytics-worker")).toEqual([]);
+        const health = await pipeline.health();
+        expect(health.deadLettered).toBe(0);
+      } finally {
+        await harness.close?.(pipeline);
+        await pipeline.close();
+      }
+    });
+
+    it("snapshots payloads and attributes at publish time", async () => {
+      const pipeline = await harness.create();
+      try {
+        const payload = { nested: { count: 1 } };
+        const attributes = { count: 1 };
+        await pipeline.publish({
+          ...baseEvent,
+          payload,
+          attributes,
+        });
+        payload.nested.count = 2;
+        attributes.count = 2;
+
+        const [delivery] = await pipeline.claim("analytics-worker");
+
+        expect(delivery?.event.payload).toEqual({ nested: { count: 1 } });
+        expect(delivery?.event.attributes).toEqual({ count: 1 });
+      } finally {
+        await harness.close?.(pipeline);
+        await pipeline.close();
+      }
+    });
+
+    it("makes future occurredAt events claimable at publish time", async () => {
+      const pipeline = await harness.create();
+      try {
+        const receipt = await pipeline.publish({
+          ...baseEvent,
+          occurredAt: "2099-01-01T00:00:00.000Z",
+        });
+
+        const [delivery] = await pipeline.claim("analytics-worker", { availableAt: "2026-05-17T00:00:00.000Z" });
+
+        expect(delivery?.event.id).toBe(receipt.id);
+      } finally {
+        await harness.close?.(pipeline);
+        await pipeline.close();
+      }
+    });
   });
 }

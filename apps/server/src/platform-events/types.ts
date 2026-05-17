@@ -28,6 +28,7 @@ export interface PlatformEventEnvelope extends Required<Pick<PlatformEventInput,
   readonly id: string;
   readonly schemaVersion: 1;
   readonly sequence: number;
+  readonly acceptedAt: string;
   readonly occurredAt: string;
   readonly tenantId: string | null;
   readonly accountId: string | null;
@@ -72,7 +73,8 @@ export interface PlatformEventHealth {
   readonly pending: number;
   readonly claimed: number;
   readonly deadLettered: number;
-  readonly retained: number | undefined;
+  readonly retained: number;
+  readonly unclaimed: number;
   readonly consumers: readonly {
     readonly name: string;
     readonly pending: number;
@@ -105,7 +107,7 @@ const EVENT_NAME_PATTERN = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$/;
 export function normalizePlatformEventInput(
   input: PlatformEventInput,
   now: () => Date = () => new Date(),
-): Omit<PlatformEventEnvelope, "id" | "sequence"> {
+): Omit<PlatformEventEnvelope, "id" | "sequence" | "acceptedAt"> {
   if (!isPlatformEventFamily(input.family)) {
     throw new PlatformEventValidationError(`Unknown platform event family ${JSON.stringify(input.family)}`);
   }
@@ -128,11 +130,15 @@ export function normalizePlatformEventInput(
     subjectId: input.subjectId ?? null,
     traceId: input.traceId ?? null,
     idempotencyKey: input.idempotencyKey ?? null,
-    payload: input.payload ?? {},
-    attributes: input.attributes ?? {},
+    payload: cloneJsonObject(input.payload ?? {}),
+    attributes: cloneJsonObject(input.attributes ?? {}) as Record<string, string | number | boolean>,
   };
 }
 
 export function isPlatformEventFamily(value: string): value is PlatformEventFamily {
   return (PLATFORM_EVENT_FAMILIES as readonly string[]).includes(value);
+}
+
+function cloneJsonObject(value: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
 }
