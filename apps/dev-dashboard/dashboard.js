@@ -1,4 +1,4 @@
-const DEFAULT_ENDPOINT = "http://127.0.0.1:4099";
+const DEFAULT_ENDPOINT = isMountedDashboard() ? location.origin : "http://127.0.0.1:4099";
 const DASHBOARD_PORT = "4299";
 const STORAGE_KEYS = {
   endpoint: "fricken-dashboard:endpoint",
@@ -33,7 +33,11 @@ if (initialEndpoint) localStorage.setItem(STORAGE_KEYS.endpoint, initialEndpoint
 
 const state = {
   route: normalizeRoute(location.hash.slice(1) || localStorage.getItem(STORAGE_KEYS.route) || "overview"),
-  endpoint: initialEndpoint || localStorage.getItem(STORAGE_KEYS.endpoint) || DEFAULT_ENDPOINT,
+  endpoint:
+    initialEndpoint ||
+    (isMountedDashboard()
+      ? DEFAULT_ENDPOINT
+      : localStorage.getItem(STORAGE_KEYS.endpoint) || DEFAULT_ENDPOINT),
   token: localStorage.getItem(STORAGE_KEYS.token) || "",
   devUserId: "user-ada",
   eventFilter: "",
@@ -46,6 +50,10 @@ const state = {
 
 function normalizeRoute(route) {
   return navItems.some((item) => item.id === route) ? route : "overview";
+}
+
+function isMountedDashboard() {
+  return location.pathname === "/_frick/dashboard" || location.pathname.startsWith("/_frick/dashboard/");
 }
 
 function endpointUrl(path) {
@@ -201,6 +209,7 @@ async function refreshData() {
     jobs: () => fetchJson("/_frick/inspect/jobs", { auth: true }),
     projections: () => fetchJson("/_frick/inspect/projections", { auth: true }),
     search: () => fetchJson("/_frick/inspect/search", { auth: true }),
+    dashboardMetadata: () => fetchDashboardMetadata(),
     eventSummary: () => fetchJson("/_frick/inspect/devtools/summary?windowMs=300000", { auth: true }),
     events: () =>
       fetchJson(
@@ -214,7 +223,9 @@ async function refreshData() {
   await Promise.all(
     Object.entries(tasks).map(async ([key, task]) => {
       try {
-        nextData[key] = await task();
+        const value = await task();
+        if (key === "dashboardMetadata" && value === undefined) return;
+        nextData[key] = value;
       } catch (error) {
         nextErrors[key] = error;
       }
@@ -226,6 +237,11 @@ async function refreshData() {
   state.lastRefresh = new Date().toISOString();
   state.loading = false;
   render();
+}
+
+async function fetchDashboardMetadata() {
+  if (!isMountedDashboard()) return undefined;
+  return fetchJson("/_frick/dashboard/api/metadata", { auth: true });
 }
 
 async function devLogin() {
@@ -489,7 +505,7 @@ function serverInspector() {
 }
 
 function inspectionSummary() {
-  return {
+  const summary = {
     endpoint: state.endpoint,
     hasToken: Boolean(state.token),
     server: state.data.server || null,
@@ -501,6 +517,11 @@ function inspectionSummary() {
         .map(([key, error]) => [key, error.message]),
     ),
   };
+  if (state.data.dashboardMetadata) {
+    summary.project = state.data.dashboardMetadata.project;
+    summary.resources = state.data.dashboardMetadata.resources?.length ?? 0;
+  }
+  return summary;
 }
 
 function renderOverview() {

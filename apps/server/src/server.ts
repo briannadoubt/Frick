@@ -318,15 +318,16 @@ export function createFrickServer(options: ServerOptions = {}) {
     options.apps ?? [defaultApp],
   );
   const runtimeProject =
-    project ??
-    createFrickProjectModule({
-      manifest: {
-        id: defaultApp.id,
-        name: defaultApp.id,
-        displayName: defaultApp.id === "foundation" ? "Frick Foundation" : defaultApp.id,
-      },
-      schema: store.schema,
-    });
+    project && options.schema === undefined && options.apps === undefined
+      ? project
+      : createFrickProjectModule({
+          manifest: {
+            id: defaultApp.id,
+            name: defaultApp.id,
+            displayName: defaultApp.id === "foundation" ? "Frick Foundation" : defaultApp.id,
+          },
+          schema: store.schema,
+        });
   const extensions = createFrickExtensionRegistry(options.extensions);
   // Precompute the admin token fingerprint once so audit-log inserts don't
   // hash on every request. SHA-256 truncated to 12 hex chars: short enough to
@@ -521,18 +522,6 @@ export function createFrickServer(options: ServerOptions = {}) {
     const originAllowed = isOriginAllowed(requestOrigin, config.allowedOrigins);
     setCors(response, requestOrigin, config.allowedOrigins, originAllowed);
 
-    // Resolve which app owns this URL and rebind `url` to use the relative
-    // path. The legacy single-app default (basePath: "") makes this a no-op
-    // for existing call sites. App schema is preferred over `store.schema`
-    // for any handler that reports schema metadata back to clients.
-    const resolution = appRegistry.resolveByPath(requestUrl);
-    const url = resolution
-      ? new URL(`${requestUrl.origin}${resolution.relativePath}${requestUrl.search}`)
-      : requestUrl;
-    const activeApp: FrickAppDefinition =
-      resolution?.app ?? { id: "foundation", schema: store.schema, basePath: "" };
-    const appSchema = activeApp.schema;
-
     if (request.method === "OPTIONS") {
       if (!originAllowed) {
         sendErrorWithMetrics(
@@ -551,16 +540,28 @@ export function createFrickServer(options: ServerOptions = {}) {
       await handleDashboardRoute({
         request,
         response,
-        url,
+        url: requestUrl,
         project: runtimeProject,
         appRegistry,
-        authenticate: () => inspectionPrincipalFromRequest(request, url, store, config),
+        authenticate: () => inspectionPrincipalFromRequest(request, requestUrl, store, config),
         sendJson: (status, body) => sendJson(response, status, body),
         sendError: (error, requestId) => sendErrorWithMetrics(response, error, requestId),
       })
     ) {
       return;
     }
+
+    // Resolve which app owns this URL and rebind `url` to use the relative
+    // path. The legacy single-app default (basePath: "") makes this a no-op
+    // for existing call sites. App schema is preferred over `store.schema`
+    // for any handler that reports schema metadata back to clients.
+    const resolution = appRegistry.resolveByPath(requestUrl);
+    const url = resolution
+      ? new URL(`${requestUrl.origin}${resolution.relativePath}${requestUrl.search}`)
+      : requestUrl;
+    const activeApp: FrickAppDefinition =
+      resolution?.app ?? { id: "foundation", schema: store.schema, basePath: "" };
+    const appSchema = activeApp.schema;
 
     if (request.method === "GET" && url.pathname === "/health") {
       sendJson(response, 200, { ok: true, service: "frick-server", status: "ok" });

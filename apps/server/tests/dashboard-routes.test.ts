@@ -72,6 +72,13 @@ describe("platform project runtime", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.schemaId).toBe("explicit-schema");
+
+    const metadataResponse = await fetch(`${app.httpUrl}/_frick/dashboard/api/metadata`, {
+      headers: await inspectHeaders(app.httpUrl),
+    });
+    expect(metadataResponse.status).toBe(200);
+    const metadata = await metadataResponse.json();
+    expect(metadata.project.schemaId).toBe("explicit-schema");
   });
 
   it("does not use project schema as the shared runtime schema when apps are explicit", async () => {
@@ -143,6 +150,20 @@ describe("mounted dashboard", () => {
       fieldCount: 2,
       indexCount: 1,
     });
+
+    const scriptResponse = await fetch(`${app.httpUrl}/_frick/dashboard/dashboard.js`);
+    expect(scriptResponse.status).toBe(200);
+    expect(await scriptResponse.text()).toContain("/_frick/dashboard/api/metadata");
+  });
+
+  it("does not serve dashboard routes under app base paths", async () => {
+    app = await startServer({
+      apps: [{ id: "chat", basePath: "/chat", schema: foundationSchema }],
+    });
+
+    const response = await fetch(`${app.httpUrl}/chat/_frick/dashboard/`);
+
+    expect(response.status).toBe(404);
   });
 
   it("requires production admin bearer for dashboard metadata in production", async () => {
