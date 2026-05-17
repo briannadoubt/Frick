@@ -229,8 +229,8 @@ export interface ServerOptions {
    * compatibility uses the app whose schemaId the client advertises.
    *
    * When omitted, the server runs in single-app mode: one root app with
-   * `basePath: ""` exposing `options.schema ?? foundationSchema`. Throws
-   * {@link FrickConfigError} on duplicate basePath or invalid basePath shape.
+   * `basePath: ""` exposing `options.schema ?? project.schema ?? foundationSchema`.
+   * Throws {@link FrickConfigError} on duplicate basePath or invalid basePath shape.
    *
    * V1 limitation: storage is server-shared. App routing affects URL
    * dispatch and Hello handshake only; reads/writes all hit the same
@@ -270,7 +270,8 @@ export function createFrickServer(options: ServerOptions = {}) {
   const startedAtPerf = performance.now();
   const authAttemptLimiter = new FixedWindowAuthAttemptLimiter();
   const project = options.project ? createFrickProjectModule(options.project) : undefined;
-  const runtimeSchema = options.schema ?? project?.schema ?? foundationSchema;
+  const runtimeSchema =
+    options.schema ?? (options.apps === undefined ? project?.schema : undefined) ?? foundationSchema;
 
   function sendErrorWithMetrics(
     response: http.ServerResponse,

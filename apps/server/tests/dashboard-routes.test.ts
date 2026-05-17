@@ -73,6 +73,37 @@ describe("platform project runtime", () => {
     const body = await response.json();
     expect(body.schemaId).toBe("explicit-schema");
   });
+
+  it("does not use project schema as the shared runtime schema when apps are explicit", async () => {
+    const projectSchema: FrickSchema = {
+      ...foundationSchema,
+      name: "project-schema",
+      schemaId: "project-schema",
+      hash: "project-schema-hash",
+    };
+    const appSchema: FrickSchema = {
+      ...foundationSchema,
+      name: "explicit-app",
+      schemaId: "explicit-app",
+      hash: "explicit-app-hash",
+    };
+
+    app = await startServer({
+      project: createFrickProjectModule({
+        manifest: { id: "crm", name: "crm" },
+        schema: projectSchema,
+      }),
+      apps: [{ id: "explicit-app", basePath: "", schema: appSchema }],
+    });
+
+    const schemaResponse = await fetch(`${app.httpUrl}/schema`);
+    expect(schemaResponse.status).toBe(200);
+    expect((await schemaResponse.json()).schemaId).toBe("explicit-app");
+
+    const readyResponse = await fetch(`${app.httpUrl}/ready`);
+    expect(readyResponse.status).toBe(200);
+    expect((await readyResponse.json()).schemaId).toBe(foundationSchema.schemaId);
+  });
 });
 
 async function startServer(options: Parameters<typeof createFrickServer>[0] = {}) {
