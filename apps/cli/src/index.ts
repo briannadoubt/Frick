@@ -11,18 +11,6 @@
 import { parseArgs } from "./argv.js";
 import { emit, emitError, resolveOutputMode, type OutputOptions } from "./output.js";
 import { toErrorShape, EXIT_USAGE } from "./errors.js";
-import { lintCommand } from "./commands/lint.js";
-import { schemaCommand } from "./commands/schema.js";
-import { migrateCommand } from "./commands/migrate.js";
-import { doctorCommand } from "./commands/doctor.js";
-import { inspectCommand } from "./commands/inspect.js";
-import { resetCommand } from "./commands/reset.js";
-import { tenantsCommand } from "./commands/tenants.js";
-import { verifyCommand } from "./commands/verify.js";
-import { backupCommand } from "./commands/backup.js";
-import { restoreCommand } from "./commands/restore.js";
-import { initCommand } from "./commands/init.js";
-import { scaffoldCommand } from "./commands/scaffold.js";
 
 interface CommandSpec {
   name: string;
@@ -43,6 +31,8 @@ const COMMANDS: readonly CommandSpec[] = [
   { name: "restore", summary: "Restore a framework database from NDJSON (requires --confirm yes)" },
   { name: "init", summary: "Scaffold a new Frick application at the given directory" },
   { name: "scaffold", summary: "Add an object, stream, or projection stub to a scaffolded app", subcommands: ["object", "stream", "projection"] },
+  { name: "dashboard", summary: "Serve Fricken Dashboard for a running Frick server" },
+  { name: "mcp", summary: "Run a stdio MCP server for agent access to documented Frick runtime surfaces" },
 ];
 
 export interface RunOptions {
@@ -74,29 +64,33 @@ export async function run(opts: RunOptions): Promise<number> {
   try {
     switch (command) {
       case "schema":
-        return await schemaCommand(childParsed, out);
+        return await (await import("./commands/schema.js")).schemaCommand(childParsed, out);
       case "lint":
-        return await lintCommand(childParsed, out);
+        return await (await import("./commands/lint.js")).lintCommand(childParsed, out);
       case "migrate":
-        return await migrateCommand(childParsed, out);
+        return await (await import("./commands/migrate.js")).migrateCommand(childParsed, out);
       case "doctor":
-        return await doctorCommand(childParsed, out);
+        return await (await import("./commands/doctor.js")).doctorCommand(childParsed, out);
       case "inspect":
-        return await inspectCommand(childParsed, out);
+        return await (await import("./commands/inspect.js")).inspectCommand(childParsed, out);
       case "reset":
-        return await resetCommand(childParsed, out);
+        return await (await import("./commands/reset.js")).resetCommand(childParsed, out);
       case "tenants":
-        return await tenantsCommand(childParsed, out);
+        return await (await import("./commands/tenants.js")).tenantsCommand(childParsed, out);
       case "verify":
-        return await verifyCommand(childParsed, out);
+        return await (await import("./commands/verify.js")).verifyCommand(childParsed, out);
       case "backup":
-        return await backupCommand(childParsed, out);
+        return await (await import("./commands/backup.js")).backupCommand(childParsed, out);
       case "restore":
-        return await restoreCommand(childParsed, out);
+        return await (await import("./commands/restore.js")).restoreCommand(childParsed, out);
       case "init":
-        return await initCommand(childParsed, out);
+        return await (await import("./commands/init.js")).initCommand(childParsed, out);
       case "scaffold":
-        return await scaffoldCommand(childParsed, out);
+        return await (await import("./commands/scaffold.js")).scaffoldCommand(childParsed, out);
+      case "dashboard":
+        return await (await import("./commands/dashboard.js")).dashboardCommand(childParsed, out);
+      case "mcp":
+        return await (await import("./commands/mcp.js")).mcpCommand(childParsed, out);
       default: {
         emitError(
           {

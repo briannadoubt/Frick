@@ -1,0 +1,8 @@
+---
+description: Use for Frick schema, server, projections, jobs, blobs, auth, tenancy, migrations, and versioning.
+alwaysApply: false
+---
+
+Use Frick public docs and package entry points. Do not import app code from demos or deep server internals into real apps.
+
+Preserve tenant isolation, schema compatibility checks, structured error envelopes, and cross-SDK parity. Update public docs and `CHANGELOG.md` for user-visible behavior changes.

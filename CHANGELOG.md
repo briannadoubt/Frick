@@ -97,6 +97,18 @@ A multi-commit rollout that lifts the client SDKs from "you can hand-write it" t
 
 ### Repository
 
+- Added `@frick/agent-kit`, a publishable agent compatibility pack with a
+  `frick-agent-kit install` CLI, Codex/Claude/Cursor plugin surfaces, Frick
+  skills, subagent profiles, Cursor rules, and a shared app spine template for
+  agent-assisted fullstack app builds.
+- Added `@frick/mcp` and `frick mcp`, a CLI-owned stdio MCP runtime that lets
+  agents inspect documented Frick health, readiness, schema, inspection, stream,
+  jobs, and structured-error surfaces. It defaults to read-only mode, with write
+  tools gated behind `--allow-writes`.
+- Added `frick dashboard`, which serves Fricken Dashboard: a static
+  Firebase-style local console under `apps/dev-dashboard` for inspecting
+  health, readiness, schema identity, metrics, jobs, migrations, and DevTools
+  events against any running Frick server.
 - npm publishing is now tag-driven through a pinned-action GitHub Actions workflow that accepts only `framework-v*` tags on `main`, uses npm trusted publishing with OIDC provenance, and publishes the public TypeScript packages from packed `dist` entrypoints.
 - `pnpm release:dry-run` now fails publishable packages that expose TypeScript source entrypoints or point manifest fields at files missing from the packed tarball.
 - Root `pnpm test`, `pnpm server`, `pnpm web`, and `pnpm cli` build public package entrypoints first so fresh checkouts work with the npm-style `dist` exports.

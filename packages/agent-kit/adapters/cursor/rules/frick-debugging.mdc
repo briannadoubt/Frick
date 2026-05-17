@@ -1,0 +1,8 @@
+---
+description: Use for Frick sync, cache, protocol, push, dashboard, and operations debugging.
+alwaysApply: false
+---
+
+Debug from evidence: reproduce the symptom, inspect schema identity, Hello/HelloAck, capabilities, auth/session state, cursors, pending mutations, cache metadata, and structured errors.
+
+Use documented health, readiness, dashboard, and inspection surfaces. Keep the dashboard local-only and avoid creating dashboard-only production APIs.

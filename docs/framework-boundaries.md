@@ -33,6 +33,11 @@ Internal modules may change while public package entry points stay stable.
 
 Demo apps prove framework behavior. They must not contain protocol, auth/session, schema compatibility, storage, or generated artifact behavior that real apps would need to copy.
 
+## Local Tooling
+
+- `apps/cli`: operational and scaffolding CLI. Command behavior is public only when documented in `apps/cli/README.md` or `docs/operations.md`; implementation imports from `apps/server/src/*` remain internal until the server package has a formal exported API.
+- `apps/dev-dashboard`: static local dashboard served by `frick dashboard`. It may read documented `/health`, `/ready`, and `/_frick/inspect/*` endpoints, but it must not create an alternate operational API or become a required production component.
+
 ## Generated Files
 
 Generated files must not be hand-edited:

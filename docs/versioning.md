@@ -24,6 +24,8 @@ A new framework version **does not** imply a new schema revision. A release that
 | `@frick/design` | TypeScript | `packages/design/package.json` |
 | `@frick/design-web` | TypeScript | `packages/design-web/package.json` |
 | `@frick/devtools` | TypeScript | `packages/devtools/package.json` |
+| `@frick/agent-kit` | TypeScript | `packages/agent-kit/package.json` |
+| `@frick/mcp` | TypeScript | `packages/mcp/package.json` |
 | `@frick/server` | TypeScript | `apps/server/package.json` |
 | `@frick/web` | TypeScript | `apps/web/package.json` |
 | `@frick/cli` | TypeScript | `apps/cli/package.json` |
@@ -88,12 +90,16 @@ These are the exports an application author may depend on. Breaking changes requ
   - exported React design primitives and generated CSS token contract
 - `@frick/devtools`:
   - `FrickDevtools` React component and documented props
+- `@frick/agent-kit`:
+  - installer CLI, package manifest, Frick skills, subagent profiles, adapter manifests, and Cursor rules
+- `@frick/mcp`:
+  - stdio MCP server, read-only runtime tools/resources/prompts, client config helper, and CLI launch helpers
 - `@frick/server`:
   - `createServer`, `FrickStore` constructor, runtime config types
   - HTTP route mounts under `/_frick/*` (admin routes excluded from compat — see below)
   - registered handler/projection/job/policy/blob/notification interfaces
 - `@frick/cli`:
-  - documented commands (`init`, `schema`, `migrate`, `doctor`, `inspect`, `reset`, `tenants`, `verify`, `lint`, `backup`, `restore`, scaffolders)
+  - documented commands (`init`, `schema`, `migrate`, `doctor`, `inspect`, `reset`, `tenants`, `verify`, `lint`, `backup`, `restore`, `dashboard`, `mcp`, scaffolders)
 
 ### Unstable / internal
 

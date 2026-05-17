@@ -26,7 +26,8 @@ For ad-hoc iteration:
 ```bash
 pnpm server                # boots the dev server on 127.0.0.1:4099
 pnpm web                   # boots the web demo on 127.0.0.1:5173
-pnpm tilt                  # one-command local dashboard (install, schema:generate, server, web)
+pnpm dashboard             # boots Fricken Dashboard on 127.0.0.1:4299
+pnpm tilt                  # Tilt resource graph for install, schema:generate, server, web
 pnpm cli <command>         # invoke the `frick` CLI in development mode
 ```
 

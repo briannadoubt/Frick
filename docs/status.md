@@ -8,6 +8,7 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
 - Shared structured error envelopes across HTTP, WebSocket nacks, and SDK error types.
 - MessagePack WebSocket frames for Hello/HelloAck, subscribe, append, signal, presence, object upsert, snapshot, delta, projection delta, ack, and nack.
 - SQLite-backed server persistence, migrations, health/ready/inspect/admin routes, backup/restore, metrics, request logging, CORS enforcement, and admin bearer auth.
+- Fricken Dashboard, a local static console served by `frick dashboard` (`pnpm cli dashboard` in the monorepo), for inspecting health, readiness, schema identity, metrics, jobs, migrations, and DevTools events against a running server.
 - TypeScript `@frick/core` runtime and `@frick/react` hooks for objects, streams, projections, presence, signals, auth, blobs, search, realtime wrappers, drafts, and background sync.
 - Swift and Android WebSocket sync transports with capability handshake, object subscriptions/upserts, presence, packed-frame decoding, cache compatibility, and cross-device draft helpers.
 

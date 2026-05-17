@@ -8,10 +8,12 @@
   },
   "main": "./src/index.ts",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-dashboard-assets.mjs",
     "test": "vitest run"
   },
   "dependencies": {
+    "@frick/agent-kit": "workspace:*",
+    "@frick/mcp": "workspace:*",
     "@frick/protocol": "workspace:*"
   },
   "devDependencies": {

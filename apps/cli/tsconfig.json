@@ -8,6 +8,8 @@
   },
   "references": [
     { "path": "../../packages/protocol" },
+    { "path": "../../packages/agent-kit" },
+    { "path": "../../packages/mcp" },
     { "path": "../server" }
   ],
   "include": ["src"]

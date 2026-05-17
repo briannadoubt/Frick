@@ -1,0 +1,10 @@
+---
+description: Use for Frick fullstack app planning, app spine creation, and multi-agent coordination.
+alwaysApply: false
+---
+
+Read `docs/frick/spine.md` before changing a Frick app. If it is missing, create it from `docs/frick/agent-kit/spine-template.md`.
+
+Frick is schema-first. Define objects, streams, events, presence, signals, projections, jobs, blobs, indexes, auth, tenancy, and platform contracts before splitting implementation.
+
+Do not hand-edit generated artifacts. Regenerate protocol outputs with `pnpm schema:generate` and design outputs with `pnpm design:generate`.

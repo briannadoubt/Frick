@@ -12,6 +12,8 @@ const PUBLIC_NPM_PACKAGE_DIRS = [
   "packages/react",
   "packages/design-web",
   "packages/devtools",
+  "packages/agent-kit",
+  "packages/mcp",
 ];
 
 const PRIVATE_WORKSPACE_PACKAGE_DIRS = ["apps/cli", "apps/server", "apps/web"];

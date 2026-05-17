@@ -137,17 +137,29 @@ When `inspectionEnabled` is true (the default outside production), the
 server exposes these GET endpoints under `/_frick/inspect/`:
 
 - `/_frick/inspect/server` — `{ schemaId, schemaVersion, schemaRevision,
-  schemaHash, env, demoAuthEnabled, inspectionEnabled, startedAt }`.
+  schemaHash, appId, env, demoAuthEnabled, inspectionEnabled, startedAt }`.
+- `/_frick/inspect/apps` — `{ apps: [{ id, basePath, schemaId,
+  schemaRevision }, ...] }` for multi-app server routing checks.
 - `/_frick/inspect/migrations` — `{ applied: [{ id, schemaRevision,
   appliedAt, checksum, durationMs }, ...] }` read from the
   `frick_migrations` ledger.
 - `/_frick/inspect/db` — `{ ready, applied, lastApplied?, idempotencyCache }`.
+- `/_frick/inspect/jobs` — `{ registeredHandlers, counts, workerEnabled }`.
+- `/_frick/inspect/projections` — registered projection names, sources,
+  and whether each projection supports rebuild/read handlers.
+- `/_frick/inspect/search` — active search adapter id plus registered
+  index names and sources.
 - `/_frick/inspect/metrics` — `{ snapshotAt, uptimeSeconds, counters, gauges }`.
   Returns a JSON snapshot of in-process counters and gauges. Counter names
   include `frick.http.requests.total{method,status}`,
   `frick.http.errors.total{code}`, and `frick.ws.frames.total{kind}`. Gauges
   include `frick.ws.connections.current`. No retention or historical
   aggregation — scrape periodically to integrate with a metrics backend.
+- `/_frick/inspect/devtools/events` — newest-first DevTools event feed with
+  optional `kind`, `tenantId`, `sinceId`, and `limit` filters.
+- `/_frick/inspect/devtools/events/:id` — one DevTools event by numeric id.
+- `/_frick/inspect/devtools/summary?windowMs=60000` — event counts by kind
+  over a rolling window.
 
 The `idempotencyCache` object reports the in-memory front cache state —
 `size` (currently held entries), `capacity` (configured maximum), and
@@ -155,6 +167,29 @@ The `idempotencyCache` object reports the in-memory front cache state —
 with `createFrickServer({ idempotencyCacheCapacity })`. Default 10,000.
 The durable `idempotency_keys` SQLite table is separately bounded (see
 retention slice).
+
+For local development, `frick dashboard` serves Fricken Dashboard at
+`http://127.0.0.1:4299` by default. In the monorepo, run
+`pnpm cli dashboard`; once published, run `pnpm exec frick dashboard`. It is a
+static console that reads `/health`, `/ready`, and the authenticated
+`/_frick/inspect/*` endpoints from the configured Frick HTTP server. Use
+`--endpoint <url>` to point it at another server, and use its Dev Login flow or
+paste a bearer token before opening inspection-backed panels.
+
+For agents that need live runtime context, `frick mcp` runs a stdio MCP server
+owned by the same CLI. It defaults to read-only and exposes documented health,
+readiness, inspection, stream-read, job, schema, and structured-error
+explanation resources/tools.
+
+```
+frick mcp --endpoint http://127.0.0.1:4099
+frick mcp --print-config --endpoint http://127.0.0.1:4099
+```
+
+Mutating MCP tools are hidden unless `--allow-writes` is provided, and those
+writes must still pass normal Frick auth, tenant isolation, schema
+compatibility, and policy checks. Do not expose raw SQL or private storage
+internals through MCP.
 
 When inspection is disabled (production default), every path under
 `/_frick/inspect/` returns `404` — its existence is not advertised. To

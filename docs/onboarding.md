@@ -21,7 +21,7 @@ The primitives the schema defines are:
 - **Projections** — server-computed derived views over objects and streams; clients subscribe to the projection and receive deltas.
 - **Jobs** and **Blobs** — durable background work and content-addressed binary storage, both with the same schema-driven shape.
 
-Two properties tie it together. First, protocol artifacts (server tables, client cache, generated DTOs, fixtures) are derived from the same schema AST, and tracked design-token outputs are generated from the canonical design definition. `pnpm verify:generated` regenerates both families and fails CI if anything moved. Second, the schema carries an identity (`schemaId`, `protocolVersion`, `schemaRevision`, `hash`) that clients send on every connection, so the server can reject incompatible clients before a single bad write hits storage.
+Two properties tie it together. First, protocol artifacts (server tables, client cache, generated DTOs, fixtures) are derived from the same schema AST, and tracked design-token outputs are generated from the canonical design definition. `pnpm verify:generated` regenerates both families and fails CI if anything moved. Second, the schema carries an identity (`schemaId`, `schemaVersion`, `schemaRevision`, `schemaHash`) that clients send on every connection, so the server can reject incompatible clients before a single bad write hits storage.
 
 ## 15-minute tutorial
 
@@ -46,7 +46,17 @@ In the second, start the web demo:
 pnpm web                        # http://127.0.0.1:5173
 ```
 
-In the third, watch the sync log:
+In the third, open Fricken Dashboard, the local Firebase-style console for
+health, schema, metrics, jobs, and DevTools events:
+
+```bash
+pnpm cli dashboard              # http://127.0.0.1:4299
+```
+
+Use the Auth page's Dev Login action to create a local session token, then
+refresh the Overview page to unlock the inspection-backed panels.
+
+You can also watch the sync log directly:
 
 ```bash
 TOKEN="$(curl -s -X POST http://127.0.0.1:4099/auth/dev-login \
@@ -93,6 +103,7 @@ Most day-to-day work is one of these. Each links to the canonical reference.
 ├── apps/
 │   ├── cli/         # the `frick` operational + scaffolding CLI
 │   ├── server/      # Node sync server (HTTP + WebSocket, SQLite-backed)
+│   ├── dev-dashboard/  # static local console for health, inspection, metrics, jobs, and events
 │   ├── web/         # browser demo app — conformance harness, not a chat product
 │   ├── ios/         # SwiftUI demo app (FrickDemo.xcodeproj)
 │   └── android/     # Android demo app (`app/`) and the reusable `frick/` SDK module

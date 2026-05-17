@@ -42,9 +42,9 @@ Thanks for the PR! A few notes before you hit submit:
 <!--
 If this changes the wire protocol, schema identity, or any persisted
 storage layout, call it out here and link to the relevant section of
-`docs/versioning.md`. A protocol break should bump `protocolVersion`; a
-schema-shape change should bump `schemaRevision`. A pure documentation
-or test change can leave this section empty.
+`docs/versioning.md`. A wire-incompatible protocol or schema-shape
+change should bump `schemaRevision`; a pure documentation or test change
+can leave this section empty.
 -->
 
 ## CHANGELOG

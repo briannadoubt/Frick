@@ -19,6 +19,7 @@ Frick is a pre-1.0 fullstack realtime framework. The repo contains the canonical
 - Generated drift check: `pnpm verify:generated`
 - Server: `pnpm server` (`http://127.0.0.1:4099`)
 - Web demo: `pnpm web` (`http://127.0.0.1:5173`)
+- Local dashboard: `pnpm dashboard` (`http://127.0.0.1:4299`)
 - Swift checks when touching `packages/swift` or `packages/design-swift`: `pnpm swift:test`
 - Android checks when touching `apps/android`: `pnpm android:build`
 
@@ -26,6 +27,7 @@ Frick is a pre-1.0 fullstack realtime framework. The repo contains the canonical
 
 - Do not hand-edit generated artifacts. Regenerate protocol outputs with `pnpm schema:generate` and design outputs with `pnpm design:generate`.
 - Keep demo app logic thin. If a real app would need to copy behavior from `apps/web`, `apps/ios/FrickDemo`, or `apps/android/app`, promote it to a framework package or document an extension point.
+- Keep `apps/dev-dashboard` static and local-only. It should inspect documented server health/readiness/inspection surfaces, not create a second operational API.
 - Preserve tenant isolation, schema compatibility checks, structured error envelopes, and cross-SDK parity when changing sync or storage paths.
 - Server route/storage internals under `apps/server/src/*` are not public API unless documented in `docs/framework-boundaries.md` or exported from `apps/server/src/index.ts`.
 - The worktree may contain unrelated user or automation edits. Inspect diffs before editing and do not revert changes you did not make.

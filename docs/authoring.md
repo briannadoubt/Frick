@@ -11,6 +11,33 @@ frick init my-app
 cd my-app && pnpm dev
 ```
 
+For agent-assisted app builds, ask `init` to install the Frick Agent Kit and
+emit an MCP config in one step:
+
+```
+frick init my-app --agents all --mcp
+```
+
+You can also install or refresh the kit later:
+
+```
+pnpm dlx @frick/agent-kit install --all --target .
+```
+
+The kit adds Codex, Claude Code, and Cursor skills/subagents, Cursor rules,
+and `docs/frick/spine.md`, a shared contract that backend and platform agents
+read before splitting work.
+
+When an agent needs live runtime context from the app it is building, start the
+CLI-owned MCP server:
+
+```
+frick mcp --endpoint http://127.0.0.1:4099
+```
+
+Use `frick mcp --print-config` to emit a machine-readable stdio config for
+agent harnesses. The MCP server is read-only by default.
+
 ## Getting Started
 
 `frick init <directory>` scaffolds a new Frick application at the given path.
@@ -28,6 +55,8 @@ Flags:
 | `--version <ver>`     | `0.1.0`              | Used for the app version and the scaffolded schema's `schemaVersion`. |
 | `--no-install`        | install runs by default | Skip `pnpm install`. Useful for tests and CI prep.                 |
 | `--skip-schema-check` | check runs           | Skip the in-process schema validation that runs after scaffolding.    |
+| `--agents <value>`    | unset                | Install Frick Agent Kit surfaces. Use `all`, `none`, or a comma-separated subset of `codex,claude,cursor`. |
+| `--mcp`               | unset                | Include read-only `frick mcp` stdio config in the final JSON output. |
 
 `init` refuses to overwrite an existing file in the target directory — it is
 strictly for fresh scaffolds, not migration. After files are written, unless

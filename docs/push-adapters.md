@@ -121,7 +121,7 @@ Every fan-out attempt writes a row to the DevTools event feed:
 }
 ```
 
-Query them via `/_frick/inspect/devtools-events?kind=frick.push.delivery&tenantId=tenant-acme` (admin-scoped). Same retention policy as every other DevTools event.
+Query them via `/_frick/inspect/devtools/events?kind=frick.push.delivery&tenantId=tenant-acme` (inspection-auth scoped). Same retention policy as every other DevTools event.
 
 ## Error codes returned to callers
 

@@ -27,7 +27,7 @@ const securityHeaders = {
     "style-src 'self'",
     "style-src-attr 'none'",
     "img-src 'self' data:",
-    "connect-src 'self'",
+    "connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*",
     "frame-src http://127.0.0.1:* http://localhost:*",
     "object-src 'none'",
     "base-uri 'none'",

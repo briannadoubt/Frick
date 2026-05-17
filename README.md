@@ -21,6 +21,7 @@ pnpm install
 pnpm schema:generate          # regenerate Swift + Kotlin DTOs from the foundation schema
 pnpm server                   # http://127.0.0.1:4099
 pnpm web                      # http://127.0.0.1:5173
+pnpm cli dashboard            # Fricken Dashboard at http://127.0.0.1:4299
 ```
 
 ## Where to go next
@@ -51,7 +52,7 @@ The TypeScript stack is required; Swift and Android tooling are only needed if y
 
 ## Status
 
-Pre-1.0. The schema identity (`schemaId`, `protocolVersion`, `schemaRevision`, `hash`) and the structured error envelope are stable enough for clients and servers to rely on. Storage layout, admin/inspection routes, and the CLI surface may still shift between minor versions. Local SQLite databases should be considered disposable while the framework is in cutover posture. See [`docs/status.md`](./docs/status.md) for the current support boundaries and known limitations.
+Pre-1.0. The schema identity (`schemaId`, `schemaVersion`, `schemaRevision`, `schemaHash`) and the structured error envelope are stable enough for clients and servers to rely on. Storage layout, admin/inspection routes, and the CLI surface may still shift between minor versions. Local SQLite databases should be considered disposable while the framework is in cutover posture. See [`docs/status.md`](./docs/status.md) for the current support boundaries and known limitations.
 
 ## License
 

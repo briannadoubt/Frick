@@ -6,7 +6,7 @@
  * gives confidence that argv parsing, exit codes, and the stdout/stderr
  * stream split all behave as a downstream automation script would see them.
  */
-import { execFile } from "node:child_process";
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,6 +37,74 @@ async function runCli(args: string[], opts: { env?: Record<string, string> } = {
     const err = error as { code?: number; stdout?: string; stderr?: string };
     return { exitCode: err.code ?? 1, stdout: err.stdout ?? "", stderr: err.stderr ?? "" };
   }
+}
+
+function spawnCli(args: string[], opts: { env?: Record<string, string> } = {}): ChildProcessWithoutNullStreams {
+  const env = { ...process.env, ...(opts.env ?? {}) };
+  return spawn("pnpm", ["exec", "tsx", CLI_ENTRY, ...args], {
+    env,
+    cwd: new URL("../../..", import.meta.url).pathname,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+function readFirstStdoutLine(child: ChildProcessWithoutNullStreams): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let stdout = "";
+    let stderr = "";
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`timed out waiting for stdout; stderr=${JSON.stringify(stderr)}`));
+    }, 10_000);
+    const cleanup = () => {
+      clearTimeout(timeout);
+      child.stdout.off("data", onStdout);
+      child.stderr.off("data", onStderr);
+      child.off("exit", onExit);
+      child.off("error", onError);
+    };
+    const onStdout = (chunk: Buffer) => {
+      stdout += chunk.toString();
+      const newline = stdout.indexOf("\n");
+      if (newline >= 0) {
+        cleanup();
+        resolve(stdout.slice(0, newline));
+      }
+    };
+    const onStderr = (chunk: Buffer) => {
+      stderr += chunk.toString();
+    };
+    const onExit = (code: number | null) => {
+      cleanup();
+      reject(new Error(`process exited before stdout line; code=${code}; stderr=${JSON.stringify(stderr)}`));
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    child.stdout.on("data", onStdout);
+    child.stderr.on("data", onStderr);
+    child.on("exit", onExit);
+    child.on("error", onError);
+  });
+}
+
+function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
+  return new Promise((resolve) => {
+    if (child.exitCode !== null || child.killed) {
+      resolve();
+      return;
+    }
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      resolve();
+    }, 3_000);
+    child.once("exit", () => {
+      clearTimeout(timeout);
+      resolve();
+    });
+    child.kill("SIGTERM");
+  });
 }
 
 function parseFirstJson(text: string): unknown {
@@ -82,6 +150,77 @@ describe("frick --help", () => {
     expect(names).toContain("reset");
     expect(names).toContain("inspect");
     expect(names).toContain("verify");
+    expect(names).toContain("dashboard");
+    expect(names).toContain("mcp");
+  });
+});
+
+describe("frick mcp", () => {
+  it("prints MCP client config without starting stdio mode", async () => {
+    const result = await runCli([
+      "mcp",
+      "--print-config",
+      "--endpoint",
+      "http://127.0.0.1:4199",
+      "--tenant",
+      "tenant-dev",
+      "--user",
+      "user-ada",
+    ]);
+    expect(result.exitCode).toBe(0);
+    const body = parseFirstJson(result.stdout) as {
+      ok: boolean;
+      transport: string;
+      command: string;
+      args: string[];
+      endpoint: string;
+      readonly: boolean;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.transport).toBe("stdio");
+    expect(body.command).toBe("frick");
+    expect(body.args).toContain("mcp");
+    expect(body.args).toContain("--endpoint");
+    expect(body.endpoint).toBe("http://127.0.0.1:4199");
+    expect(body.readonly).toBe(true);
+  });
+});
+
+describe("frick dashboard", () => {
+  it("starts the static dashboard server and reports its URL", async () => {
+    const child = spawnCli([
+      "dashboard",
+      "--port",
+      "0",
+      "--endpoint",
+      "http://127.0.0.1:4199",
+    ]);
+    try {
+      const line = await readFirstStdoutLine(child);
+      const body = JSON.parse(line) as { ok: boolean; url: string; endpoint: string; port: number };
+      expect(body.ok).toBe(true);
+      expect(body.port).toBeGreaterThan(0);
+      expect(body.endpoint).toBe("http://127.0.0.1:4199");
+      expect(body.url).toContain("endpoint=http%3A%2F%2F127.0.0.1%3A4199");
+
+      const index = await fetch(body.url);
+      expect(index.status).toBe(200);
+      expect(await index.text()).toContain("Fricken Dashboard");
+
+      const script = await fetch(new URL("/dashboard.js", body.url));
+      expect(script.status).toBe(200);
+      expect(await script.text()).toContain("fricken-dashboard:endpoint");
+    } finally {
+      await stopChild(child);
+    }
+  });
+
+  it("rejects an invalid port", async () => {
+    const result = await runCli(["dashboard", "--port", "nope"]);
+    expect(result.exitCode).toBe(2);
+    const err = parseLastJson(result.stderr) as { error: { code: string; message: string } };
+    expect(err.error.code).toBe("cli.usage");
+    expect(err.error.message).toContain("--port");
   });
 });
 
@@ -368,6 +507,40 @@ describe("frick init / scaffold", () => {
     ]) {
       expect(existsSync(join(appDir, relative))).toBe(true);
     }
+  });
+
+  it("init can install agent harnesses and emit MCP config", async () => {
+    const appDir = join(tmpRoot, "agent-app");
+    const result = await runCli([
+      "init",
+      appDir,
+      "--no-install",
+      "--agents",
+      "all",
+      "--mcp",
+      "--port",
+      "4111",
+    ]);
+    expect(result.exitCode).toBe(0);
+    const body = parseLastJson(result.stdout) as {
+      ok: boolean;
+      agentKit?: { ok: boolean; harnesses: string[]; written: string[] };
+      mcp?: { endpoint: string; readonly: boolean; command: string; args: string[] };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.agentKit?.ok).toBe(true);
+    expect(body.agentKit?.harnesses).toEqual(["codex", "claude", "cursor"]);
+    expect(body.agentKit?.written.some((path) => path.endsWith(".cursor/rules/frick-mcp.mdc"))).toBe(true);
+    expect(body.mcp).toMatchObject({
+      endpoint: "http://127.0.0.1:4111",
+      readonly: true,
+      command: "frick",
+    });
+    expect(body.mcp?.args).toEqual(["mcp", "--endpoint", "http://127.0.0.1:4111"]);
+    expect(existsSync(join(appDir, "docs/frick/spine.md"))).toBe(true);
+    expect(existsSync(join(appDir, ".codex/agents/frick-mcp.toml"))).toBe(true);
+    expect(existsSync(join(appDir, ".claude/agents/frick-mcp.md"))).toBe(true);
+    expect(existsSync(join(appDir, ".cursor/rules/frick-mcp.mdc"))).toBe(true);
   });
 
   it("scaffold object Profile adds a Profile object stub", async () => {

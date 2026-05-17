@@ -1,121 +1,1024 @@
-const tools = [
-  { id: "tilt", label: "Tilt", url: "http://localhost:10350" },
-  { id: "web-tilt", label: "Web · Tilt", url: "http://127.0.0.1:5173" },
-  { id: "web-preview", label: "Web · Preview", url: "http://127.0.0.1:5273" },
-  { id: "schema-tilt", label: "Schema · 4099", url: "http://127.0.0.1:4099/schema" },
-  { id: "health-tilt", label: "Health · 4099", url: "http://127.0.0.1:4099/health" },
-  { id: "schema-prev", label: "Schema · 4199", url: "http://127.0.0.1:4199/schema" },
-  { id: "health-prev", label: "Health · 4199", url: "http://127.0.0.1:4199/health" },
+const DEFAULT_ENDPOINT = "http://127.0.0.1:4099";
+const DASHBOARD_PORT = "4299";
+const STORAGE_KEYS = {
+  endpoint: "fricken-dashboard:endpoint",
+  token: "fricken-dashboard:token",
+  route: "fricken-dashboard:route",
+};
+
+const app = document.getElementById("app");
+
+const navItems = [
+  { id: "overview", label: "Overview", icon: "dashboard" },
+  { id: "realtime", label: "Realtime", icon: "pulse" },
+  { id: "data", label: "Data", icon: "database" },
+  { id: "auth", label: "Auth", icon: "lock" },
+  { id: "storage", label: "Storage", icon: "box" },
+  { id: "jobs", label: "Jobs", icon: "queue" },
+  { id: "observability", label: "Observability", icon: "chart" },
+  { id: "settings", label: "Settings", icon: "settings" },
 ];
 
-const nav = document.getElementById("tabs");
-const panel = document.getElementById("panel");
-const openLink = document.getElementById("open-link");
-let fallbackTimer = 0;
+const launchTargets = [
+  { label: "Web demo", description: "Open the Frick browser demo.", path: "http://127.0.0.1:5173", icon: "window" },
+  { label: "Tilt", description: "Open the local Tilt resource graph.", path: "http://localhost:10350", icon: "layers" },
+  { label: "Schema", description: "Inspect the active foundation schema JSON.", path: "/schema", icon: "schema" },
+  { label: "Health", description: "Check process liveness without auth.", path: "/health", icon: "heart" },
+  { label: "Ready", description: "Check database and migration readiness.", path: "/ready", icon: "check" },
+  { label: "DevTools events", description: "Read the inspection event feed.", path: "/_frick/inspect/devtools/events", icon: "activity" },
+];
 
-function selectTab(id) {
-  const tool = tools.find((candidate) => candidate.id === id);
-  if (!tool) return;
+const initialEndpoint = new URLSearchParams(location.search).get("endpoint");
+if (initialEndpoint) localStorage.setItem(STORAGE_KEYS.endpoint, initialEndpoint);
 
-  window.clearTimeout(fallbackTimer);
-  for (const btn of nav.querySelectorAll("button.tab")) {
-    btn.setAttribute("aria-selected", btn.dataset.id === id ? "true" : "false");
+const state = {
+  route: normalizeRoute(location.hash.slice(1) || localStorage.getItem(STORAGE_KEYS.route) || "overview"),
+  endpoint: initialEndpoint || localStorage.getItem(STORAGE_KEYS.endpoint) || DEFAULT_ENDPOINT,
+  token: localStorage.getItem(STORAGE_KEYS.token) || "",
+  devUserId: "user-ada",
+  eventFilter: "",
+  selectedEventId: undefined,
+  loading: false,
+  lastRefresh: undefined,
+  data: {},
+  errors: {},
+};
+
+function normalizeRoute(route) {
+  return navItems.some((item) => item.id === route) ? route : "overview";
+}
+
+function endpointUrl(path) {
+  if (path.startsWith("http://") || path.startsWith("https://")) return path;
+  const base = new URL(state.endpoint);
+  if (!base.pathname.endsWith("/")) base.pathname = `${base.pathname}/`;
+  base.search = "";
+  base.hash = "";
+  return new URL(path, base).toString();
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function icon(name) {
+  const common = 'class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"';
+  const paths = {
+    activity: '<path d="M22 12h-4l-3 8L9 4l-3 8H2" />',
+    box: '<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" /><path d="m3.3 7 8.7 5 8.7-5" /><path d="M12 22V12" />',
+    chart: '<path d="M3 3v18h18" /><path d="M7 15v2" /><path d="M12 9v8" /><path d="M17 5v12" />',
+    check: '<path d="m20 6-11 11-5-5" />',
+    clipboard: '<path d="M9 5h6" /><path d="M9 3h6a2 2 0 0 1 2 2v1h1a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h1V5a2 2 0 0 1 2-2Z" />',
+    dashboard: '<rect x="3" y="3" width="7" height="8" rx="1" /><rect x="14" y="3" width="7" height="5" rx="1" /><rect x="14" y="12" width="7" height="9" rx="1" /><rect x="3" y="15" width="7" height="6" rx="1" />',
+    database: '<ellipse cx="12" cy="5" rx="8" ry="3" /><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5" /><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6" />',
+    heart: '<path d="M20.8 4.6a5.4 5.4 0 0 0-7.6 0L12 5.8l-1.2-1.2a5.4 5.4 0 1 0-7.6 7.6L12 21l8.8-8.8a5.4 5.4 0 0 0 0-7.6Z" />',
+    layers: '<path d="m12 2 9 5-9 5-9-5 9-5Z" /><path d="m3 12 9 5 9-5" /><path d="m3 17 9 5 9-5" />',
+    link: '<path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" /><path d="M14 11a5 5 0 0 0-7.1 0l-2 2A5 5 0 0 0 12 20.1l1.1-1.1" />',
+    lock: '<rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" />',
+    pulse: '<path d="M4 12h4l2-7 4 14 2-7h4" />',
+    queue: '<path d="M8 6h13" /><path d="M8 12h13" /><path d="M8 18h13" /><path d="M3 6h.01" /><path d="M3 12h.01" /><path d="M3 18h.01" />',
+    refresh: '<path d="M21 12a9 9 0 0 1-15 6.7L3 16" /><path d="M3 21v-5h5" /><path d="M3 12a9 9 0 0 1 15-6.7L21 8" /><path d="M21 3v5h-5" />',
+    schema: '<path d="M12 3v4" /><path d="M7 7h10v6H7Z" /><path d="M12 13v4" /><path d="M5 21h14" /><path d="M8 17h8v4H8Z" />',
+    settings: '<path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 1 1 4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1A2 2 0 1 1 7.1 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.1a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1Z" />',
+    window: '<rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18" /><path d="M8 4v5" />',
+  };
+  return `<svg ${common}>${paths[name] || paths.dashboard}</svg>`;
+}
+
+function statusTone(ok, skipped) {
+  if (skipped) return "warn";
+  return ok ? "good" : "bad";
+}
+
+function toneClass(tone) {
+  return `tone-${tone || "info"}`;
+}
+
+function dot(tone) {
+  return `<span class="status-dot dot-${tone || "info"}"></span>`;
+}
+
+function formatAge(iso) {
+  if (!iso) return "Never";
+  const elapsed = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(elapsed)) return "Unknown";
+  if (elapsed < 1000) return "just now";
+  if (elapsed < 60000) return `${Math.round(elapsed / 1000)}s ago`;
+  if (elapsed < 3600000) return `${Math.round(elapsed / 60000)}m ago`;
+  return new Date(iso).toLocaleString();
+}
+
+function shortHash(hash) {
+  if (!hash) return "unknown";
+  return String(hash).length > 12 ? `${String(hash).slice(0, 12)}...` : String(hash);
+}
+
+function numberValue(value, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function metricEntries(kind) {
+  const metrics = state.data.metrics;
+  return Array.isArray(metrics?.[kind]) ? metrics[kind] : [];
+}
+
+function sumCounters(name) {
+  return metricEntries("counters")
+    .filter((entry) => entry.name === name)
+    .reduce((sum, entry) => sum + numberValue(entry.value), 0);
+}
+
+function gaugeValue(name) {
+  const entry = metricEntries("gauges").find((candidate) => candidate.name === name);
+  return numberValue(entry?.value, 0);
+}
+
+function requestRows() {
+  const rows = metricEntries("counters").filter((entry) => entry.name === "frick.http.requests.total");
+  const grouped = new Map();
+  for (const row of rows) {
+    const status = row.fields?.status || "unknown";
+    grouped.set(status, (grouped.get(status) || 0) + numberValue(row.value));
+  }
+  return Array.from(grouped.entries())
+    .map(([label, value]) => ({ label, value }))
+    .sort((a, b) => b.value - a.value);
+}
+
+function frameRows() {
+  const rows = metricEntries("counters").filter((entry) => entry.name === "frick.ws.frames.total");
+  return rows
+    .map((row) => ({ label: row.fields?.kind || "unknown", value: numberValue(row.value) }))
+    .sort((a, b) => b.value - a.value);
+}
+
+async function fetchJson(path, options = {}) {
+  if (options.auth && !state.token) {
+    const error = new Error("Session token required");
+    error.skipped = true;
+    throw error;
   }
 
-  panel.replaceChildren();
-  const iframe = document.createElement("iframe");
-  iframe.src = tool.url;
-  iframe.setAttribute("loading", "eager");
-  iframe.setAttribute("referrerpolicy", "no-referrer");
-  iframe.setAttribute("sandbox", "allow-forms allow-same-origin allow-scripts");
-  panel.appendChild(iframe);
+  const headers = { accept: "application/json" };
+  if (options.auth) headers.authorization = `Bearer ${state.token}`;
+  const response = await fetch(endpointUrl(path), { headers });
+  const text = await response.text();
+  let body = undefined;
+  try {
+    body = text ? JSON.parse(text) : undefined;
+  } catch {
+    body = text;
+  }
 
-  const fallback = document.createElement("div");
-  fallback.className = "empty";
-  fallback.hidden = true;
-
-  const blockReason = document.createElement("div");
-  blockReason.append("If this panel is blank, the target may block embedded frames with ");
-  const headerName = document.createElement("code");
-  headerName.textContent = "X-Frame-Options";
-  blockReason.append(headerName, " or a similar policy.");
-
-  const openPrompt = document.createElement("div");
-  openPrompt.append("Open ");
-  const fallbackLink = document.createElement("a");
-  fallbackLink.className = "open-link";
-  fallbackLink.href = tool.url;
-  fallbackLink.target = "_blank";
-  fallbackLink.rel = "noopener";
-  fallbackLink.textContent = tool.url;
-  openPrompt.append(fallbackLink, " in a new tab.");
-
-  fallback.append(blockReason, openPrompt);
-  panel.appendChild(fallback);
-
-  const showFallback = () => {
-    fallback.hidden = false;
-  };
-  const clearFallbackTimer = () => {
-    window.clearTimeout(timer);
-    if (fallbackTimer === timer) fallbackTimer = 0;
-  };
-  const hideFallback = () => {
-    clearFallbackTimer();
-    fallback.hidden = true;
-  };
-  const iframeRenderState = () => {
-    try {
-      const doc = iframe.contentDocument;
-      if (!doc) return "unknown";
-      const text = doc.body?.textContent?.trim() ?? "";
-      if (doc.location.href === "about:blank" || (doc.body?.children.length === 0 && text.length === 0)) {
-        return "blank";
-      }
-      return "rendered";
-    } catch {
-      return "unknown";
-    }
-  };
-  const timer = window.setTimeout(() => {
-    if (fallbackTimer === timer) showFallback();
-  }, 2500);
-  fallbackTimer = timer;
-  iframe.addEventListener(
-    "load",
-    () => {
-      clearFallbackTimer();
-      const renderState = iframeRenderState();
-      if (renderState === "blank") {
-        showFallback();
-      } else {
-        hideFallback();
-      }
-    },
-    { once: true },
-  );
-  iframe.addEventListener(
-    "error",
-    () => {
-      clearFallbackTimer();
-      showFallback();
-    },
-    { once: true },
-  );
-
-  openLink.href = tool.url;
-  openLink.textContent = `Open ${tool.label} ↗`;
-  history.replaceState(null, "", `#${id}`);
+  if (!response.ok) {
+    const message = body?.error?.message || body?.message || body?.error || response.statusText;
+    const error = new Error(`${response.status} ${message}`);
+    error.status = response.status;
+    error.body = body;
+    throw error;
+  }
+  return body;
 }
 
-for (const tool of tools) {
-  const btn = document.createElement("button");
-  btn.className = "tab";
-  btn.dataset.id = tool.id;
-  btn.textContent = tool.label;
-  btn.addEventListener("click", () => selectTab(tool.id));
-  nav.appendChild(btn);
+async function refreshData() {
+  state.loading = true;
+  render();
+
+  const tasks = {
+    health: () => fetchJson("/health"),
+    ready: () => fetchJson("/ready"),
+    server: () => fetchJson("/_frick/inspect/server", { auth: true }),
+    apps: () => fetchJson("/_frick/inspect/apps", { auth: true }),
+    db: () => fetchJson("/_frick/inspect/db", { auth: true }),
+    migrations: () => fetchJson("/_frick/inspect/migrations", { auth: true }),
+    metrics: () => fetchJson("/_frick/inspect/metrics", { auth: true }),
+    jobs: () => fetchJson("/_frick/inspect/jobs", { auth: true }),
+    projections: () => fetchJson("/_frick/inspect/projections", { auth: true }),
+    search: () => fetchJson("/_frick/inspect/search", { auth: true }),
+    eventSummary: () => fetchJson("/_frick/inspect/devtools/summary?windowMs=300000", { auth: true }),
+    events: () =>
+      fetchJson(
+        `/_frick/inspect/devtools/events?limit=50${state.eventFilter ? `&kind=${encodeURIComponent(state.eventFilter)}` : ""}`,
+        { auth: true },
+      ),
+  };
+
+  const nextData = {};
+  const nextErrors = {};
+  await Promise.all(
+    Object.entries(tasks).map(async ([key, task]) => {
+      try {
+        nextData[key] = await task();
+      } catch (error) {
+        nextErrors[key] = error;
+      }
+    }),
+  );
+
+  state.data = nextData;
+  state.errors = nextErrors;
+  state.lastRefresh = new Date().toISOString();
+  state.loading = false;
+  render();
 }
 
-const initial = location.hash.slice(1) || tools[0].id;
-selectTab(initial);
+async function devLogin() {
+  const response = await fetch(endpointUrl("/auth/dev-login"), {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ userId: state.devUserId || "user-ada" }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(body?.error?.message || body?.message || response.statusText);
+  }
+  const token = body.sessionToken || body.token;
+  if (!token) throw new Error("Dev login response did not include a session token");
+  state.token = token;
+  localStorage.setItem(STORAGE_KEYS.token, token);
+  await refreshData();
+}
+
+function routeTitle() {
+  return navItems.find((item) => item.id === state.route)?.label || "Overview";
+}
+
+function connectionStatus() {
+  const healthOk = state.data.health?.ok === true;
+  const readyOk = state.data.ready?.status === "ready";
+  const hasToken = Boolean(state.token);
+  const inspectOk = Boolean(state.data.server);
+  const serverError = state.errors.health || state.errors.ready;
+  return { healthOk, readyOk, hasToken, inspectOk, serverError };
+}
+
+function statusStrip() {
+  const status = connectionStatus();
+  const healthTone = state.errors.health ? "bad" : status.healthOk ? "good" : "warn";
+  const readyTone = state.errors.ready ? "bad" : status.readyOk ? "good" : "warn";
+  const inspectSkipped = state.errors.server?.skipped;
+  const inspectTone = statusTone(status.inspectOk, inspectSkipped);
+  return `
+    <div class="status-strip">
+      <span class="status-pill ${toneClass(healthTone)}">${dot(healthTone)} Health ${escapeHtml(status.healthOk ? "ok" : state.errors.health ? "offline" : "unknown")}</span>
+      <span class="status-pill ${toneClass(readyTone)}">${dot(readyTone)} Ready ${escapeHtml(status.readyOk ? "ready" : state.errors.ready ? "not ready" : "unknown")}</span>
+      <span class="status-pill ${toneClass(inspectTone)}">${dot(inspectTone)} Inspection ${escapeHtml(status.inspectOk ? "connected" : inspectSkipped ? "needs token" : "unavailable")}</span>
+      <span class="status-pill tone-info">${dot("info")} Endpoint ${escapeHtml(state.endpoint)}</span>
+      <span class="refresh-note">${state.loading ? "Refreshing..." : `Last refresh: ${escapeHtml(formatAge(state.lastRefresh))}`}</span>
+    </div>
+  `;
+}
+
+function metricCard(label, value, detail, tone = "info") {
+  return `
+    <article class="metric-card">
+      <header>
+        <span>${escapeHtml(label)}</span>
+        <span class="status-tag ${toneClass(tone)}">${dot(tone)} ${escapeHtml(tone)}</span>
+      </header>
+      <div class="metric-value">${escapeHtml(value)}</div>
+      <p>${escapeHtml(detail)}</p>
+    </article>
+  `;
+}
+
+function overviewMetrics() {
+  const server = state.data.server;
+  const db = state.data.db;
+  const eventSummary = state.data.eventSummary;
+  const wsConnections = gaugeValue("frick.ws.connections.current");
+  const requests = sumCounters("frick.http.requests.total");
+  const frames = sumCounters("frick.ws.frames.total");
+  const cache = db?.idempotencyCache;
+  return `
+    <section class="metric-grid" aria-label="Overview metrics">
+      ${metricCard(
+        "Server",
+        state.data.ready?.status || (state.errors.health ? "offline" : "unknown"),
+        server ? `${server.env} env, app ${server.appId || "foundation"}` : "Start pnpm server or connect with a token.",
+        state.data.ready?.status === "ready" ? "good" : state.errors.health ? "bad" : "warn",
+      )}
+      ${metricCard(
+        "Schema",
+        server?.schemaRevision ? `rev ${server.schemaRevision}` : "not loaded",
+        `hash ${shortHash(server?.schemaHash || state.data.ready?.schemaHash)}`,
+        server ? "good" : "warn",
+      )}
+      ${metricCard("WebSockets", wsConnections, `${frames} frame events counted`, wsConnections > 0 ? "good" : "info")}
+      ${metricCard("HTTP requests", requests, "In-process counter snapshot", requests > 0 ? "good" : "info")}
+      ${metricCard(
+        "DevTools events",
+        eventSummary?.total ?? 0,
+        "Events in the last five minutes",
+        eventSummary?.total ? "good" : state.token ? "info" : "warn",
+      )}
+      ${metricCard(
+        "Idempotency cache",
+        cache ? `${cache.size}/${cache.capacity}` : "not loaded",
+        cache ? `${cache.evictions} evictions since boot` : "Requires inspection access.",
+        cache ? "good" : "warn",
+      )}
+    </section>
+  `;
+}
+
+function barChart(title, rows, empty, color = "green") {
+  const max = Math.max(1, ...rows.map((row) => row.value));
+  const body = rows.length
+    ? rows
+        .slice(0, 8)
+        .map((row) => {
+          const width = Math.max(5, Math.round((row.value / max) * 20) * 5);
+          return `
+            <div class="bar-row">
+              <span class="table-label">${escapeHtml(row.label)}</span>
+              <span class="bar-track"><span class="bar-fill ${escapeHtml(color)} w-${width}"></span></span>
+              <strong class="nowrap">${escapeHtml(row.value)}</strong>
+            </div>
+          `;
+        })
+        .join("")
+    : `<div class="empty-state">${escapeHtml(empty)}</div>`;
+  return `
+    <section class="panel">
+      <header class="panel-header">
+        <div>
+          <span class="panel-kicker">Metrics</span>
+          <h2 class="panel-title">${escapeHtml(title)}</h2>
+        </div>
+      </header>
+      <div class="panel-body chart">${body}</div>
+    </section>
+  `;
+}
+
+function eventRows(limit = 8) {
+  const events = state.data.events?.events || [];
+  if (!events.length) {
+    const message = state.errors.events?.skipped
+      ? "Add a session token or run Dev Login to read the event feed."
+      : "No devtools events returned yet.";
+    return `<div class="empty-state">${escapeHtml(message)}</div>`;
+  }
+  return `
+    <div class="event-list">
+      ${events
+        .slice(0, limit)
+        .map((event) => {
+          const selected = event.id === state.selectedEventId;
+          return `
+            <button class="event-row" type="button" data-event-id="${escapeHtml(event.id)}" data-selected="${selected}">
+              <span>
+                <span class="event-kind">${escapeHtml(event.kind)}</span>
+                <span class="event-meta">${escapeHtml(event.tenantId || "server")} · ${escapeHtml(formatAge(event.occurredAt))}</span>
+              </span>
+              <span class="status-tag tone-info">#${escapeHtml(event.id)}</span>
+            </button>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function activityPanel(limit = 8) {
+  return `
+    <section class="panel">
+      <header class="panel-header">
+        <div>
+          <span class="panel-kicker">Live feed</span>
+          <h2 class="panel-title">Recent DevTools events</h2>
+        </div>
+        <button class="icon-button" type="button" data-action="refresh" title="Refresh">${icon("refresh")}</button>
+      </header>
+      <div class="panel-body">${eventRows(limit)}</div>
+    </section>
+  `;
+}
+
+function launchGrid() {
+  return `
+    <section class="panel">
+      <header class="panel-header">
+        <div>
+          <span class="panel-kicker">Local tools</span>
+          <h2 class="panel-title">Launch targets</h2>
+        </div>
+      </header>
+      <div class="panel-body">
+        <div class="launch-grid">
+          ${launchTargets
+            .map((target) => `
+              <a class="launch-tile" href="${escapeHtml(endpointUrl(target.path))}" target="_blank" rel="noopener">
+                <header>
+                  <span class="tile-icon">${icon(target.icon)}</span>
+                  ${icon("link")}
+                </header>
+                <strong>${escapeHtml(target.label)}</strong>
+                <p>${escapeHtml(target.description)}</p>
+              </a>
+            `)
+            .join("")}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function keyValueList(rows) {
+  return `
+    <div class="key-value-list">
+      ${rows
+        .map(([label, value]) => `
+          <div class="key-value-row">
+            <span class="field-label">${escapeHtml(label)}</span>
+            <code>${escapeHtml(value ?? "unknown")}</code>
+          </div>
+        `)
+        .join("")}
+    </div>
+  `;
+}
+
+function serverInspector() {
+  const server = state.data.server;
+  const ready = state.data.ready;
+  const selectedEvent = (state.data.events?.events || []).find((event) => event.id === state.selectedEventId);
+  return `
+    <aside class="side-stack" aria-label="Dashboard inspector">
+      <section class="detail-card">
+        <header class="detail-header">
+          <div>
+            <span class="panel-kicker">Server</span>
+            <h2 class="panel-title">Runtime identity</h2>
+          </div>
+        </header>
+        <div class="detail-body">
+          ${keyValueList([
+            ["App", server?.appId || "foundation"],
+            ["Environment", server?.env || "unknown"],
+            ["Schema ID", server?.schemaId || ready?.schemaId],
+            ["Schema revision", server?.schemaRevision || ready?.schemaRevision],
+            ["Schema hash", server?.schemaHash || ready?.schemaHash],
+            ["Started", server?.startedAt ? new Date(server.startedAt).toLocaleString() : "unknown"],
+          ])}
+        </div>
+      </section>
+      <section class="detail-card">
+        <header class="detail-header">
+          <div>
+            <span class="panel-kicker">Selection</span>
+            <h2 class="panel-title">${selectedEvent ? "Event payload" : "Inspection state"}</h2>
+          </div>
+        </header>
+        <div class="detail-body">
+          <pre>${escapeHtml(JSON.stringify(selectedEvent || inspectionSummary(), null, 2))}</pre>
+        </div>
+      </section>
+    </aside>
+  `;
+}
+
+function inspectionSummary() {
+  return {
+    endpoint: state.endpoint,
+    hasToken: Boolean(state.token),
+    server: state.data.server || null,
+    db: state.data.db || null,
+    jobs: state.data.jobs || null,
+    errors: Object.fromEntries(
+      Object.entries(state.errors)
+        .filter(([, error]) => Boolean(error))
+        .map(([key, error]) => [key, error.message]),
+    ),
+  };
+}
+
+function renderOverview() {
+  return `
+    ${pageHeader(
+      "Overview",
+      "Fricken Dashboard turns the local Frick server into a Firebase-style console for schema, sync, data, jobs, and runtime inspection.",
+    )}
+    ${statusStrip()}
+    <div class="dashboard-grid">
+      <div class="primary-stack">
+        ${overviewMetrics()}
+        <div class="split-panel">
+          ${barChart("HTTP requests by status", requestRows(), "No request counters yet. Refresh after exercising the server.", "green")}
+          ${activityPanel(6)}
+        </div>
+        ${launchGrid()}
+      </div>
+      ${serverInspector()}
+    </div>
+  `;
+}
+
+function renderRealtime() {
+  const summary = state.data.eventSummary;
+  return `
+    ${pageHeader("Realtime", "Watch WebSocket connection pressure, frame counters, and sync-related DevTools events.")}
+    ${statusStrip()}
+    <div class="dashboard-grid">
+      <div class="primary-stack">
+        <section class="metric-grid">
+          ${metricCard("Current sockets", gaugeValue("frick.ws.connections.current"), "Live WebSocket gauge", gaugeValue("frick.ws.connections.current") > 0 ? "good" : "info")}
+          ${metricCard("Frame count", sumCounters("frick.ws.frames.total"), "All frame kinds since process start", "info")}
+          ${metricCard("Event window", summary?.total ?? 0, "DevTools events in five minutes", summary?.total ? "good" : "info")}
+        </section>
+        ${barChart("Frame counts by kind", frameRows(), "No WebSocket frames counted yet. Open the web demo and send a message.", "blue")}
+        ${activityPanel(10)}
+      </div>
+      ${serverInspector()}
+    </div>
+  `;
+}
+
+function renderData() {
+  const db = state.data.db;
+  const migrations = state.data.migrations?.applied || [];
+  const projections = state.data.projections?.projections || [];
+  const search = state.data.search;
+  return `
+    ${pageHeader("Data", "Inspect persistence readiness, migrations, projections, search indexes, and cache pressure.")}
+    ${statusStrip()}
+    <div class="dashboard-grid">
+      <div class="primary-stack">
+        <section class="metric-grid">
+          ${metricCard("Database", db?.ready ? "ready" : "unknown", `${db?.applied ?? 0} migrations applied`, db?.ready ? "good" : "warn")}
+          ${metricCard("Migrations", migrations.length, migrations.at(-1)?.id || "No migration ledger loaded", migrations.length ? "good" : "warn")}
+          ${metricCard("Search adapter", search?.adapter || "unknown", `${search?.indexes?.length ?? 0} indexes registered`, search ? "good" : "warn")}
+        </section>
+        <section class="panel">
+          <header class="panel-header">
+            <div>
+              <span class="panel-kicker">Migrations</span>
+              <h2 class="panel-title">Applied ledger</h2>
+            </div>
+          </header>
+          <div class="panel-body">${migrationTable(migrations)}</div>
+        </section>
+        <div class="split-panel">
+          ${definitionListPanel("Projections", projections.map((item) => [item.name, `${item.supportsRead ? "read" : "no read"} / ${item.supportsRebuild ? "rebuild" : "no rebuild"}`]))}
+          ${definitionListPanel("Search indexes", (search?.indexes || []).map((item) => [item.name, JSON.stringify(item.source)]))}
+        </div>
+      </div>
+      ${serverInspector()}
+    </div>
+  `;
+}
+
+function migrationTable(rows) {
+  if (!rows.length) return `<div class="empty-state">No migration data loaded. Inspection may need a token.</div>`;
+  return `
+    <table class="table">
+      <thead><tr><th>ID</th><th>Revision</th><th>Applied</th><th>Duration</th></tr></thead>
+      <tbody>
+        ${rows
+          .slice()
+          .reverse()
+          .slice(0, 12)
+          .map((row) => `
+            <tr>
+              <td><code class="code-inline">${escapeHtml(row.id)}</code></td>
+              <td>${escapeHtml(row.schemaRevision)}</td>
+              <td>${escapeHtml(new Date(row.appliedAt).toLocaleString())}</td>
+              <td>${escapeHtml(row.durationMs ?? "n/a")}ms</td>
+            </tr>
+          `)
+          .join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function definitionListPanel(title, rows) {
+  return `
+    <section class="panel">
+      <header class="panel-header">
+        <div>
+          <span class="panel-kicker">Registry</span>
+          <h2 class="panel-title">${escapeHtml(title)}</h2>
+        </div>
+      </header>
+      <div class="panel-body">
+        ${
+          rows.length
+            ? `<div class="row-list">${rows
+                .map(([label, detail]) => `
+                  <div class="list-row">
+                    <span><strong>${escapeHtml(label)}</strong><span class="row-meta">${escapeHtml(detail)}</span></span>
+                    <span class="status-tag tone-info">${dot("info")} registered</span>
+                  </div>
+                `)
+                .join("")}</div>`
+            : `<div class="empty-state">Nothing reported by this endpoint yet.</div>`
+        }
+      </div>
+    </section>
+  `;
+}
+
+function renderAuth() {
+  return `
+    ${pageHeader("Auth", "Create a local dev session or paste an admin/session bearer to unlock inspection endpoints.")}
+    ${statusStrip()}
+    <div class="dashboard-grid">
+      <div class="primary-stack">
+        <section class="panel">
+          <header class="panel-header">
+            <div>
+              <span class="panel-kicker">Development</span>
+              <h2 class="panel-title">Dev login</h2>
+            </div>
+          </header>
+          <div class="panel-body">
+            ${state.errors.devLogin ? `<div class="error-box">${escapeHtml(state.errors.devLogin.message)}</div>` : ""}
+            <form class="form-grid" data-form="dev-login">
+              <label class="form-row">
+                <span class="field-label">User ID</span>
+                <span class="inline-fields">
+                  <input class="text-input" name="devUserId" value="${escapeHtml(state.devUserId)}" autocomplete="off" />
+                  <button class="button primary" type="submit">${icon("lock")} Dev Login</button>
+                </span>
+              </label>
+              <p class="help-copy">The dashboard stores only the returned bearer in browser localStorage for this local console.</p>
+            </form>
+          </div>
+        </section>
+        <section class="panel">
+          <header class="panel-header">
+            <div>
+              <span class="panel-kicker">Session</span>
+              <h2 class="panel-title">Bearer token</h2>
+            </div>
+          </header>
+          <div class="panel-body">
+            <form class="form-grid" data-form="token">
+              <label class="form-row">
+                <span class="field-label">Token</span>
+                <input class="text-input" name="token" value="${escapeHtml(state.token)}" autocomplete="off" />
+              </label>
+              <div class="topbar-actions">
+                <button class="button primary" type="submit">${icon("check")} Save token</button>
+                <button class="button secondary" type="button" data-action="clear-token">${icon("clipboard")} Clear</button>
+              </div>
+            </form>
+          </div>
+        </section>
+      </div>
+      ${serverInspector()}
+    </div>
+  `;
+}
+
+function renderStorage() {
+  return `
+    ${pageHeader("Storage", "Track the operational surfaces that guard durable data: blobs, backup routes, search, and tenant-scoped stores.")}
+    ${statusStrip()}
+    <div class="dashboard-grid">
+      <div class="primary-stack">
+        <section class="metric-grid">
+          ${metricCard("Blob store", "SQLite", "Blob bytes are stored in SQLite in this cutover posture.", "info")}
+          ${metricCard("Search", state.data.search?.adapter || "unknown", `${state.data.search?.indexes?.length ?? 0} indexes visible`, state.data.search ? "good" : "warn")}
+          ${metricCard("Backup API", "admin", "Use /_frick/admin/backup and restore with admin auth.", "info")}
+        </section>
+        ${launchGrid()}
+        ${definitionListPanel("Storage routes", [
+          ["/blobs", "Upload and derivative metadata paths"],
+          ["/search", "Tenant-visible search query route"],
+          ["/_frick/admin/backup", "NDJSON backup stream"],
+          ["/_frick/admin/restore", "NDJSON restore replay"],
+        ])}
+      </div>
+      ${serverInspector()}
+    </div>
+  `;
+}
+
+function renderJobs() {
+  const jobs = state.data.jobs;
+  const counts = jobs?.counts || {};
+  const handlers = jobs?.registeredHandlers || [];
+  const rows = Object.entries(counts).map(([status, count]) => [status, `${count} jobs`]);
+  return `
+    ${pageHeader("Jobs", "Inspect registered job handlers, worker state, and durable queue status counts.")}
+    ${statusStrip()}
+    <div class="dashboard-grid">
+      <div class="primary-stack">
+        <section class="metric-grid">
+          ${metricCard("Worker", jobs?.workerEnabled ? "enabled" : "unknown", "Server-side durable worker status", jobs?.workerEnabled ? "good" : "warn")}
+          ${metricCard("Handlers", handlers.length, handlers.join(", ") || "No handlers reported", handlers.length ? "good" : "warn")}
+          ${metricCard("Queued statuses", Object.keys(counts).length, "Distinct job states in storage", Object.keys(counts).length ? "good" : "info")}
+        </section>
+        <div class="split-panel">
+          ${definitionListPanel("Registered handlers", handlers.map((handler) => [handler, "job handler"]))}
+          ${definitionListPanel("Queue counts", rows)}
+        </div>
+        ${activityPanel(10)}
+      </div>
+      ${serverInspector()}
+    </div>
+  `;
+}
+
+function renderObservability() {
+  return `
+    ${pageHeader("Observability", "Read metric snapshots and the retained DevTools event feed from the running server.")}
+    ${statusStrip()}
+    <div class="dashboard-grid">
+      <div class="primary-stack">
+        <section class="panel">
+          <header class="panel-header">
+            <div>
+              <span class="panel-kicker">Filter</span>
+              <h2 class="panel-title">Event feed</h2>
+            </div>
+          </header>
+          <div class="panel-body">
+            <form class="form-grid" data-form="event-filter">
+              <label class="form-row">
+                <span class="field-label">Kind contains</span>
+                <span class="inline-fields">
+                  <input class="text-input" name="eventFilter" value="${escapeHtml(state.eventFilter)}" placeholder="http.request, ws.connect, frick.push" autocomplete="off" />
+                  <button class="button primary" type="submit">${icon("refresh")} Apply</button>
+                </span>
+              </label>
+            </form>
+          </div>
+          <div class="panel-body">${eventRows(20)}</div>
+        </section>
+        <div class="split-panel">
+          ${barChart("HTTP requests by status", requestRows(), "No HTTP metrics returned.", "green")}
+          ${barChart("WebSocket frames by kind", frameRows(), "No WebSocket frame metrics returned.", "blue")}
+        </div>
+        ${metricsTable()}
+      </div>
+      ${serverInspector()}
+    </div>
+  `;
+}
+
+function metricsTable() {
+  const rows = [...metricEntries("counters"), ...metricEntries("gauges")];
+  return `
+    <section class="panel">
+      <header class="panel-header">
+        <div>
+          <span class="panel-kicker">Snapshot</span>
+          <h2 class="panel-title">Raw metric entries</h2>
+        </div>
+      </header>
+      <div class="panel-body">
+        ${
+          rows.length
+            ? `<table class="table">
+                <thead><tr><th>Name</th><th>Fields</th><th>Value</th></tr></thead>
+                <tbody>
+                  ${rows
+                    .map((row) => `
+                      <tr>
+                        <td><code class="code-inline">${escapeHtml(row.name)}</code></td>
+                        <td><code class="code-inline">${escapeHtml(JSON.stringify(row.fields || {}))}</code></td>
+                        <td>${escapeHtml(row.value)}</td>
+                      </tr>
+                    `)
+                    .join("")}
+                </tbody>
+              </table>`
+            : `<div class="empty-state">No metrics loaded. Inspection may need a session token.</div>`
+        }
+      </div>
+    </section>
+  `;
+}
+
+function renderSettings() {
+  return `
+    ${pageHeader("Settings", "Configure the local server endpoint and the credential used for inspection routes.")}
+    ${statusStrip()}
+    <div class="dashboard-grid">
+      <div class="primary-stack">
+        <section class="panel">
+          <header class="panel-header">
+            <div>
+              <span class="panel-kicker">Connection</span>
+              <h2 class="panel-title">Local endpoint</h2>
+            </div>
+          </header>
+          <div class="panel-body">
+            <form class="form-grid" data-form="endpoint">
+              <label class="form-row">
+                <span class="field-label">Frick HTTP endpoint</span>
+                <input class="text-input" name="endpoint" value="${escapeHtml(state.endpoint)}" autocomplete="off" />
+              </label>
+              <button class="button primary" type="submit">${icon("check")} Save endpoint</button>
+            </form>
+          </div>
+        </section>
+        ${definitionListPanel("Dashboard facts", [
+          ["Static app", `Served from apps/dev-dashboard on port ${DASHBOARD_PORT}`],
+          ["Inspection auth", "Bearer token or dev session required"],
+          ["Default server", DEFAULT_ENDPOINT],
+          ["Generated artifacts", "Not edited by this dashboard"],
+        ])}
+      </div>
+      ${serverInspector()}
+    </div>
+  `;
+}
+
+function pageHeader(title, copy) {
+  return `
+    <header class="page-header">
+      <div>
+        <h1 class="page-title">${escapeHtml(title)}</h1>
+        <p class="page-copy">${escapeHtml(copy)}</p>
+      </div>
+      <button class="button primary" type="button" data-action="refresh">${icon("refresh")} Refresh</button>
+    </header>
+  `;
+}
+
+function renderRoute() {
+  const routes = {
+    overview: renderOverview,
+    realtime: renderRealtime,
+    data: renderData,
+    auth: renderAuth,
+    storage: renderStorage,
+    jobs: renderJobs,
+    observability: renderObservability,
+    settings: renderSettings,
+  };
+  return (routes[state.route] || renderOverview)();
+}
+
+function render() {
+  app.innerHTML = `
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-mark">F</span>
+          <span>
+            <strong>Fricken Dashboard</strong>
+            <small>Realtime console</small>
+          </span>
+        </div>
+        <section class="project-card">
+          <span>Project</span>
+          <strong>Frick Foundation</strong>
+        </section>
+        <nav class="nav" aria-label="Dashboard">
+          ${navItems
+            .map((item) => `
+              <button class="nav-button" type="button" data-route="${escapeHtml(item.id)}" aria-current="${state.route === item.id ? "page" : "false"}">
+                ${icon(item.icon)}
+                <span>${escapeHtml(item.label)}</span>
+              </button>
+            `)
+            .join("")}
+        </nav>
+        <section class="sidebar-footer">
+          <span>Endpoint</span>
+          <code>${escapeHtml(state.endpoint)}</code>
+        </section>
+      </aside>
+      <section class="workspace">
+        <header class="topbar">
+          <div class="topbar-title">
+            <span>Frick Foundation</span>
+            <strong>${escapeHtml(routeTitle())}</strong>
+          </div>
+          <div class="topbar-actions">
+            <label class="endpoint-control" title="Server endpoint">
+              ${icon("link")}
+              <input id="endpoint-input" value="${escapeHtml(state.endpoint)}" autocomplete="off" />
+            </label>
+            <label class="token-control" data-has-token="${Boolean(state.token)}" title="Inspection bearer token">
+              ${icon("lock")}
+              <input id="token-input" value="${escapeHtml(state.token)}" type="password" autocomplete="off" placeholder="Session token" />
+            </label>
+            <button class="icon-button" type="button" data-action="refresh" title="Refresh">${icon("refresh")}</button>
+            <a class="button secondary" href="http://127.0.0.1:5173" target="_blank" rel="noopener">${icon("window")} Web demo</a>
+          </div>
+        </header>
+        <main class="content">${renderRoute()}</main>
+      </section>
+    </div>
+  `;
+  bindControls();
+}
+
+function bindControls() {
+  app.querySelectorAll("[data-route]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.route = normalizeRoute(button.dataset.route);
+      localStorage.setItem(STORAGE_KEYS.route, state.route);
+      history.replaceState(null, "", `#${state.route}`);
+      render();
+    });
+  });
+
+  app.querySelectorAll("[data-action='refresh']").forEach((button) => {
+    button.addEventListener("click", () => void refreshData());
+  });
+
+  app.querySelectorAll("[data-event-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedEventId = Number(button.dataset.eventId);
+      render();
+    });
+  });
+
+  const endpointInput = app.querySelector("#endpoint-input");
+  if (endpointInput) {
+    endpointInput.addEventListener("change", () => {
+      state.endpoint = endpointInput.value.trim() || DEFAULT_ENDPOINT;
+      localStorage.setItem(STORAGE_KEYS.endpoint, state.endpoint);
+      void refreshData();
+    });
+  }
+
+  const tokenInput = app.querySelector("#token-input");
+  if (tokenInput) {
+    tokenInput.addEventListener("change", () => {
+      state.token = tokenInput.value.trim();
+      if (state.token) localStorage.setItem(STORAGE_KEYS.token, state.token);
+      else localStorage.removeItem(STORAGE_KEYS.token);
+      void refreshData();
+    });
+  }
+
+  const devLoginForm = app.querySelector("[data-form='dev-login']");
+  if (devLoginForm) {
+    devLoginForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      state.devUserId = new FormData(devLoginForm).get("devUserId")?.toString().trim() || "user-ada";
+      state.errors = { ...state.errors, devLogin: undefined };
+      try {
+        await devLogin();
+      } catch (error) {
+        state.errors = { ...state.errors, devLogin: error };
+        render();
+      }
+    });
+  }
+
+  const tokenForm = app.querySelector("[data-form='token']");
+  if (tokenForm) {
+    tokenForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      state.token = new FormData(tokenForm).get("token")?.toString().trim() || "";
+      if (state.token) localStorage.setItem(STORAGE_KEYS.token, state.token);
+      else localStorage.removeItem(STORAGE_KEYS.token);
+      void refreshData();
+    });
+  }
+
+  const endpointForm = app.querySelector("[data-form='endpoint']");
+  if (endpointForm) {
+    endpointForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      state.endpoint = new FormData(endpointForm).get("endpoint")?.toString().trim() || DEFAULT_ENDPOINT;
+      localStorage.setItem(STORAGE_KEYS.endpoint, state.endpoint);
+      void refreshData();
+    });
+  }
+
+  const eventFilterForm = app.querySelector("[data-form='event-filter']");
+  if (eventFilterForm) {
+    eventFilterForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      state.eventFilter = new FormData(eventFilterForm).get("eventFilter")?.toString().trim() || "";
+      void refreshData();
+    });
+  }
+
+  app.querySelectorAll("[data-action='clear-token']").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.token = "";
+      localStorage.removeItem(STORAGE_KEYS.token);
+      void refreshData();
+    });
+  });
+}
+
+window.addEventListener("hashchange", () => {
+  state.route = normalizeRoute(location.hash.slice(1));
+  localStorage.setItem(STORAGE_KEYS.route, state.route);
+  render();
+});
+
+render();
+void refreshData();

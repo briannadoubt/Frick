@@ -1,0 +1,368 @@
+{
+  "name": "@frick/agent-kit",
+  "version": "0.0.0",
+  "description": "Portable Frick plugin, skill, subagent, and Cursor rule pack for building fullstack realtime apps with agent help.",
+  "pluginSurfaces": {
+    "codex": "adapters/codex/plugin/.codex-plugin/plugin.json",
+    "claude": "adapters/claude-code/plugin/plugin.json",
+    "cursor": "adapters/cursor/plugin/plugin.json"
+  },
+  "sharedReferences": [
+    "references/spine-template.md",
+    "references/parallel-execution.md",
+    "references/prompt-cookbook.md",
+    "references/compatibility-matrix.md"
+  ],
+  "capabilities": [
+    {
+      "id": "frick-fullstack-app",
+      "title": "Fullstack App Orchestration",
+      "summary": "Plan and coordinate a complete Frick app across backend, web, iOS, Android, and verification work.",
+      "skill": "skills/frick-fullstack-app/SKILL.md",
+      "agents": {
+        "codex": ["adapters/codex/agents/frick-orchestrator.toml"],
+        "claude": ["adapters/claude-code/agents/frick-orchestrator.md"],
+        "cursor": ["adapters/cursor/agents/frick-orchestrator.md"]
+      },
+      "cursorRules": ["adapters/cursor/rules/frick-core.mdc"],
+      "docs": ["README.md", "docs/onboarding.md", "docs/authoring.md"],
+      "commands": ["pnpm cli init <app>", "pnpm test", "pnpm typecheck"]
+    },
+    {
+      "id": "frick-shared-spine",
+      "title": "Shared App Spine",
+      "summary": "Create the schema and implementation contract all platform agents work from.",
+      "skill": "skills/frick-shared-spine/SKILL.md",
+      "agents": {
+        "codex": ["adapters/codex/agents/frick-orchestrator.toml"],
+        "claude": ["adapters/claude-code/agents/frick-orchestrator.md"],
+        "cursor": ["adapters/cursor/agents/frick-orchestrator.md"]
+      },
+      "cursorRules": ["adapters/cursor/rules/frick-core.mdc"],
+      "docs": ["docs/cross-platform-client-contract.md", "docs/framework-boundaries.md"],
+      "commands": ["pnpm schema:generate", "pnpm verify:generated"]
+    },
+    {
+      "id": "frick-parallel-execution",
+      "title": "Parallel Agent Execution",
+      "summary": "Split backend, clients, and debugging work while keeping all agents aligned to the spine.",
+      "skill": "skills/frick-parallel-execution/SKILL.md",
+      "agents": {
+        "codex": ["adapters/codex/agents/frick-orchestrator.toml"],
+        "claude": ["adapters/claude-code/agents/frick-orchestrator.md"],
+        "cursor": ["adapters/cursor/agents/frick-orchestrator.md"]
+      },
+      "cursorRules": ["adapters/cursor/rules/frick-core.mdc"],
+      "docs": ["references/parallel-execution.md"],
+      "commands": ["pnpm test", "pnpm typecheck"]
+    },
+    {
+      "id": "frick-schema-design",
+      "title": "Schema Design",
+      "summary": "Design objects, streams, events, presence, signals, blobs, jobs, and projections as one versioned schema.",
+      "skill": "skills/frick-schema-design/SKILL.md",
+      "agents": {
+        "codex": ["adapters/codex/agents/frick-backend.toml"],
+        "claude": ["adapters/claude-code/agents/frick-backend.md"],
+        "cursor": ["adapters/cursor/agents/frick-backend.md"]
+      },
+      "cursorRules": ["adapters/cursor/rules/frick-authoring.mdc"],
+      "docs": ["docs/schema-author-tutorial.md", "docs/authoring.md", "docs/versioning.md"],
+      "commands": ["pnpm schema:generate", "pnpm verify:generated"]
+    },
+    {
+      "id": "frick-server-backend",
+      "title": "Server Backend",
+      "summary": "Implement app server wiring, handlers, policies, and extension points without depending on demo internals.",
+      "skill": "skills/frick-server-backend/SKILL.md",
+      "agents": {
+        "codex": ["adapters/codex/agents/frick-backend.toml"],
+        "claude": ["adapters/claude-code/agents/frick-backend.md"],
+        "cursor": ["adapters/cursor/agents/frick-backend.md"]
+      },
+      "cursorRules": ["adapters/cursor/rules/frick-authoring.mdc"],
+      "docs": ["docs/framework-boundaries.md", "docs/operations.md", "docs/authoring.md"],
+      "commands": ["pnpm server", "pnpm test"]
+    },
+    {
+      "id": "frick-projections",
+      "title": "Projections",
+      "summary": "Add server-computed derived views and keep projection deltas consistent across clients.",
+      "skill": "skills/frick-projections/SKILL.md",
+      "agents": {
+        "codex": ["adapters/codex/agents/frick-backend.toml"],
+        "claude": ["adapters/claude-code/agents/frick-backend.md"],
+        "cursor": ["adapters/cursor/agents/frick-backend.md"]
+      },
+      "cursorRules": ["adapters/cursor/rules/frick-authoring.mdc"],
+      "docs": ["docs/onboarding.md", "docs/authoring.md"],
+      "commands": ["pnpm cli scaffold projection <Name>", "pnpm test"]
+    },
+    {
+      "id": "frick-jobs",
+      "title": "Jobs",
+      "summary": "Design and implement durable background work with schema-backed payloads and retries.",
+      "skill": "skills/frick-jobs/SKILL.md",
+      "agents": {
+        "codex": ["adapters/codex/agents/frick-backend.toml"],
+        "claude": ["adapters/claude-code/agents/frick-backend.md"],
+        "cursor": ["adapters/cursor/agents/frick-backend.md"]
+      },
+      "cursorRules": ["adapters/cursor/rules/frick-authoring.mdc"],
+      "docs": ["docs/operations.md", "docs/authoring.md"],
+      "commands": ["pnpm cli inspect jobs", "pnpm test"]
+    },
+    {
+      "id": "frick-blobs",
+      "title": "Blobs",
+      "summary": "Add content-addressed binary data flows with typed schema references and server limits.",
+      "skill": "skills/frick-blobs/SKILL.md",
+      "agents": {
+        "codex": ["adapters/codex/agents/frick-backend.toml"],
+        "claude": ["adapters/claude-code/agents/frick-backend.md"],
+        "cursor": ["adapters/cursor/agents/frick-backend.md"]
+      },
+      "cursorRules": ["adapters/cursor/rules/frick-authoring.mdc"],
+      "docs": ["docs/cross-platform-client-contract.md", "docs/operations.md"],
+      "commands": ["pnpm test", "pnpm typecheck"]
+    },
+    {
+      "id": "frick-auth-tenancy",
+      "title": "Auth and Tenancy",
+      "summary": "Preserve tenant isolation, session behavior, and policy checks through app-specific workflows.",
+      "skill": "skills/frick-auth-tenancy/SKILL.md",
+      "agents": {
+        "codex": ["adapters/codex/agents/frick-backend.toml"],
+        "claude": ["adapters/claude-code/agents/frick-backend.md"],
+        "cursor": ["adapters/cursor/agents/frick-backend.md"]
+      },
+      "cursorRules": ["adapters/cursor/rules/frick-authoring.mdc"],
+      "docs": ["docs/threat-model.md", "docs/cross-platform-client-contract.md", "docs/operations.md"],
+      "commands": ["pnpm cli tenants list", "pnpm test"]
+    },
+    {
+      "id": "frick-migrations-versioning",
+      "title": "Migrations and Versioning",
+      "summary": "Manage schema identity, revision compatibility, migrations, and release behavior.",
+      "skill": "skills/frick-migrations-versioning/SKILL.md",
+      "agents": {
+        "codex": ["adapters/codex/agents/frick-backend.toml", "adapters/codex/agents/frick-release-reviewer.toml"],
+        "claude": ["adapters/claude-code/agents/frick-backend.md", "adapters/claude-code/agents/frick-release-reviewer.md"],
+        "cursor": ["adapters/cursor/agents/frick-backend.md", "adapters/cursor/agents/frick-release-reviewer.md"]
+      },
+      "cursorRules": ["adapters/cursor/rules/frick-authoring.mdc", "adapters/cursor/rules/frick-quality.mdc"],
+      "docs": ["docs/versioning.md", "docs/release.md", "docs/operations.md"],
+      "commands": ["pnpm cli migrate status", "pnpm verify:generated"]
+    },
+    {
+      "id": "frick-web-react",
+      "title": "React Web Client",
+      "summary": "Build browser clients with @frick/react, @frick/core, and design-web packages.",
+      "skill": "skills/frick-web-react/SKILL.md",
+      "agents": {
+        "codex": ["adapters/codex/agents/frick-web.toml"],
+        "claude": ["adapters/claude-code/agents/frick-web.md"],
+        "cursor": ["adapters/cursor/agents/frick-web.md"]
+      },
+      "cursorRules": ["adapters/cursor/rules/frick-platforms.mdc"],
+      "docs": ["docs/onboarding.md", "docs/authoring.md", "docs/cross-platform-client-contract.md"],
+      "commands": ["pnpm web", "pnpm typecheck"]
+    },
+    {
+      "id": "frick-typescript-core",
+      "title": "TypeScript Core Client",
+      "summary": "Use the UI-agnostic TypeScript runtime for cache, subscriptions, sync status, commands, and offline writes.",
+      "skill": "skills/frick-typescript-core/SKILL.md",
+      "agents": {
+        "codex": ["adapters/codex/agents/frick-web.toml"],
+        "claude": ["adapters/claude-code/agents/frick-web.md"],
+        "cursor": ["adapters/cursor/agents/frick-web.md"]
+      },
+      "cursorRules": ["adapters/cursor/rules/frick-platforms.mdc"],
+      "docs": ["docs/cross-platform-client-contract.md"],
+      "commands": ["pnpm test", "pnpm typecheck"]
+    },
+    {
+      "id": "frick-swift-ios",
+      "title": "Swift iOS Client",
+      "summary": "Build native iOS clients against generated Swift DTOs, sync status, cache compatibility, and design tokens.",
+      "skill": "skills/frick-swift-ios/SKILL.md",
+      "agents": {
+        "codex": ["adapters/codex/agents/frick-ios.toml"],
+        "claude": ["adapters/claude-code/agents/frick-ios.md"],
+        "cursor": ["adapters/cursor/agents/frick-ios.md"]
+      },
+      "cursorRules": ["adapters/cursor/rules/frick-platforms.mdc"],
+      "docs": ["docs/cross-platform-client-contract.md", "docs/push-receive.md"],
+      "commands": ["pnpm swift:test", "pnpm ios:build"]
+    },
+    {
+      "id": "frick-kotlin-android",
+      "title": "Kotlin Android Client",
+      "summary": "Build Android clients against generated Kotlin DTOs, StateFlow sync status, cache compatibility, and design tokens.",
+      "skill": "skills/frick-kotlin-android/SKILL.md",
+      "agents": {
+        "codex": ["adapters/codex/agents/frick-android.toml"],
+        "claude": ["adapters/claude-code/agents/frick-android.md"],
+        "cursor": ["adapters/cursor/agents/frick-android.md"]
+      },
+      "cursorRules": ["adapters/cursor/rules/frick-platforms.mdc"],
+      "docs": ["docs/cross-platform-client-contract.md", "docs/push-receive.md"],
+      "commands": ["pnpm android:build"]
+    },
+    {
+      "id": "frick-design-tokens",
+      "title": "Design Tokens",
+      "summary": "Author shared design tokens and regenerate web, Swift, and Android design artifacts.",
+      "skill": "skills/frick-design-tokens/SKILL.md",
+      "agents": {
+        "codex": ["adapters/codex/agents/frick-web.toml", "adapters/codex/agents/frick-ios.toml", "adapters/codex/agents/frick-android.toml"],
+        "claude": ["adapters/claude-code/agents/frick-web.md", "adapters/claude-code/agents/frick-ios.md", "adapters/claude-code/agents/frick-android.md"],
+        "cursor": ["adapters/cursor/agents/frick-web.md", "adapters/cursor/agents/frick-ios.md", "adapters/cursor/agents/frick-android.md"]
+      },
+      "cursorRules": ["adapters/cursor/rules/frick-platforms.mdc"],
+      "docs": ["docs/framework-boundaries.md"],
+      "commands": ["pnpm design:generate", "pnpm verify:generated"]
+    },
+    {
+      "id": "frick-sync-debugging",
+      "title": "Sync Debugging",
+      "summary": "Diagnose realtime sync, handshake, capability negotiation, cursors, nacks, and reconnect behavior.",
+      "skill": "skills/frick-sync-debugging/SKILL.md",
+      "agents": {
+        "codex": ["adapters/codex/agents/frick-debugger.toml"],
+        "claude": ["adapters/claude-code/agents/frick-debugger.md"],
+        "cursor": ["adapters/cursor/agents/frick-debugger.md"]
+      },
+      "cursorRules": ["adapters/cursor/rules/frick-debugging.mdc"],
+      "docs": ["docs/cross-platform-client-contract.md", "docs/operations.md"],
+      "commands": ["pnpm server", "pnpm dashboard", "pnpm test"]
+    },
+    {
+      "id": "frick-cache-debugging",
+      "title": "Cache Debugging",
+      "summary": "Debug local cache compatibility, metadata stamping, pending appends, and reset behavior across SDKs.",
+      "skill": "skills/frick-cache-debugging/SKILL.md",
+      "agents": {
+        "codex": ["adapters/codex/agents/frick-debugger.toml"],
+        "claude": ["adapters/claude-code/agents/frick-debugger.md"],
+        "cursor": ["adapters/cursor/agents/frick-debugger.md"]
+      },
+      "cursorRules": ["adapters/cursor/rules/frick-debugging.mdc"],
+      "docs": ["docs/cross-platform-client-contract.md"],
+      "commands": ["pnpm test", "pnpm swift:test", "pnpm android:build"]
+    },
+    {
+      "id": "frick-protocol-debugging",
+      "title": "Protocol Debugging",
+      "summary": "Inspect schema identity, MessagePack frames, structured errors, protocol fixtures, and generated DTO parity.",
+      "skill": "skills/frick-protocol-debugging/SKILL.md",
+      "agents": {
+        "codex": ["adapters/codex/agents/frick-debugger.toml"],
+        "claude": ["adapters/claude-code/agents/frick-debugger.md"],
+        "cursor": ["adapters/cursor/agents/frick-debugger.md"]
+      },
+      "cursorRules": ["adapters/cursor/rules/frick-debugging.mdc"],
+      "docs": ["docs/cross-platform-client-contract.md", "docs/versioning.md"],
+      "commands": ["pnpm schema:generate", "pnpm verify:generated"]
+    },
+    {
+      "id": "frick-push-notifications",
+      "title": "Push Notifications",
+      "summary": "Wire APNs, FCM, web push, deep links, adapter credentials, and delivery telemetry.",
+      "skill": "skills/frick-push-notifications/SKILL.md",
+      "agents": {
+        "codex": ["adapters/codex/agents/frick-backend.toml", "adapters/codex/agents/frick-ios.toml", "adapters/codex/agents/frick-android.toml"],
+        "claude": ["adapters/claude-code/agents/frick-backend.md", "adapters/claude-code/agents/frick-ios.md", "adapters/claude-code/agents/frick-android.md"],
+        "cursor": ["adapters/cursor/agents/frick-backend.md", "adapters/cursor/agents/frick-ios.md", "adapters/cursor/agents/frick-android.md"]
+      },
+      "cursorRules": ["adapters/cursor/rules/frick-debugging.mdc", "adapters/cursor/rules/frick-platforms.mdc"],
+      "docs": ["docs/push-adapters.md", "docs/push-receive.md", "docs/operations.md"],
+      "commands": ["pnpm test", "pnpm swift:test", "pnpm android:build"]
+    },
+    {
+      "id": "frick-dashboard-operations",
+      "title": "Dashboard and Operations",
+      "summary": "Use health, readiness, inspection, dashboard, migrations, backup, restore, and local operations surfaces.",
+      "skill": "skills/frick-dashboard-operations/SKILL.md",
+      "agents": {
+        "codex": ["adapters/codex/agents/frick-debugger.toml"],
+        "claude": ["adapters/claude-code/agents/frick-debugger.md"],
+        "cursor": ["adapters/cursor/agents/frick-debugger.md"]
+      },
+      "cursorRules": ["adapters/cursor/rules/frick-debugging.mdc"],
+      "docs": ["docs/operations.md", "apps/cli/README.md"],
+      "commands": ["pnpm dashboard", "pnpm cli doctor", "pnpm cli inspect server"]
+    },
+    {
+      "id": "frick-generated-artifacts",
+      "title": "Generated Artifacts",
+      "summary": "Regenerate protocol, fixture, and design outputs without hand-editing generated files.",
+      "skill": "skills/frick-generated-artifacts/SKILL.md",
+      "agents": {
+        "codex": ["adapters/codex/agents/frick-release-reviewer.toml"],
+        "claude": ["adapters/claude-code/agents/frick-release-reviewer.md"],
+        "cursor": ["adapters/cursor/agents/frick-release-reviewer.md"]
+      },
+      "cursorRules": ["adapters/cursor/rules/frick-quality.mdc"],
+      "docs": ["docs/framework-boundaries.md", "docs/onboarding.md"],
+      "commands": ["pnpm schema:generate", "pnpm design:generate", "pnpm verify:generated"]
+    },
+    {
+      "id": "frick-cross-platform-parity",
+      "title": "Cross-Platform Parity",
+      "summary": "Review TypeScript, Swift, and Kotlin behavior against the shared client contract.",
+      "skill": "skills/frick-cross-platform-parity/SKILL.md",
+      "agents": {
+        "codex": ["adapters/codex/agents/frick-release-reviewer.toml"],
+        "claude": ["adapters/claude-code/agents/frick-release-reviewer.md"],
+        "cursor": ["adapters/cursor/agents/frick-release-reviewer.md"]
+      },
+      "cursorRules": ["adapters/cursor/rules/frick-quality.mdc"],
+      "docs": ["docs/cross-platform-client-contract.md"],
+      "commands": ["pnpm test", "pnpm swift:test", "pnpm android:build"]
+    },
+    {
+      "id": "frick-testing",
+      "title": "Testing",
+      "summary": "Choose and run the right Frick tests for schema, server, clients, generated artifacts, and mobile SDKs.",
+      "skill": "skills/frick-testing/SKILL.md",
+      "agents": {
+        "codex": ["adapters/codex/agents/frick-release-reviewer.toml"],
+        "claude": ["adapters/claude-code/agents/frick-release-reviewer.md"],
+        "cursor": ["adapters/cursor/agents/frick-release-reviewer.md"]
+      },
+      "cursorRules": ["adapters/cursor/rules/frick-quality.mdc"],
+      "docs": ["CONTRIBUTING.md", "docs/status.md"],
+      "commands": ["pnpm test", "pnpm typecheck", "pnpm verify:generated"]
+    },
+    {
+      "id": "frick-release-readiness",
+      "title": "Release Readiness",
+      "summary": "Prepare public package, versioning, changelog, release, and publish checks.",
+      "skill": "skills/frick-release-readiness/SKILL.md",
+      "agents": {
+        "codex": ["adapters/codex/agents/frick-release-reviewer.toml"],
+        "claude": ["adapters/claude-code/agents/frick-release-reviewer.md"],
+        "cursor": ["adapters/cursor/agents/frick-release-reviewer.md"]
+      },
+      "cursorRules": ["adapters/cursor/rules/frick-quality.mdc"],
+      "docs": ["docs/release.md", "docs/versioning.md", "docs/publish-checklist.md"],
+      "commands": ["pnpm release:dry-run", "pnpm verify:release --skip-mobile"]
+    },
+    {
+      "id": "frick-mcp-runtime",
+      "title": "MCP Runtime",
+      "summary": "Expose a running Frick app to agents through the CLI-owned MCP server for live inspection and safe operations.",
+      "skill": "skills/frick-mcp-runtime/SKILL.md",
+      "agents": {
+        "codex": ["adapters/codex/agents/frick-mcp.toml"],
+        "claude": ["adapters/claude-code/agents/frick-mcp.md"],
+        "cursor": ["adapters/cursor/agents/frick-mcp.md"]
+      },
+      "cursorRules": ["adapters/cursor/rules/frick-mcp.mdc"],
+      "docs": ["docs/operations.md", "apps/cli/README.md", "docs/cross-platform-client-contract.md"],
+      "commands": ["frick mcp --print-config", "frick mcp --endpoint http://127.0.0.1:4099", "pnpm cli mcp --print-config"]
+    }
+  ]
+}

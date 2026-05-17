@@ -1,0 +1,29 @@
+{
+  "name": "frick-agent-kit",
+  "version": "0.0.0",
+  "description": "Build, debug, and verify fullstack Frick applications with Codex skills and agents.",
+  "author": {
+    "name": "Frick",
+    "url": "https://github.com/bri/Frick"
+  },
+  "homepage": "https://github.com/bri/Frick",
+  "repository": "https://github.com/bri/Frick",
+  "license": "Apache-2.0",
+  "keywords": ["frick", "realtime", "fullstack", "agents", "skills"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Frick Agent Kit",
+    "shortDescription": "Build fullstack realtime Frick apps with Codex.",
+    "longDescription": "Frick Agent Kit provides Codex skills, subagent profiles, and workflow guidance for schema-first Frick applications across server, web, iOS, Android, debugging, and release readiness.",
+    "developerName": "Frick",
+    "category": "Developer tools",
+    "capabilities": ["Read", "Write", "Interactive"],
+    "websiteURL": "https://github.com/bri/Frick",
+    "defaultPrompt": [
+      "Build a fullstack Frick app.",
+      "Design a Frick schema spine.",
+      "Debug Frick sync behavior."
+    ],
+    "brandColor": "#2F6F73"
+  }
+}

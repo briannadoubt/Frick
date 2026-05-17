@@ -101,6 +101,8 @@ jobs:
             "packages/react",
             "packages/design-web",
             "packages/devtools",
+            "packages/agent-kit",
+            "packages/mcp",
           ];
 
           for (const dir of packageDirs) {
@@ -142,6 +144,8 @@ jobs:
             packages/react
             packages/design-web
             packages/devtools
+            packages/agent-kit
+            packages/mcp
           )
 
           for package_dir in "${package_dirs[@]}"; do

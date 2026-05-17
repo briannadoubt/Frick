@@ -19,6 +19,8 @@
  * schema.ts to confirm it validates.
  */
 import { spawn } from "node:child_process";
+import { installAgentKit, type AgentHarness, type InstallAgentKitReport } from "@frick/agent-kit";
+import { createMcpClientConfig } from "@frick/mcp";
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
@@ -42,13 +44,16 @@ interface InitOptions {
   version: string;
   install: boolean;
   skipSchemaCheck: boolean;
+  agents?: AgentHarness[];
+  mcp: boolean;
 }
 
 function readOptions(parsed: ParsedArgs): InitOptions {
   const directory = parsed.positionals[0];
   if (!directory) {
     throw new CliUsageError("frick init requires a target <directory>", {
-      usage: "frick init <directory> [--name <name>] [--port <port>] [--version <ver>] [--no-install]",
+      usage:
+        "frick init <directory> [--name <name>] [--port <port>] [--version <ver>] [--no-install] [--agents all|codex,claude,cursor] [--mcp]",
     });
   }
   const resolved = isAbsolute(directory) ? directory : resolve(process.cwd(), directory);
@@ -77,8 +82,26 @@ function readOptions(parsed: ParsedArgs): InitOptions {
     noInstallFlag === true || installFlag === false || installFlag === "false" ? false : true;
 
   const skipSchemaCheck = parsed.flags["skip-schema-check"] === true;
+  const agents = parseAgentsFlag(parsed.flags.agents);
+  const mcp = parsed.flags.mcp === true || parsed.flags.mcp === "true";
 
-  return { directory: resolved, appName, port, version, install, skipSchemaCheck };
+  return { directory: resolved, appName, port, version, install, skipSchemaCheck, ...(agents ? { agents } : {}), mcp };
+}
+
+function parseAgentsFlag(value: string | boolean | undefined): AgentHarness[] | undefined {
+  if (value === undefined || value === false || value === "false" || value === "none") return undefined;
+  if (value === true || value === "all") return ["codex", "claude", "cursor"];
+  const harnesses = value
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+  if (harnesses.length === 0) return undefined;
+  for (const harness of harnesses) {
+    if (harness !== "codex" && harness !== "claude" && harness !== "cursor") {
+      throw new CliUsageError(`--agents must be all, none, or a comma-separated list of codex, claude, cursor; got ${value}`);
+    }
+  }
+  return Array.from(new Set(harnesses)) as AgentHarness[];
 }
 
 async function writeFileFresh(path: string, body: string, created: string[]): Promise<void> {
@@ -154,10 +177,16 @@ export async function initCommand(parsed: ParsedArgs, out: OutputOptions): Promi
   await writeFileFresh(join(opts.directory, "src", "server.ts"), renderServerTs(vars), created);
   await writeFileFresh(join(opts.directory, "tests", "smoke.test.ts"), renderSmokeTestTs(vars), created);
 
+  const agentKitReport: InstallAgentKitReport | undefined = opts.agents
+    ? await installAgentKit({ targetDir: opts.directory, harnesses: opts.agents })
+    : undefined;
   const installReport = opts.install ? await runPnpmInstall(opts.directory) : { ok: true, exitCode: 0 };
   const schemaReport = opts.skipSchemaCheck
     ? { ok: true, skipped: true as const }
     : await schemaCheckInProcess(opts.directory, opts.appName);
+  const mcpConfig = opts.mcp
+    ? createMcpClientConfig({ endpoint: `http://127.0.0.1:${opts.port}` })
+    : undefined;
 
   emit(
     {
@@ -167,6 +196,8 @@ export async function initCommand(parsed: ParsedArgs, out: OutputOptions): Promi
       port: opts.port,
       version: opts.version,
       created,
+      ...(agentKitReport ? { agentKit: agentKitReport } : {}),
+      ...(mcpConfig ? { mcp: mcpConfig } : {}),
       install: opts.install ? installReport : { skipped: true },
       schemaCheck: schemaReport,
     },

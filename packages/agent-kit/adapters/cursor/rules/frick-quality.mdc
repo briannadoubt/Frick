@@ -1,0 +1,8 @@
+---
+description: Use for Frick generated artifacts, cross-platform parity, tests, release readiness, and publish checks.
+alwaysApply: false
+---
+
+Run the smallest command that proves the changed behavior, then broaden. Common gates are `pnpm test`, `pnpm typecheck`, `pnpm verify:generated`, `pnpm swift:test`, `pnpm android:build`, and `pnpm release:dry-run`.
+
+Never claim work is complete until fresh verification output supports the claim.

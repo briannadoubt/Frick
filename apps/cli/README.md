@@ -16,6 +16,7 @@ During development:
 pnpm cli <command> [args]
 # e.g.
 pnpm cli doctor --db-path ./frick.sqlite --env development
+pnpm cli dashboard --endpoint http://127.0.0.1:4099
 ```
 
 After `pnpm --filter @frick/cli build`:
@@ -60,6 +61,19 @@ Validates the foundation schema and emits `{ ok, schemaId, schemaVersion, schema
 
 Convenience wrapper around `pnpm schema:generate` (regenerates native artifacts).
 
+### `frick init <directory> [--agents all|codex,claude,cursor] [--mcp]`
+
+Scaffolds a new Frick application. With `--agents`, the CLI installs the
+Frick Agent Kit into the new app so Codex, Claude Code, and Cursor can work
+from the same `docs/frick/spine.md`. With `--mcp`, the final JSON record
+includes a read-only stdio MCP config pointing at the scaffolded app's port.
+
+Example:
+
+```
+frick init my-app --agents all --mcp
+```
+
 ### `frick migrate status`
 
 Emits `{ dbPath, env, applied: [...], pending: [...] }`. Open the DB read-only.
@@ -99,6 +113,30 @@ applied row, and idempotency cache stats.
 
 Emits `{ available, counts }` if the jobs framework exposes `countsByStatus`,
 otherwise `{ available: false, reason: "jobs framework not detected" }`.
+
+### `frick dashboard [--host <host>] [--port <port>] [--endpoint <url>]`
+
+Serves Fricken Dashboard, the local Firebase-style console for a running Frick
+server. Emits a JSON line with `{ ok, url, host, port, endpoint }`, then keeps
+the process alive until interrupted.
+
+- `--host` defaults to `127.0.0.1`.
+- `--port` defaults to `4299`; use `--port 0` to bind any free port.
+- `--endpoint` defaults to `http://127.0.0.1:4099` and is passed into the
+  dashboard URL so the UI points at that server on first load.
+
+### `frick mcp [--endpoint <url>] [--readonly] [--allow-writes] [--tenant <id>] [--user <id>] [--token <bearer>] [--print-config]`
+
+Runs a stdio MCP server for agents that need live Frick runtime context. The
+CLI owns the process; agents connect to this command rather than starting a
+separate sidecar. Default mode is read-only and exposes documented health,
+readiness, inspection, stream-read, jobs, and structured-error tools/resources.
+
+- `--endpoint` defaults to `http://127.0.0.1:4099`.
+- `--readonly` is the default and keeps mutating tools unavailable.
+- `--allow-writes` exposes write tools, still subject to normal Frick authz.
+- `--tenant`, `--user`, and `--token` add scoped headers to runtime requests.
+- `--print-config` emits a JSON config record instead of starting stdio mode.
 
 ### `frick reset --dev`
 
