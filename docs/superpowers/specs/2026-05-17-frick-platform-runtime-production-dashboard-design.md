@@ -27,6 +27,8 @@ dashboard that make those capabilities feel like one coherent platform.
 - Add first-class OpenTelemetry for server and clients.
 - Add first-class product analytics with automatic SDK tracking and explicit
   app-defined events.
+- Add a first-class platform event pipeline with SQLite-backed local/dev
+  delivery and a Redpanda/Kafka-compatible production adapter.
 - Keep analytics local-first and app-owned, with optional export to external
   OTel backends or future Frick Cloud.
 - Provide a standard deployable service model that can target Docker Compose
@@ -84,6 +86,7 @@ The runtime composes this module with built-in services:
 - object, stream, projection, blob, search, and job stores
 - admin and dashboard APIs
 - audit log
+- platform event pipeline
 - OpenTelemetry instrumentation
 - product analytics ingestion and aggregation
 - dashboard static assets mounted at `/_frick/dashboard`
@@ -217,6 +220,53 @@ Cloud.
 Frick keeps its small internal metrics facade only as a compatibility wrapper.
 The long-term implementation should bridge that facade to OTel instruments.
 
+## Platform Event Pipeline
+
+Frick needs a platform event pipeline that is distinct from realtime sync.
+Existing domain stream events, WebSocket/SSE fan-out, cluster bus messages, and
+DevTools events remain purpose-built surfaces. They should not become the
+backbone for analytics, telemetry enrichment, audit consumers, aggregation, or
+export. Those workloads have different retention, privacy, throughput,
+consumer-group, replay, and failure semantics.
+
+The runtime should define a small adapter contract:
+
+- publish a typed platform event
+- subscribe with an explicit consumer name/group
+- acknowledge successful processing
+- retry transient failures
+- dead-letter poison events
+- support bounded retention
+- expose health and lag metadata for the dashboard
+
+Default adapters:
+
+- **SQLite event pipeline**: default for `development`, `test`, and lightweight
+  self-hosting. It keeps `frick dev` zero-infrastructure and lets small
+  projects run without a broker.
+- **Redpanda/Kafka-compatible event pipeline**: recommended production profile.
+  Redpanda gives Kafka protocol compatibility with a much simpler local and
+  self-hosted footprint than traditional Kafka.
+- **Memory event pipeline**: tests only. It is useful for isolated unit tests
+  but should not be a runtime default.
+
+The same conformance suite must run against SQLite and Redpanda adapters. Frick
+should not rely on adapter-specific behavior unless the contract names it.
+
+Initial platform event families:
+
+- `analytics.user_event`
+- `telemetry.client_error`
+- `audit.dashboard_action`
+- `jobs.lifecycle`
+- `sync.lifecycle`
+- `notifications.delivery`
+- `dashboard.operator_action`
+
+This pipeline feeds product analytics, dashboard audit views, async consumers,
+and optional export. It does not replace app domain streams or the realtime
+cluster bus.
+
 ## Product Analytics
 
 Product analytics is separate from observability. OTel describes system
@@ -225,6 +275,7 @@ behavior.
 
 Frick ships a local-first analytics pipeline:
 
+- product analytics events enter through the platform event pipeline
 - client SDKs emit automatic lifecycle events
 - apps can define typed product events
 - server validates event names, dimensions, scopes, and privacy rules
@@ -296,6 +347,8 @@ Initial service model:
 - `frick-worker`
 - `frick-dashboard` mounted by server, with standalone static serving available
 - `frick-otel-collector`
+- `frick-event-pipeline` backed by SQLite in dev/lightweight profiles and
+  Redpanda/Kafka-compatible infrastructure in production profiles
 - `frick-analytics-store`
 - `frick-cluster-bus` when horizontal scale is enabled
 - application database
@@ -307,9 +360,14 @@ from the same logical service model.
 Commands:
 
 - `frick dev`: starts the full local platform for a project.
+- `frick dev --profile redpanda`: starts the local platform with the
+  Redpanda/Kafka-compatible event pipeline so production pipeline behavior can
+  be tested locally.
 - `frick dashboard`: opens or serves the dashboard for the project.
 - `frick deploy --profile compose`: builds/runs the standard stack for the
-  project using Compose.
+  project using Compose and the Redpanda/Kafka-compatible pipeline.
+- `frick deploy --profile lightweight`: builds/runs a small self-hosted stack
+  using the SQLite event pipeline.
 - `frick doctor`: checks project, runtime, telemetry, dashboard, and deployment
   health.
 
@@ -328,6 +386,8 @@ Current pieces map naturally into the platform:
 - Existing inspection, metrics, DevTools events, and admin routes become
   dashboard/observability inputs.
 - The cluster bus contract remains the horizontal realtime fan-out extension.
+- Platform event pipeline adapters become the backbone for analytics,
+  telemetry enrichment, audit consumers, async aggregation, and export.
 
 The main missing boundary is the project module/manifest shape that lets the
 runtime load app code without copying platform implementation into the app.
@@ -342,13 +402,19 @@ runtime load app code without copying platform implementation into the app.
    for dashboard navigation and data browsing.
 4. **Dashboard auth and audit**: project-admin and tenant-admin capabilities,
    auth provider bridge, and audit store/API.
-5. **OTel server baseline**: add OTel SDK integration, collector config, trace
+5. **Platform event pipeline baseline**: define the event contract,
+   conformance suite, SQLite adapter, and Redpanda/Kafka-compatible adapter.
+6. **OTel server baseline**: add OTel SDK integration, collector config, trace
    ids, HTTP/sync/job metrics, and bridge existing metrics.
-6. **Product analytics baseline**: local event ingestion, typed event
-   definitions, client `track`, auto lifecycle events, and basic aggregates.
-7. **Standard local stack**: `frick dev` runs server, dashboard, OTel collector,
-   analytics store, worker, and optional bus.
-8. **Compose deployment profile**: `frick deploy --profile compose` runs the
+7. **Product analytics baseline**: typed event definitions, client `track`,
+   auto lifecycle events, analytics consumers, and basic aggregates on top of
+   the platform event pipeline.
+8. **Standard local stack**: `frick dev` runs server, dashboard, OTel collector,
+   SQLite event pipeline, analytics store, worker, and optional bus.
+9. **Redpanda local/prod profile**: `frick dev --profile redpanda` and
+   `frick deploy --profile compose` run the same pipeline contract against
+   Redpanda/Kafka-compatible infrastructure.
+10. **Compose deployment profile**: `frick deploy --profile compose` runs the
    same logical stack outside the repo.
 
 ## Testing Strategy
@@ -357,6 +423,9 @@ runtime load app code without copying platform implementation into the app.
 - Server tests for dashboard auth, capabilities, audit, and schema metadata.
 - Browser tests for mounted and standalone dashboard modes.
 - Integration tests for OTel span/metric emission using an in-memory exporter.
+- Event-pipeline conformance tests shared by SQLite and Redpanda/Kafka
+  adapters, covering publish, subscribe, ack, retry, dead-letter, retention,
+  health, and lag.
 - Integration tests for analytics ingestion, redaction, tenant isolation, and
   aggregate queries.
 - Client SDK tests for auto tracking, explicit `track`, opt-out, and redaction.
@@ -370,6 +439,12 @@ runtime load app code without copying platform implementation into the app.
   remain self-hostable and local-first.
 - Product analytics can accidentally collect sensitive data. Schema sensitivity
   metadata, redaction, and policy hooks are required early.
+- A broker-backed event pipeline can become operationally heavy. Keep SQLite as
+  the default dev/lightweight adapter and make Redpanda/Kafka-compatible
+  infrastructure a production profile with a local opt-in.
+- Divergent adapter behavior can create production-only bugs. Maintain a shared
+  conformance suite and avoid relying on behavior not named in the adapter
+  contract.
 - Dashboard mutation can become dangerous. Start read-mostly and require
   explicit policies for write actions.
 - OTel dependencies can make app bundles heavier. Keep SDK instrumentation
@@ -388,4 +463,7 @@ The design is ready to plan when these statements are accepted:
 - Schema-defined resources appear automatically in the dashboard.
 - Project admins and tenant admins are supported from the start.
 - OTel and product analytics are first-class, local-first, and exportable.
+- The platform event pipeline is first-class, separate from realtime sync, and
+  supports both SQLite dev/lightweight and Redpanda/Kafka-compatible production
+  adapters from the start.
 - Docker Compose is the first deployment target, with Kubernetes/Helm later.
