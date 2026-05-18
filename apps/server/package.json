@@ -10,6 +10,16 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./push/apns-adapter": {
+      "types": "./dist/push/apns-adapter.d.ts",
+      "import": "./dist/push/apns-adapter.js",
+      "default": "./dist/push/apns-adapter.js"
+    },
+    "./push/fcm-adapter": {
+      "types": "./dist/push/fcm-adapter.d.ts",
+      "import": "./dist/push/fcm-adapter.js",
+      "default": "./dist/push/fcm-adapter.js"
     }
   },
   "files": [

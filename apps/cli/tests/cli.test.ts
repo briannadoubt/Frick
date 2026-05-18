@@ -559,6 +559,15 @@ describe("frick init / scaffold", () => {
     ]) {
       expect(existsSync(join(appDir, relative))).toBe(true);
     }
+    const serverSource = readFileSync(join(appDir, "src/server.ts"), "utf8");
+    expect(serverSource).toContain("await app.listen();");
+    expect(serverSource).not.toContain("app.start");
+    const smokeSource = readFileSync(join(appDir, "tests/smoke.test.ts"), "utf8");
+    expect(smokeSource).toContain("await app.listen();");
+    expect(smokeSource).toContain("app.httpUrl");
+    expect(smokeSource).toContain("/health");
+    expect(smokeSource).toContain("await app.close();");
+    expect(smokeSource).not.toContain("app.start");
   });
 
   it("init can install agent harnesses and emit MCP config", async () => {

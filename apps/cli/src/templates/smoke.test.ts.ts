@@ -12,17 +12,20 @@ import { schema } from "../src/schema.js";
 
 describe("smoke", () => {
   it("boots the server and answers /health", async () => {
-    const app = createFrickServer({ schema, port: 0 });
-    const started = typeof app.start === "function" ? await app.start() : app;
+    const app = createFrickServer({
+      schema,
+      port: 0,
+      dbPath: ":memory:",
+      config: { env: "test" },
+      jobs: { workerEnabled: false },
+    });
+    await app.listen();
     try {
-      const address = (started as { address?: () => { port: number } }).address?.();
-      const port = address?.port ?? 0;
-      const response = await fetch(\`http://127.0.0.1:\${port}/health\`);
+      const response = await fetch(\`\${app.httpUrl}/health\`);
       expect(response.status).toBe(200);
+      expect(app.store.schema.schemaId).toBe(schema.schemaId);
     } finally {
-      if (typeof (started as { stop?: () => Promise<void> }).stop === "function") {
-        await (started as { stop: () => Promise<void> }).stop();
-      }
+      await app.close();
     }
   });
 });

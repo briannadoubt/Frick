@@ -4,9 +4,10 @@ The `frick` operational CLI. A thin wrapper around framework module functions
 (`loadFrickConfig`, the migration runner, `FrickStore`, the tenants ledger,
 `resetFrickDatabase`) exposed as a single binary.
 
-The CLI is internal-use only — it ships inside the monorepo and reaches into
-`apps/server/src/` via relative imports. Extracting `@frick/server` into a
-published library and shipping `frick` to npm is a future slice.
+The CLI is internal-use only — it ships inside the monorepo and still reaches
+into some server internals for operational commands. Scaffolded apps import the
+framework through the `@frick/server` package entrypoint; publishing `frick` to
+npm remains a future slice.
 
 ## Invocation
 

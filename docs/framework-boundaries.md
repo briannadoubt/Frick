@@ -13,7 +13,11 @@ Status: Contract baseline audit.
 - `packages/design-swift`: Swift design package.
 - `apps/android/frick`: Android/Kotlin client SDK module.
 - `apps/android/design`: Android/Kotlin design module.
-- `apps/server`: Frick server runtime. Intended public baseline API is `createFrickServer` plus documented server options; route internals are not public API. A package entry point/export map still needs to formalize this before release.
+- `apps/server`: Frick server runtime. Public baseline API is the
+  `@frick/server` package entrypoint: `createFrickServer`, documented server
+  options, telemetry types, project/module helpers, reset/migration helpers,
+  and the documented cluster bus. Production push adapters are exported through
+  documented package subpaths. Route and storage internals remain private.
 - Mounted dashboard routes under `/_frick/dashboard` and documented
   `/_frick/dashboard/api/*` responses are operator-facing surfaces. Internal
   route helper modules under `apps/server/src/dashboard/*` remain private

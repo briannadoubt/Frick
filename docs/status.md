@@ -37,7 +37,10 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
 ## Known Limitations
 
 - The CLI is still private to the monorepo. Development uses `pnpm cli <command>`; publishing a standalone npm CLI remains release work.
-- `apps/server` is a runtime app and partial library surface today. `createFrickServer` and documented options are the intended baseline; deep route/storage imports are internal.
+- `@frick/server` has an import-safe package entrypoint and documented export
+  map for the baseline server, telemetry, project, migration/reset, cluster
+  bus, and production push-adapter surfaces. Deep route/storage imports remain
+  internal.
 - Multi-app servers route by URL prefix and WebSocket Hello schema id, but storage is still shared at the server level.
 - Blob bytes are stored in SQLite today. `FRICK_BLOB_STORAGE_PATH` is parsed for a future filesystem driver but is not the active blob-byte store.
 - Swift and Android package publication is configured in source, but local verification still depends on the host having Xcode or Android SDK/JDK paths installed.

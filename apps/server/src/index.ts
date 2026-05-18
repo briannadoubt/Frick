@@ -6,6 +6,15 @@ export {
   type FrickAppResolution,
 } from "./apps/registry.js";
 export {
+  MemoryClusterBus,
+  MemoryClusterChannel,
+  type ClusterEnvelope,
+  type ClusterEnvelopeHandler,
+  type FrickClusterBus,
+  type MemoryClusterBusOptions,
+  type NodeId,
+} from "./cluster/bus.js";
+export {
   createFrickProjectModule,
   projectModuleToAppDefinition,
   type FrickProjectManifest,
@@ -41,4 +50,3 @@ export {
   type FrickWebSocketConnectionTelemetrySpan,
   type FrickWebSocketFrameTelemetry,
 } from "./telemetry/runtime.js";
-

@@ -345,10 +345,10 @@ export function createFrickServer(options: ServerOptions = {}) {
   const store = new FrickStore({
     path: options.dbPath ?? process.env.FRICK_DB_PATH ?? defaultDatabasePath(),
     schema: runtimeSchema,
-    // The default seed seeds foundation-schema rows (User/Conversation/...).
-    // When a project supplies its own schema, those object types don't exist
-    // and the seed crashes — skip it.
-    seed: runtimeSchema === foundationSchema,
+    // Seed only when the runtime schema can accept the foundation dev rows.
+    // Empty scaffold schemas must boot without User/Conversation/RoomMember,
+    // while foundation-extending schemas still need Ada/Grace for dev auth.
+    seed: supportsFoundationSeed(runtimeSchema),
     projections,
     searchIndexes,
     ...(options.search?.adapter !== undefined ? { searchAdapter: options.search.adapter } : {}),
@@ -2033,6 +2033,21 @@ function safeListAppliedMigrations(store: FrickStore) {
   } catch {
     return undefined;
   }
+}
+
+function supportsFoundationSeed(schema: FrickSchema): boolean {
+  const objects = new Map(schema.objects.map((object) => [object.name, object]));
+  const requirements: Record<string, readonly string[]> = {
+    User: ["displayName"],
+    Conversation: ["kind", "title", "createdBy"],
+    RoomMember: ["conversationId", "userId", "role"],
+  };
+  return Object.entries(requirements).every(([name, fields]) => {
+    const object = objects.get(name);
+    if (!object) return false;
+    const availableFields = new Set(object.fields.map((field) => field.name));
+    return fields.every((field) => availableFields.has(field));
+  });
 }
 
 function resolveConfig(input: FrickConfig | FrickConfigOverrides | undefined): FrickConfig {
