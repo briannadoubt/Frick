@@ -52,7 +52,7 @@ function splitKafkaPipeline(
       }
       return [];
     },
-    ack: (name, eventId) => consumer.ack(name, eventId),
+    ack: (name, eventId, options) => consumer.ack(name, eventId, options),
     retry: (name, eventId, options) => consumer.retry(name, eventId, options),
     deadLetter: (name, eventId, options) => consumer.deadLetter(name, eventId, options),
     health: () => consumer.health(),

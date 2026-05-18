@@ -76,4 +76,33 @@ describe("SQLite platform events", () => {
     expect(result.prunedByCap).toBe(1);
     expect((await pipeline.health()).retained).toBe(1);
   });
+
+  it("redelivers stale claimed events after the claim timeout", async () => {
+    let now = new Date("2026-05-17T00:00:00.000Z");
+    const pipeline = openPipeline(() => now);
+    const receipt = await pipeline.publish({
+      family: "analytics.user_event",
+      name: "button.clicked",
+      source: "test",
+    });
+
+    const [first] = await pipeline.claim("analytics-worker");
+    expect(first?.event.id).toBe(receipt.id);
+    expect(first?.attempt).toBe(1);
+    expect(await pipeline.claim("analytics-worker")).toEqual([]);
+
+    now = new Date("2026-05-17T00:10:01.000Z");
+    const [redelivery] = await pipeline.claim("analytics-worker");
+    expect(redelivery?.event.id).toBe(receipt.id);
+    expect(redelivery?.attempt).toBe(2);
+
+    await pipeline.ack("analytics-worker", receipt.id, {
+      attempt: first!.attempt,
+      claimedAt: first!.claimedAt,
+    });
+    now = new Date("2026-05-17T00:20:02.000Z");
+    const [afterStaleAck] = await pipeline.claim("analytics-worker");
+    expect(afterStaleAck?.event.id).toBe(receipt.id);
+    expect(afterStaleAck?.attempt).toBe(3);
+  });
 });

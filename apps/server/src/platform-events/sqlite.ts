@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import {
   normalizePlatformEventInput,
+  type PlatformEventAckOptions,
   type PlatformEventClaimOptions,
   type PlatformEventDeadLetterOptions,
   type PlatformEventDelivery,
@@ -16,10 +17,12 @@ import {
 export const DEFAULT_PLATFORM_EVENTS_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const DEFAULT_PLATFORM_EVENTS_MAX_ROWS = 1_000_000;
 export const DEFAULT_PLATFORM_EVENTS_PRUNE_INTERVAL_MS = 15 * 60 * 1000;
+export const DEFAULT_PLATFORM_EVENTS_CLAIM_TIMEOUT_MS = 5 * 60 * 1000;
 
 export interface SqlitePlatformEventPipelineOptions {
   readonly retentionMs: number;
   readonly maxRows: number;
+  readonly claimTimeoutMs?: number;
   readonly now?: () => Date;
 }
 
@@ -76,12 +79,14 @@ export class SqlitePlatformEventPipeline implements PlatformEventPipeline {
   readonly #db: DatabaseSync;
   readonly #retentionMs: number;
   readonly #maxRows: number;
+  readonly #claimTimeoutMs: number;
   readonly #now: () => Date;
 
   constructor(db: DatabaseSync, options: SqlitePlatformEventPipelineOptions) {
     this.#db = db;
     this.#retentionMs = options.retentionMs;
     this.#maxRows = options.maxRows;
+    this.#claimTimeoutMs = options.claimTimeoutMs ?? DEFAULT_PLATFORM_EVENTS_CLAIM_TIMEOUT_MS;
     this.#now = options.now ?? (() => new Date());
   }
 
@@ -150,8 +155,10 @@ export class SqlitePlatformEventPipeline implements PlatformEventPipeline {
     options: PlatformEventClaimOptions = {},
   ): Promise<PlatformEventDelivery[]> {
     const name = normalizeConsumerName(consumer);
-    const availableAt = options.availableAt ?? this.#now().toISOString();
-    const claimedAt = this.#now().toISOString();
+    const now = this.#now();
+    const availableAt = options.availableAt ?? now.toISOString();
+    const claimedAt = now.toISOString();
+    const staleClaimedBefore = new Date(now.getTime() - this.#claimTimeoutMs).toISOString();
     const batchSize = clampBatchSize(options.batchSize);
 
     this.#db.exec("BEGIN IMMEDIATE");
@@ -172,12 +179,14 @@ export class SqlitePlatformEventPipeline implements PlatformEventPipeline {
             FROM platform_event_deliveries d
             JOIN platform_events e ON e.event_id = d.event_id
             WHERE d.consumer = ?
-              AND d.status IN ('pending', 'retry')
-              AND d.available_at <= ?
+              AND (
+                (d.status IN ('pending', 'retry') AND d.available_at <= ?)
+                OR (d.status = 'claimed' AND (d.claimed_at IS NULL OR d.claimed_at <= ?))
+              )
             ORDER BY e.id ASC
             LIMIT ?`,
         )
-        .all(name, availableAt, batchSize) as Array<{ event_id: string }>;
+        .all(name, availableAt, staleClaimedBefore, batchSize) as Array<{ event_id: string }>;
       const eventIds = selected.map((row) => row.event_id);
       if (eventIds.length === 0) {
         this.#db.exec("COMMIT");
@@ -228,15 +237,23 @@ export class SqlitePlatformEventPipeline implements PlatformEventPipeline {
     }
   }
 
-  async ack(consumer: string, eventId: string): Promise<void> {
+  async ack(
+    consumer: string,
+    eventId: string,
+    options: PlatformEventAckOptions,
+  ): Promise<void> {
     const name = normalizeConsumerName(consumer);
     this.#db
       .prepare(
         `UPDATE platform_event_deliveries
           SET status = 'acked', acked_at = ?
-          WHERE consumer = ? AND event_id = ? AND status = 'claimed'`,
+          WHERE consumer = ?
+            AND event_id = ?
+            AND status = 'claimed'
+            AND attempt_count = ?
+            AND claimed_at = ?`,
       )
-      .run(this.#now().toISOString(), name, eventId);
+      .run(this.#now().toISOString(), name, eventId, options.attempt, options.claimedAt);
   }
 
   async retry(
@@ -254,9 +271,18 @@ export class SqlitePlatformEventPipeline implements PlatformEventPipeline {
               last_error = ?
           WHERE consumer = ?
             AND event_id = ?
-            AND status NOT IN ('acked', 'dead_lettered')`,
+            AND status = 'claimed'
+            AND attempt_count = ?
+            AND claimed_at = ?`,
       )
-      .run(options.availableAt ?? this.#now().toISOString(), options.error, name, eventId);
+      .run(
+        options.availableAt ?? this.#now().toISOString(),
+        options.error,
+        name,
+        eventId,
+        options.attempt,
+        options.claimedAt,
+      );
   }
 
   async deadLetter(
@@ -273,9 +299,11 @@ export class SqlitePlatformEventPipeline implements PlatformEventPipeline {
               last_error = ?
           WHERE consumer = ?
             AND event_id = ?
-            AND status NOT IN ('acked', 'dead_lettered')`,
+            AND status = 'claimed'
+            AND attempt_count = ?
+            AND claimed_at = ?`,
       )
-      .run(this.#now().toISOString(), options.error, name, eventId);
+      .run(this.#now().toISOString(), options.error, name, eventId, options.attempt, options.claimedAt);
   }
 
   async health(): Promise<PlatformEventHealth> {

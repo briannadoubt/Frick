@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   normalizePlatformEventInput,
   type PlatformEventClaimOptions,
+  type PlatformEventAckOptions,
   type PlatformEventDeadLetterOptions,
   type PlatformEventDelivery,
   type PlatformEventEnvelope,
@@ -113,9 +114,13 @@ export class MemoryPlatformEventPipeline implements PlatformEventPipeline {
     return deliveries;
   }
 
-  async ack(consumer: string, eventId: string): Promise<void> {
+  async ack(
+    consumer: string,
+    eventId: string,
+    options: PlatformEventAckOptions,
+  ): Promise<void> {
     const delivery = this.#consumerState(consumer).get(eventId);
-    if (!delivery || delivery.status !== "claimed") return;
+    if (!delivery || !matchesDeliveryAttempt(delivery, options)) return;
     delivery.status = "acked";
   }
 
@@ -125,7 +130,7 @@ export class MemoryPlatformEventPipeline implements PlatformEventPipeline {
     options: PlatformEventRetryOptions,
   ): Promise<void> {
     const delivery = this.#consumerState(consumer).get(eventId);
-    if (!delivery || delivery.status === "acked" || delivery.status === "dead_lettered") return;
+    if (!delivery || !matchesDeliveryAttempt(delivery, options)) return;
     delivery.status = "retry";
     delivery.availableAt = options.availableAt ?? this.#now().toISOString();
     delivery.claimedAt = undefined;
@@ -138,7 +143,7 @@ export class MemoryPlatformEventPipeline implements PlatformEventPipeline {
     options: PlatformEventDeadLetterOptions,
   ): Promise<void> {
     const delivery = this.#consumerState(consumer).get(eventId);
-    if (!delivery || delivery.status === "acked" || delivery.status === "dead_lettered") return;
+    if (!delivery || !matchesDeliveryAttempt(delivery, options)) return;
     delivery.status = "dead_lettered";
     delivery.lastError = options.error;
   }
@@ -199,6 +204,17 @@ export class MemoryPlatformEventPipeline implements PlatformEventPipeline {
     }
     return state;
   }
+}
+
+function matchesDeliveryAttempt(
+  delivery: DeliveryState,
+  attempt: { attempt: number; claimedAt: string },
+): boolean {
+  return (
+    delivery.status === "claimed" &&
+    delivery.attempt === attempt.attempt &&
+    delivery.claimedAt === attempt.claimedAt
+  );
 }
 
 function countDeliveries(deliveries: Iterable<DeliveryState>): {

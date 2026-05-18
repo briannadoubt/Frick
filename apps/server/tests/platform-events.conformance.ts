@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
+  PlatformEventDelivery,
+  PlatformEventDeliveryAttempt,
   PlatformEventInput,
   PlatformEventPipeline,
 } from "../src/platform-events/types.js";
@@ -19,6 +21,14 @@ const baseEvent: PlatformEventInput = {
   payload: { messageId: "message-1" },
   attributes: { platform: "web", beta: true, count: 1 },
 };
+
+function deliveryAttempt(delivery: PlatformEventDelivery | undefined): PlatformEventDeliveryAttempt {
+  expect(delivery).toBeDefined();
+  return {
+    attempt: delivery!.attempt,
+    claimedAt: delivery!.claimedAt,
+  };
+}
 
 export function definePlatformEventPipelineConformance(
   harness: PlatformEventConformanceHarness,
@@ -57,7 +67,7 @@ export function definePlatformEventPipelineConformance(
         const [delivery] = await pipeline.claim("analytics-worker");
         expect(delivery?.event.id).toBe(receipt.id);
 
-        await pipeline.ack("analytics-worker", receipt.id);
+        await pipeline.ack("analytics-worker", receipt.id, deliveryAttempt(delivery));
 
         expect(await pipeline.claim("analytics-worker")).toEqual([]);
         const secondConsumer = await pipeline.claim("export-worker");
@@ -76,6 +86,7 @@ export function definePlatformEventPipelineConformance(
         expect(delivery?.attempt).toBe(1);
 
         await pipeline.retry("analytics-worker", receipt.id, {
+          ...deliveryAttempt(delivery),
           error: "temporary failure",
           availableAt: "2099-01-01T00:00:00.000Z",
         });
@@ -98,9 +109,12 @@ export function definePlatformEventPipelineConformance(
       const pipeline = await harness.create();
       try {
         const receipt = await pipeline.publish(baseEvent);
-        await pipeline.claim("analytics-worker");
+        const [delivery] = await pipeline.claim("analytics-worker");
 
-        await pipeline.deadLetter("analytics-worker", receipt.id, { error: "bad payload" });
+        await pipeline.deadLetter("analytics-worker", receipt.id, {
+          ...deliveryAttempt(delivery),
+          error: "bad payload",
+        });
 
         expect(await pipeline.claim("analytics-worker")).toEqual([]);
         const health = await pipeline.health();
@@ -150,11 +164,17 @@ export function definePlatformEventPipelineConformance(
       const pipeline = await harness.create();
       try {
         const receipt = await pipeline.publish(baseEvent);
-        await pipeline.claim("analytics-worker");
-        await pipeline.ack("analytics-worker", receipt.id);
+        const [delivery] = await pipeline.claim("analytics-worker");
+        await pipeline.ack("analytics-worker", receipt.id, deliveryAttempt(delivery));
 
-        await pipeline.retry("analytics-worker", receipt.id, { error: "too late" });
-        await pipeline.deadLetter("analytics-worker", receipt.id, { error: "also too late" });
+        await pipeline.retry("analytics-worker", receipt.id, {
+          ...deliveryAttempt(delivery),
+          error: "too late",
+        });
+        await pipeline.deadLetter("analytics-worker", receipt.id, {
+          ...deliveryAttempt(delivery),
+          error: "also too late",
+        });
 
         expect(await pipeline.claim("analytics-worker")).toEqual([]);
         const health = await pipeline.health();
@@ -169,23 +189,56 @@ export function definePlatformEventPipelineConformance(
       const pipeline = await harness.create();
       try {
         const retryReceipt = await pipeline.publish({ ...baseEvent, idempotencyKey: "stale-ack-retry" });
-        await pipeline.claim("analytics-worker");
+        const [retryFirst] = await pipeline.claim("analytics-worker");
         await pipeline.retry("analytics-worker", retryReceipt.id, {
+          ...deliveryAttempt(retryFirst),
           error: "temporary failure",
           availableAt: "2099-01-01T00:00:00.000Z",
         });
-        await pipeline.ack("analytics-worker", retryReceipt.id);
+        await pipeline.ack("analytics-worker", retryReceipt.id, deliveryAttempt(retryFirst));
         const [retryDelivery] = await pipeline.claim("analytics-worker", {
           availableAt: "2099-01-01T00:00:00.000Z",
         });
         expect(retryDelivery?.event.id).toBe(retryReceipt.id);
 
         const deadLetterReceipt = await pipeline.publish({ ...baseEvent, idempotencyKey: "stale-ack-dead-letter" });
-        await pipeline.claim("analytics-worker");
-        await pipeline.deadLetter("analytics-worker", deadLetterReceipt.id, { error: "bad payload" });
-        await pipeline.ack("analytics-worker", deadLetterReceipt.id);
+        const [deadLetterDelivery] = await pipeline.claim("analytics-worker");
+        await pipeline.deadLetter("analytics-worker", deadLetterReceipt.id, {
+          ...deliveryAttempt(deadLetterDelivery),
+          error: "bad payload",
+        });
+        await pipeline.ack("analytics-worker", deadLetterReceipt.id, deliveryAttempt(deadLetterDelivery));
         const health = await pipeline.health();
         expect(health.deadLettered).toBe(1);
+      } finally {
+        await harness.close?.(pipeline);
+        await pipeline.close();
+      }
+    });
+
+    it("does not let a stale delivery attempt ack a newer claim", async () => {
+      const pipeline = await harness.create();
+      try {
+        const receipt = await pipeline.publish({
+          ...baseEvent,
+          idempotencyKey: "stale-attempt-ack",
+        });
+        const [first] = await pipeline.claim("analytics-worker");
+        await pipeline.retry("analytics-worker", receipt.id, {
+          ...deliveryAttempt(first),
+          error: "temporary failure",
+        });
+        const [second] = await pipeline.claim("analytics-worker");
+        expect(second?.attempt).toBe(2);
+
+        await pipeline.ack("analytics-worker", receipt.id, deliveryAttempt(first));
+        await pipeline.retry("analytics-worker", receipt.id, {
+          ...deliveryAttempt(second),
+          error: "second retry",
+        });
+        const [third] = await pipeline.claim("analytics-worker");
+        expect(third?.event.id).toBe(receipt.id);
+        expect(third?.attempt).toBe(3);
       } finally {
         await harness.close?.(pipeline);
         await pipeline.close();

@@ -204,7 +204,13 @@ baseline commits only contiguous terminal offsets on `ack`, republishes
 retried events to the broker, and publishes poison messages to `<topic>.dlq`.
 The job worker publishes initial `jobs.lifecycle` events for completed,
 retryable failed, and dead-lettered jobs; downstream consumers can claim those
-events from the same adapter as analytics and telemetry events.
+events from the same adapter as analytics and telemetry events. SQLite claims
+use a five-minute visibility lease; if a consumer crashes after claiming but
+before `ack`, `retry`, or `deadLetter`, the same consumer name can reclaim that
+event after the lease expires and the delivery attempt count increments.
+Terminal actions are matched against the delivery's `attempt` and `claimedAt`
+values so an expired attempt cannot acknowledge, retry, or dead-letter a newer
+claim.
 Per-consumer health lag is still process-local, and idempotency is enforced by
 the active adapter process after it has published or consumed a matching event;
 cross-process and post-restart Kafka idempotency require a durable key index in

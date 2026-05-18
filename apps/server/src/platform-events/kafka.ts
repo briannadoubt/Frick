@@ -10,6 +10,7 @@ import {
 import {
   normalizePlatformEventInput,
   isPlatformEventFamily,
+  type PlatformEventAckOptions,
   type PlatformEventClaimOptions,
   type PlatformEventDeadLetterOptions,
   type PlatformEventDelivery,
@@ -43,6 +44,7 @@ interface KafkaDeliveryState {
   status: DeliveryStatus;
   attempt: number;
   availableAt: string;
+  claimedAt: string | undefined;
   queued: KafkaQueuedEvent | undefined;
 }
 
@@ -168,6 +170,7 @@ export class KafkaPlatformEventPipeline implements PlatformEventPipeline {
       delivery.attempt += 1;
       delivery.queued = queued;
       const claimedAt = this.#now().toISOString();
+      delivery.claimedAt = claimedAt;
       deliveries.push({
         event: queued.event,
         consumer: state.name,
@@ -179,13 +182,18 @@ export class KafkaPlatformEventPipeline implements PlatformEventPipeline {
     return deliveries;
   }
 
-  async ack(consumer: string, eventId: string): Promise<void> {
+  async ack(
+    consumer: string,
+    eventId: string,
+    options: PlatformEventAckOptions,
+  ): Promise<void> {
     const state = this.#consumers.get(normalizeConsumerName(consumer));
     const delivery = state?.deliveries.get(eventId);
-    if (!state || !delivery || delivery.status !== "claimed") return;
+    if (!state || !delivery || !matchesDeliveryAttempt(delivery, options)) return;
     await this.#commitTerminalOffset(state, delivery.queued);
     delivery.status = "acked";
     delivery.queued = undefined;
+    delivery.claimedAt = undefined;
   }
 
   async retry(
@@ -195,13 +203,14 @@ export class KafkaPlatformEventPipeline implements PlatformEventPipeline {
   ): Promise<void> {
     const state = this.#consumers.get(normalizeConsumerName(consumer));
     const delivery = state?.deliveries.get(eventId);
-    if (!state || !delivery || delivery.status === "acked" || delivery.status === "dead_lettered") return;
+    if (!state || !delivery || !matchesDeliveryAttempt(delivery, options)) return;
     const queued = delivery.queued;
     if (!queued) return;
     const availableAt = options.availableAt ?? this.#now().toISOString();
     delivery.status = "retry";
     delivery.availableAt = availableAt;
     delivery.queued = undefined;
+    delivery.claimedAt = undefined;
     try {
       await this.#publishEvent(queued.event, {
         "frick-original-event-id": queued.event.id,
@@ -212,6 +221,7 @@ export class KafkaPlatformEventPipeline implements PlatformEventPipeline {
       delivery.status = "claimed";
       delivery.availableAt = queued.availableAt;
       delivery.queued = queued;
+      delivery.claimedAt = options.claimedAt;
       throw error;
     }
   }
@@ -223,7 +233,7 @@ export class KafkaPlatformEventPipeline implements PlatformEventPipeline {
   ): Promise<void> {
     const state = this.#consumers.get(normalizeConsumerName(consumer));
     const delivery = state?.deliveries.get(eventId);
-    if (!state || !delivery || delivery.status === "acked" || delivery.status === "dead_lettered") return;
+    if (!state || !delivery || !matchesDeliveryAttempt(delivery, options)) return;
     const queued = delivery.queued;
 
     await this.#ensureProducer(`${this.#topic}.dlq`);
@@ -244,6 +254,7 @@ export class KafkaPlatformEventPipeline implements PlatformEventPipeline {
     await this.#commitTerminalOffset(state, queued);
     delivery.status = "dead_lettered";
     delivery.queued = undefined;
+    delivery.claimedAt = undefined;
   }
 
   async health(): Promise<PlatformEventHealth> {
@@ -536,9 +547,21 @@ function enqueueEvent(state: KafkaConsumerState, queued: KafkaQueuedEvent): void
     status: "pending",
     attempt: 0,
     availableAt: queued.availableAt,
+    claimedAt: undefined,
     queued,
   });
   state.queue.push(queued);
+}
+
+function matchesDeliveryAttempt(
+  delivery: KafkaDeliveryState,
+  attempt: { attempt: number; claimedAt: string },
+): boolean {
+  return (
+    delivery.status === "claimed" &&
+    delivery.attempt === attempt.attempt &&
+    delivery.claimedAt === attempt.claimedAt
+  );
 }
 
 function rememberIdempotency(

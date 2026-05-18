@@ -53,17 +53,24 @@ export interface PlatformEventDelivery {
   readonly claimedAt: string;
 }
 
+export interface PlatformEventDeliveryAttempt {
+  readonly attempt: number;
+  readonly claimedAt: string;
+}
+
 export interface PlatformEventClaimOptions {
   readonly batchSize?: number;
   readonly availableAt?: string;
 }
 
-export interface PlatformEventRetryOptions {
+export interface PlatformEventAckOptions extends PlatformEventDeliveryAttempt {}
+
+export interface PlatformEventRetryOptions extends PlatformEventDeliveryAttempt {
   readonly error: string;
   readonly availableAt?: string;
 }
 
-export interface PlatformEventDeadLetterOptions {
+export interface PlatformEventDeadLetterOptions extends PlatformEventDeliveryAttempt {
   readonly error: string;
 }
 
@@ -88,7 +95,7 @@ export interface PlatformEventPipeline {
   readonly adapter: PlatformEventHealth["adapter"];
   publish(input: PlatformEventInput): Promise<PlatformEventPublishReceipt>;
   claim(consumer: string, options?: PlatformEventClaimOptions): Promise<PlatformEventDelivery[]>;
-  ack(consumer: string, eventId: string): Promise<void>;
+  ack(consumer: string, eventId: string, options: PlatformEventAckOptions): Promise<void>;
   retry(consumer: string, eventId: string, options: PlatformEventRetryOptions): Promise<void>;
   deadLetter(consumer: string, eventId: string, options: PlatformEventDeadLetterOptions): Promise<void>;
   health(): Promise<PlatformEventHealth>;
