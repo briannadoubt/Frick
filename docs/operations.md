@@ -320,6 +320,15 @@ session principals are pinned to their session tenant; admin bearers may pass
 `tenantId` to inspect a tenant account directory. The endpoint caps `limit` at
 200 rows and reports whether additional rows were truncated.
 
+`/_frick/dashboard/api/blobs?limit=50&tenantId=_default&ownerId=user-ada`
+returns read-only blob metadata for the mounted dashboard Storage view:
+`tenantId`, `blobId`, `ownerId`, `contentHash`, `byteLength`, `mimeType`, and
+`createdAt`. Tenant session principals are pinned to their session tenant and
+own user id, even if query parameters request another tenant or owner. Admin
+bearers may pass `tenantId` and `ownerId` to inspect a tenant's storage
+metadata. The endpoint caps `limit` at 200 rows, reports truncation, and never
+returns blob content bytes or storage keys.
+
 `/_frick/dashboard/api/tenants?includeArchived=true&limit=50` returns the
 tenant ledger rows used by the mounted dashboard Settings view: `tenantId`,
 optional `displayName`, `createdAt`, and optional `archivedAt`. Tenant session

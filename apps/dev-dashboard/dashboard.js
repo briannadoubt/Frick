@@ -6,6 +6,7 @@ const STORAGE_KEYS = {
   route: "fricken-dashboard:route",
   objectType: "fricken-dashboard:objectType",
   tenantId: "fricken-dashboard:tenantId",
+  blobOwnerId: "fricken-dashboard:blobOwnerId",
 };
 
 const app = document.getElementById("app");
@@ -46,6 +47,7 @@ const state = {
   selectedEventId: undefined,
   selectedObjectType: localStorage.getItem(STORAGE_KEYS.objectType) || "",
   dataTenantId: localStorage.getItem(STORAGE_KEYS.tenantId) || "",
+  blobOwnerId: localStorage.getItem(STORAGE_KEYS.blobOwnerId) || "",
   loading: false,
   lastRefresh: undefined,
   data: {},
@@ -133,6 +135,14 @@ function shortHash(hash) {
 function numberValue(value, fallback = 0) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function formatBytes(value) {
+  const bytes = numberValue(value);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
 function metricEntries(kind) {
@@ -331,6 +341,14 @@ async function refreshData() {
       nextErrors.dashboardAccounts = error;
     }
 
+    try {
+      nextData.dashboardBlobs = await fetchDashboardBlobs(
+        selectedDashboardTenantId(nextData.dashboardTenants),
+      );
+    } catch (error) {
+      nextErrors.dashboardBlobs = error;
+    }
+
     const objectType = selectedDashboardObjectType(nextData.dashboardMetadata);
     if (objectType) {
       try {
@@ -394,6 +412,14 @@ async function fetchDashboardTenantSettings(tenantId) {
   const params = new URLSearchParams();
   if (tenantId) params.set("tenantId", tenantId);
   return fetchJson(`/_frick/dashboard/api/tenant-settings?${params}`, { auth: true });
+}
+
+async function fetchDashboardBlobs(tenantId) {
+  if (!isMountedDashboard()) return undefined;
+  const params = new URLSearchParams({ limit: "25" });
+  if (tenantId) params.set("tenantId", tenantId);
+  if (state.blobOwnerId) params.set("ownerId", state.blobOwnerId);
+  return fetchJson(`/_frick/dashboard/api/blobs?${params}`, { auth: true });
 }
 
 async function devLogin() {
@@ -1151,15 +1177,122 @@ function renderStorage() {
           ${metricCard("Search", state.data.search?.adapter || "unknown", `${state.data.search?.indexes?.length ?? 0} indexes visible`, state.data.search ? "good" : "warn")}
           ${metricCard("Backup API", "admin", "Use /_frick/admin/backup and restore with admin auth.", "info")}
         </section>
+        ${dashboardBlobBrowser()}
         ${launchGrid()}
         ${definitionListPanel("Storage routes", [
           ["/blobs", "Upload and derivative metadata paths"],
+          ["/_frick/dashboard/api/blobs", "Read-only mounted dashboard blob metadata"],
           ["/search", "Tenant-visible search query route"],
           ["/_frick/admin/backup", "NDJSON backup stream"],
           ["/_frick/admin/restore", "NDJSON restore replay"],
         ])}
       </div>
       ${serverInspector()}
+    </div>
+  `;
+}
+
+function dashboardBlobBrowser() {
+  if (!isMountedDashboard()) {
+    return `
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <span class="panel-kicker">Blobs</span>
+            <h2 class="panel-title">Storage metadata</h2>
+          </div>
+        </header>
+        <div class="panel-body">
+          <div class="empty-state">Mount Fricken Dashboard at /_frick/dashboard to browse blob metadata from the server origin.</div>
+        </div>
+      </section>
+    `;
+  }
+
+  const blobs = state.data.dashboardBlobs;
+  const error = state.errors.dashboardBlobs;
+  const selectedTenantId = selectedDashboardTenantId();
+  return `
+    <section class="panel">
+      <header class="panel-header">
+        <div>
+          <span class="panel-kicker">Blobs</span>
+          <h2 class="panel-title">Storage metadata</h2>
+        </div>
+        ${
+          blobs
+            ? `<span class="status-tag tone-info">${dot("info")} ${escapeHtml(blobs.scope)} / ${escapeHtml(blobs.tenantId)}</span>`
+            : ""
+        }
+      </header>
+      <div class="panel-body">
+        <form class="tenant-filter" data-form="blob-filter">
+          <label class="form-row">
+            <span class="field-label">Tenant</span>
+            <span class="inline-fields">
+              <input class="text-input" name="tenantId" value="${escapeHtml(selectedTenantId)}" placeholder="_default" autocomplete="off" />
+            </span>
+          </label>
+          <label class="form-row">
+            <span class="field-label">Owner</span>
+            <span class="inline-fields">
+              <input class="text-input" name="ownerId" value="${escapeHtml(state.blobOwnerId)}" placeholder="user-ada" autocomplete="off" />
+              <button class="button secondary" type="submit">${icon("check")} Apply</button>
+            </span>
+          </label>
+        </form>
+        ${error ? `<div class="error-box">${escapeHtml(error.message)}</div>` : ""}
+        ${blobs ? blobSummary(blobs) : ""}
+        ${blobTable(blobs)}
+      </div>
+    </section>
+  `;
+}
+
+function blobSummary(data) {
+  const detail = data.truncated
+    ? `${data.count} of ${data.total} visible blobs`
+    : `${data.total} visible blobs`;
+  const totalBytes = data.blobs.reduce((sum, blob) => sum + numberValue(blob.byteLength), 0);
+  return `
+    <div class="status-strip compact">
+      <span class="status-pill tone-info">${dot("info")} ${escapeHtml(detail)}</span>
+      <span class="status-pill tone-info">${dot("info")} ${escapeHtml(formatBytes(totalBytes))} listed</span>
+      <span class="status-pill tone-info">${dot("info")} ${escapeHtml(data.ownerId || "all owners")}</span>
+      <span class="status-pill tone-info">${dot("info")} limit ${escapeHtml(data.limit)}</span>
+    </div>
+  `;
+}
+
+function blobTable(data) {
+  if (!data) {
+    if (state.errors.dashboardBlobs?.skipped) {
+      return `<div class="empty-state">Add a bearer token to load blob metadata.</div>`;
+    }
+    return `<div class="empty-state">No blob metadata loaded yet.</div>`;
+  }
+  if (!data.blobs.length) {
+    return `<div class="empty-state">No blobs visible for ${escapeHtml(data.tenantId)}.</div>`;
+  }
+  return `
+    <div class="object-table-wrap">
+      <table class="table">
+        <thead><tr><th>Blob</th><th>Owner</th><th>MIME</th><th>Size</th><th>Hash</th><th>Created</th></tr></thead>
+        <tbody>
+          ${data.blobs
+            .map((blob) => `
+              <tr>
+                <td><code class="code-inline">${escapeHtml(blob.blobId)}</code></td>
+                <td>${escapeHtml(blob.ownerId)}</td>
+                <td>${escapeHtml(blob.mimeType)}</td>
+                <td>${escapeHtml(formatBytes(blob.byteLength))}</td>
+                <td><code class="code-inline">${escapeHtml(shortHash(blob.contentHash))}</code></td>
+                <td>${escapeHtml(new Date(blob.createdAt).toLocaleString())}</td>
+              </tr>
+            `)
+            .join("")}
+        </tbody>
+      </table>
     </div>
   `;
 }
@@ -1785,6 +1918,21 @@ function bindControls() {
       state.dataTenantId = new FormData(tenantSettingsForm).get("tenantId")?.toString().trim() || "";
       if (state.dataTenantId) localStorage.setItem(STORAGE_KEYS.tenantId, state.dataTenantId);
       else localStorage.removeItem(STORAGE_KEYS.tenantId);
+      void refreshData();
+    });
+  }
+
+  const blobFilterForm = app.querySelector("[data-form='blob-filter']");
+  if (blobFilterForm) {
+    blobFilterForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const form = new FormData(blobFilterForm);
+      state.dataTenantId = form.get("tenantId")?.toString().trim() || "";
+      state.blobOwnerId = form.get("ownerId")?.toString().trim() || "";
+      if (state.dataTenantId) localStorage.setItem(STORAGE_KEYS.tenantId, state.dataTenantId);
+      else localStorage.removeItem(STORAGE_KEYS.tenantId);
+      if (state.blobOwnerId) localStorage.setItem(STORAGE_KEYS.blobOwnerId, state.blobOwnerId);
+      else localStorage.removeItem(STORAGE_KEYS.blobOwnerId);
       void refreshData();
     });
   }

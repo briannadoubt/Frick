@@ -163,6 +163,13 @@ describe("mounted dashboard", () => {
     expect(response.status).toBe(401);
   });
 
+  it("requires authentication for dashboard blob metadata", async () => {
+    app = await startServer();
+    const response = await fetch(`${app.httpUrl}/_frick/dashboard/api/blobs`);
+
+    expect(response.status).toBe(401);
+  });
+
   it("serves dashboard metadata API when authenticated", async () => {
     app = await startServer();
     const response = await fetch(`${app.httpUrl}/_frick/dashboard/api/metadata`, {
@@ -195,6 +202,7 @@ describe("mounted dashboard", () => {
     expect(script).toContain("/_frick/dashboard/api/accounts");
     expect(script).toContain("/_frick/dashboard/api/tenants");
     expect(script).toContain("/_frick/dashboard/api/tenant-settings");
+    expect(script).toContain("/_frick/dashboard/api/blobs");
   });
 
   it("serves schema object rows through the mounted dashboard data API", async () => {
@@ -560,6 +568,128 @@ describe("mounted dashboard", () => {
     expect(serialized).not.toContain("apns-secret-ciphertext");
     expect(serialized).not.toContain("fcm-secret-ciphertext");
     expect(serialized).not.toContain("ignoredGlobalLimit");
+  });
+
+  it("serves tenant-owned blob metadata through the dashboard API without content bytes", async () => {
+    app = await startServer();
+    app.store.blobs.create("_default", {
+      blobId: "blob-dashboard-ada",
+      ownerId: "user-ada",
+      contentHash: "sha256-dashboard-ada",
+      byteLength: 18,
+      mimeType: "text/plain",
+      storageKey: "secret/storage/key",
+    });
+    app.store.blobs.writeContent(
+      "_default",
+      "blob-dashboard-ada",
+      Buffer.from("secret blob bytes"),
+    );
+    app.store.blobs.create("_default", {
+      blobId: "blob-dashboard-grace",
+      ownerId: "user-grace",
+      contentHash: "sha256-dashboard-grace",
+      byteLength: 20,
+      mimeType: "text/plain",
+      storageKey: "grace/storage/key",
+    });
+
+    const response = await fetch(
+      `${app.httpUrl}/_frick/dashboard/api/blobs?ownerId=user-grace&limit=10`,
+      { headers: await inspectHeaders(app.httpUrl) },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      schemaHash: foundationSchema.hash,
+      tenantId: "_default",
+      ownerId: "user-ada",
+      scope: "tenant",
+      count: 1,
+      total: 1,
+      limit: 10,
+      truncated: false,
+    });
+    expect(body.blobs).toEqual([
+      {
+        tenantId: "_default",
+        blobId: "blob-dashboard-ada",
+        ownerId: "user-ada",
+        contentHash: "sha256-dashboard-ada",
+        byteLength: 18,
+        mimeType: "text/plain",
+        createdAt: expect.any(String),
+      },
+    ]);
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain("secret blob bytes");
+    expect(serialized).not.toContain("secret/storage/key");
+    expect(serialized).not.toContain("blob-dashboard-grace");
+  });
+
+  it("lets admin bearer inspect tenant blob metadata with owner filters", async () => {
+    const adminToken = "test-admin-token-1234567890ABCDEF1234567890ABCDEF";
+    app = await startServer({
+      config: { adminToken },
+    });
+    app.store.blobs.create("tenant-x", {
+      blobId: "blob-x-first",
+      ownerId: "user-x",
+      contentHash: "sha256-x-first",
+      byteLength: 128,
+      mimeType: "image/png",
+      storageKey: "tenant-x/first",
+    });
+    app.store.blobs.create("tenant-x", {
+      blobId: "blob-x-second",
+      ownerId: "user-x",
+      contentHash: "sha256-x-second",
+      byteLength: 64,
+      mimeType: "image/png",
+      storageKey: "tenant-x/second",
+    });
+    app.store.blobs.create("tenant-x", {
+      blobId: "blob-x-other",
+      ownerId: "user-other",
+      contentHash: "sha256-x-other",
+      byteLength: 32,
+      mimeType: "text/plain",
+      storageKey: "tenant-x/other",
+    });
+
+    const response = await fetch(
+      `${app.httpUrl}/_frick/dashboard/api/blobs?tenantId=tenant-x&ownerId=user-x&limit=1`,
+      { headers: { authorization: `Bearer ${adminToken}` } },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      schemaHash: foundationSchema.hash,
+      tenantId: "tenant-x",
+      ownerId: "user-x",
+      scope: "admin",
+      count: 1,
+      total: 2,
+      limit: 1,
+      truncated: true,
+    });
+    expect(body.blobs).toEqual([
+      {
+        tenantId: "tenant-x",
+        blobId: expect.stringMatching(/^blob-x-/),
+        ownerId: "user-x",
+        contentHash: expect.stringMatching(/^sha256-x-/),
+        byteLength: expect.any(Number),
+        mimeType: "image/png",
+        createdAt: expect.any(String),
+      },
+    ]);
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain("tenant-x/first");
+    expect(serialized).not.toContain("tenant-x/second");
+    expect(serialized).not.toContain("blob-x-other");
   });
 
   it("rejects unknown dashboard object data types", async () => {

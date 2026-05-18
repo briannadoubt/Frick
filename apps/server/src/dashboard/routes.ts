@@ -10,6 +10,7 @@ import {
   type AnalyticsEventStore,
 } from "../analytics/summary.js";
 import { buildDashboardAccounts } from "./accounts.js";
+import { buildDashboardBlobs } from "./blobs.js";
 import { buildDashboardObjectData } from "./data.js";
 import { buildDashboardMetadata } from "./metadata.js";
 import { buildDashboardTenantSettings } from "./tenant-settings.js";
@@ -161,6 +162,26 @@ export async function handleDashboardRoute(input: DashboardRouteInput): Promise<
       store: input.store,
       principal,
       ...(tenantId ? { tenantId } : {}),
+    }));
+    return true;
+  }
+
+  if (relativePath === "/api/blobs") {
+    setDashboardHeaders(input.response);
+    const principal = input.authenticate();
+    if (principal instanceof Error) {
+      input.sendError(principal, "dashboard_unauthorized");
+      return true;
+    }
+
+    const tenantId = input.url.searchParams.get("tenantId") || undefined;
+    const ownerId = input.url.searchParams.get("ownerId") || undefined;
+    sendDashboardJson(input, 200, buildDashboardBlobs({
+      store: input.store,
+      principal,
+      ...(tenantId ? { tenantId } : {}),
+      ...(ownerId ? { ownerId } : {}),
+      ...optionalLimit(input.url.searchParams.get("limit")),
     }));
     return true;
   }

@@ -8,6 +8,7 @@ interface DashboardHarness {
   fetchDashboardAccounts(): Promise<unknown>;
   fetchDashboardTenants(): Promise<unknown>;
   fetchDashboardTenantSettings(): Promise<unknown>;
+  fetchDashboardBlobs(): Promise<unknown>;
 }
 
 describe("dev dashboard script", () => {
@@ -19,6 +20,7 @@ describe("dev dashboard script", () => {
     await dashboard.fetchDashboardAccounts();
     await dashboard.fetchDashboardTenants();
     await dashboard.fetchDashboardTenantSettings();
+    await dashboard.fetchDashboardBlobs();
 
     expect(dashboard.calls.map((call) => new URL(call.url).pathname)).toEqual([
       "/_frick/inspect/analytics/summary",
@@ -35,6 +37,7 @@ describe("dev dashboard script", () => {
     await dashboard.fetchDashboardAccounts();
     await dashboard.fetchDashboardTenants();
     await dashboard.fetchDashboardTenantSettings();
+    await dashboard.fetchDashboardBlobs();
 
     expect(dashboard.calls.map((call) => new URL(call.url).pathname)).toEqual([
       "/_frick/dashboard/api/analytics/summary",
@@ -42,6 +45,7 @@ describe("dev dashboard script", () => {
       "/_frick/dashboard/api/accounts",
       "/_frick/dashboard/api/tenants",
       "/_frick/dashboard/api/tenant-settings",
+      "/_frick/dashboard/api/blobs",
     ]);
   });
 });
@@ -73,7 +77,7 @@ function loadDashboardScript(input: { pathname: string }): DashboardHarness {
     "history",
     "window",
     `${source}
-return { fetchAnalyticsSummary, fetchPlatformEventsHealth, fetchDashboardAccounts, fetchDashboardTenants, fetchDashboardTenantSettings };`,
+return { fetchAnalyticsSummary, fetchPlatformEventsHealth, fetchDashboardAccounts, fetchDashboardTenants, fetchDashboardTenantSettings, fetchDashboardBlobs };`,
   ) as (
     document: unknown,
     location: unknown,
@@ -81,7 +85,7 @@ return { fetchAnalyticsSummary, fetchPlatformEventsHealth, fetchDashboardAccount
     fetch: unknown,
     history: unknown,
     window: unknown,
-  ) => Pick<DashboardHarness, "fetchAnalyticsSummary" | "fetchPlatformEventsHealth" | "fetchDashboardAccounts" | "fetchDashboardTenants" | "fetchDashboardTenantSettings">;
+  ) => Pick<DashboardHarness, "fetchAnalyticsSummary" | "fetchPlatformEventsHealth" | "fetchDashboardAccounts" | "fetchDashboardTenants" | "fetchDashboardTenantSettings" | "fetchDashboardBlobs">;
 
   const api = factory(
     { getElementById: () => app },
