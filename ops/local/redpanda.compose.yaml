@@ -1,6 +1,15 @@
 name: frick-local-redpanda
 
 services:
+  otel-collector:
+    image: ${FRICK_OTEL_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.119.0}
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
+
   redpanda:
     image: ${FRICK_REDPANDA_IMAGE:-docker.redpanda.com/redpandadata/redpanda:v24.3.7}
     command:

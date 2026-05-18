@@ -58,6 +58,12 @@ All variables are optional. Defaults match the runtime mode.
 | `FRICK_DB_PATH`             | `./frick.sqlite`            | `./frick.sqlite`                      | SQLite path. `":memory:"` is rejected in production.                 |
 | `FRICK_BLOB_STORAGE_PATH`   | `./frick-blobs/`            | `./frick-blobs/`                      | Parsed for future filesystem blob storage; current blob bytes are SQLite-backed. |
 | `FRICK_LOG_LEVEL`           | `info`                      | `info`                                | One of `debug`, `info`, `warn`, `error`.                             |
+| `FRICK_OTEL_ENABLED`        | `true` when an OTLP endpoint is set; otherwise `false` | same | Enables the built-in OpenTelemetry SDK runtime.                      |
+| `FRICK_OTEL_SERVICE_NAME`   | `frick-server`              | `frick-server`                        | OTel service name. Falls back to `OTEL_SERVICE_NAME` when set.        |
+| `FRICK_OTEL_EXPORTER_OTLP_ENDPOINT` | unset              | unset                                 | Base OTLP HTTP collector endpoint. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT`; Frick appends `/v1/traces` and `/v1/metrics`. |
+| `FRICK_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | unset       | unset                                 | Signal-specific traces endpoint. Falls back to `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`. |
+| `FRICK_OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | unset      | unset                                 | Signal-specific metrics endpoint. Falls back to `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`. |
+| `FRICK_OTEL_METRIC_EXPORT_INTERVAL_MS` | `60000`          | `60000`                               | OTel metric export interval. Positive integer milliseconds.          |
 | `FRICK_DEMO_AUTH_ENABLED`   | `true`                      | `false`                               | Toggles `POST /auth/dev-login`. Forcing on in prod logs a warning.   |
 | `FRICK_SESSION_TTL_SECONDS` | `604800` (7d)               | `604800`                              | New sessions get `expiresAt = now + ttl`.                            |
 | `FRICK_INSPECTION_ENABLED`  | `true`                      | `false`                               | Gates `/_frick/inspect/*`. Forcing on in prod logs a warning.        |
@@ -90,13 +96,15 @@ pipeline locally:
 frick dev --profile redpanda
 ```
 
-That command starts only the Redpanda service from
-`ops/local/redpanda.compose.yaml` with Docker Compose and waits for it to be
-healthy. The profile binds broker access to `127.0.0.1:19092`, sets
-`FRICK_PLATFORM_EVENTS_DRIVER=kafka`, points
+That command starts Redpanda and a local OpenTelemetry Collector from
+`ops/local/redpanda.compose.yaml` with Docker Compose and waits for them. The
+profile binds broker access to `127.0.0.1:19092`, collector access to
+`127.0.0.1:4318`, sets `FRICK_PLATFORM_EVENTS_DRIVER=kafka`, points
 `FRICK_PLATFORM_EVENTS_KAFKA_BROKERS` and `FRICK_TEST_KAFKA_BROKERS` at the
-local broker, and prints the server/web/dashboard commands to run against it.
-Use `--dry-run` to inspect the plan without starting Docker.
+local broker, enables OTel export with
+`FRICK_OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318`, and prints the
+server/web/dashboard commands to run against it. Use `--dry-run` to inspect
+the plan without starting Docker.
 
 ## Runtime limits
 
@@ -184,7 +192,11 @@ server exposes these GET endpoints under `/_frick/inspect/`:
   include `frick.http.requests.total{method,status}`,
   `frick.http.errors.total{code}`, and `frick.ws.frames.total{kind}`. Gauges
   include `frick.ws.connections.current`. No retention or historical
-  aggregation — scrape periodically to integrate with a metrics backend.
+  aggregation — scrape periodically to integrate with a metrics backend. When
+  OTel is enabled, the server also exports HTTP request spans plus
+  `frick.http.server.requests` and `frick.http.server.duration_ms` metrics
+  through OTLP; the in-process inspection snapshot remains available for
+  local dashboard panels and simple health checks.
 - `/_frick/inspect/platform-events` — platform event pipeline health:
   `{ adapter, ok, pending, claimed, deadLettered, retained, unclaimed,
   consumers }`. The default adapter is SQLite, with bounded retention and

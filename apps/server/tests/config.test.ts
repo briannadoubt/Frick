@@ -19,6 +19,12 @@ describe("loadFrickConfig", () => {
       adminToken: undefined,
       adminEnabled: false,
       implicitTenantCreation: true,
+      otelEnabled: false,
+      otelServiceName: "frick-server",
+      otelExporterOtlpEndpoint: undefined,
+      otelExporterOtlpTracesEndpoint: undefined,
+      otelExporterOtlpMetricsEndpoint: undefined,
+      otelMetricExportIntervalMs: 60_000,
       platformEventsDriver: "sqlite",
       platformEventsTopic: "frick.platform.events",
       platformEventsKafkaBrokers: [],
@@ -62,6 +68,12 @@ describe("loadFrickConfig", () => {
           FRICK_DB_PATH: "/tmp/frick.sqlite",
           FRICK_BLOB_STORAGE_PATH: "/tmp/frick-blobs",
           FRICK_LOG_LEVEL: "debug",
+          FRICK_OTEL_ENABLED: "true",
+          FRICK_OTEL_SERVICE_NAME: "frick-api",
+          FRICK_OTEL_EXPORTER_OTLP_ENDPOINT: "http://collector:4318",
+          FRICK_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://collector:4318/v1/traces",
+          FRICK_OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: "http://collector:4318/v1/metrics",
+          FRICK_OTEL_METRIC_EXPORT_INTERVAL_MS: "10000",
           FRICK_PLATFORM_EVENTS_DRIVER: "kafka",
           FRICK_PLATFORM_EVENTS_TOPIC: "frick.events",
           FRICK_PLATFORM_EVENTS_KAFKA_BROKERS: "localhost:9092, localhost:19092",
@@ -78,6 +90,12 @@ describe("loadFrickConfig", () => {
     expect(config.dbPath).toBe("/tmp/frick.sqlite");
     expect(config.blobStoragePath).toBe("/tmp/frick-blobs");
     expect(config.logLevel).toBe("debug");
+    expect(config.otelEnabled).toBe(true);
+    expect(config.otelServiceName).toBe("frick-api");
+    expect(config.otelExporterOtlpEndpoint).toBe("http://collector:4318");
+    expect(config.otelExporterOtlpTracesEndpoint).toBe("http://collector:4318/v1/traces");
+    expect(config.otelExporterOtlpMetricsEndpoint).toBe("http://collector:4318/v1/metrics");
+    expect(config.otelMetricExportIntervalMs).toBe(10_000);
     expect(config.platformEventsDriver).toBe("kafka");
     expect(config.platformEventsTopic).toBe("frick.events");
     expect(config.platformEventsKafkaBrokers).toEqual(["localhost:9092", "localhost:19092"]);
@@ -97,6 +115,39 @@ describe("loadFrickConfig", () => {
     );
     expect(config.platformEventsDriver).toBe("kafka");
     expect(config.platformEventsKafkaBrokers).toEqual(["redpanda:9092"]);
+  });
+
+  it("enables OTel when an OTLP endpoint is configured", () => {
+    const config = loadFrickConfig(
+      {},
+      {
+        env: {
+          OTEL_EXPORTER_OTLP_ENDPOINT: "http://collector:4318",
+          OTEL_SERVICE_NAME: "custom-service",
+        },
+        warn: () => {},
+      },
+    );
+    expect(config.otelEnabled).toBe(true);
+    expect(config.otelServiceName).toBe("custom-service");
+    expect(config.otelExporterOtlpEndpoint).toBe("http://collector:4318");
+  });
+
+  it("enables OTel when signal-specific OTLP endpoints are configured", () => {
+    const config = loadFrickConfig(
+      {},
+      {
+        env: {
+          OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://collector:4318/v1/traces",
+          OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: "http://collector:4318/v1/metrics",
+        },
+        warn: () => {},
+      },
+    );
+    expect(config.otelEnabled).toBe(true);
+    expect(config.otelExporterOtlpEndpoint).toBeUndefined();
+    expect(config.otelExporterOtlpTracesEndpoint).toBe("http://collector:4318/v1/traces");
+    expect(config.otelExporterOtlpMetricsEndpoint).toBe("http://collector:4318/v1/metrics");
   });
 
   it("reads env vars when no overrides are provided", () => {
@@ -173,6 +224,9 @@ describe("loadFrickConfig", () => {
     ).toThrow(FrickConfigError);
     expect(() =>
       loadFrickConfig({}, { env: { FRICK_PLATFORM_EVENTS_MAX_ROWS: "-1" }, warn: () => {} }),
+    ).toThrow(FrickConfigError);
+    expect(() =>
+      loadFrickConfig({}, { env: { FRICK_OTEL_METRIC_EXPORT_INTERVAL_MS: "0" }, warn: () => {} }),
     ).toThrow(FrickConfigError);
   });
 });

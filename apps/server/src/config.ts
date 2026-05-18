@@ -57,6 +57,21 @@ export interface FrickConfig {
   /** Threshold for the structured logger. */
   logLevel: FrickLogLevel;
   /**
+   * Enables the OpenTelemetry runtime. Defaults to true when an OTLP endpoint
+   * is configured through Frick or standard OTel env vars.
+   */
+  otelEnabled: boolean;
+  /** Service name attached to Frick server spans and metrics. */
+  otelServiceName: string;
+  /** Base OTLP HTTP endpoint, usually the collector endpoint on port 4318. */
+  otelExporterOtlpEndpoint: string | undefined;
+  /** Signal-specific OTLP HTTP traces endpoint. */
+  otelExporterOtlpTracesEndpoint: string | undefined;
+  /** Signal-specific OTLP HTTP metrics endpoint. */
+  otelExporterOtlpMetricsEndpoint: string | undefined;
+  /** How often the OTel metric reader exports accumulated metrics. */
+  otelMetricExportIntervalMs: number;
+  /**
    * Whether inspection routes under `/_frick/inspect/*` are enabled. Defaults
    * to true when `env !== "production"`, off otherwise. Set
    * `FRICK_INSPECTION_ENABLED=true` to force them on in production.
@@ -113,6 +128,8 @@ const DEFAULT_BLOB_STORAGE_PATH = "./frick-blobs/";
 const DEFAULT_PLATFORM_EVENTS_TOPIC = "frick.platform.events";
 const DEFAULT_PLATFORM_EVENTS_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_PLATFORM_EVENTS_MAX_ROWS = 1_000_000;
+const DEFAULT_OTEL_SERVICE_NAME = "frick-server";
+const DEFAULT_OTEL_METRIC_EXPORT_INTERVAL_MS = 60_000;
 
 const VALID_ENVS: ReadonlySet<FrickEnv> = new Set<FrickEnv>(["development", "test", "production"]);
 const VALID_LOG_LEVELS: ReadonlySet<FrickLogLevel> = new Set<FrickLogLevel>([
@@ -161,6 +178,45 @@ export function loadFrickConfig(
   const blobStoragePath =
     overrides.blobStoragePath ?? parseString(env.FRICK_BLOB_STORAGE_PATH) ?? DEFAULT_BLOB_STORAGE_PATH;
   const logLevel = overrides.logLevel ?? parseLogLevel(env.FRICK_LOG_LEVEL, "info");
+  const otelExporterOtlpEndpoint =
+    "otelExporterOtlpEndpoint" in overrides
+      ? overrides.otelExporterOtlpEndpoint
+      : parseString(env.FRICK_OTEL_EXPORTER_OTLP_ENDPOINT) ??
+        parseString(env.OTEL_EXPORTER_OTLP_ENDPOINT);
+  const otelExporterOtlpTracesEndpoint =
+    "otelExporterOtlpTracesEndpoint" in overrides
+      ? overrides.otelExporterOtlpTracesEndpoint
+      : parseString(env.FRICK_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT) ??
+        parseString(env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT);
+  const otelExporterOtlpMetricsEndpoint =
+    "otelExporterOtlpMetricsEndpoint" in overrides
+      ? overrides.otelExporterOtlpMetricsEndpoint
+      : parseString(env.FRICK_OTEL_EXPORTER_OTLP_METRICS_ENDPOINT) ??
+        parseString(env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT);
+  const otelEndpointConfigured =
+    otelExporterOtlpEndpoint !== undefined ||
+    otelExporterOtlpTracesEndpoint !== undefined ||
+    otelExporterOtlpMetricsEndpoint !== undefined;
+  const otelEnabledDefault = otelEndpointConfigured && env.OTEL_SDK_DISABLED?.toLowerCase() !== "true";
+  const otelEnabled =
+    overrides.otelEnabled ??
+    parseBoolean(env.FRICK_OTEL_ENABLED, otelEnabledDefault, "FRICK_OTEL_ENABLED");
+  const otelServiceName = validateNonEmptyString(
+    overrides.otelServiceName ??
+      parseString(env.FRICK_OTEL_SERVICE_NAME) ??
+      parseString(env.OTEL_SERVICE_NAME) ??
+      DEFAULT_OTEL_SERVICE_NAME,
+    "FRICK_OTEL_SERVICE_NAME",
+  );
+  const otelMetricExportIntervalMs = validatePositiveInteger(
+    overrides.otelMetricExportIntervalMs ??
+      parsePositiveInteger(
+        env.FRICK_OTEL_METRIC_EXPORT_INTERVAL_MS,
+        DEFAULT_OTEL_METRIC_EXPORT_INTERVAL_MS,
+        "FRICK_OTEL_METRIC_EXPORT_INTERVAL_MS",
+      ),
+    "otelMetricExportIntervalMs",
+  );
   const inspectionDefault = runtimeEnv !== "production";
   const inspectionEnabled =
     overrides.inspectionEnabled ??
@@ -239,6 +295,12 @@ export function loadFrickConfig(
     dbPath,
     blobStoragePath,
     logLevel,
+    otelEnabled,
+    otelServiceName,
+    otelExporterOtlpEndpoint,
+    otelExporterOtlpTracesEndpoint,
+    otelExporterOtlpMetricsEndpoint,
+    otelMetricExportIntervalMs,
     inspectionEnabled,
     adminToken,
     adminEnabled,

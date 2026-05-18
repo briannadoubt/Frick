@@ -20,6 +20,9 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
   Product analytics summaries are materialized by a built-in platform-event
   consumer so SQLite and Kafka/Redpanda deployments share the same dashboard
   read model.
+- Server-side OpenTelemetry export for HTTP request spans and request metrics,
+  enabled by OTLP env vars and included in the Redpanda local profile through
+  the checked-in collector config.
 - Swift and Android WebSocket sync transports with capability handshake, object subscriptions/upserts, presence, packed-frame decoding, cache compatibility, and cross-device draft helpers.
 
 ## Known Limitations

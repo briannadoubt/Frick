@@ -59,7 +59,8 @@ refresh the Overview page to unlock the inspection-backed panels.
 For the default SQLite platform-event pipeline, the three commands above are
 enough. To test the Kafka-compatible Redpanda profile locally, run
 `pnpm cli dev --profile redpanda --dry-run` to inspect the env and Docker
-Compose plan, or drop `--dry-run` to start the checked-in Redpanda service.
+Compose plan, or drop `--dry-run` to start the checked-in Redpanda service and
+local OpenTelemetry Collector.
 
 You can also watch the sync log directly:
 

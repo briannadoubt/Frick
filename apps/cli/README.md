@@ -131,11 +131,13 @@ the process alive until interrupted.
 Prints or starts a local Frick runtime profile. The default `sqlite` profile
 prints the standard server, web demo, and dashboard loop without starting
 Docker. The `redpanda` profile points the platform event pipeline at the local
-Redpanda/Kafka broker from `ops/local/redpanda.compose.yaml`.
+Redpanda/Kafka broker and exports server OTel to the local collector from
+`ops/local/redpanda.compose.yaml`.
 
 - `--profile sqlite` emits `FRICK_PLATFORM_EVENTS_DRIVER=sqlite`.
-- `--profile redpanda` emits Kafka/Redpanda env vars and, without `--dry-run`,
-  runs `docker compose -f ops/local/redpanda.compose.yaml up -d --wait redpanda`.
+- `--profile redpanda` emits Kafka/Redpanda and OTel env vars and, without
+  `--dry-run`, runs `docker compose -f ops/local/redpanda.compose.yaml up -d
+  --wait redpanda otel-collector`.
 - `--dry-run` prints the JSON plan without starting any process.
 
 ### `frick mcp [--endpoint <url>] [--readonly] [--allow-writes] [--tenant <id>] [--user <id>] [--token <bearer>] [--print-config]`

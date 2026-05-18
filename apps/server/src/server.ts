@@ -93,6 +93,12 @@ import { FrickLimitError, mergeLimits, type FrickLimits } from "./limits.js";
 import { resolveTenantLimits } from "./tenant-config.js";
 import { createInMemoryMetrics, type FrickMetrics } from "./metrics.js";
 import {
+  createFrickTelemetryRuntime,
+  type FrickHttpTelemetryResult,
+  type FrickHttpTelemetrySpan,
+  type FrickTelemetryRuntime,
+} from "./telemetry/runtime.js";
+import {
   createFrickJobRegistry,
   type FrickJobHandler,
 } from "./jobs/registry.js";
@@ -178,6 +184,11 @@ export interface ServerOptions {
    * true. Counters and gauges only — see `apps/server/src/metrics.ts`.
    */
   metrics?: FrickMetrics;
+  /**
+   * OpenTelemetry runtime. Defaults to the built-in OTel SDK integration
+   * when `config.otelEnabled` is true, otherwise a no-op runtime.
+   */
+  telemetry?: FrickTelemetryRuntime;
   /**
    * Platform event pipeline override. Defaults to the configured pipeline
    * built from the store's SQLite adapter.
@@ -292,6 +303,8 @@ export function createFrickServer(options: ServerOptions = {}) {
     options.logger ?? (inTestRunner ? createNoopLogger() : createConsoleLogger(config));
   const limits = mergeLimits(options.limits);
   const metrics = options.metrics ?? createInMemoryMetrics();
+  const telemetry =
+    options.telemetry ?? createFrickTelemetryRuntime({ config, logger });
   const startedAtPerf = performance.now();
   const authAttemptLimiter = new FixedWindowAuthAttemptLimiter();
   if (
@@ -386,6 +399,52 @@ export function createFrickServer(options: ServerOptions = {}) {
   }
   function noteRequestEnd(): void {
     inFlight = Math.max(0, inFlight - 1);
+  }
+  async function startTelemetry(): Promise<void> {
+    try {
+      await telemetry.start();
+    } catch (err) {
+      logger.warn("frick.otel.start_failed", {
+        event: "frick.otel.start_failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  function startHttpTelemetry(input: Parameters<FrickTelemetryRuntime["startHttpRequest"]>[0]): FrickHttpTelemetrySpan {
+    try {
+      return telemetry.startHttpRequest(input);
+    } catch (err) {
+      logger.warn("frick.otel.http_start_failed", {
+        event: "frick.otel.http_start_failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return {
+        end: () => {},
+      };
+    }
+  }
+  function finishHttpTelemetry(
+    span: FrickHttpTelemetrySpan,
+    result: FrickHttpTelemetryResult,
+  ): void {
+    try {
+      span.end(result);
+    } catch (err) {
+      logger.warn("frick.otel.http_record_failed", {
+        event: "frick.otel.http_record_failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  async function shutdownTelemetry(): Promise<void> {
+    try {
+      await telemetry.shutdown();
+    } catch (err) {
+      logger.warn("frick.otel.shutdown_failed", {
+        event: "frick.otel.shutdown_failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
   // `closing` and `inFlight` are surfaced on the returned object for tests
   // and operators that want to observe drain state without instrumenting
@@ -524,6 +583,12 @@ export function createFrickServer(options: ServerOptions = {}) {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
     const requestId = randomUUID();
     const startedAt = performance.now();
+    const telemetrySpan = startHttpTelemetry({
+      requestId,
+      method: request.method ?? "",
+      path: url.pathname,
+      host: request.headers.host,
+    });
     let requestLogger = logger.child({
       requestId,
       method: request.method ?? "",
@@ -533,9 +598,11 @@ export function createFrickServer(options: ServerOptions = {}) {
     // the existing log/metric emissions. We don't widen the logger callback
     // signature — we just stash the tenant in a local.
     let observedTenantId: string | undefined;
+    let observedUserId: string | undefined;
     try {
       await dispatchHttp(request, response, url, (principal) => {
         observedTenantId = principal.tenantId;
+        observedUserId = principal.userId;
         requestLogger = requestLogger.child({
           tenantId: principal.tenantId,
           userId: principal.userId,
@@ -554,6 +621,12 @@ export function createFrickServer(options: ServerOptions = {}) {
           status: String(status),
         })
         .inc();
+      finishHttpTelemetry(telemetrySpan, {
+        statusCode: status,
+        durationMs,
+        tenantId: observedTenantId,
+        userId: observedUserId,
+      });
       // Durable structured event for the DevTools console. Additive — the
       // log line above remains the canonical stderr trace and the metric
       // counter above remains the canonical aggregate.
@@ -1784,27 +1857,44 @@ export function createFrickServer(options: ServerOptions = {}) {
     sendJson(response, 404, { error: "not_found" });
   }
 
-  function listen(): Promise<void> {
-    return new Promise((resolve) => {
-      server.listen(port, host, () => {
-        const address = server.address();
-        const boundPort = address && typeof address !== "string" ? address.port : port;
-        logger.info("frick.server.listen", {
-          event: "frick.server.listen",
-          schemaId: store.schema.schemaId,
-          schemaRevision: store.schema.schemaRevision,
-          schemaHash: store.schema.hash,
-          env: config.env,
-          host,
-          port: boundPort,
-          publicUrl: config.publicUrl,
-          demoAuthEnabled: config.demoAuthEnabled,
-          dbPath: options.dbPath ?? process.env.FRICK_DB_PATH ?? config.dbPath,
-          inspectionEnabled: config.inspectionEnabled,
+  async function listen(): Promise<void> {
+    await startTelemetry();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const cleanup = () => {
+          server.off("error", onError);
+          wss.off("error", onError);
+        };
+        const onError = (error: Error) => {
+          cleanup();
+          reject(error);
+        };
+        server.once("error", onError);
+        wss.once("error", onError);
+        server.listen(port, host, () => {
+          cleanup();
+          const address = server.address();
+          const boundPort = address && typeof address !== "string" ? address.port : port;
+          logger.info("frick.server.listen", {
+            event: "frick.server.listen",
+            schemaId: store.schema.schemaId,
+            schemaRevision: store.schema.schemaRevision,
+            schemaHash: store.schema.hash,
+            env: config.env,
+            host,
+            port: boundPort,
+            publicUrl: config.publicUrl,
+            demoAuthEnabled: config.demoAuthEnabled,
+            dbPath: options.dbPath ?? process.env.FRICK_DB_PATH ?? config.dbPath,
+            inspectionEnabled: config.inspectionEnabled,
+          });
+          resolve();
         });
-        resolve();
       });
-    });
+    } catch (err) {
+      await shutdownTelemetry();
+      throw err;
+    }
   }
 
   let closePromise: Promise<void> | undefined;
@@ -1862,7 +1952,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         // available on Node 18.2+.
         const maybeCloseAll = (server as unknown as { closeAllConnections?: () => void })
           .closeAllConnections;
-        if (typeof maybeCloseAll === "function") maybeCloseAll();
+        if (typeof maybeCloseAll === "function") maybeCloseAll.call(server);
       }, shutdownTimeoutMs);
 
       server.close((serverError) => {
@@ -1875,6 +1965,7 @@ export function createFrickServer(options: ServerOptions = {}) {
             } catch {
               // Already closed — fine during shutdown.
             }
+            await shutdownTelemetry();
             logger.info("frick.server.closed", { event: "frick.server.closed" });
             const error = serverError ?? wsError;
             if (error && !/Server is not running|not running/i.test(error.message)) {
@@ -1903,6 +1994,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     pushRegistry,
     platformEvents,
     analyticsConsumer,
+    telemetry,
     apps: appRegistry,
     gateway,
     /** Derived `http://host:port` origin. Resolved after `listen()` binds. */
@@ -1944,6 +2036,14 @@ function isFrickConfig(value: FrickConfig | FrickConfigOverrides): value is Fric
     typeof v.port === "number" &&
     typeof v.dbPath === "string" &&
     typeof v.logLevel === "string" &&
+    typeof v.otelEnabled === "boolean" &&
+    typeof v.otelServiceName === "string" &&
+    (typeof v.otelExporterOtlpEndpoint === "string" || v.otelExporterOtlpEndpoint === undefined) &&
+    (typeof v.otelExporterOtlpTracesEndpoint === "string" ||
+      v.otelExporterOtlpTracesEndpoint === undefined) &&
+    (typeof v.otelExporterOtlpMetricsEndpoint === "string" ||
+      v.otelExporterOtlpMetricsEndpoint === undefined) &&
+    typeof v.otelMetricExportIntervalMs === "number" &&
     typeof v.platformEventsDriver === "string" &&
     typeof v.platformEventsTopic === "string" &&
     Array.isArray(v.platformEventsKafkaBrokers) &&

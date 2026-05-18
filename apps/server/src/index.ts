@@ -26,6 +26,14 @@ export {
   type FrameworkMigration,
 } from "./storage/migrations.js";
 export { FrickResetRefusedError, resetFrickDatabase } from "./storage/reset.js";
+export {
+  createFrickTelemetryRuntime,
+  createNoopTelemetryRuntime,
+  type FrickHttpTelemetryRequest,
+  type FrickHttpTelemetryResult,
+  type FrickHttpTelemetrySpan,
+  type FrickTelemetryRuntime,
+} from "./telemetry/runtime.js";
 
 const app = createFrickServer();
 await app.listen();

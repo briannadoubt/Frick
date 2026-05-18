@@ -244,7 +244,9 @@ describe("frick dev", () => {
     expect(body.composeFile).toContain("ops/local/redpanda.compose.yaml");
     expect(body.env.FRICK_PLATFORM_EVENTS_DRIVER).toBe("kafka");
     expect(body.env.FRICK_PLATFORM_EVENTS_KAFKA_BROKERS).toBe("127.0.0.1:19092");
-    expect(body.steps).toContain("docker compose up -d --wait redpanda");
+    expect(body.env.FRICK_OTEL_ENABLED).toBe("true");
+    expect(body.env.FRICK_OTEL_EXPORTER_OTLP_ENDPOINT).toBe("http://127.0.0.1:4318");
+    expect(body.steps).toContain("docker compose up -d --wait redpanda otel-collector");
     expect(body.started).toBe(false);
   });
 
@@ -262,7 +264,7 @@ describe("frick dev", () => {
     expect(body.profile).toBe("sqlite");
     expect(body.composeFile).toBeUndefined();
     expect(body.env.FRICK_PLATFORM_EVENTS_DRIVER).toBe("sqlite");
-    expect(body.steps).not.toContain("docker compose up -d --wait redpanda");
+    expect(body.steps).not.toContain("docker compose up -d --wait redpanda otel-collector");
   });
 
   it("rejects unknown dev profiles", async () => {
