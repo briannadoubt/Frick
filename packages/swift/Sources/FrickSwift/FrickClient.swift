@@ -974,6 +974,7 @@ public final class FrickClient: Sendable {
     private let streamReconnectDelayNanoseconds: UInt64
     private let replicaId: String
     private let storage: FrickStorage
+    private let telemetry: any FrickClientTelemetryRuntime
     private let requestIdFactory: @Sendable () -> String
     private let readReceiptTracker = ReadReceiptTracker()
     private let sessionStore = FrickSessionStore()
@@ -988,6 +989,7 @@ public final class FrickClient: Sendable {
         replicaId: String = "ios-demo",
         storage: FrickStorage = FrickSQLiteStorage.appStorage,
         allowInsecureLocalTransport: Bool = FrickClient.defaultAllowsInsecureLocalTransport,
+        telemetry: any FrickClientTelemetryRuntime = FrickNoopClientTelemetryRuntime(),
         requestIdFactory: @escaping @Sendable () -> String = { UUID().uuidString }
     ) {
         Self.validateBaseURL(baseURL, allowInsecureLocalTransport: allowInsecureLocalTransport)
@@ -997,6 +999,7 @@ public final class FrickClient: Sendable {
         self.streamReconnectDelayNanoseconds = streamReconnectDelayNanoseconds
         self.replicaId = replicaId
         self.storage = storage
+        self.telemetry = telemetry
         self.requestIdFactory = requestIdFactory
     }
 
@@ -1266,23 +1269,96 @@ public final class FrickClient: Sendable {
         options: FrickAnalyticsTrackOptions = FrickAnalyticsTrackOptions()
     ) async throws -> FrickAnalyticsTrackReceipt {
         _ = try requireAuthenticatedSession()
+        let startedAt = Date()
+        let span = startFrickClientTelemetrySpan(telemetry, FrickClientTelemetrySpanStart(
+            name: "frick.analytics.track",
+            kind: .client,
+            attributes: [
+                "frick.analytics.event_name": .string(name),
+                "url.path": .string("/analytics/events"),
+            ]
+        ))
+        var finished = false
+        func finish(
+            status: FrickClientTelemetrySpanStatus,
+            metricStatus: String,
+            httpStatusCode: Int? = nil,
+            duplicate: Bool? = nil,
+            error: Error? = nil
+        ) {
+            guard !finished else {
+                return
+            }
+            finished = true
+            var attributes: FrickClientTelemetryAttributes = [
+                "frick.analytics.status": .string(metricStatus),
+            ]
+            if let httpStatusCode {
+                attributes["http.response.status_code"] = .int(httpStatusCode)
+            }
+            if let duplicate {
+                attributes["frick.analytics.duplicate"] = .bool(duplicate)
+            }
+            finishFrickClientTelemetrySpan(span, FrickClientTelemetrySpanResult(
+                status: status,
+                attributes: attributes,
+                errorDescription: error.map { String(describing: $0) }
+            ))
+            recordFrickClientTelemetryCounter(
+                telemetry,
+                name: "frick.client.analytics.events.total",
+                value: 1,
+                attributes: ["status": .string(metricStatus)]
+            )
+            recordFrickClientTelemetryHistogram(
+                telemetry,
+                name: "frick.client.analytics.duration_ms",
+                value: Date().timeIntervalSince(startedAt) * 1000,
+                attributes: ["status": .string(metricStatus)]
+            )
+        }
+
+        var statusCode: Int?
         var request = URLRequest(url: baseURL.appending(path: "analytics").appending(path: "events"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.httpBody = try encoder.encode(AnalyticsTrackRequest(
-            name: name,
-            properties: properties,
-            context: options.context,
-            attributes: options.attributes,
-            traceId: options.traceId,
-            idempotencyKey: options.idempotencyKey,
-            occurredAt: options.occurredAt
-        ))
-        authenticate(&request)
+        do {
+            request.httpBody = try encoder.encode(AnalyticsTrackRequest(
+                name: name,
+                properties: properties,
+                context: options.context,
+                attributes: options.attributes,
+                traceId: options.traceId ?? span.traceId,
+                idempotencyKey: options.idempotencyKey,
+                occurredAt: options.occurredAt
+            ))
+            authenticate(&request)
+            var telemetryHeaders: [String: String] = [:]
+            injectFrickClientTelemetryHeaders(span, into: &telemetryHeaders)
+            if let traceparent = telemetryHeaders.first(where: { name, _ in name.lowercased() == "traceparent" })?.value {
+                request.setValue(traceparent, forHTTPHeaderField: "traceparent")
+            }
 
-        let (data, response) = try await session.data(for: request)
-        try validate(response, data: data)
-        return try decoder.decode(FrickAnalyticsTrackReceipt.self, from: data)
+            let (data, response) = try await session.data(for: request)
+            statusCode = (response as? HTTPURLResponse)?.statusCode
+            try validate(response, data: data)
+            let receipt = try decoder.decode(FrickAnalyticsTrackReceipt.self, from: data)
+            finish(
+                status: .ok,
+                metricStatus: receipt.duplicate ? "duplicate" : "accepted",
+                httpStatusCode: statusCode,
+                duplicate: receipt.duplicate
+            )
+            return receipt
+        } catch {
+            finish(
+                status: .error,
+                metricStatus: statusCode == nil && error is URLError ? "network_error" : "rejected",
+                httpStatusCode: statusCode,
+                error: error
+            )
+            throw error
+        }
     }
 
     public func sendSignal<Value: Encodable & Sendable>(

@@ -251,6 +251,191 @@ final class FrickEventStreamParserTests: XCTestCase {
         XCTAssertEqual(body["occurredAt"] as? String, "2026-05-17T11:59:00.000Z")
     }
 
+    func testTrackRecordsTelemetryAndCorrelatesSpanTraceId() async throws {
+        FrickStreamingURLProtocol.reset()
+        FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-ada", token: "token-ada"), for: "/auth/dev-login")
+        FrickStreamingURLProtocol.enqueue(
+            """
+            {
+              "ok": true,
+              "eventId": "platform-event-ios-telemetry",
+              "sequence": 43,
+              "acceptedAt": "2026-05-17T12:00:01.000Z",
+              "duplicate": false
+            }
+            """,
+            for: "/analytics/events"
+        )
+        let telemetry = RecordingFrickClientTelemetryRuntime(traceId: "trace-ios-auto")
+        let client = try makeTestClient(telemetry: telemetry)
+
+        _ = try await client.devLogin(userId: "user-ada")
+        _ = try await client.track("screen.viewed", properties: ["path": .string("/settings")])
+
+        let analyticsBody = try XCTUnwrap(FrickStreamingURLProtocol.recordedRequests.last?.jsonBody)
+        XCTAssertEqual(analyticsBody["traceId"] as? String, "trace-ios-auto")
+        XCTAssertEqual(
+            FrickStreamingURLProtocol.recordedRequests.last?.headerValue("traceparent"),
+            "00-trace-ios-auto-span-01"
+        )
+        XCTAssertEqual(telemetry.startedSpans, [
+            FrickClientTelemetrySpanStart(
+                name: "frick.analytics.track",
+                kind: .client,
+                attributes: [
+                    "frick.analytics.event_name": .string("screen.viewed"),
+                    "url.path": .string("/analytics/events"),
+                ]
+            ),
+        ])
+        XCTAssertEqual(telemetry.finishedSpans.map(\.status), [.ok])
+        XCTAssertEqual(telemetry.finishedSpans.first?.attributes["frick.analytics.status"], .string("accepted"))
+        XCTAssertEqual(telemetry.finishedSpans.first?.attributes["http.response.status_code"], .int(200))
+        XCTAssertEqual(telemetry.finishedSpans.first?.attributes["frick.analytics.duplicate"], .bool(false))
+        XCTAssertEqual(telemetry.counters, [
+            RecordingFrickClientTelemetryRuntime.Measurement(
+                name: "frick.client.analytics.events.total",
+                value: 1,
+                attributes: ["status": .string("accepted")]
+            ),
+        ])
+        XCTAssertEqual(telemetry.histograms.map(\.name), ["frick.client.analytics.duration_ms"])
+        XCTAssertEqual(telemetry.histograms.first?.attributes, ["status": .string("accepted")])
+    }
+
+    func testTrackIgnoresTelemetryFailures() async throws {
+        FrickStreamingURLProtocol.reset()
+        FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-ada", token: "token-ada"), for: "/auth/dev-login")
+        FrickStreamingURLProtocol.enqueue(
+            """
+            {
+              "ok": true,
+              "eventId": "platform-event-ios-resilient",
+              "sequence": 44,
+              "acceptedAt": "2026-05-17T12:00:02.000Z",
+              "duplicate": false
+            }
+            """,
+            for: "/analytics/events"
+        )
+        let client = try makeTestClient(telemetry: ThrowingFrickClientTelemetryRuntime())
+
+        _ = try await client.devLogin(userId: "user-ada")
+        let receipt = try await client.track("button.clicked")
+
+        XCTAssertEqual(receipt.eventId, "platform-event-ios-resilient")
+    }
+
+    func testTrackPrefersCallerTraceIdOverSpanTraceId() async throws {
+        FrickStreamingURLProtocol.reset()
+        FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-ada", token: "token-ada"), for: "/auth/dev-login")
+        FrickStreamingURLProtocol.enqueue(
+            """
+            {
+              "ok": true,
+              "eventId": "platform-event-ios-caller-trace",
+              "sequence": 45,
+              "acceptedAt": "2026-05-17T12:00:03.000Z",
+              "duplicate": false
+            }
+            """,
+            for: "/analytics/events"
+        )
+        let telemetry = RecordingFrickClientTelemetryRuntime(traceId: "trace-ios-span")
+        let client = try makeTestClient(telemetry: telemetry)
+
+        _ = try await client.devLogin(userId: "user-ada")
+        _ = try await client.track("screen.viewed", options: FrickAnalyticsTrackOptions(traceId: "trace-ios-caller"))
+
+        let analyticsBody = try XCTUnwrap(FrickStreamingURLProtocol.recordedRequests.last?.jsonBody)
+        XCTAssertEqual(analyticsBody["traceId"] as? String, "trace-ios-caller")
+    }
+
+    func testTrackRecordsDuplicateTelemetryStatus() async throws {
+        FrickStreamingURLProtocol.reset()
+        FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-ada", token: "token-ada"), for: "/auth/dev-login")
+        FrickStreamingURLProtocol.enqueue(
+            """
+            {
+              "ok": true,
+              "eventId": "platform-event-ios-duplicate",
+              "sequence": 46,
+              "acceptedAt": "2026-05-17T12:00:04.000Z",
+              "duplicate": true
+            }
+            """,
+            for: "/analytics/events"
+        )
+        let telemetry = RecordingFrickClientTelemetryRuntime(traceId: "trace-ios-duplicate")
+        let client = try makeTestClient(telemetry: telemetry)
+
+        _ = try await client.devLogin(userId: "user-ada")
+        let receipt = try await client.track("button.clicked")
+
+        XCTAssertTrue(receipt.duplicate)
+        XCTAssertEqual(telemetry.finishedSpans.first?.attributes["frick.analytics.status"], .string("duplicate"))
+        XCTAssertEqual(telemetry.finishedSpans.first?.attributes["frick.analytics.duplicate"], .bool(true))
+        XCTAssertEqual(telemetry.counters.first?.attributes, ["status": .string("duplicate")])
+        XCTAssertEqual(telemetry.histograms.first?.attributes, ["status": .string("duplicate")])
+    }
+
+    func testTrackRecordsRejectedTelemetryStatus() async throws {
+        FrickStreamingURLProtocol.reset()
+        FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-ada", token: "token-ada"), for: "/auth/dev-login")
+        FrickStreamingURLProtocol.enqueue(
+            """
+            {
+              "error": {
+                "code": "auth.forbidden",
+                "message": "Nope",
+                "requestId": "req-analytics",
+                "retryable": false
+              }
+            }
+            """,
+            status: 403,
+            for: "/analytics/events"
+        )
+        let telemetry = RecordingFrickClientTelemetryRuntime(traceId: "trace-ios-rejected")
+        let client = try makeTestClient(telemetry: telemetry)
+
+        _ = try await client.devLogin(userId: "user-ada")
+        do {
+            _ = try await client.track("button.clicked")
+            XCTFail("expected rejected analytics response")
+        } catch is FrickServerError {
+            // expected
+        }
+
+        XCTAssertEqual(telemetry.finishedSpans.map(\.status), [.error])
+        XCTAssertEqual(telemetry.finishedSpans.first?.attributes["frick.analytics.status"], .string("rejected"))
+        XCTAssertEqual(telemetry.finishedSpans.first?.attributes["http.response.status_code"], .int(403))
+        XCTAssertEqual(telemetry.counters.first?.attributes, ["status": .string("rejected")])
+        XCTAssertEqual(telemetry.histograms.first?.attributes, ["status": .string("rejected")])
+    }
+
+    func testTrackRecordsNetworkTelemetryStatus() async throws {
+        FrickStreamingURLProtocol.reset()
+        FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-ada", token: "token-ada"), for: "/auth/dev-login")
+        FrickStreamingURLProtocol.fail(URLError(.notConnectedToInternet), for: "/analytics/events")
+        let telemetry = RecordingFrickClientTelemetryRuntime(traceId: "trace-ios-network")
+        let client = try makeTestClient(telemetry: telemetry)
+
+        _ = try await client.devLogin(userId: "user-ada")
+        do {
+            _ = try await client.track("button.clicked")
+            XCTFail("expected network analytics failure")
+        } catch is URLError {
+            // expected
+        }
+
+        XCTAssertEqual(telemetry.finishedSpans.map(\.status), [.error])
+        XCTAssertEqual(telemetry.finishedSpans.first?.attributes["frick.analytics.status"], .string("network_error"))
+        XCTAssertNil(telemetry.finishedSpans.first?.attributes["http.response.status_code"])
+        XCTAssertEqual(telemetry.counters.first?.attributes, ["status": .string("network_error")])
+        XCTAssertEqual(telemetry.histograms.first?.attributes, ["status": .string("network_error")])
+    }
+
     func testTrackRequiresSessionBeforePosting() async throws {
         FrickStreamingURLProtocol.reset()
         let client = try makeTestClient()
@@ -1186,6 +1371,7 @@ private struct QueuedResponse {
 private final class FrickStreamingURLProtocol: URLProtocol {
     nonisolated(unsafe) private static var lock = NSLock()
     nonisolated(unsafe) private static var responses: [String: [QueuedResponse]] = [:]
+    nonisolated(unsafe) private static var failures: [String: [Error]] = [:]
     nonisolated(unsafe) private static var paths: [String] = []
     nonisolated(unsafe) private static var requests: [RecordedURLRequest] = []
     nonisolated(unsafe) private static var posts: [[String: Any]] = []
@@ -1211,6 +1397,7 @@ private final class FrickStreamingURLProtocol: URLProtocol {
     static func reset() {
         lock.lock()
         responses = [:]
+        failures = [:]
         paths = []
         requests = []
         posts = []
@@ -1226,6 +1413,12 @@ private final class FrickStreamingURLProtocol: URLProtocol {
     static func enqueue(_ payload: Data, status: Int = 200, for path: String) {
         lock.lock()
         responses[path, default: []].append(QueuedResponse(body: payload, statusCode: status))
+        lock.unlock()
+    }
+
+    static func fail(_ error: Error, for path: String) {
+        lock.lock()
+        failures[path, default: []].append(error)
         lock.unlock()
     }
 
@@ -1255,6 +1448,13 @@ private final class FrickStreamingURLProtocol: URLProtocol {
             if let body,
                let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
                 Self.posts.append(json)
+            }
+            if var pathFailures = Self.failures[path], !pathFailures.isEmpty {
+                let failure = pathFailures.removeFirst()
+                Self.failures[path] = pathFailures
+                Self.lock.unlock()
+                client?.urlProtocol(self, didFailWithError: failure)
+                return
             }
             let queued: QueuedResponse?
             if path.hasPrefix("/auth/") || path == "/conversations" || path == "/append" || path == "/analytics/events" {
@@ -1390,6 +1590,7 @@ private struct StreamEventsResponsePayload: Encodable {
 
 private func makeTestClient(
     storage: FrickStorage? = nil,
+    telemetry: any FrickClientTelemetryRuntime = FrickNoopClientTelemetryRuntime(),
     requestIdFactory: @escaping @Sendable () -> String = { UUID().uuidString }
 ) throws -> FrickClient {
     let configuration = URLSessionConfiguration.ephemeral
@@ -1406,6 +1607,7 @@ private func makeTestClient(
         session: session,
         streamingSession: session,
         storage: resolvedStorage,
+        telemetry: telemetry,
         requestIdFactory: requestIdFactory
     )
 }
@@ -1424,6 +1626,83 @@ private func devLoginResponse(userId: String, token: String, tenantId: String? =
     }
     return "{\n" + fields.map { "  \($0)" }.joined(separator: ",\n") + "\n}"
 }
+
+private final class RecordingFrickClientTelemetryRuntime: FrickClientTelemetryRuntime, @unchecked Sendable {
+    struct Measurement: Equatable {
+        let name: String
+        let value: Double
+        let attributes: [String: FrickClientTelemetryAttributeValue]
+    }
+
+    private let traceId: String
+    private let lock = NSLock()
+    private(set) var startedSpans: [FrickClientTelemetrySpanStart] = []
+    private(set) var finishedSpans: [FrickClientTelemetrySpanResult] = []
+    private(set) var counters: [Measurement] = []
+    private(set) var histograms: [Measurement] = []
+
+    init(traceId: String) {
+        self.traceId = traceId
+    }
+
+    func startSpan(_ input: FrickClientTelemetrySpanStart) throws -> any FrickClientTelemetrySpan {
+        lock.lock()
+        startedSpans.append(input)
+        lock.unlock()
+        return RecordingFrickClientTelemetrySpan(traceId: traceId) { [weak self] result in
+            self?.lock.lock()
+            self?.finishedSpans.append(result ?? FrickClientTelemetrySpanResult())
+            self?.lock.unlock()
+        }
+    }
+
+    func recordCounter(name: String, value: Double, attributes: [String: FrickClientTelemetryAttributeValue]) throws {
+        lock.lock()
+        counters.append(Measurement(name: name, value: value, attributes: attributes))
+        lock.unlock()
+    }
+
+    func recordHistogram(name: String, value: Double, attributes: [String: FrickClientTelemetryAttributeValue]) throws {
+        lock.lock()
+        histograms.append(Measurement(name: name, value: value, attributes: attributes))
+        lock.unlock()
+    }
+}
+
+private final class RecordingFrickClientTelemetrySpan: FrickClientTelemetrySpan, @unchecked Sendable {
+    let traceId: String?
+
+    private let onEnd: @Sendable (FrickClientTelemetrySpanResult?) -> Void
+
+    init(traceId: String?, onEnd: @escaping @Sendable (FrickClientTelemetrySpanResult?) -> Void) {
+        self.traceId = traceId
+        self.onEnd = onEnd
+    }
+
+    func injectHeaders(_ headers: inout [String: String]) throws {
+        headers["traceparent"] = "00-\(traceId ?? "missing")-span-01"
+    }
+
+    func end(_ result: FrickClientTelemetrySpanResult?) throws {
+        onEnd(result)
+    }
+}
+
+private struct ThrowingFrickClientTelemetryRuntime: FrickClientTelemetryRuntime {
+    func startSpan(_ input: FrickClientTelemetrySpanStart) throws -> any FrickClientTelemetrySpan {
+        throw TestTelemetryError()
+    }
+
+    func recordCounter(name: String, value: Double, attributes: [String: FrickClientTelemetryAttributeValue]) throws {
+        throw TestTelemetryError()
+    }
+
+    func recordHistogram(name: String, value: Double, attributes: [String: FrickClientTelemetryAttributeValue]) throws {
+        throw TestTelemetryError()
+    }
+}
+
+private struct TestTelemetryError: Error {}
 
 private func createLegacyCacheMetadataDatabase(path: String) throws {
     var database: OpaquePointer?

@@ -2,6 +2,7 @@ package dev.frick.client
 
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
+import java.io.IOException
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import kotlinx.coroutines.flow.Flow
@@ -386,6 +387,235 @@ class FrickEventStreamParserTest {
         assertEquals("trace-android-1", body.getValue("traceId").jsonPrimitive.content)
         assertEquals("screen-android-1", body.getValue("idempotencyKey").jsonPrimitive.content)
         assertEquals("2026-05-17T11:59:00.000Z", body.getValue("occurredAt").jsonPrimitive.content)
+    }
+
+    @Test
+    fun trackRecordsTelemetryAndCorrelatesSpanTraceId() = runBlocking {
+        val telemetry = RecordingFrickClientTelemetryRuntime(traceId = "trace-android-auto")
+        val storage = MemoryFrickStorage(session = testSession())
+        val transport = FakeFrickTransport(
+            postResponses = mapOf(
+                "/analytics/events" to """
+                    {
+                      "ok": true,
+                      "eventId": "platform-event-android-telemetry",
+                      "sequence": 2147483649,
+                      "acceptedAt": "2026-05-17T12:00:01.000Z",
+                      "duplicate": false
+                    }
+                """.trimIndent(),
+            ),
+        )
+        val client = FrickClient(transport = transport, storage = storage, telemetry = telemetry)
+
+        client.track(
+            name = "screen.viewed",
+            properties = mapOf("path" to JsonPrimitive("/settings")),
+        )
+
+        val body = Json.parseToJsonElement(transport.posts.single().body).jsonObject
+        assertEquals("trace-android-auto", body.getValue("traceId").jsonPrimitive.content)
+        assertEquals("00-trace-android-auto-span-01", transport.posts.single().headers["traceparent"])
+        assertEquals(
+            listOf(
+                FrickClientTelemetrySpanStart(
+                    name = "frick.analytics.track",
+                    kind = FrickClientTelemetrySpanKind.CLIENT,
+                    attributes = mapOf(
+                        "frick.analytics.event_name" to JsonPrimitive("screen.viewed"),
+                        "url.path" to JsonPrimitive("/analytics/events"),
+                    ),
+                ),
+            ),
+            telemetry.startedSpans,
+        )
+        assertEquals(listOf(FrickClientTelemetrySpanStatus.OK), telemetry.finishedSpans.map { result -> result.status })
+        assertEquals(
+            JsonPrimitive("accepted"),
+            telemetry.finishedSpans.single().attributes.getValue("frick.analytics.status"),
+        )
+        assertEquals(
+            JsonPrimitive(false),
+            telemetry.finishedSpans.single().attributes.getValue("frick.analytics.duplicate"),
+        )
+        assertEquals(
+            listOf(
+                RecordingFrickClientTelemetryRuntime.Measurement(
+                    name = "frick.client.analytics.events.total",
+                    value = 1.0,
+                    attributes = mapOf("status" to JsonPrimitive("accepted")),
+                ),
+            ),
+            telemetry.counters,
+        )
+        assertEquals(listOf("frick.client.analytics.duration_ms"), telemetry.histograms.map { measurement -> measurement.name })
+        assertEquals(mapOf("status" to JsonPrimitive("accepted")), telemetry.histograms.single().attributes)
+    }
+
+    @Test
+    fun trackIgnoresTelemetryFailures() = runBlocking {
+        val storage = MemoryFrickStorage(session = testSession())
+        val transport = FakeFrickTransport(
+            postResponses = mapOf(
+                "/analytics/events" to """
+                    {
+                      "ok": true,
+                      "eventId": "platform-event-android-resilient",
+                      "sequence": 2147483650,
+                      "acceptedAt": "2026-05-17T12:00:02.000Z",
+                      "duplicate": false
+                    }
+                """.trimIndent(),
+            ),
+        )
+        val client = FrickClient(
+            transport = transport,
+            storage = storage,
+            telemetry = ThrowingFrickClientTelemetryRuntime,
+        )
+
+        val receipt = client.track("button.clicked")
+
+        assertEquals("platform-event-android-resilient", receipt.eventId)
+    }
+
+    @Test
+    fun trackIgnoresThrowingTelemetrySpanTraceId() = runBlocking {
+        val storage = MemoryFrickStorage(session = testSession())
+        val transport = FakeFrickTransport(
+            postResponses = mapOf(
+                "/analytics/events" to """
+                    {
+                      "ok": true,
+                      "eventId": "platform-event-android-trace-safe",
+                      "sequence": 2147483651,
+                      "acceptedAt": "2026-05-17T12:00:03.000Z",
+                      "duplicate": false
+                    }
+                """.trimIndent(),
+            ),
+        )
+        val client = FrickClient(
+            transport = transport,
+            storage = storage,
+            telemetry = ThrowingTraceIdFrickClientTelemetryRuntime,
+        )
+
+        val receipt = client.track("button.clicked")
+
+        assertEquals("platform-event-android-trace-safe", receipt.eventId)
+        assertEquals("/analytics/events", transport.posts.single().path)
+    }
+
+    @Test
+    fun trackPrefersCallerTraceIdOverSpanTraceId() = runBlocking {
+        val telemetry = RecordingFrickClientTelemetryRuntime(traceId = "trace-android-span")
+        val storage = MemoryFrickStorage(session = testSession())
+        val transport = FakeFrickTransport(
+            postResponses = mapOf(
+                "/analytics/events" to """
+                    {
+                      "ok": true,
+                      "eventId": "platform-event-android-caller-trace",
+                      "sequence": 2147483652,
+                      "acceptedAt": "2026-05-17T12:00:04.000Z",
+                      "duplicate": false
+                    }
+                """.trimIndent(),
+            ),
+        )
+        val client = FrickClient(transport = transport, storage = storage, telemetry = telemetry)
+
+        client.track(name = "screen.viewed", traceId = "trace-android-caller")
+
+        val body = Json.parseToJsonElement(transport.posts.single().body).jsonObject
+        assertEquals("trace-android-caller", body.getValue("traceId").jsonPrimitive.content)
+    }
+
+    @Test
+    fun trackRecordsDuplicateTelemetryStatus() = runBlocking {
+        val telemetry = RecordingFrickClientTelemetryRuntime(traceId = "trace-android-duplicate")
+        val storage = MemoryFrickStorage(session = testSession())
+        val transport = FakeFrickTransport(
+            postResponses = mapOf(
+                "/analytics/events" to """
+                    {
+                      "ok": true,
+                      "eventId": "platform-event-android-duplicate",
+                      "sequence": 2147483653,
+                      "acceptedAt": "2026-05-17T12:00:05.000Z",
+                      "duplicate": true
+                    }
+                """.trimIndent(),
+            ),
+        )
+        val client = FrickClient(transport = transport, storage = storage, telemetry = telemetry)
+
+        val receipt = client.track("button.clicked")
+
+        assertEquals(true, receipt.duplicate)
+        assertEquals(
+            JsonPrimitive("duplicate"),
+            telemetry.finishedSpans.single().attributes.getValue("frick.analytics.status"),
+        )
+        assertEquals(
+            JsonPrimitive(true),
+            telemetry.finishedSpans.single().attributes.getValue("frick.analytics.duplicate"),
+        )
+        assertEquals(mapOf("status" to JsonPrimitive("duplicate")), telemetry.counters.single().attributes)
+        assertEquals(mapOf("status" to JsonPrimitive("duplicate")), telemetry.histograms.single().attributes)
+    }
+
+    @Test
+    fun trackRecordsRejectedTelemetryStatus() = runBlocking {
+        val telemetry = RecordingFrickClientTelemetryRuntime(traceId = "trace-android-rejected")
+        val storage = MemoryFrickStorage(session = testSession())
+        val transport = FakeFrickTransport(
+            postResponses = mapOf("/analytics/events" to """{"ok":false}"""),
+        )
+        val client = FrickClient(transport = transport, storage = storage, telemetry = telemetry)
+
+        try {
+            client.track("button.clicked")
+            fail("expected rejected analytics decode failure")
+        } catch (_: Exception) {
+            // expected
+        }
+
+        assertEquals(listOf(FrickClientTelemetrySpanStatus.ERROR), telemetry.finishedSpans.map { result -> result.status })
+        assertEquals(
+            JsonPrimitive("rejected"),
+            telemetry.finishedSpans.single().attributes.getValue("frick.analytics.status"),
+        )
+        assertEquals(mapOf("status" to JsonPrimitive("rejected")), telemetry.counters.single().attributes)
+        assertEquals(mapOf("status" to JsonPrimitive("rejected")), telemetry.histograms.single().attributes)
+    }
+
+    @Test
+    fun trackRecordsNetworkTelemetryStatus() = runBlocking {
+        val telemetry = RecordingFrickClientTelemetryRuntime(traceId = "trace-android-network")
+        val storage = MemoryFrickStorage(session = testSession())
+        val transport = FakeFrickTransport(
+            failingPosts = 1,
+            postFailure = IOException("offline"),
+        )
+        val client = FrickClient(transport = transport, storage = storage, telemetry = telemetry)
+
+        try {
+            client.track("button.clicked")
+            fail("expected network analytics failure")
+        } catch (_: IOException) {
+            // expected
+        }
+
+        assertEquals(emptyList<FakeFrickTransport.Post>(), transport.posts)
+        assertEquals(listOf(FrickClientTelemetrySpanStatus.ERROR), telemetry.finishedSpans.map { result -> result.status })
+        assertEquals(
+            JsonPrimitive("network_error"),
+            telemetry.finishedSpans.single().attributes.getValue("frick.analytics.status"),
+        )
+        assertEquals(mapOf("status" to JsonPrimitive("network_error")), telemetry.counters.single().attributes)
+        assertEquals(mapOf("status" to JsonPrimitive("network_error")), telemetry.histograms.single().attributes)
     }
 
     @Test
@@ -1144,6 +1374,7 @@ private class FakeFrickTransport(
     private val streamChunks: List<String> = emptyList(),
     private val failGets: Boolean = false,
     private var failingPosts: Int = 0,
+    private val postFailure: Throwable = IllegalStateException("offline"),
 ) : FrickTransport {
     val requestedPaths = mutableListOf<String>()
     val byteRequestedPaths = mutableListOf<String>()
@@ -1176,12 +1407,15 @@ private class FakeFrickTransport(
         return streamChunks.asFlow()
     }
 
-    override suspend fun post(path: String, body: String): String {
-        val post = Post(path = path, body = body)
+    override suspend fun post(path: String, body: String): String =
+        post(path = path, body = body, headers = emptyMap())
+
+    override suspend fun post(path: String, body: String, headers: Map<String, String>): String {
+        val post = Post(path = path, body = body, headers = headers)
         postAttempts += post
         if (failingPosts > 0) {
             failingPosts -= 1
-            throw IllegalStateException("offline")
+            throw postFailure
         }
         posts += post
         return postResponses[path].orEmpty()
@@ -1196,6 +1430,7 @@ private class FakeFrickTransport(
     data class Post(
         val path: String,
         val body: String,
+        val headers: Map<String, String> = emptyMap(),
     )
 
     data class BytePut(
@@ -1216,6 +1451,73 @@ private class FakeFrickTransport(
             return result
         }
     }
+}
+
+private class RecordingFrickClientTelemetryRuntime(
+    private val traceId: String,
+) : FrickClientTelemetryRuntime {
+    data class Measurement(
+        val name: String,
+        val value: Double,
+        val attributes: Map<String, JsonPrimitive>,
+    )
+
+    val startedSpans = mutableListOf<FrickClientTelemetrySpanStart>()
+    val finishedSpans = mutableListOf<FrickClientTelemetrySpanResult>()
+    val counters = mutableListOf<Measurement>()
+    val histograms = mutableListOf<Measurement>()
+
+    override fun startSpan(input: FrickClientTelemetrySpanStart): FrickClientTelemetrySpan {
+        startedSpans += input
+        return RecordingFrickClientTelemetrySpan(traceId = traceId) { result ->
+            finishedSpans += result ?: FrickClientTelemetrySpanResult()
+        }
+    }
+
+    override fun recordCounter(name: String, value: Double, attributes: Map<String, JsonPrimitive>) {
+        counters += Measurement(name = name, value = value, attributes = attributes)
+    }
+
+    override fun recordHistogram(name: String, value: Double, attributes: Map<String, JsonPrimitive>) {
+        histograms += Measurement(name = name, value = value, attributes = attributes)
+    }
+}
+
+private class RecordingFrickClientTelemetrySpan(
+    override val traceId: String?,
+    private val onEnd: (FrickClientTelemetrySpanResult?) -> Unit,
+) : FrickClientTelemetrySpan {
+    override fun injectHeaders(headers: MutableMap<String, String>) {
+        headers["traceparent"] = "00-${traceId ?: "missing"}-span-01"
+    }
+
+    override fun end(result: FrickClientTelemetrySpanResult?) {
+        onEnd(result)
+    }
+}
+
+private object ThrowingFrickClientTelemetryRuntime : FrickClientTelemetryRuntime {
+    override fun startSpan(input: FrickClientTelemetrySpanStart): FrickClientTelemetrySpan {
+        throw IllegalStateException("telemetry failed")
+    }
+
+    override fun recordCounter(name: String, value: Double, attributes: Map<String, JsonPrimitive>) {
+        throw IllegalStateException("telemetry failed")
+    }
+
+    override fun recordHistogram(name: String, value: Double, attributes: Map<String, JsonPrimitive>) {
+        throw IllegalStateException("telemetry failed")
+    }
+}
+
+private object ThrowingTraceIdFrickClientTelemetryRuntime : FrickClientTelemetryRuntime {
+    override fun startSpan(input: FrickClientTelemetrySpanStart): FrickClientTelemetrySpan =
+        ThrowingTraceIdFrickClientTelemetrySpan
+}
+
+private object ThrowingTraceIdFrickClientTelemetrySpan : FrickClientTelemetrySpan {
+    override val traceId: String?
+        get() = throw IllegalStateException("telemetry trace failed")
 }
 
 private class MemoryFrickStorage(

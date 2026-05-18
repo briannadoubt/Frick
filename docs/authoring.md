@@ -223,17 +223,27 @@ the call or install a process-wide default with
 `setDefaultClientTelemetryRuntime(...)`. Telemetry failures are isolated from
 sync, writes, and analytics requests.
 
+Swift and Android/Kotlin expose the same dependency-light
+`FrickClientTelemetryRuntime` hook for analytics `track` calls. The native SDKs
+do not bundle or initialize native OpenTelemetry SDKs; apps can bridge the hook
+to their telemetry provider. Native sync socket telemetry is still separate
+follow-up work. Android custom transports can opt into `traceparent`
+forwarding by overriding the header-aware `post(path, body, headers)` overload;
+the original `post(path, body)` implementation remains valid.
+
 The built-in instrumentation covers:
 
 - analytics posts: `frick.analytics.track` spans,
   `frick.client.analytics.events.total{status}`, and
   `frick.client.analytics.duration_ms{status}`. When app code does not supply
   `traceId`, the active telemetry span trace id is copied into the
-  `analytics.user_event` payload for dashboard/server correlation.
+  `analytics.user_event` payload for dashboard/server correlation. Telemetry
+  runtimes may also inject W3C `traceparent`; default no-op native runtimes do
+  not inject headers.
 - sync WebSocket transport: `WebSocket /_frick/sync` client spans,
   `frick.client.ws.frames.sent.total{kind}`,
   `frick.client.ws.frames.received.total{kind}`, and
-  `frick.client.ws.connection.duration_ms{closeCategory}`.
+  `frick.client.ws.connection.duration_ms{closeCategory}` in TypeScript.
 
 Frame `kind` labels are bounded to known protocol names or `unknown`; close
 telemetry records close code/category and never raw close text. The default

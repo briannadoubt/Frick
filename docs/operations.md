@@ -316,6 +316,11 @@ replace the default for standalone helpers. Frame labels are bounded to known
 protocol names or `unknown`, close telemetry records a bounded category rather
 than raw close text, and the default analytics header injection sends only
 `traceparent`.
+Swift and Android/Kotlin expose dependency-light `FrickClientTelemetryRuntime`
+hooks for analytics `track` calls with the same analytics span and metric
+names, trace-id body correlation, and optional `traceparent` injection from a
+host-provided telemetry runtime. They do not bundle or initialize native OTel
+SDKs, and native sync socket telemetry is still pending.
 
 For agents that need live runtime context, `frick mcp` runs a stdio MCP server
 owned by the same CLI. It defaults to read-only and exposes documented health,

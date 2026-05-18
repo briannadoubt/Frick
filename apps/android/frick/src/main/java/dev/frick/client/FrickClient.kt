@@ -321,6 +321,7 @@ interface FrickTransport {
     suspend fun getBytes(path: String): ByteArray
     fun stream(path: String): Flow<String>
     suspend fun post(path: String, body: String): String
+    suspend fun post(path: String, body: String, headers: Map<String, String>): String = post(path, body)
     suspend fun putBytes(path: String, mimeType: String, bytes: ByteArray): String
 }
 
@@ -755,9 +756,13 @@ class KtorFrickTransport(
         }
     }.flowOn(Dispatchers.IO)
 
-    override suspend fun post(path: String, body: String): String {
+    override suspend fun post(path: String, body: String): String =
+        post(path = path, body = body, headers = emptyMap())
+
+    override suspend fun post(path: String, body: String, headers: Map<String, String>): String {
         val response = httpClient.post(resolve(path)) {
             authorize()
+            headers.forEach { (name, value) -> header(name, value) }
             contentType(ContentType.Application.Json)
             setBody(body)
         }
@@ -796,6 +801,7 @@ class FrickClient(
         baseUrl = baseUrl,
         sessionTokenProvider = { storage.loadSession()?.sessionToken },
     ),
+    private val telemetry: FrickClientTelemetryRuntime = NoopFrickClientTelemetryRuntime,
 ) {
     companion object {
         const val DefaultBaseUrl = "https://127.0.0.1:4099"
@@ -1049,21 +1055,94 @@ class FrickClient(
         occurredAt: String? = null,
     ): FrickAnalyticsTrackReceipt = withContext(Dispatchers.IO) {
         requireAuthenticatedSession()
-        val raw = transport.post(
-            path = "/analytics/events",
-            body = frickJson.encodeToString(
-                AnalyticsTrackRequest(
-                    name = name,
-                    properties = properties.takeIf { eventProperties -> eventProperties.isNotEmpty() },
-                    context = context?.takeIf { eventContext -> eventContext.isNotEmpty() },
-                    attributes = attributes?.takeIf { eventAttributes -> eventAttributes.isNotEmpty() },
-                    traceId = traceId,
-                    idempotencyKey = idempotencyKey,
-                    occurredAt = occurredAt,
+        val startedAtNanos = System.nanoTime()
+        val span = startFrickClientTelemetrySpan(
+            telemetry,
+            FrickClientTelemetrySpanStart(
+                name = "frick.analytics.track",
+                kind = FrickClientTelemetrySpanKind.CLIENT,
+                attributes = mapOf(
+                    "frick.analytics.event_name" to JsonPrimitive(name),
+                    "url.path" to JsonPrimitive("/analytics/events"),
                 ),
             ),
         )
-        frickJson.decodeFromString(raw)
+        var finished = false
+        fun finish(
+            status: FrickClientTelemetrySpanStatus,
+            metricStatus: String,
+            duplicate: Boolean? = null,
+            error: Throwable? = null,
+        ) {
+            if (finished) {
+                return
+            }
+            finished = true
+            val spanAttributes = buildMap<String, JsonPrimitive> {
+                put("frick.analytics.status", JsonPrimitive(metricStatus))
+                if (duplicate != null) {
+                    put("frick.analytics.duplicate", JsonPrimitive(duplicate))
+                }
+            }
+            finishFrickClientTelemetrySpan(
+                span,
+                FrickClientTelemetrySpanResult(
+                    status = status,
+                    attributes = spanAttributes,
+                    error = error,
+                ),
+            )
+            val metricAttributes = mapOf("status" to JsonPrimitive(metricStatus))
+            recordFrickClientTelemetryCounter(
+                telemetry,
+                name = "frick.client.analytics.events.total",
+                value = 1.0,
+                attributes = metricAttributes,
+            )
+            recordFrickClientTelemetryHistogram(
+                telemetry,
+                name = "frick.client.analytics.duration_ms",
+                value = (System.nanoTime() - startedAtNanos).toDouble() / 1_000_000.0,
+                attributes = metricAttributes,
+            )
+        }
+
+        try {
+            val telemetryHeaders = mutableMapOf<String, String>()
+            injectFrickClientTelemetryHeaders(span, telemetryHeaders)
+            val traceHeaders = telemetryHeaders
+                .filterKeys { name -> name.equals("traceparent", ignoreCase = true) }
+                .mapKeys { "traceparent" }
+            val raw = transport.post(
+                path = "/analytics/events",
+                body = frickJson.encodeToString(
+                    AnalyticsTrackRequest(
+                        name = name,
+                        properties = properties.takeIf { eventProperties -> eventProperties.isNotEmpty() },
+                        context = context?.takeIf { eventContext -> eventContext.isNotEmpty() },
+                        attributes = attributes?.takeIf { eventAttributes -> eventAttributes.isNotEmpty() },
+                        traceId = traceId ?: getFrickClientTelemetryTraceId(span),
+                        idempotencyKey = idempotencyKey,
+                        occurredAt = occurredAt,
+                    ),
+                ),
+                headers = traceHeaders,
+            )
+            val receipt = frickJson.decodeFromString<FrickAnalyticsTrackReceipt>(raw)
+            finish(
+                status = FrickClientTelemetrySpanStatus.OK,
+                metricStatus = if (receipt.duplicate) "duplicate" else "accepted",
+                duplicate = receipt.duplicate,
+            )
+            receipt
+        } catch (error: Throwable) {
+            finish(
+                status = FrickClientTelemetrySpanStatus.ERROR,
+                metricStatus = if (error is java.io.IOException) "network_error" else "rejected",
+                error = error,
+            )
+            throw error
+        }
     }
 
     suspend fun sendSignal(name: String, key: String, value: Map<String, JsonElement>) = withContext(Dispatchers.IO) {

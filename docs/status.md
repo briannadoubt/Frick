@@ -29,8 +29,9 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
   collector config.
 - TypeScript client OpenTelemetry API bridge for analytics requests and sync
   WebSocket transport metrics/spans. The bridge is active by default but is a
-  no-op until the app installs an OTel provider; native SDK telemetry capture is
-  still pending.
+  no-op until the app installs an OTel provider. Swift and Android expose
+  dependency-light telemetry hooks for analytics `track` calls only; they do
+  not bundle native OTel SDKs, and native sync telemetry remains pending.
 - Swift and Android WebSocket sync transports with capability handshake, object subscriptions/upserts, presence, packed-frame decoding, cache compatibility, and cross-device draft helpers.
 
 ## Known Limitations

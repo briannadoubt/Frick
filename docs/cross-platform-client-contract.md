@@ -197,7 +197,7 @@ Telemetry failures are isolated from sync, writes, cache, and analytics
 requests. Metric labels stay bounded; user, tenant, and app-provided values are
 span attributes or analytics payload fields, not framework metric labels.
 
-The TypeScript runtime currently provides the first implementation:
+The TypeScript runtime provides the full OpenTelemetry API bridge:
 
 - `FrickClient` accepts `telemetry?: FrickClientTelemetryRuntime | false` and
   defaults to an OpenTelemetry API bridge. With no app-installed OTel provider,
@@ -215,8 +215,14 @@ The TypeScript runtime currently provides the first implementation:
   Analytics header injection sends `traceparent` only; app-defined OTel baggage
   is not forwarded by the default bridge.
 
-Swift and Android should follow these semantics when their telemetry capture
-surfaces land.
+Swift and Android/Kotlin expose dependency-light `FrickClientTelemetryRuntime`
+hooks for analytics `track` calls only. Native analytics telemetry uses the
+same span name, metric names, status labels, trace-id body correlation, and
+optional `traceparent` injection from the host-provided runtime. The native
+SDKs do not bundle or initialize OpenTelemetry SDKs. Native sync socket
+telemetry should follow the TypeScript semantics when it lands. Android custom
+transports keep the original `post(path, body)` source contract; transports
+that want to forward `traceparent` can override `post(path, body, headers)`.
 
 ## Object Upserts Over the Sync Socket
 
