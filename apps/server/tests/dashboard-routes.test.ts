@@ -142,6 +142,13 @@ describe("mounted dashboard", () => {
     expect(response.status).toBe(401);
   });
 
+  it("requires authentication for dashboard accounts", async () => {
+    app = await startServer();
+    const response = await fetch(`${app.httpUrl}/_frick/dashboard/api/accounts`);
+
+    expect(response.status).toBe(401);
+  });
+
   it("serves dashboard metadata API when authenticated", async () => {
     app = await startServer();
     const response = await fetch(`${app.httpUrl}/_frick/dashboard/api/metadata`, {
@@ -171,6 +178,7 @@ describe("mounted dashboard", () => {
     expect(script).toContain("/_frick/inspect/analytics/summary");
     expect(script).toContain("platform-events/health");
     expect(script).toContain("/_frick/dashboard/api/data/objects/");
+    expect(script).toContain("/_frick/dashboard/api/accounts");
   });
 
   it("serves schema object rows through the mounted dashboard data API", async () => {
@@ -252,6 +260,104 @@ describe("mounted dashboard", () => {
         avatarBlobId: null,
       },
     ]);
+  });
+
+  it("serves tenant-scoped accounts through the mounted dashboard accounts API", async () => {
+    app = await startServer();
+    app.store.createAccountUser({
+      tenantId: "_default",
+      userId: "user-dashboard-one",
+      handle: "dashboard-one",
+      displayName: "Dashboard One",
+      password: "supersecret",
+    });
+    app.store.createAccountUser({
+      tenantId: "tenant-x",
+      userId: "user-tenant-x",
+      handle: "tenant-x",
+      displayName: "Tenant X",
+      password: "supersecret",
+    });
+    const login = await fetch(`${app.httpUrl}/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ identity: "dashboard-one", password: "supersecret" }),
+    });
+    expect(login.status).toBe(200);
+    const { sessionToken } = (await login.json()) as { sessionToken: string };
+
+    const response = await fetch(
+      `${app.httpUrl}/_frick/dashboard/api/accounts?tenantId=tenant-x`,
+      { headers: { authorization: `Bearer ${sessionToken}` } },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      schemaHash: foundationSchema.hash,
+      tenantId: "_default",
+      scope: "tenant",
+      count: 1,
+      limit: 50,
+      truncated: false,
+    });
+    expect(body.accounts).toEqual([
+      expect.objectContaining({
+        tenantId: "_default",
+        userId: "user-dashboard-one",
+        handle: "dashboard-one",
+        displayName: "Dashboard One",
+      }),
+    ]);
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain("password");
+    expect(serialized).not.toContain("sessionToken");
+  });
+
+  it("lets admin bearer inspect a requested tenant's dashboard accounts", async () => {
+    const adminToken = "test-admin-token-1234567890ABCDEF1234567890ABCDEF";
+    app = await startServer({
+      config: { adminToken },
+    });
+    app.store.createAccountUser({
+      tenantId: "tenant-x",
+      userId: "user-xfirst",
+      handle: "xfirst",
+      displayName: "X First",
+      password: "supersecret",
+    });
+    app.store.createAccountUser({
+      tenantId: "tenant-x",
+      userId: "user-xsecond",
+      handle: "xsecond",
+      displayName: "X Second",
+      password: "supersecret",
+    });
+
+    const response = await fetch(
+      `${app.httpUrl}/_frick/dashboard/api/accounts?tenantId=tenant-x&limit=1`,
+      { headers: { authorization: `Bearer ${adminToken}` } },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      tenantId: "tenant-x",
+      scope: "admin",
+      count: 1,
+      limit: 1,
+      truncated: true,
+    });
+    expect(body.accounts).toEqual([
+      expect.objectContaining({
+        tenantId: "tenant-x",
+        handle: "xfirst",
+        displayName: "X First",
+      }),
+    ]);
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain("password");
+    expect(serialized).not.toContain("sessionToken");
   });
 
   it("rejects unknown dashboard object data types", async () => {

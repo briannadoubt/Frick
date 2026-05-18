@@ -300,6 +300,12 @@ async function refreshData() {
   );
 
   if (isMountedDashboard()) {
+    try {
+      nextData.dashboardAccounts = await fetchDashboardAccounts();
+    } catch (error) {
+      nextErrors.dashboardAccounts = error;
+    }
+
     const objectType = selectedDashboardObjectType(nextData.dashboardMetadata);
     if (objectType) {
       try {
@@ -343,6 +349,13 @@ async function fetchDashboardObjectData(type) {
   return fetchJson(`/_frick/dashboard/api/data/objects/${encodeURIComponent(type)}?${params}`, {
     auth: true,
   });
+}
+
+async function fetchDashboardAccounts() {
+  if (!isMountedDashboard()) return undefined;
+  const params = new URLSearchParams({ limit: "25" });
+  if (state.dataTenantId) params.set("tenantId", state.dataTenantId);
+  return fetchJson(`/_frick/dashboard/api/accounts?${params}`, { auth: true });
 }
 
 async function devLogin() {
@@ -988,8 +1001,103 @@ function renderAuth() {
             </form>
           </div>
         </section>
+        ${dashboardAccountsPanel()}
       </div>
       ${serverInspector()}
+    </div>
+  `;
+}
+
+function dashboardAccountsPanel() {
+  if (!isMountedDashboard()) {
+    return `
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <span class="panel-kicker">Accounts</span>
+            <h2 class="panel-title">Tenant accounts</h2>
+          </div>
+        </header>
+        <div class="panel-body">
+          <div class="empty-state">Mount Fricken Dashboard at /_frick/dashboard to browse account records from the server origin.</div>
+        </div>
+      </section>
+    `;
+  }
+
+  const accounts = state.data.dashboardAccounts;
+  const error = state.errors.dashboardAccounts;
+  return `
+    <section class="panel">
+      <header class="panel-header">
+        <div>
+          <span class="panel-kicker">Accounts</span>
+          <h2 class="panel-title">Tenant accounts</h2>
+        </div>
+        ${
+          accounts
+            ? `<span class="status-tag tone-info">${dot("info")} ${escapeHtml(accounts.scope)} / ${escapeHtml(accounts.tenantId)}</span>`
+            : ""
+        }
+      </header>
+      <div class="panel-body">
+        <form class="tenant-filter" data-form="object-tenant">
+          <label class="form-row">
+            <span class="field-label">Tenant</span>
+            <span class="inline-fields">
+              <input class="text-input" name="tenantId" value="${escapeHtml(state.dataTenantId)}" placeholder="_default" autocomplete="off" />
+              <button class="button secondary" type="submit">${icon("check")} Apply</button>
+            </span>
+          </label>
+        </form>
+        ${error ? `<div class="error-box">${escapeHtml(error.message)}</div>` : ""}
+        ${accounts ? accountsSummary(accounts) : ""}
+        ${accountsTable(accounts)}
+      </div>
+    </section>
+  `;
+}
+
+function accountsSummary(data) {
+  const detail = data.truncated
+    ? `${data.count} visible accounts, more available`
+    : `${data.count} visible accounts`;
+  return `
+    <div class="status-strip compact">
+      <span class="status-pill tone-info">${dot("info")} ${escapeHtml(data.tenantId)}</span>
+      <span class="status-pill tone-info">${dot("info")} ${escapeHtml(detail)}</span>
+      <span class="status-pill tone-info">${dot("info")} limit ${escapeHtml(data.limit)}</span>
+    </div>
+  `;
+}
+
+function accountsTable(data) {
+  if (!data) {
+    if (state.errors.dashboardAccounts?.skipped) {
+      return `<div class="empty-state">Add a bearer token to load tenant accounts.</div>`;
+    }
+    return `<div class="empty-state">No account data loaded yet.</div>`;
+  }
+  if (!data.accounts.length) {
+    return `<div class="empty-state">No accounts visible for ${escapeHtml(data.tenantId)}.</div>`;
+  }
+  return `
+    <div class="object-table-wrap">
+      <table class="table">
+        <thead><tr><th>Handle</th><th>User</th><th>Name</th><th>Created</th></tr></thead>
+        <tbody>
+          ${data.accounts
+            .map((account) => `
+              <tr>
+                <td><code class="code-inline">${escapeHtml(account.handle)}</code></td>
+                <td>${escapeHtml(account.userId)}</td>
+                <td>${escapeHtml(account.displayName)}</td>
+                <td>${escapeHtml(new Date(account.createdAt).toLocaleString())}</td>
+              </tr>
+            `)
+            .join("")}
+        </tbody>
+      </table>
     </div>
   `;
 }

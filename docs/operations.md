@@ -312,6 +312,14 @@ object-visibility filter as sync snapshots; admin bearers may pass `tenantId`
 to inspect a tenant's rows directly. The endpoint validates `:type` against the
 active schema and caps `limit` at 200 rows.
 
+`/_frick/dashboard/api/accounts?limit=50&tenantId=_default` returns sanitized
+account rows for the mounted dashboard Auth view: `tenantId`, `userId`,
+`handle`, `displayName`, and `createdAt`. Password hashes, password salts,
+session tokens, devices, and rate-limit state are never included. Tenant
+session principals are pinned to their session tenant; admin bearers may pass
+`tenantId` to inspect a tenant account directory. The endpoint caps `limit` at
+200 rows and reports whether additional rows were truncated.
+
 The platform event pipeline defaults to SQLite for local and lightweight
 deployments. Set `FRICK_PLATFORM_EVENTS_DRIVER=kafka` with
 `FRICK_PLATFORM_EVENTS_KAFKA_BROKERS=host:9092` to use the built-in

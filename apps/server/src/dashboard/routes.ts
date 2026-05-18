@@ -9,6 +9,7 @@ import {
   normalizeAnalyticsSummaryWindowMs,
   type AnalyticsEventStore,
 } from "../analytics/summary.js";
+import { buildDashboardAccounts } from "./accounts.js";
 import { buildDashboardObjectData } from "./data.js";
 import { buildDashboardMetadata } from "./metadata.js";
 import { sendDashboardAsset } from "./assets.js";
@@ -105,6 +106,24 @@ export async function handleDashboardRoute(input: DashboardRouteInput): Promise<
       store: input.analyticsEvents,
       principal,
       windowMs: normalizeAnalyticsSummaryWindowMs(input.url.searchParams.get("windowMs")),
+      ...optionalLimit(input.url.searchParams.get("limit")),
+    }));
+    return true;
+  }
+
+  if (relativePath === "/api/accounts") {
+    setDashboardHeaders(input.response);
+    const principal = input.authenticate();
+    if (principal instanceof Error) {
+      input.sendError(principal, "dashboard_unauthorized");
+      return true;
+    }
+
+    const tenantId = input.url.searchParams.get("tenantId") || undefined;
+    sendDashboardJson(input, 200, buildDashboardAccounts({
+      store: input.store,
+      principal,
+      ...(tenantId ? { tenantId } : {}),
       ...optionalLimit(input.url.searchParams.get("limit")),
     }));
     return true;
