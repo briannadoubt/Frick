@@ -1006,6 +1006,42 @@ export function createFrickServer(options: ServerOptions = {}) {
     // `limits.maxXxx` call sites untouched.
     const tenantLimits = resolveTenantLimits(principal.tenantId, store, limits);
 
+    if (request.method === "POST" && url.pathname === "/analytics/events") {
+      try {
+        const body = await readJsonBody(request, tenantLimits.maxHttpBodyBytes);
+        const analyticsEvent = parseAnalyticsEventBody(body, request);
+        const receipt = await platformEvents.publish({
+          family: "analytics.user_event",
+          name: analyticsEvent.name,
+          source: "frick.analytics.ingest",
+          tenantId: principal.tenantId,
+          subjectId: principal.userId,
+          ...(analyticsEvent.traceId !== undefined ? { traceId: analyticsEvent.traceId } : {}),
+          ...(analyticsEvent.idempotencyKey !== undefined ? { idempotencyKey: analyticsEvent.idempotencyKey } : {}),
+          ...(analyticsEvent.occurredAt !== undefined ? { occurredAt: analyticsEvent.occurredAt } : {}),
+          payload: {
+            properties: analyticsEvent.properties,
+            context: analyticsEvent.context,
+          },
+          attributes: {
+            ...analyticsEvent.attributes,
+            deviceId: principal.deviceId,
+            replicaId: principal.replicaId,
+          },
+        });
+        sendJson(response, 202, {
+          ok: true,
+          eventId: receipt.id,
+          sequence: receipt.sequence,
+          acceptedAt: receipt.acceptedAt,
+          duplicate: receipt.duplicate,
+        });
+      } catch (error) {
+        sendErrorWithMetrics(response, error, "analytics_rejected");
+      }
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/conversations") {
       try {
         const body = await readJsonBody(request, tenantLimits.maxHttpBodyBytes);
@@ -2100,7 +2136,7 @@ function setCors(
   }
   response.setHeader(
     "Access-Control-Allow-Headers",
-    "authorization, content-type, if-match, x-frick-owner-id, x-frick-session-token",
+    "authorization, content-type, if-match, x-frick-idempotency-key, x-frick-owner-id, x-frick-session-token, x-frick-trace-id",
   );
   response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
   response.setHeader(
@@ -2325,6 +2361,93 @@ function requireNumber(value: unknown, name: string): number {
     throw new Error(`${name} must be a finite number`);
   }
   return value;
+}
+
+interface ParsedAnalyticsEventBody {
+  name: string;
+  properties: Record<string, unknown>;
+  context: Record<string, unknown>;
+  attributes: Record<string, string | number | boolean>;
+  traceId?: string;
+  idempotencyKey?: string;
+  occurredAt?: string;
+}
+
+function parseAnalyticsEventBody(
+  body: Record<string, unknown>,
+  request: http.IncomingMessage,
+): ParsedAnalyticsEventBody {
+  const traceId =
+    optionalNonEmptyString(body.traceId, "traceId") ??
+    optionalHeader(request, "x-frick-trace-id", "x-frick-trace-id");
+  const idempotencyKey =
+    optionalNonEmptyString(body.idempotencyKey, "idempotencyKey") ??
+    optionalHeader(request, "x-frick-idempotency-key", "x-frick-idempotency-key");
+  const occurredAt = optionalIsoTimestamp(body.occurredAt, "occurredAt");
+  return {
+    name: requireString(body.name, "name"),
+    properties: optionalRecord(body.properties, "properties") ?? {},
+    context: optionalRecord(body.context, "context") ?? {},
+    attributes: optionalAnalyticsAttributes(body.attributes, "attributes") ?? {},
+    ...(traceId !== undefined ? { traceId } : {}),
+    ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+    ...(occurredAt !== undefined ? { occurredAt } : {}),
+  };
+}
+
+function optionalRecord(value: unknown, name: string): Record<string, unknown> | undefined {
+  if (value === undefined) return undefined;
+  return requireRecord(value, name);
+}
+
+function optionalAnalyticsAttributes(
+  value: unknown,
+  name: string,
+): Record<string, string | number | boolean> | undefined {
+  const record = optionalRecord(value, name);
+  if (record === undefined) return undefined;
+  const attributes: Record<string, string | number | boolean> = {};
+  for (const [key, attr] of Object.entries(record)) {
+    if (typeof attr !== "string" && typeof attr !== "number" && typeof attr !== "boolean") {
+      throw new Error(`${name}.${key} must be a string, number, or boolean`);
+    }
+    if (typeof attr === "number" && !Number.isFinite(attr)) {
+      throw new Error(`${name}.${key} must be a finite number`);
+    }
+    attributes[key] = attr;
+  }
+  return attributes;
+}
+
+function optionalNonEmptyString(value: unknown, name: string): string | undefined {
+  if (value === undefined) return undefined;
+  return requireString(value, name);
+}
+
+const CANONICAL_ISO_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+function optionalIsoTimestamp(value: unknown, name: string): string | undefined {
+  const timestamp = optionalNonEmptyString(value, name);
+  if (timestamp === undefined) return undefined;
+  const date = new Date(timestamp);
+  if (
+    !CANONICAL_ISO_TIMESTAMP_PATTERN.test(timestamp) ||
+    Number.isNaN(date.getTime()) ||
+    date.toISOString() !== timestamp
+  ) {
+    throw new Error(`${name} must be a canonical ISO timestamp string`);
+  }
+  return timestamp;
+}
+
+function optionalHeader(
+  request: http.IncomingMessage,
+  header: string,
+  name: string,
+): string | undefined {
+  const value = headerValue(request, header);
+  if (value === undefined) return undefined;
+  return requireString(value, name);
 }
 
 function parseBlobContentPath(url: URL): string | undefined {
@@ -3485,6 +3608,7 @@ function isProtectedPath(pathname: string): boolean {
     pathname.startsWith("/blobs/") ||
     pathname === "/signals" ||
     pathname.startsWith("/signals/") ||
+    pathname === "/analytics/events" ||
     pathname === "/streams" ||
     pathname.startsWith("/streams/") ||
     pathname === "/append" ||
