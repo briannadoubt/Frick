@@ -12,6 +12,7 @@ import {
 import { buildDashboardAccounts } from "./accounts.js";
 import { buildDashboardObjectData } from "./data.js";
 import { buildDashboardMetadata } from "./metadata.js";
+import { buildDashboardTenantSettings } from "./tenant-settings.js";
 import { buildDashboardTenants } from "./tenants.js";
 import { sendDashboardAsset } from "./assets.js";
 
@@ -143,6 +144,23 @@ export async function handleDashboardRoute(input: DashboardRouteInput): Promise<
       principal,
       includeArchived: input.url.searchParams.get("includeArchived") === "true",
       ...optionalLimit(input.url.searchParams.get("limit")),
+    }));
+    return true;
+  }
+
+  if (relativePath === "/api/tenant-settings") {
+    setDashboardHeaders(input.response);
+    const principal = input.authenticate();
+    if (principal instanceof Error) {
+      input.sendError(principal, "dashboard_unauthorized");
+      return true;
+    }
+
+    const tenantId = input.url.searchParams.get("tenantId") || undefined;
+    sendDashboardJson(input, 200, buildDashboardTenantSettings({
+      store: input.store,
+      principal,
+      ...(tenantId ? { tenantId } : {}),
     }));
     return true;
   }

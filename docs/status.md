@@ -15,8 +15,8 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
   server. Standalone mode reads platform event pipeline health and
   tenant-scoped product analytics summaries through authenticated inspection
   routes; mounted mode exposes the same product views, read-only object data,
-  tenant ledger rows, and sanitized account rows through authenticated
-  dashboard APIs.
+  tenant ledger rows, sanitized tenant settings summaries, and sanitized
+  account rows through authenticated dashboard APIs.
 - TypeScript `@frick/core` runtime and `@frick/react` hooks for objects, streams, projections, presence, signals, auth, blobs, search, realtime wrappers, drafts, and background sync.
 - First-class platform events for framework telemetry, job lifecycle events,
   and authenticated product analytics ingestion through TypeScript, Swift, and

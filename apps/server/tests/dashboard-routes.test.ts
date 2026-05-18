@@ -156,6 +156,13 @@ describe("mounted dashboard", () => {
     expect(response.status).toBe(401);
   });
 
+  it("requires authentication for dashboard tenant settings", async () => {
+    app = await startServer();
+    const response = await fetch(`${app.httpUrl}/_frick/dashboard/api/tenant-settings`);
+
+    expect(response.status).toBe(401);
+  });
+
   it("serves dashboard metadata API when authenticated", async () => {
     app = await startServer();
     const response = await fetch(`${app.httpUrl}/_frick/dashboard/api/metadata`, {
@@ -187,6 +194,7 @@ describe("mounted dashboard", () => {
     expect(script).toContain("/_frick/dashboard/api/data/objects/");
     expect(script).toContain("/_frick/dashboard/api/accounts");
     expect(script).toContain("/_frick/dashboard/api/tenants");
+    expect(script).toContain("/_frick/dashboard/api/tenant-settings");
   });
 
   it("serves schema object rows through the mounted dashboard data API", async () => {
@@ -458,6 +466,100 @@ describe("mounted dashboard", () => {
     const serialized = JSON.stringify(fullArchivedBody);
     expect(serialized).not.toContain("password");
     expect(serialized).not.toContain("sessionToken");
+  });
+
+  it("serves only the current tenant settings through the dashboard API for tenant sessions", async () => {
+    app = await startServer();
+    app.store.tenants.create("tenant-other", "Other");
+    app.store.tenantSettings.set("tenant-other", "retentionMs", 12345);
+    app.store.tenantSettings.set("tenant-session", "limits", { maxBlobBytes: 8 });
+    const login = await fetch(`${app.httpUrl}/auth/dev-login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tenantId: "tenant-session", userId: "user-tenant-session" }),
+    });
+    expect(login.status).toBe(200);
+    const { sessionToken } = (await login.json()) as { sessionToken: string };
+
+    const response = await fetch(
+      `${app.httpUrl}/_frick/dashboard/api/tenant-settings?tenantId=tenant-other`,
+      { headers: { authorization: `Bearer ${sessionToken}` } },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      schemaHash: foundationSchema.hash,
+      tenantId: "tenant-session",
+      scope: "tenant",
+      settings: {
+        limits: { maxBlobBytes: 8 },
+        push: {
+          apns: { configured: false },
+          fcm: { configured: false },
+          webPush: { configured: false },
+        },
+        configuredKeys: ["limits"],
+        redactedKeys: [],
+        otherKeys: [],
+      },
+    });
+    expect(JSON.stringify(body)).not.toContain("12345");
+  });
+
+  it("lets admin bearer inspect sanitized dashboard tenant settings", async () => {
+    const adminToken = "test-admin-token-1234567890ABCDEF1234567890ABCDEF";
+    app = await startServer({
+      config: { adminToken },
+    });
+    app.store.tenants.create("tenant-settings", "Settings");
+    app.store.tenantSettings.set("tenant-settings", "limits", {
+      maxBlobBytes: 8,
+      maxStreamAppendPayloadBytes: 16,
+      ignoredGlobalLimit: 999,
+    });
+    app.store.tenantSettings.set("tenant-settings", "retentionMs", 60000);
+    app.store.tenantSettings.set("tenant-settings", "push.apns.encrypted", "apns-secret-ciphertext");
+    app.store.tenantSettings.set("tenant-settings", "push.fcm.encrypted", "fcm-secret-ciphertext");
+    app.store.tenantSettings.set("tenant-settings", "customFeature", { enabled: true });
+
+    const response = await fetch(
+      `${app.httpUrl}/_frick/dashboard/api/tenant-settings?tenantId=tenant-settings`,
+      { headers: { authorization: `Bearer ${adminToken}` } },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      schemaHash: foundationSchema.hash,
+      tenantId: "tenant-settings",
+      scope: "admin",
+      settings: {
+        limits: {
+          maxBlobBytes: 8,
+          maxStreamAppendPayloadBytes: 16,
+        },
+        retentionMs: 60000,
+        push: {
+          apns: { configured: true },
+          fcm: { configured: true },
+          webPush: { configured: false },
+        },
+        configuredKeys: [
+          "customFeature",
+          "limits",
+          "push.apns.encrypted",
+          "push.fcm.encrypted",
+          "retentionMs",
+        ],
+        redactedKeys: ["push.apns.encrypted", "push.fcm.encrypted"],
+        otherKeys: ["customFeature"],
+      },
+    });
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain("apns-secret-ciphertext");
+    expect(serialized).not.toContain("fcm-secret-ciphertext");
+    expect(serialized).not.toContain("ignoredGlobalLimit");
   });
 
   it("rejects unknown dashboard object data types", async () => {

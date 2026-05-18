@@ -328,6 +328,14 @@ active tenant directory by default and may pass `includeArchived=true` to see
 soft-archived tenants. The endpoint caps `limit` at 200 rows and never includes
 tenant settings or encrypted credential material.
 
+`/_frick/dashboard/api/tenant-settings?tenantId=_default` returns a sanitized
+tenant settings summary for the mounted dashboard Settings view. Tenant session
+principals are pinned to their session tenant; admin bearers may pass
+`tenantId` to inspect another tenant. The response includes validated
+per-tenant `limits`, optional `retentionMs`, push credential configured/not
+configured flags for APNs, FCM, and Web Push, plus stored setting key names.
+Encrypted push credential values and unknown setting values are never returned.
+
 The platform event pipeline defaults to SQLite for local and lightweight
 deployments. Set `FRICK_PLATFORM_EVENTS_DRIVER=kafka` with
 `FRICK_PLATFORM_EVENTS_KAFKA_BROKERS=host:9092` to use the built-in

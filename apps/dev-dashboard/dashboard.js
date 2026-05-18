@@ -195,6 +195,17 @@ function selectedDashboardObjectType(metadata = state.data.dashboardMetadata) {
   return resources[0].name;
 }
 
+function selectedDashboardTenantId(tenants = state.data.dashboardTenants) {
+  const rows = tenants?.tenants || [];
+  if (
+    state.dataTenantId &&
+    (!rows.length || rows.some((tenant) => tenant.tenantId === state.dataTenantId))
+  ) {
+    return state.dataTenantId;
+  }
+  return rows[0]?.tenantId || state.dataTenantId || "";
+}
+
 function requestRows() {
   const rows = metricEntries("counters").filter((entry) => entry.name === "frick.http.requests.total");
   const grouped = new Map();
@@ -307,6 +318,14 @@ async function refreshData() {
     }
 
     try {
+      nextData.dashboardTenantSettings = await fetchDashboardTenantSettings(
+        selectedDashboardTenantId(nextData.dashboardTenants),
+      );
+    } catch (error) {
+      nextErrors.dashboardTenantSettings = error;
+    }
+
+    try {
       nextData.dashboardAccounts = await fetchDashboardAccounts();
     } catch (error) {
       nextErrors.dashboardAccounts = error;
@@ -368,6 +387,13 @@ async function fetchDashboardTenants() {
   if (!isMountedDashboard()) return undefined;
   const params = new URLSearchParams({ includeArchived: "true", limit: "50" });
   return fetchJson(`/_frick/dashboard/api/tenants?${params}`, { auth: true });
+}
+
+async function fetchDashboardTenantSettings(tenantId) {
+  if (!isMountedDashboard()) return undefined;
+  const params = new URLSearchParams();
+  if (tenantId) params.set("tenantId", tenantId);
+  return fetchJson(`/_frick/dashboard/api/tenant-settings?${params}`, { auth: true });
 }
 
 async function devLogin() {
@@ -1356,6 +1382,167 @@ function tenantsTable(data) {
   `;
 }
 
+function dashboardTenantSettingsPanel() {
+  if (!isMountedDashboard()) {
+    return `
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <span class="panel-kicker">Settings</span>
+            <h2 class="panel-title">Tenant settings</h2>
+          </div>
+        </header>
+        <div class="panel-body">
+          <div class="empty-state">Mount Fricken Dashboard at /_frick/dashboard to inspect tenant settings from the server origin.</div>
+        </div>
+      </section>
+    `;
+  }
+
+  const settings = state.data.dashboardTenantSettings;
+  const error = state.errors.dashboardTenantSettings;
+  const selectedTenantId = selectedDashboardTenantId();
+  return `
+    <section class="panel">
+      <header class="panel-header">
+        <div>
+          <span class="panel-kicker">Settings</span>
+          <h2 class="panel-title">Tenant settings</h2>
+        </div>
+        ${
+          settings
+            ? `<span class="status-tag tone-info">${dot("info")} ${escapeHtml(settings.scope)} / ${escapeHtml(settings.tenantId)}</span>`
+            : ""
+        }
+      </header>
+      <div class="panel-body">
+        <form class="tenant-filter" data-form="tenant-settings">
+          <label class="form-row">
+            <span class="field-label">Tenant</span>
+            <span class="inline-fields">
+              <input class="text-input" name="tenantId" value="${escapeHtml(selectedTenantId)}" placeholder="_default" autocomplete="off" />
+              <button class="button secondary" type="submit">${icon("check")} Apply</button>
+            </span>
+          </label>
+        </form>
+        ${error ? `<div class="error-box">${escapeHtml(error.message)}</div>` : ""}
+        ${settings ? tenantSettingsSummary(settings) : ""}
+        ${tenantSettingsTables(settings)}
+      </div>
+    </section>
+  `;
+}
+
+function tenantSettingsSummary(data) {
+  const configuredPush = ["apns", "fcm", "webPush"]
+    .filter((platform) => data.settings.push?.[platform]?.configured)
+    .length;
+  const retention = data.settings.retentionMs === undefined
+    ? "default retention"
+    : `${data.settings.retentionMs}ms retention`;
+  return `
+    <div class="status-strip compact">
+      <span class="status-pill tone-info">${dot("info")} ${escapeHtml(retention)}</span>
+      <span class="status-pill ${configuredPush ? "tone-good" : "tone-info"}">${dot(configuredPush ? "good" : "info")} ${escapeHtml(configuredPush)} push credentials</span>
+      <span class="status-pill ${data.settings.redactedKeys.length ? "tone-warn" : "tone-info"}">${dot(data.settings.redactedKeys.length ? "warn" : "info")} ${escapeHtml(data.settings.redactedKeys.length)} redacted keys</span>
+    </div>
+  `;
+}
+
+function tenantSettingsTables(data) {
+  if (!data) {
+    if (state.errors.dashboardTenantSettings?.skipped) {
+      return `<div class="empty-state">Add a bearer token to load tenant settings.</div>`;
+    }
+    return `<div class="empty-state">No tenant settings loaded yet.</div>`;
+  }
+  return `
+    <div class="split-panel">
+      ${tenantLimitsTable(data.settings.limits)}
+      ${pushCredentialsTable(data.settings.push)}
+    </div>
+    ${tenantSettingKeysTable(data.settings)}
+  `;
+}
+
+function tenantLimitsTable(limits = {}) {
+  const rows = Object.entries(limits);
+  return `
+    <div class="object-table-wrap">
+      <table class="table">
+        <thead><tr><th>Limit</th><th>Override</th></tr></thead>
+        <tbody>
+          ${
+            rows.length
+              ? rows
+                  .map(([key, value]) => `
+                    <tr>
+                      <td><code class="code-inline">${escapeHtml(key)}</code></td>
+                      <td>${escapeHtml(value)}</td>
+                    </tr>
+                  `)
+                  .join("")
+              : `<tr><td colspan="2">No per-tenant limit overrides.</td></tr>`
+          }
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function pushCredentialsTable(push = {}) {
+  return `
+    <div class="object-table-wrap">
+      <table class="table">
+        <thead><tr><th>Push platform</th><th>Status</th></tr></thead>
+        <tbody>
+          ${["apns", "fcm", "webPush"]
+            .map((platform) => {
+              const configured = Boolean(push[platform]?.configured);
+              return `
+                <tr>
+                  <td><code class="code-inline">${escapeHtml(platform)}</code></td>
+                  <td><span class="status-tag ${configured ? "tone-good" : "tone-info"}">${dot(configured ? "good" : "info")} ${configured ? "configured" : "not configured"}</span></td>
+                </tr>
+              `;
+            })
+            .join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function tenantSettingKeysTable(settings) {
+  const rows = settings.configuredKeys;
+  if (!rows.length) {
+    return `<div class="empty-state">No tenant settings stored for ${escapeHtml(state.data.dashboardTenantSettings?.tenantId || "this tenant")}.</div>`;
+  }
+  return `
+    <div class="object-table-wrap">
+      <table class="table">
+        <thead><tr><th>Stored key</th><th>Dashboard treatment</th></tr></thead>
+        <tbody>
+          ${rows
+            .map((key) => {
+              const redacted = settings.redactedKeys.includes(key);
+              const known = !settings.otherKeys.includes(key);
+              const tone = redacted ? "warn" : known ? "good" : "info";
+              const treatment = redacted ? "redacted" : known ? "summarized" : "key only";
+              return `
+                <tr>
+                  <td><code class="code-inline">${escapeHtml(key)}</code></td>
+                  <td><span class="status-tag ${toneClass(tone)}">${dot(tone)} ${escapeHtml(treatment)}</span></td>
+                </tr>
+              `;
+            })
+            .join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
 function renderSettings() {
   return `
     ${pageHeader("Settings", "Configure the local server endpoint and the credential used for inspection routes.")}
@@ -1380,11 +1567,13 @@ function renderSettings() {
           </div>
         </section>
         ${dashboardTenantsPanel()}
+        ${dashboardTenantSettingsPanel()}
         ${definitionListPanel("Dashboard facts", [
           ["Static app", `Served from apps/dev-dashboard on port ${DASHBOARD_PORT}`],
           ["Inspection auth", "Bearer token or dev session required"],
           ["Default server", DEFAULT_ENDPOINT],
           ["Tenant directory", "Read-only mounted dashboard API"],
+          ["Tenant settings", "Sanitized settings summary"],
           ["Generated artifacts", "Not edited by this dashboard"],
         ])}
       </div>
@@ -1583,6 +1772,17 @@ function bindControls() {
     objectTenantForm.addEventListener("submit", (event) => {
       event.preventDefault();
       state.dataTenantId = new FormData(objectTenantForm).get("tenantId")?.toString().trim() || "";
+      if (state.dataTenantId) localStorage.setItem(STORAGE_KEYS.tenantId, state.dataTenantId);
+      else localStorage.removeItem(STORAGE_KEYS.tenantId);
+      void refreshData();
+    });
+  }
+
+  const tenantSettingsForm = app.querySelector("[data-form='tenant-settings']");
+  if (tenantSettingsForm) {
+    tenantSettingsForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      state.dataTenantId = new FormData(tenantSettingsForm).get("tenantId")?.toString().trim() || "";
       if (state.dataTenantId) localStorage.setItem(STORAGE_KEYS.tenantId, state.dataTenantId);
       else localStorage.removeItem(STORAGE_KEYS.tenantId);
       void refreshData();

@@ -7,6 +7,7 @@ interface DashboardHarness {
   fetchPlatformEventsHealth(): Promise<unknown>;
   fetchDashboardAccounts(): Promise<unknown>;
   fetchDashboardTenants(): Promise<unknown>;
+  fetchDashboardTenantSettings(): Promise<unknown>;
 }
 
 describe("dev dashboard script", () => {
@@ -17,6 +18,7 @@ describe("dev dashboard script", () => {
     await dashboard.fetchPlatformEventsHealth();
     await dashboard.fetchDashboardAccounts();
     await dashboard.fetchDashboardTenants();
+    await dashboard.fetchDashboardTenantSettings();
 
     expect(dashboard.calls.map((call) => new URL(call.url).pathname)).toEqual([
       "/_frick/inspect/analytics/summary",
@@ -32,12 +34,14 @@ describe("dev dashboard script", () => {
     await dashboard.fetchPlatformEventsHealth();
     await dashboard.fetchDashboardAccounts();
     await dashboard.fetchDashboardTenants();
+    await dashboard.fetchDashboardTenantSettings();
 
     expect(dashboard.calls.map((call) => new URL(call.url).pathname)).toEqual([
       "/_frick/dashboard/api/analytics/summary",
       "/_frick/dashboard/api/platform-events/health",
       "/_frick/dashboard/api/accounts",
       "/_frick/dashboard/api/tenants",
+      "/_frick/dashboard/api/tenant-settings",
     ]);
   });
 });
@@ -69,7 +73,7 @@ function loadDashboardScript(input: { pathname: string }): DashboardHarness {
     "history",
     "window",
     `${source}
-return { fetchAnalyticsSummary, fetchPlatformEventsHealth, fetchDashboardAccounts, fetchDashboardTenants };`,
+return { fetchAnalyticsSummary, fetchPlatformEventsHealth, fetchDashboardAccounts, fetchDashboardTenants, fetchDashboardTenantSettings };`,
   ) as (
     document: unknown,
     location: unknown,
@@ -77,7 +81,7 @@ return { fetchAnalyticsSummary, fetchPlatformEventsHealth, fetchDashboardAccount
     fetch: unknown,
     history: unknown,
     window: unknown,
-  ) => Pick<DashboardHarness, "fetchAnalyticsSummary" | "fetchPlatformEventsHealth" | "fetchDashboardAccounts" | "fetchDashboardTenants">;
+  ) => Pick<DashboardHarness, "fetchAnalyticsSummary" | "fetchPlatformEventsHealth" | "fetchDashboardAccounts" | "fetchDashboardTenants" | "fetchDashboardTenantSettings">;
 
   const api = factory(
     { getElementById: () => app },
