@@ -202,6 +202,9 @@ KafkaJS adapter against Redpanda or Kafka. The Kafka adapter connects lazily
 on first publish or claim so server construction remains synchronous. This
 baseline commits only contiguous terminal offsets on `ack`, republishes
 retried events to the broker, and publishes poison messages to `<topic>.dlq`.
+The job worker publishes initial `jobs.lifecycle` events for completed,
+retryable failed, and dead-lettered jobs; downstream consumers can claim those
+events from the same adapter as analytics and telemetry events.
 Per-consumer health lag is still process-local, and idempotency is enforced by
 the active adapter process after it has published or consumed a matching event;
 cross-process and post-restart Kafka idempotency require a durable key index in

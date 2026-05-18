@@ -147,6 +147,17 @@ function gaugeValue(name) {
   return numberValue(entry?.value, 0);
 }
 
+function platformEventsHealth() {
+  return state.data.platformEvents || state.data.dashboardMetadata?.platformEvents;
+}
+
+function platformEventsUnavailableDetail() {
+  const error = state.errors.platformEvents;
+  if (error?.skipped) return "Add a bearer token to load pipeline health.";
+  if (error) return error.message;
+  return "Mounted dashboard route required.";
+}
+
 function requestRows() {
   const rows = metricEntries("counters").filter((entry) => entry.name === "frick.http.requests.total");
   const grouped = new Map();
@@ -210,6 +221,7 @@ async function refreshData() {
     projections: () => fetchJson("/_frick/inspect/projections", { auth: true }),
     search: () => fetchJson("/_frick/inspect/search", { auth: true }),
     dashboardMetadata: () => fetchDashboardMetadata(),
+    platformEvents: () => fetchPlatformEventsHealth(),
     eventSummary: () => fetchJson("/_frick/inspect/devtools/summary?windowMs=300000", { auth: true }),
     events: () =>
       fetchJson(
@@ -224,7 +236,7 @@ async function refreshData() {
     Object.entries(tasks).map(async ([key, task]) => {
       try {
         const value = await task();
-        if (key === "dashboardMetadata" && value === undefined) return;
+        if ((key === "dashboardMetadata" || key === "platformEvents") && value === undefined) return;
         nextData[key] = value;
       } catch (error) {
         nextErrors[key] = error;
@@ -242,6 +254,11 @@ async function refreshData() {
 async function fetchDashboardMetadata() {
   if (!isMountedDashboard()) return undefined;
   return fetchJson("/_frick/dashboard/api/metadata", { auth: true });
+}
+
+async function fetchPlatformEventsHealth() {
+  if (!isMountedDashboard()) return undefined;
+  return fetchJson("/_frick/dashboard/api/platform-events/health", { auth: true });
 }
 
 async function devLogin() {
@@ -311,6 +328,7 @@ function overviewMetrics() {
   const server = state.data.server;
   const db = state.data.db;
   const eventSummary = state.data.eventSummary;
+  const platformEvents = platformEventsHealth();
   const wsConnections = gaugeValue("frick.ws.connections.current");
   const requests = sumCounters("frick.http.requests.total");
   const frames = sumCounters("frick.ws.frames.total");
@@ -336,6 +354,14 @@ function overviewMetrics() {
         eventSummary?.total ?? 0,
         "Events in the last five minutes",
         eventSummary?.total ? "good" : state.token ? "info" : "warn",
+      )}
+      ${metricCard(
+        "Platform events",
+        platformEvents ? platformEvents.adapter : "not loaded",
+        platformEvents
+          ? `${platformEvents.pending} pending, ${platformEvents.deadLettered} dead-lettered`
+          : platformEventsUnavailableDetail(),
+        platformEvents?.ok ? "good" : platformEvents ? "bad" : "warn",
       )}
       ${metricCard(
         "Idempotency cache",
@@ -505,12 +531,22 @@ function serverInspector() {
 }
 
 function inspectionSummary() {
+  const platformEvents = platformEventsHealth();
   const summary = {
     endpoint: state.endpoint,
     hasToken: Boolean(state.token),
     server: state.data.server || null,
     db: state.data.db || null,
     jobs: state.data.jobs || null,
+    platformEvents: platformEvents
+      ? {
+          adapter: platformEvents.adapter,
+          ok: platformEvents.ok,
+          pending: platformEvents.pending,
+          deadLettered: platformEvents.deadLettered,
+          consumers: platformEvents.consumers?.length ?? 0,
+        }
+      : null,
     errors: Object.fromEntries(
       Object.entries(state.errors)
         .filter(([, error]) => Boolean(error))
@@ -754,11 +790,32 @@ function renderJobs() {
 }
 
 function renderObservability() {
+  const platformEvents = platformEventsHealth();
   return `
     ${pageHeader("Observability", "Read metric snapshots and the retained DevTools event feed from the running server.")}
     ${statusStrip()}
     <div class="dashboard-grid">
       <div class="primary-stack">
+        <section class="metric-grid">
+          ${metricCard(
+            "Pipeline",
+            platformEvents ? platformEvents.adapter : "not loaded",
+            platformEvents ? `${platformEvents.retained} retained events` : platformEventsUnavailableDetail(),
+            platformEvents?.ok ? "good" : platformEvents ? "bad" : "warn",
+          )}
+          ${metricCard(
+            "Pending events",
+            platformEvents?.pending ?? 0,
+            `${platformEvents?.claimed ?? 0} claimed, ${platformEvents?.unclaimed ?? 0} unclaimed`,
+            platformEvents?.pending ? "warn" : platformEvents ? "good" : "info",
+          )}
+          ${metricCard(
+            "Dead letters",
+            platformEvents?.deadLettered ?? 0,
+            `${platformEvents?.consumers?.length ?? 0} consumers tracked`,
+            platformEvents?.deadLettered ? "bad" : platformEvents ? "good" : "info",
+          )}
+        </section>
         <section class="panel">
           <header class="panel-header">
             <div>

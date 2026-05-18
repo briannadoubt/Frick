@@ -158,7 +158,9 @@ describe("mounted dashboard", () => {
 
     const scriptResponse = await fetch(`${app.httpUrl}/_frick/dashboard/dashboard.js`);
     expect(scriptResponse.status).toBe(200);
-    expect(await scriptResponse.text()).toContain("/_frick/dashboard/api/metadata");
+    const script = await scriptResponse.text();
+    expect(script).toContain("/_frick/dashboard/api/metadata");
+    expect(script).toContain("platform-events/health");
   });
 
   it("does not serve dashboard routes under app base paths", async () => {
