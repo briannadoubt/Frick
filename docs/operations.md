@@ -219,6 +219,12 @@ those APIs require the configured admin bearer until the dashboard capability
 system lands. In development, a valid session bearer from `/auth/dev-login` can
 read the dashboard APIs. `/_frick/dashboard/api/platform-events/health`
 returns the same platform-event health payload as the inspection route.
+`/_frick/dashboard/api/analytics/summary?windowMs=86400000` returns a
+tenant-scoped product analytics summary derived from retained
+`analytics.user_event` platform events, including event totals, unique users,
+top event names, top viewed routes, and recent event metadata. Tenant session
+principals only see their session tenant; production admin bearers see the
+project-wide summary.
 
 The platform event pipeline defaults to SQLite for local and lightweight
 deployments. Set `FRICK_PLATFORM_EVENTS_DRIVER=kafka` with

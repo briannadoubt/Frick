@@ -1,8 +1,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { DatabaseSync } from "node:sqlite";
 import type { Principal } from "../authz.js";
 import type { FrickAppRegistry } from "../apps/registry.js";
 import type { PlatformEventPipeline } from "../platform-events/types.js";
 import type { FrickProjectModule } from "../platform/project.js";
+import { buildAnalyticsSummary, normalizeAnalyticsSummaryWindowMs } from "../analytics/summary.js";
 import { buildDashboardMetadata } from "./metadata.js";
 import { sendDashboardAsset } from "./assets.js";
 
@@ -13,6 +15,7 @@ export interface DashboardRouteInput {
   readonly project: FrickProjectModule;
   readonly appRegistry: FrickAppRegistry;
   readonly platformEvents: PlatformEventPipeline;
+  readonly db: DatabaseSync;
   readonly authenticate: () => Principal | Error;
   readonly sendJson: (status: number, body: unknown) => void;
   readonly sendError: (error: unknown, requestId: string) => void;
@@ -84,6 +87,23 @@ export async function handleDashboardRoute(input: DashboardRouteInput): Promise<
     return true;
   }
 
+  if (relativePath === "/api/analytics/summary") {
+    setDashboardHeaders(input.response);
+    const principal = input.authenticate();
+    if (principal instanceof Error) {
+      input.sendError(principal, "dashboard_unauthorized");
+      return true;
+    }
+
+    sendDashboardJson(input, 200, buildAnalyticsSummary({
+      db: input.db,
+      principal,
+      windowMs: normalizeAnalyticsSummaryWindowMs(input.url.searchParams.get("windowMs")),
+      ...optionalLimit(input.url.searchParams.get("limit")),
+    }));
+    return true;
+  }
+
   if (relativePath === "/api/platform-events/health") {
     setDashboardHeaders(input.response);
     const principal = input.authenticate();
@@ -110,6 +130,13 @@ export async function handleDashboardRoute(input: DashboardRouteInput): Promise<
 
 function isDashboardPath(pathname: string): boolean {
   return pathname === dashboardPrefix || pathname.startsWith(`${dashboardPrefix}/`);
+}
+
+function optionalLimit(value: string | null): { limit?: number } {
+  if (value === null || value === "") return {};
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return {};
+  return { limit: parsed };
 }
 
 function setDashboardHeaders(response: ServerResponse): void {

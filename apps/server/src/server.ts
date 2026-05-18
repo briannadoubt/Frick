@@ -574,6 +574,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         project: runtimeProject,
         appRegistry,
         platformEvents,
+        db: store.db,
         authenticate: () => inspectionPrincipalFromRequest(request, requestUrl, store, config),
         sendJson: (status, body) => sendJson(response, status, body),
         sendError: (error, requestId) => sendErrorWithMetrics(response, error, requestId),

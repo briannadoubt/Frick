@@ -147,6 +147,10 @@ available, records the initial route, and records subsequent
 </FrickProvider>
 ```
 
+Mounted Fricken Dashboard reads those accepted events through
+`/_frick/dashboard/api/analytics/summary` and shows tenant-scoped product event
+counts plus route activity without requiring app-local analytics tables.
+
 Pass an options object to customize the browser source, event name, route
 properties, or error handler:
 

@@ -82,6 +82,7 @@ A multi-commit rollout that lifts the client SDKs from "you can hand-write it" t
 - **Per-tenant push credentials** — stored in `tenant_settings` wrapped with AES-256-GCM. The encryption key comes from `FRICK_PUSH_CRED_KEY` (base64-encoded 32 bytes); when unset the adapters return a `push.credentials.disabled` skipped-delivery rather than running without encryption.
 - **`frick.push.delivery` DevTools events** — every fan-out attempt records intent, platform, status, error code, and receipt id so operators can read back exactly what landed where.
 - **Platform event pipeline baseline** — the server now ships a shared event contract, memory and durable SQLite adapters, a KafkaJS Redpanda/Kafka adapter boundary, backup/restore preservation, authenticated health at `/_frick/inspect/platform-events` plus `/_frick/dashboard/api/platform-events/health`, and initial job lifecycle events.
+- **Dashboard analytics summary** — mounted Fricken Dashboard now exposes `/_frick/dashboard/api/analytics/summary`, a tenant-scoped read model over retained `analytics.user_event` platform events, and renders product event/route summaries in the dashboard.
 - WebSocket presence subscribe/set/clear frames now run through authz. Foundation `TypingState` enforces known conversation membership and prevents clients from writing another user's typing state.
 
 ### CLI (`@frick/cli`)

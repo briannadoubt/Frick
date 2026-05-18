@@ -151,6 +151,17 @@ function platformEventsHealth() {
   return state.data.platformEvents || state.data.dashboardMetadata?.platformEvents;
 }
 
+function analyticsSummary() {
+  return state.data.analyticsSummary;
+}
+
+function analyticsUnavailableDetail() {
+  const error = state.errors.analyticsSummary;
+  if (error?.skipped) return "Add a bearer token to load product analytics.";
+  if (error) return error.message;
+  return "Mounted dashboard route required.";
+}
+
 function platformEventsUnavailableDetail() {
   const error = state.errors.platformEvents;
   if (error?.skipped) return "Add a bearer token to load pipeline health.";
@@ -175,6 +186,20 @@ function frameRows() {
   return rows
     .map((row) => ({ label: row.fields?.kind || "unknown", value: numberValue(row.value) }))
     .sort((a, b) => b.value - a.value);
+}
+
+function analyticsTopEventRows() {
+  return (analyticsSummary()?.topEvents || []).map((row) => ({
+    label: row.name,
+    value: numberValue(row.count),
+  }));
+}
+
+function analyticsTopRouteRows() {
+  return (analyticsSummary()?.topRoutes || []).map((row) => ({
+    label: row.path,
+    value: numberValue(row.count),
+  }));
 }
 
 async function fetchJson(path, options = {}) {
@@ -221,6 +246,7 @@ async function refreshData() {
     projections: () => fetchJson("/_frick/inspect/projections", { auth: true }),
     search: () => fetchJson("/_frick/inspect/search", { auth: true }),
     dashboardMetadata: () => fetchDashboardMetadata(),
+    analyticsSummary: () => fetchAnalyticsSummary(),
     platformEvents: () => fetchPlatformEventsHealth(),
     eventSummary: () => fetchJson("/_frick/inspect/devtools/summary?windowMs=300000", { auth: true }),
     events: () =>
@@ -236,7 +262,10 @@ async function refreshData() {
     Object.entries(tasks).map(async ([key, task]) => {
       try {
         const value = await task();
-        if ((key === "dashboardMetadata" || key === "platformEvents") && value === undefined) return;
+        if (
+          (key === "dashboardMetadata" || key === "analyticsSummary" || key === "platformEvents") &&
+          value === undefined
+        ) return;
         nextData[key] = value;
       } catch (error) {
         nextErrors[key] = error;
@@ -254,6 +283,11 @@ async function refreshData() {
 async function fetchDashboardMetadata() {
   if (!isMountedDashboard()) return undefined;
   return fetchJson("/_frick/dashboard/api/metadata", { auth: true });
+}
+
+async function fetchAnalyticsSummary() {
+  if (!isMountedDashboard()) return undefined;
+  return fetchJson("/_frick/dashboard/api/analytics/summary?windowMs=86400000", { auth: true });
 }
 
 async function fetchPlatformEventsHealth() {
@@ -328,6 +362,7 @@ function overviewMetrics() {
   const server = state.data.server;
   const db = state.data.db;
   const eventSummary = state.data.eventSummary;
+  const analytics = analyticsSummary();
   const platformEvents = platformEventsHealth();
   const wsConnections = gaugeValue("frick.ws.connections.current");
   const requests = sumCounters("frick.http.requests.total");
@@ -354,6 +389,14 @@ function overviewMetrics() {
         eventSummary?.total ?? 0,
         "Events in the last five minutes",
         eventSummary?.total ? "good" : state.token ? "info" : "warn",
+      )}
+      ${metricCard(
+        "Analytics events",
+        analytics?.totals?.events ?? 0,
+        analytics
+          ? `${analytics.totals.uniqueUsers} users, ${analytics.topEvents.length} event types`
+          : analyticsUnavailableDetail(),
+        analytics?.totals?.events ? "good" : analytics ? "info" : "warn",
       )}
       ${metricCard(
         "Platform events",
@@ -447,6 +490,26 @@ function activityPanel(limit = 8) {
   `;
 }
 
+function analyticsPanel() {
+  const analytics = analyticsSummary();
+  return `
+    <div class="split-panel">
+      ${barChart(
+        "Product events",
+        analyticsTopEventRows(),
+        analytics ? "No product analytics events in this window." : analyticsUnavailableDetail(),
+        "green",
+      )}
+      ${barChart(
+        "Viewed routes",
+        analyticsTopRouteRows(),
+        analytics ? "No route views in this window." : analyticsUnavailableDetail(),
+        "blue",
+      )}
+    </div>
+  `;
+}
+
 function launchGrid() {
   return `
     <section class="panel">
@@ -532,6 +595,7 @@ function serverInspector() {
 
 function inspectionSummary() {
   const platformEvents = platformEventsHealth();
+  const analytics = analyticsSummary();
   const summary = {
     endpoint: state.endpoint,
     hasToken: Boolean(state.token),
@@ -545,6 +609,13 @@ function inspectionSummary() {
           pending: platformEvents.pending,
           deadLettered: platformEvents.deadLettered,
           consumers: platformEvents.consumers?.length ?? 0,
+        }
+      : null,
+    analytics: analytics
+      ? {
+          events: analytics.totals?.events ?? 0,
+          uniqueUsers: analytics.totals?.uniqueUsers ?? 0,
+          topEvents: analytics.topEvents?.length ?? 0,
         }
       : null,
     errors: Object.fromEntries(
@@ -791,6 +862,7 @@ function renderJobs() {
 
 function renderObservability() {
   const platformEvents = platformEventsHealth();
+  const analytics = analyticsSummary();
   return `
     ${pageHeader("Observability", "Read metric snapshots and the retained DevTools event feed from the running server.")}
     ${statusStrip()}
@@ -815,7 +887,16 @@ function renderObservability() {
             `${platformEvents?.consumers?.length ?? 0} consumers tracked`,
             platformEvents?.deadLettered ? "bad" : platformEvents ? "good" : "info",
           )}
+          ${metricCard(
+            "Analytics events",
+            analytics?.totals?.events ?? 0,
+            analytics
+              ? `${analytics.totals.uniqueTenants} tenants, ${analytics.totals.uniqueUsers} users`
+              : analyticsUnavailableDetail(),
+            analytics?.totals?.events ? "good" : analytics ? "info" : "warn",
+          )}
         </section>
+        ${analyticsPanel()}
         <section class="panel">
           <header class="panel-header">
             <div>
