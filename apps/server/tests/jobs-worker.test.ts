@@ -3,6 +3,11 @@ import { FrickStore } from "../src/store.js";
 import { createNoopLogger } from "../src/logger.js";
 import { createFrickJobRegistry, type FrickJobHandler } from "../src/jobs/registry.js";
 import { createFrickJobWorker, type FrickJobWorker } from "../src/jobs/worker.js";
+import type {
+  FrickJobTelemetryRun,
+  FrickJobTelemetryResult,
+  FrickTelemetryRuntime,
+} from "../src/telemetry/runtime.js";
 
 let store: FrickStore | undefined;
 let worker: FrickJobWorker | undefined;
@@ -33,6 +38,105 @@ async function waitFor<T>(predicate: () => T | undefined, timeoutMs = 2000): Pro
 }
 
 describe("FrickJobWorker", () => {
+  it("records OTel job run spans with tenant, type, attempt, and duration", async () => {
+    store = new FrickStore({ path: ":memory:", seed: false });
+    const registry = createFrickJobRegistry();
+    const telemetry = new RecordingTelemetryRuntime();
+    registry.register("TelemetryJob", async () => ({ status: "completed", result: { ok: true } }));
+    worker = createFrickJobWorker({
+      store,
+      registry,
+      logger: createNoopLogger(),
+      pollIntervalMs: 10,
+      workerId: "worker-telemetry",
+      telemetry,
+    });
+    worker.start();
+    const row = store.jobs.enqueue({
+      tenantId: "_default",
+      jobType: "TelemetryJob",
+      payload: { value: 42 },
+    });
+
+    await waitFor(() => store!.jobs.getById(row.id)?.status === "completed");
+
+    expect(telemetry.jobs).toEqual([
+      expect.objectContaining({
+        input: {
+          jobId: row.id,
+          jobType: "TelemetryJob",
+          tenantId: "_default",
+          attemptCount: 1,
+          workerId: "worker-telemetry",
+        },
+        result: expect.objectContaining({
+          status: "completed",
+          durationMs: expect.any(Number),
+        }),
+      }),
+    ]);
+  });
+
+  it("records dead-lettered job spans with error metadata", async () => {
+    store = new FrickStore({ path: ":memory:", seed: false });
+    const registry = createFrickJobRegistry();
+    const telemetry = new RecordingTelemetryRuntime();
+    registry.register("BoomTelemetryJob", async () => {
+      throw new Error("kaboom");
+    });
+    worker = createFrickJobWorker({
+      store,
+      registry,
+      logger: createNoopLogger(),
+      pollIntervalMs: 10,
+      telemetry,
+    });
+    worker.start();
+    const row = store.jobs.enqueue({
+      tenantId: "_default",
+      jobType: "BoomTelemetryJob",
+      payload: {},
+      maxAttempts: 1,
+    });
+
+    await waitFor(() => store!.jobs.getById(row.id)?.status === "dead_lettered");
+
+    expect(telemetry.jobs).toEqual([
+      expect.objectContaining({
+        input: expect.objectContaining({
+          jobId: row.id,
+          jobType: "BoomTelemetryJob",
+        }),
+        result: expect.objectContaining({
+          status: "dead_lettered",
+          errorCode: "server.internal",
+          retryable: true,
+        }),
+      }),
+    ]);
+  });
+
+  it("keeps job completion alive when telemetry throws", async () => {
+    store = new FrickStore({ path: ":memory:", seed: false });
+    const registry = createFrickJobRegistry();
+    registry.register("TelemetryThrowsJob", async () => ({ status: "completed" }));
+    worker = createFrickJobWorker({
+      store,
+      registry,
+      logger: createNoopLogger(),
+      pollIntervalMs: 10,
+      telemetry: new ThrowingTelemetryRuntime(),
+    });
+    worker.start();
+    const row = store.jobs.enqueue({
+      tenantId: "_default",
+      jobType: "TelemetryThrowsJob",
+      payload: {},
+    });
+
+    await waitFor(() => store!.jobs.getById(row.id)?.status === "completed");
+  });
+
   it("picks up a job, runs the handler, and marks it completed", async () => {
     store = new FrickStore({ path: ":memory:", seed: false });
     const registry = createFrickJobRegistry();
@@ -141,3 +245,33 @@ describe("FrickJobWorker", () => {
     worker = undefined;
   });
 });
+
+class RecordingTelemetryRuntime implements Partial<FrickTelemetryRuntime> {
+  readonly jobs: Array<{
+    input: FrickJobTelemetryRun;
+    result?: FrickJobTelemetryResult;
+  }> = [];
+
+  startJobRun(input: FrickJobTelemetryRun) {
+    const record: {
+      input: FrickJobTelemetryRun;
+      result?: FrickJobTelemetryResult;
+    } = { input };
+    this.jobs.push(record);
+    return {
+      end: (result: FrickJobTelemetryResult) => {
+        record.result = result;
+      },
+    };
+  }
+}
+
+class ThrowingTelemetryRuntime implements Partial<FrickTelemetryRuntime> {
+  startJobRun() {
+    return {
+      end: () => {
+        throw new Error("job telemetry failed");
+      },
+    };
+  }
+}

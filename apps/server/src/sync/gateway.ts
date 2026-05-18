@@ -55,6 +55,12 @@ import type { FrickMetrics, Gauge } from "../metrics.js";
 import { emitDevToolsEvent } from "../devtools/emit.js";
 import type { FrickAppRegistry } from "../apps/registry.js";
 import type { ClusterEnvelope, FrickClusterBus } from "../cluster/bus.js";
+import type {
+  FrickTelemetryRuntime,
+  FrickWebSocketCloseCategory,
+  FrickWebSocketConnectionTelemetrySpan,
+  FrickWebSocketFrameTelemetry,
+} from "../telemetry/runtime.js";
 
 /**
  * Per-connection tracking for the DevTools `ws.disconnect` event. We synth a
@@ -88,9 +94,13 @@ export class SyncGateway {
    */
   readonly #clientLimits = new WeakMap<SyncClient, FrickLimits>();
   readonly #devtoolsContexts = new WeakMap<SyncClient, DevToolsConnectionContext>();
+  readonly #telemetryConnections = new WeakMap<SyncClient, FrickWebSocketConnectionTelemetrySpan>();
   readonly #heartbeatTimers = new Set<ReturnType<typeof setInterval>>();
   readonly #metrics: FrickMetrics | undefined;
   readonly #connectionsGauge: Gauge | undefined;
+  readonly #telemetry:
+    | Pick<FrickTelemetryRuntime, "startWebSocketConnection" | "recordWebSocketFrame">
+    | undefined;
   #activeConnections = 0;
 
   readonly #projections: FrickProjectionRegistry | undefined;
@@ -111,6 +121,7 @@ export class SyncGateway {
       limits?: FrickLimits;
       policyHooks?: readonly FrickPolicyHook[];
       metrics?: FrickMetrics;
+      telemetry?: Pick<FrickTelemetryRuntime, "startWebSocketConnection" | "recordWebSocketFrame">;
       projections?: FrickProjectionRegistry;
       appRegistry?: FrickAppRegistry;
       /**
@@ -126,6 +137,7 @@ export class SyncGateway {
     this.#policyHooks = options.policyHooks ?? [];
     this.#metrics = options.metrics;
     this.#connectionsGauge = this.#metrics?.gauge("frick.ws.connections.current");
+    this.#telemetry = options.telemetry;
     this.#projections = options.projections;
     this.#appRegistry = options.appRegistry;
     this.#clusterBus = options.clusterBus;
@@ -185,6 +197,8 @@ export class SyncGateway {
         frameCounts: {},
       };
       this.#devtoolsContexts.set(client, devtoolsCtx);
+      const telemetryConnection = this.#startWebSocketTelemetryConnection(devtoolsCtx, principal);
+      this.#telemetryConnections.set(client, telemetryConnection);
       emitDevToolsEvent(this.store, {
         kind: "ws.connect",
         ...(principal ? { tenantId: principal.tenantId } : {}),
@@ -200,14 +214,21 @@ export class SyncGateway {
         this.#lastSeenAt.set(client, Date.now());
         this.#handleRawFrame(client, socket, payload as Buffer);
       });
-      socket.on("close", () => {
+      socket.on("close", (code) => {
         clearInterval(heartbeat);
         this.#heartbeatTimers.delete(heartbeat);
         this.#subscriptions.removeClient(client);
         this.#removeSessionClient(client);
+        this.#telemetryConnections.delete(client);
         if (client.principal) this.#bumpTenantCount(client.principal.tenantId, -1);
         this.#activeConnections = Math.max(0, this.#activeConnections - 1);
         this.#connectionsGauge?.set(this.#activeConnections);
+        this.#finishWebSocketTelemetryConnection(telemetryConnection, {
+          durationMs: Date.now() - devtoolsCtx.connectedAtMs,
+          frameCounts: devtoolsCtx.frameCounts,
+          closeCode: code,
+          closeCategory: webSocketCloseCategory(code),
+        });
         emitDevToolsEvent(this.store, {
           kind: "ws.disconnect",
           ...(client.principal ? { tenantId: client.principal.tenantId } : {}),
@@ -246,6 +267,53 @@ export class SyncGateway {
       }
     }
     this.#clientsBySessionToken.delete(sessionToken);
+  }
+
+  #startWebSocketTelemetryConnection(
+    devtoolsCtx: DevToolsConnectionContext,
+    principal: Principal | undefined,
+  ): FrickWebSocketConnectionTelemetrySpan {
+    try {
+      return (
+        this.#telemetry?.startWebSocketConnection?.({
+          clientId: devtoolsCtx.clientId,
+          tenantId: principal?.tenantId,
+          userId: principal?.userId,
+        }) ?? { end: () => {} }
+      );
+    } catch {
+      return { end: () => {} };
+    }
+  }
+
+  #finishWebSocketTelemetryConnection(
+    span: FrickWebSocketConnectionTelemetrySpan,
+    result: Parameters<FrickWebSocketConnectionTelemetrySpan["end"]>[0],
+  ): void {
+    try {
+      span.end(result);
+    } catch {
+      // Telemetry must never affect WebSocket cleanup.
+    }
+  }
+
+  #authenticateWebSocketTelemetryConnection(client: SyncClient, principal: Principal): void {
+    try {
+      this.#telemetryConnections.get(client)?.authenticate?.({
+        tenantId: principal.tenantId,
+        userId: principal.userId,
+      });
+    } catch {
+      // Telemetry must never affect session binding.
+    }
+  }
+
+  #recordWebSocketFrameTelemetry(input: FrickWebSocketFrameTelemetry): void {
+    try {
+      this.#telemetry?.recordWebSocketFrame?.(input);
+    } catch {
+      // Telemetry must never affect frame dispatch.
+    }
   }
 
   /**
@@ -513,7 +581,7 @@ export class SyncGateway {
     }
     try {
       const decoded = decodeFrame(payload);
-      const kindLabel = FrameKind[decoded[0]] ?? String(decoded[0]);
+      const kindLabel = webSocketFrameKindLabel(decoded[0]);
       if (this.#metrics) {
         this.#metrics
           .counter("frick.ws.frames.total", { kind: kindLabel })
@@ -525,6 +593,12 @@ export class SyncGateway {
       if (devtoolsCtx) {
         devtoolsCtx.frameCounts[kindLabel] = (devtoolsCtx.frameCounts[kindLabel] ?? 0) + 1;
       }
+      this.#recordWebSocketFrameTelemetry({
+        kind: kindLabel,
+        byteLength,
+        tenantId: client.principal?.tenantId,
+        userId: client.principal?.userId,
+      });
       this.#handleFrame(client, decoded);
     } catch (error) {
       const envelope = createFrickErrorEnvelope({
@@ -1284,6 +1358,7 @@ export class SyncGateway {
     }
     client.principal = principal;
     this.#clientLimits.set(client, resolveTenantLimits(principal.tenantId, this.store, this.#limits));
+    this.#authenticateWebSocketTelemetryConnection(client, principal);
   }
 
   #addSessionClient(sessionToken: string, client: SyncClient): void {
@@ -1345,6 +1420,54 @@ function requestIdForPreHelloFrame(frame: FrickFrame): string {
       return frame[1].requestId;
     default:
       return "pre-hello";
+  }
+}
+
+function webSocketFrameKindLabel(kind: unknown): string {
+  if (typeof kind !== "number" || !Number.isInteger(kind)) {
+    return "unknown";
+  }
+  const label = FrameKind[kind];
+  return typeof label === "string" ? label : "unknown";
+}
+
+function webSocketCloseCategory(code: number | undefined): FrickWebSocketCloseCategory {
+  switch (code) {
+    case 1000:
+      return "normal";
+    case 1001:
+      return "going_away";
+    case 1002:
+      return "protocol_error";
+    case 1003:
+      return "unsupported_data";
+    case 1005:
+      return "no_status";
+    case 1006:
+      return "abnormal";
+    case 1007:
+      return "invalid_payload";
+    case 1008:
+      return "policy_violation";
+    case 1009:
+      return "too_large";
+    case 1010:
+      return "mandatory_extension";
+    case 1011:
+      return "internal_error";
+    case 1012:
+      return "service_restart";
+    case 1013:
+      return "try_again_later";
+    case 1014:
+      return "bad_gateway";
+    case 1015:
+      return "tls_handshake";
+    default:
+      if (code !== undefined && code >= 4000 && code <= 4999) {
+        return "private";
+      }
+      return "unknown";
   }
 }
 

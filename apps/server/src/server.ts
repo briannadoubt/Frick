@@ -480,6 +480,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     limits,
     policyHooks,
     metrics,
+    telemetry,
     projections: store.projections,
     appRegistry,
     ...(options.clusterBus ? { clusterBus: options.clusterBus } : {}),
@@ -553,6 +554,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     registry: jobRegistry,
     logger,
     metrics,
+    telemetry,
     platformEvents,
     ...(options.jobs?.pollIntervalMs !== undefined
       ? { pollIntervalMs: options.jobs.pollIntervalMs }

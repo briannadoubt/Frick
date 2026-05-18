@@ -193,9 +193,21 @@ server exposes these GET endpoints under `/_frick/inspect/`:
   `frick.http.errors.total{code}`, and `frick.ws.frames.total{kind}`. Gauges
   include `frick.ws.connections.current`. No retention or historical
   aggregation — scrape periodically to integrate with a metrics backend. When
-  OTel is enabled, the server also exports HTTP request spans plus
-  `frick.http.server.requests` and `frick.http.server.duration_ms` metrics
-  through OTLP; the in-process inspection snapshot remains available for
+  OTel is enabled, the server also exports HTTP request spans, WebSocket
+  connection spans, job-run spans, and request/WebSocket/job metrics through
+  OTLP:
+  `frick.http.server.requests{method,status}`,
+  `frick.http.server.duration_ms{method,status}`,
+  `frick.ws.connections.current{authenticated}`,
+  `frick.ws.frames.total{kind}`,
+  `frick.ws.frame.bytes{kind}`,
+  `frick.ws.connection.duration_ms{authenticated}`,
+  `frick.jobs.runs.total{jobType,status}`, and
+  `frick.jobs.run.duration_ms{jobType,status}`. WebSocket frame `kind` is
+  bounded to known protocol names or `unknown`; close telemetry records the
+  close code and a bounded category, not raw close text. Tenant/user ids are
+  span attributes, not metric labels. Keep job type names low-cardinality and
+  registry-defined. The in-process inspection snapshot remains available for
   local dashboard panels and simple health checks.
 - `/_frick/inspect/platform-events` — platform event pipeline health:
   `{ adapter, ok, pending, claimed, deadLettered, retained, unclaimed,

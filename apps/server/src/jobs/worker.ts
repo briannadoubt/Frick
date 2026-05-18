@@ -20,6 +20,12 @@ import type { PlatformEventPipeline } from "../platform-events/types.js";
 import type { FrickStore } from "../store.js";
 import type { JobRow } from "../storage/job-store.js";
 import { emitDevToolsEvent } from "../devtools/emit.js";
+import type {
+  FrickJobTelemetryResult,
+  FrickJobTelemetryRun,
+  FrickJobTelemetrySpan,
+  FrickTelemetryRuntime,
+} from "../telemetry/runtime.js";
 import type { FrickJobHandler, FrickJobRegistry, FrickJobResult } from "./registry.js";
 
 export interface FrickJobWorker {
@@ -39,6 +45,7 @@ export interface FrickJobWorkerOptions {
   pollIntervalMs?: number;
   claimBatchSize?: number;
   metrics?: FrickMetrics;
+  telemetry?: Pick<FrickTelemetryRuntime, "startJobRun">;
   platformEvents?: PlatformEventPipeline;
   /** How long `stop()` waits for in-flight handlers before resolving. */
   gracefulShutdownTimeoutMs?: number;
@@ -54,6 +61,7 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
     registry,
     logger,
     metrics,
+    telemetry,
     platformEvents,
     pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
     claimBatchSize = DEFAULT_CLAIM_BATCH_SIZE,
@@ -124,6 +132,13 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
         attemptCount: job.attemptCount,
       }),
     };
+    const telemetrySpan = startJobTelemetry({
+      jobId: job.id,
+      jobType: job.jobType,
+      tenantId: job.tenantId,
+      attemptCount: job.attemptCount,
+      workerId,
+    });
 
     try {
       if (!handler) {
@@ -137,7 +152,7 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
           errorMessage: `No handler registered for job type "${job.jobType}"`,
           retryable: false,
         };
-        applyResult(job, result, startedAtMs);
+        finishJobTelemetry(telemetrySpan, applyResult(job, result, startedAtMs));
         return;
       }
 
@@ -160,7 +175,15 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
           error: result.errorMessage,
         });
       }
-      applyResult(job, result, startedAtMs);
+      finishJobTelemetry(telemetrySpan, applyResult(job, result, startedAtMs));
+    } catch (error) {
+      finishJobTelemetry(telemetrySpan, {
+        status: "failed",
+        durationMs: Date.now() - startedAtMs,
+        errorCode: "server.internal",
+        retryable: true,
+      });
+      throw error;
     } finally {
       inFlight -= 1;
       if (stopRequested && inFlight === 0 && stopResolve) {
@@ -169,7 +192,23 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
     }
   }
 
-  function applyResult(job: JobRow, result: FrickJobResult, startedAtMs: number): void {
+  function startJobTelemetry(input: FrickJobTelemetryRun): FrickJobTelemetrySpan {
+    try {
+      return telemetry?.startJobRun?.(input) ?? { end: () => {} };
+    } catch {
+      return { end: () => {} };
+    }
+  }
+
+  function finishJobTelemetry(span: FrickJobTelemetrySpan, result: FrickJobTelemetryResult): void {
+    try {
+      span.end(result);
+    } catch {
+      // Telemetry must never affect job completion/failure bookkeeping.
+    }
+  }
+
+  function applyResult(job: JobRow, result: FrickJobResult, startedAtMs: number): FrickJobTelemetryResult {
     const durationMs = Date.now() - startedAtMs;
     if (result.status === "completed") {
       store.jobs.complete(job.id, result.result);
@@ -183,7 +222,7 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
         attemptCount: job.attemptCount,
         durationMs,
       });
-      return;
+      return { status: "completed", durationMs };
     }
     const retryable = result.retryable ?? false;
     const errorCode = result.errorCode ?? "server.internal";
@@ -214,6 +253,7 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
         errorCode,
         retryable,
       });
+      return { status: "dead_lettered", durationMs, errorCode, retryable };
     } else {
       emitDevToolsEvent(store, {
         kind: "job.failed",
@@ -226,6 +266,7 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
         errorCode,
         retryable,
       });
+      return { status: "failed", durationMs, errorCode, retryable };
     }
   }
 

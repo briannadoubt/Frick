@@ -32,7 +32,16 @@ export {
   type FrickHttpTelemetryRequest,
   type FrickHttpTelemetryResult,
   type FrickHttpTelemetrySpan,
+  type FrickJobTelemetryResult,
+  type FrickJobTelemetryRun,
+  type FrickJobTelemetrySpan,
   type FrickTelemetryRuntime,
+  type FrickWebSocketCloseCategory,
+  type FrickWebSocketConnectionTelemetry,
+  type FrickWebSocketConnectionTelemetryPrincipal,
+  type FrickWebSocketConnectionTelemetryResult,
+  type FrickWebSocketConnectionTelemetrySpan,
+  type FrickWebSocketFrameTelemetry,
 } from "./telemetry/runtime.js";
 
 const app = createFrickServer();
