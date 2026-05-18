@@ -301,6 +301,12 @@ async function refreshData() {
 
   if (isMountedDashboard()) {
     try {
+      nextData.dashboardTenants = await fetchDashboardTenants();
+    } catch (error) {
+      nextErrors.dashboardTenants = error;
+    }
+
+    try {
       nextData.dashboardAccounts = await fetchDashboardAccounts();
     } catch (error) {
       nextErrors.dashboardAccounts = error;
@@ -356,6 +362,12 @@ async function fetchDashboardAccounts() {
   const params = new URLSearchParams({ limit: "25" });
   if (state.dataTenantId) params.set("tenantId", state.dataTenantId);
   return fetchJson(`/_frick/dashboard/api/accounts?${params}`, { auth: true });
+}
+
+async function fetchDashboardTenants() {
+  if (!isMountedDashboard()) return undefined;
+  const params = new URLSearchParams({ includeArchived: "true", limit: "50" });
+  return fetchJson(`/_frick/dashboard/api/tenants?${params}`, { auth: true });
 }
 
 async function devLogin() {
@@ -1254,6 +1266,96 @@ function metricsTable() {
   `;
 }
 
+function dashboardTenantsPanel() {
+  if (!isMountedDashboard()) {
+    return `
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <span class="panel-kicker">Tenants</span>
+            <h2 class="panel-title">Tenant directory</h2>
+          </div>
+        </header>
+        <div class="panel-body">
+          <div class="empty-state">Mount Fricken Dashboard at /_frick/dashboard to browse the tenant ledger from the server origin.</div>
+        </div>
+      </section>
+    `;
+  }
+
+  const tenants = state.data.dashboardTenants;
+  const error = state.errors.dashboardTenants;
+  return `
+    <section class="panel">
+      <header class="panel-header">
+        <div>
+          <span class="panel-kicker">Tenants</span>
+          <h2 class="panel-title">Tenant directory</h2>
+        </div>
+        ${
+          tenants
+            ? `<span class="status-tag tone-info">${dot("info")} ${escapeHtml(tenants.scope)} / ${escapeHtml(tenants.count)} visible</span>`
+            : ""
+        }
+      </header>
+      <div class="panel-body">
+        ${error ? `<div class="error-box">${escapeHtml(error.message)}</div>` : ""}
+        ${tenants ? tenantsSummary(tenants) : ""}
+        ${tenantsTable(tenants)}
+      </div>
+    </section>
+  `;
+}
+
+function tenantsSummary(data) {
+  const archived = data.tenants.filter((tenant) => tenant.archivedAt).length;
+  const active = data.tenants.length - archived;
+  return `
+    <div class="status-strip compact">
+      <span class="status-pill tone-info">${dot("info")} ${escapeHtml(active)} active</span>
+      <span class="status-pill ${archived ? "tone-warn" : "tone-info"}">${dot(archived ? "warn" : "info")} ${escapeHtml(archived)} archived</span>
+      <span class="status-pill tone-info">${dot("info")} limit ${escapeHtml(data.limit)}</span>
+    </div>
+  `;
+}
+
+function tenantsTable(data) {
+  if (!data) {
+    if (state.errors.dashboardTenants?.skipped) {
+      return `<div class="empty-state">Add a bearer token to load the tenant directory.</div>`;
+    }
+    return `<div class="empty-state">No tenant data loaded yet.</div>`;
+  }
+  if (!data.tenants.length) {
+    return `<div class="empty-state">No tenants visible for this credential.</div>`;
+  }
+  return `
+    <div class="object-table-wrap">
+      <table class="table">
+        <thead><tr><th>Tenant</th><th>Name</th><th>Status</th><th>Created</th><th></th></tr></thead>
+        <tbody>
+          ${data.tenants
+            .map((tenant) => {
+              const archived = Boolean(tenant.archivedAt);
+              return `
+                <tr>
+                  <td><code class="code-inline">${escapeHtml(tenant.tenantId)}</code></td>
+                  <td>${escapeHtml(tenant.displayName || "Untitled")}</td>
+                  <td><span class="status-tag ${archived ? "tone-warn" : "tone-good"}">${dot(archived ? "warn" : "good")} ${archived ? "archived" : "active"}</span></td>
+                  <td>${escapeHtml(new Date(tenant.createdAt).toLocaleString())}</td>
+                  <td class="nowrap">
+                    <button class="button secondary" type="button" data-select-tenant="${escapeHtml(tenant.tenantId)}">${icon("check")} Use</button>
+                  </td>
+                </tr>
+              `;
+            })
+            .join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
 function renderSettings() {
   return `
     ${pageHeader("Settings", "Configure the local server endpoint and the credential used for inspection routes.")}
@@ -1277,10 +1379,12 @@ function renderSettings() {
             </form>
           </div>
         </section>
+        ${dashboardTenantsPanel()}
         ${definitionListPanel("Dashboard facts", [
           ["Static app", `Served from apps/dev-dashboard on port ${DASHBOARD_PORT}`],
           ["Inspection auth", "Bearer token or dev session required"],
           ["Default server", DEFAULT_ENDPOINT],
+          ["Tenant directory", "Read-only mounted dashboard API"],
           ["Generated artifacts", "Not edited by this dashboard"],
         ])}
       </div>
@@ -1397,6 +1501,15 @@ function bindControls() {
       state.selectedObjectType = button.dataset.objectType || "";
       if (state.selectedObjectType) localStorage.setItem(STORAGE_KEYS.objectType, state.selectedObjectType);
       else localStorage.removeItem(STORAGE_KEYS.objectType);
+      void refreshData();
+    });
+  });
+
+  app.querySelectorAll("[data-select-tenant]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.dataTenantId = button.dataset.selectTenant || "";
+      if (state.dataTenantId) localStorage.setItem(STORAGE_KEYS.tenantId, state.dataTenantId);
+      else localStorage.removeItem(STORAGE_KEYS.tenantId);
       void refreshData();
     });
   });

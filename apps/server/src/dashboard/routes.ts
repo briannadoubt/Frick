@@ -12,6 +12,7 @@ import {
 import { buildDashboardAccounts } from "./accounts.js";
 import { buildDashboardObjectData } from "./data.js";
 import { buildDashboardMetadata } from "./metadata.js";
+import { buildDashboardTenants } from "./tenants.js";
 import { sendDashboardAsset } from "./assets.js";
 
 export interface DashboardRouteInput {
@@ -124,6 +125,23 @@ export async function handleDashboardRoute(input: DashboardRouteInput): Promise<
       store: input.store,
       principal,
       ...(tenantId ? { tenantId } : {}),
+      ...optionalLimit(input.url.searchParams.get("limit")),
+    }));
+    return true;
+  }
+
+  if (relativePath === "/api/tenants") {
+    setDashboardHeaders(input.response);
+    const principal = input.authenticate();
+    if (principal instanceof Error) {
+      input.sendError(principal, "dashboard_unauthorized");
+      return true;
+    }
+
+    sendDashboardJson(input, 200, buildDashboardTenants({
+      store: input.store,
+      principal,
+      includeArchived: input.url.searchParams.get("includeArchived") === "true",
       ...optionalLimit(input.url.searchParams.get("limit")),
     }));
     return true;

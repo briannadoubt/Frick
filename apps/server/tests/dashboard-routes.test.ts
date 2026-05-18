@@ -149,6 +149,13 @@ describe("mounted dashboard", () => {
     expect(response.status).toBe(401);
   });
 
+  it("requires authentication for dashboard tenants", async () => {
+    app = await startServer();
+    const response = await fetch(`${app.httpUrl}/_frick/dashboard/api/tenants`);
+
+    expect(response.status).toBe(401);
+  });
+
   it("serves dashboard metadata API when authenticated", async () => {
     app = await startServer();
     const response = await fetch(`${app.httpUrl}/_frick/dashboard/api/metadata`, {
@@ -179,6 +186,7 @@ describe("mounted dashboard", () => {
     expect(script).toContain("platform-events/health");
     expect(script).toContain("/_frick/dashboard/api/data/objects/");
     expect(script).toContain("/_frick/dashboard/api/accounts");
+    expect(script).toContain("/_frick/dashboard/api/tenants");
   });
 
   it("serves schema object rows through the mounted dashboard data API", async () => {
@@ -356,6 +364,98 @@ describe("mounted dashboard", () => {
       }),
     ]);
     const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain("password");
+    expect(serialized).not.toContain("sessionToken");
+  });
+
+  it("serves only the current tenant through the dashboard tenants API for tenant sessions", async () => {
+    app = await startServer();
+    app.store.tenants.create("tenant-other", "Other");
+    const login = await fetch(`${app.httpUrl}/auth/dev-login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tenantId: "tenant-session", userId: "user-tenant-session" }),
+    });
+    expect(login.status).toBe(200);
+    const { sessionToken } = (await login.json()) as { sessionToken: string };
+
+    const response = await fetch(
+      `${app.httpUrl}/_frick/dashboard/api/tenants?includeArchived=true`,
+      { headers: { authorization: `Bearer ${sessionToken}` } },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      schemaHash: foundationSchema.hash,
+      scope: "tenant",
+      includeArchived: true,
+      count: 1,
+      limit: 50,
+      truncated: false,
+    });
+    expect(body.tenants).toEqual([
+      expect.objectContaining({ tenantId: "tenant-session" }),
+    ]);
+    expect(JSON.stringify(body)).not.toContain("tenant-other");
+  });
+
+  it("lets admin bearer list dashboard tenants and include archived rows on request", async () => {
+    const adminToken = "test-admin-token-1234567890ABCDEF1234567890ABCDEF";
+    app = await startServer({
+      config: { adminToken },
+    });
+    app.store.tenants.create("tenant-alpha", "Alpha");
+    app.store.tenants.create("tenant-archived", "Archived");
+    app.store.tenants.archive("tenant-archived");
+
+    const activeResponse = await fetch(`${app.httpUrl}/_frick/dashboard/api/tenants`, {
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
+    expect(activeResponse.status).toBe(200);
+    const activeBody = await activeResponse.json();
+    expect(activeBody).toMatchObject({
+      schemaHash: foundationSchema.hash,
+      scope: "admin",
+      includeArchived: false,
+      count: 2,
+      limit: 50,
+      truncated: false,
+    });
+    expect(activeBody.tenants.map((row: { tenantId: string }) => row.tenantId)).toEqual([
+      "_default",
+      "tenant-alpha",
+    ]);
+
+    const archivedResponse = await fetch(
+      `${app.httpUrl}/_frick/dashboard/api/tenants?includeArchived=true&limit=2`,
+      { headers: { authorization: `Bearer ${adminToken}` } },
+    );
+    expect(archivedResponse.status).toBe(200);
+    const archivedBody = await archivedResponse.json();
+    expect(archivedBody).toMatchObject({
+      schemaHash: foundationSchema.hash,
+      scope: "admin",
+      includeArchived: true,
+      count: 2,
+      limit: 2,
+      truncated: true,
+    });
+    expect(archivedBody.tenants.map((row: { tenantId: string }) => row.tenantId)).toEqual([
+      "_default",
+      "tenant-alpha",
+    ]);
+
+    const fullArchivedResponse = await fetch(
+      `${app.httpUrl}/_frick/dashboard/api/tenants?includeArchived=true`,
+      { headers: { authorization: `Bearer ${adminToken}` } },
+    );
+    expect(fullArchivedResponse.status).toBe(200);
+    const fullArchivedBody = await fullArchivedResponse.json();
+    expect(fullArchivedBody.tenants).toContainEqual(
+      expect.objectContaining({ tenantId: "tenant-archived", archivedAt: expect.any(String) }),
+    );
+    const serialized = JSON.stringify(fullArchivedBody);
     expect(serialized).not.toContain("password");
     expect(serialized).not.toContain("sessionToken");
   });

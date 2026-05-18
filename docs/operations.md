@@ -320,6 +320,14 @@ session principals are pinned to their session tenant; admin bearers may pass
 `tenantId` to inspect a tenant account directory. The endpoint caps `limit` at
 200 rows and reports whether additional rows were truncated.
 
+`/_frick/dashboard/api/tenants?includeArchived=true&limit=50` returns the
+tenant ledger rows used by the mounted dashboard Settings view: `tenantId`,
+optional `displayName`, `createdAt`, and optional `archivedAt`. Tenant session
+principals only receive their session tenant row; admin bearers receive the
+active tenant directory by default and may pass `includeArchived=true` to see
+soft-archived tenants. The endpoint caps `limit` at 200 rows and never includes
+tenant settings or encrypted credential material.
+
 The platform event pipeline defaults to SQLite for local and lightweight
 deployments. Set `FRICK_PLATFORM_EVENTS_DRIVER=kafka` with
 `FRICK_PLATFORM_EVENTS_KAFKA_BROKERS=host:9092` to use the built-in
