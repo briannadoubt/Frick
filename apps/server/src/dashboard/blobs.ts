@@ -1,5 +1,6 @@
 import type { Principal } from "../authz.js";
 import type { FrickStore } from "../store.js";
+import type { DerivativeRow } from "../storage/blob-derivative-store.js";
 import type { BlobMetadata } from "../storage/blob-store.js";
 
 const DEFAULT_BLOB_LIMIT = 50;
@@ -12,7 +13,17 @@ export interface DashboardBlobRow {
   readonly contentHash: string;
   readonly byteLength: number;
   readonly mimeType: string;
+  readonly derivatives: DashboardBlobDerivativeSummary;
   readonly createdAt: string;
+}
+
+export interface DashboardBlobDerivativeSummary {
+  readonly count: number;
+  readonly totalBytes: number;
+  readonly processors: readonly string[];
+  readonly mimeTypes: readonly string[];
+  readonly hasMetadata: boolean;
+  readonly latestCreatedAt?: string;
 }
 
 export interface DashboardBlobs {
@@ -43,7 +54,12 @@ export function buildDashboardBlobs(input: BuildDashboardBlobsInput): DashboardB
   const ownerId = scope === "admin" ? input.ownerId : input.principal.userId;
   const limit = normalizeDashboardBlobLimit(input.limit);
   const visibleBlobs = input.store.blobs.list(tenantId, ownerId);
-  const blobs = visibleBlobs.slice(0, limit).map(toDashboardBlobRow);
+  const blobs = visibleBlobs
+    .slice(0, limit)
+    .map((blob) => toDashboardBlobRow(
+      blob,
+      input.store.blobDerivatives.listForParent(blob.blobId, tenantId),
+    ));
 
   return {
     schemaHash: input.store.schema.hash,
@@ -65,7 +81,10 @@ export function normalizeDashboardBlobLimit(value: number | undefined): number {
   return Math.min(MAX_BLOB_LIMIT, Math.floor(value));
 }
 
-function toDashboardBlobRow(blob: BlobMetadata): DashboardBlobRow {
+function toDashboardBlobRow(
+  blob: BlobMetadata,
+  derivatives: readonly DerivativeRow[],
+): DashboardBlobRow {
   return {
     tenantId: blob.tenantId,
     blobId: blob.blobId,
@@ -73,6 +92,29 @@ function toDashboardBlobRow(blob: BlobMetadata): DashboardBlobRow {
     contentHash: blob.contentHash,
     byteLength: blob.byteLength,
     mimeType: blob.mimeType,
+    derivatives: summarizeDerivatives(derivatives),
     createdAt: blob.createdAt,
   };
+}
+
+function summarizeDerivatives(
+  derivatives: readonly DerivativeRow[],
+): DashboardBlobDerivativeSummary {
+  const latestCreatedAt = derivatives
+    .map((derivative) => derivative.createdAt)
+    .sort()
+    .at(-1);
+
+  return {
+    count: derivatives.length,
+    totalBytes: derivatives.reduce((sum, derivative) => sum + derivative.byteLength, 0),
+    processors: uniqueSorted(derivatives.map((derivative) => derivative.processorId)),
+    mimeTypes: uniqueSorted(derivatives.map((derivative) => derivative.mimeType)),
+    hasMetadata: derivatives.some((derivative) => derivative.metadata !== undefined),
+    ...(latestCreatedAt ? { latestCreatedAt } : {}),
+  };
+}
+
+function uniqueSorted(values: readonly string[]): readonly string[] {
+  return Array.from(new Set(values)).sort();
 }

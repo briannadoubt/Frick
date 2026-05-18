@@ -1254,10 +1254,19 @@ function blobSummary(data) {
     ? `${data.count} of ${data.total} visible blobs`
     : `${data.total} visible blobs`;
   const totalBytes = data.blobs.reduce((sum, blob) => sum + numberValue(blob.byteLength), 0);
+  const totalDerivatives = data.blobs.reduce(
+    (sum, blob) => sum + numberValue(blob.derivatives?.count),
+    0,
+  );
+  const totalDerivativeBytes = data.blobs.reduce(
+    (sum, blob) => sum + numberValue(blob.derivatives?.totalBytes),
+    0,
+  );
   return `
     <div class="status-strip compact">
       <span class="status-pill tone-info">${dot("info")} ${escapeHtml(detail)}</span>
       <span class="status-pill tone-info">${dot("info")} ${escapeHtml(formatBytes(totalBytes))} listed</span>
+      <span class="status-pill tone-info">${dot("info")} ${escapeHtml(totalDerivatives)} derivatives / ${escapeHtml(formatBytes(totalDerivativeBytes))}</span>
       <span class="status-pill tone-info">${dot("info")} ${escapeHtml(data.ownerId || "all owners")}</span>
       <span class="status-pill tone-info">${dot("info")} limit ${escapeHtml(data.limit)}</span>
     </div>
@@ -1277,7 +1286,7 @@ function blobTable(data) {
   return `
     <div class="object-table-wrap">
       <table class="table">
-        <thead><tr><th>Blob</th><th>Owner</th><th>MIME</th><th>Size</th><th>Hash</th><th>Created</th></tr></thead>
+        <thead><tr><th>Blob</th><th>Owner</th><th>MIME</th><th>Size</th><th>Derivatives</th><th>Hash</th><th>Created</th></tr></thead>
         <tbody>
           ${data.blobs
             .map((blob) => `
@@ -1286,6 +1295,7 @@ function blobTable(data) {
                 <td>${escapeHtml(blob.ownerId)}</td>
                 <td>${escapeHtml(blob.mimeType)}</td>
                 <td>${escapeHtml(formatBytes(blob.byteLength))}</td>
+                <td>${formatDerivativeSummary(blob.derivatives)}</td>
                 <td><code class="code-inline">${escapeHtml(shortHash(blob.contentHash))}</code></td>
                 <td>${escapeHtml(new Date(blob.createdAt).toLocaleString())}</td>
               </tr>
@@ -1294,6 +1304,21 @@ function blobTable(data) {
         </tbody>
       </table>
     </div>
+  `;
+}
+
+function formatDerivativeSummary(summary = {}) {
+  const count = numberValue(summary.count);
+  if (!count) {
+    return `<span class="status-tag tone-info">${dot("info")} none</span>`;
+  }
+  const processors = (summary.processors || []).join(", ") || "unknown processor";
+  const mimeTypes = (summary.mimeTypes || []).join(", ") || "unknown MIME";
+  const metadata = summary.hasMetadata ? "metadata present" : "metadata absent";
+  return `
+    <span class="status-tag tone-info">${dot("info")} ${escapeHtml(count)} / ${escapeHtml(formatBytes(summary.totalBytes))}</span>
+    <div class="table-note">${escapeHtml(processors)}</div>
+    <div class="table-note">${escapeHtml(mimeTypes)} · ${escapeHtml(metadata)}</div>
   `;
 }
 

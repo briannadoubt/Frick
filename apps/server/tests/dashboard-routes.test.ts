@@ -619,6 +619,13 @@ describe("mounted dashboard", () => {
         contentHash: "sha256-dashboard-ada",
         byteLength: 18,
         mimeType: "text/plain",
+        derivatives: {
+          count: 0,
+          totalBytes: 0,
+          processors: [],
+          mimeTypes: [],
+          hasMetadata: false,
+        },
         createdAt: expect.any(String),
       },
     ]);
@@ -683,6 +690,13 @@ describe("mounted dashboard", () => {
         contentHash: expect.stringMatching(/^sha256-x-/),
         byteLength: expect.any(Number),
         mimeType: "image/png",
+        derivatives: {
+          count: 0,
+          totalBytes: 0,
+          processors: [],
+          mimeTypes: [],
+          hasMetadata: false,
+        },
         createdAt: expect.any(String),
       },
     ]);
@@ -690,6 +704,93 @@ describe("mounted dashboard", () => {
     expect(serialized).not.toContain("tenant-x/first");
     expect(serialized).not.toContain("tenant-x/second");
     expect(serialized).not.toContain("blob-x-other");
+  });
+
+  it("summarizes blob derivative metadata without exposing derivative content or raw metadata", async () => {
+    const adminToken = "test-admin-token-1234567890ABCDEF1234567890ABCDEF";
+    app = await startServer({
+      config: { adminToken },
+    });
+    app.store.blobs.create("tenant-x", {
+      blobId: "blob-with-derivatives",
+      ownerId: "user-x",
+      contentHash: "sha256-parent",
+      byteLength: 1024,
+      mimeType: "image/png",
+      storageKey: "tenant-x/parent-storage-key",
+    });
+    app.store.blobDerivatives.record({
+      parentBlobId: "blob-with-derivatives",
+      derivativeId: "thumb",
+      tenantId: "tenant-x",
+      processorId: "image.thumbnail",
+      mimeType: "image/webp",
+      byteLength: 256,
+      contentHash: "sha256-thumb",
+      storageKey: "tenant-x/secret-thumb-storage-key",
+      content: Buffer.from("secret derivative thumbnail bytes"),
+      metadata: {
+        width: 128,
+        privateExif: "gps secret",
+      },
+    });
+    app.store.blobDerivatives.record({
+      parentBlobId: "blob-with-derivatives",
+      derivativeId: "ocr",
+      tenantId: "tenant-x",
+      processorId: "image.ocr",
+      mimeType: "application/json",
+      byteLength: 128,
+      contentHash: "sha256-ocr",
+      storageKey: "tenant-x/secret-ocr-storage-key",
+      content: Buffer.from("secret extracted text"),
+      metadata: {
+        language: "en",
+        text: "sensitive sidecar metadata",
+      },
+    });
+    app.store.blobDerivatives.record({
+      parentBlobId: "blob-other-tenant",
+      derivativeId: "thumb",
+      tenantId: "tenant-other",
+      processorId: "image.thumbnail",
+      mimeType: "image/webp",
+      byteLength: 999,
+      contentHash: "sha256-other",
+      storageKey: "tenant-other/secret",
+      content: Buffer.from("other tenant derivative bytes"),
+    });
+
+    const response = await fetch(
+      `${app.httpUrl}/_frick/dashboard/api/blobs?tenantId=tenant-x&ownerId=user-x`,
+      { headers: { authorization: `Bearer ${adminToken}` } },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.blobs).toEqual([
+      expect.objectContaining({
+        tenantId: "tenant-x",
+        blobId: "blob-with-derivatives",
+        derivatives: {
+          count: 2,
+          totalBytes: 384,
+          processors: ["image.ocr", "image.thumbnail"],
+          mimeTypes: ["application/json", "image/webp"],
+          hasMetadata: true,
+          latestCreatedAt: expect.any(String),
+        },
+      }),
+    ]);
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain("secret derivative thumbnail bytes");
+    expect(serialized).not.toContain("secret extracted text");
+    expect(serialized).not.toContain("secret-thumb-storage-key");
+    expect(serialized).not.toContain("secret-ocr-storage-key");
+    expect(serialized).not.toContain("privateExif");
+    expect(serialized).not.toContain("gps secret");
+    expect(serialized).not.toContain("sensitive sidecar metadata");
+    expect(serialized).not.toContain("tenant-other/secret");
   });
 
   it("rejects unknown dashboard object data types", async () => {
