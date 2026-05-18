@@ -29,6 +29,7 @@ const COMMANDS: readonly CommandSpec[] = [
   { name: "verify", summary: "Run `pnpm verify:generated` end-to-end" },
   { name: "backup", summary: "Stream a framework database dump as NDJSON" },
   { name: "restore", summary: "Restore a framework database from NDJSON (requires --confirm yes)" },
+  { name: "dev", summary: "Print or start a local Frick runtime profile" },
   { name: "init", summary: "Scaffold a new Frick application at the given directory" },
   { name: "scaffold", summary: "Add an object, stream, or projection stub to a scaffolded app", subcommands: ["object", "stream", "projection"] },
   { name: "dashboard", summary: "Serve Fricken Dashboard for a running Frick server" },
@@ -83,6 +84,8 @@ export async function run(opts: RunOptions): Promise<number> {
         return await (await import("./commands/backup.js")).backupCommand(childParsed, out);
       case "restore":
         return await (await import("./commands/restore.js")).restoreCommand(childParsed, out);
+      case "dev":
+        return await (await import("./commands/dev.js")).devCommand(childParsed, out);
       case "init":
         return await (await import("./commands/init.js")).initCommand(childParsed, out);
       case "scaffold":

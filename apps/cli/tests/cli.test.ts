@@ -150,6 +150,7 @@ describe("frick --help", () => {
     expect(names).toContain("reset");
     expect(names).toContain("inspect");
     expect(names).toContain("verify");
+    expect(names).toContain("dev");
     expect(names).toContain("dashboard");
     expect(names).toContain("mcp");
   });
@@ -221,6 +222,55 @@ describe("frick dashboard", () => {
     const err = parseLastJson(result.stderr) as { error: { code: string; message: string } };
     expect(err.error.code).toBe("cli.usage");
     expect(err.error.message).toContain("--port");
+  });
+});
+
+describe("frick dev", () => {
+  it("prints the Redpanda profile plan without starting Docker", async () => {
+    const result = await runCli(["dev", "--profile", "redpanda", "--dry-run"]);
+    expect(result.exitCode).toBe(0);
+    const body = parseFirstJson(result.stdout) as {
+      ok: boolean;
+      command: string;
+      profile: string;
+      composeFile: string;
+      env: Record<string, string>;
+      steps: string[];
+      started: boolean;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.command).toBe("dev");
+    expect(body.profile).toBe("redpanda");
+    expect(body.composeFile).toContain("ops/local/redpanda.compose.yaml");
+    expect(body.env.FRICK_PLATFORM_EVENTS_DRIVER).toBe("kafka");
+    expect(body.env.FRICK_PLATFORM_EVENTS_KAFKA_BROKERS).toBe("127.0.0.1:19092");
+    expect(body.steps).toContain("docker compose up -d --wait redpanda");
+    expect(body.started).toBe(false);
+  });
+
+  it("prints the SQLite profile plan without Docker", async () => {
+    const result = await runCli(["dev", "--dry-run"]);
+    expect(result.exitCode).toBe(0);
+    const body = parseFirstJson(result.stdout) as {
+      ok: boolean;
+      profile: string;
+      composeFile?: string;
+      env: Record<string, string>;
+      steps: string[];
+    };
+    expect(body.ok).toBe(true);
+    expect(body.profile).toBe("sqlite");
+    expect(body.composeFile).toBeUndefined();
+    expect(body.env.FRICK_PLATFORM_EVENTS_DRIVER).toBe("sqlite");
+    expect(body.steps).not.toContain("docker compose up -d --wait redpanda");
+  });
+
+  it("rejects unknown dev profiles", async () => {
+    const result = await runCli(["dev", "--profile", "nope", "--dry-run"]);
+    expect(result.exitCode).toBe(2);
+    const err = parseLastJson(result.stderr) as { error: { code: string; message: string } };
+    expect(err.error.code).toBe("cli.usage");
+    expect(err.error.message).toContain("--profile");
   });
 });
 
