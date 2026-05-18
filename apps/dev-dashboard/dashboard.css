@@ -514,6 +514,42 @@ a {
   grid-template-columns: minmax(0, 1.05fr) minmax(280px, 0.95fr);
 }
 
+.object-type-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.object-type-button {
+  max-width: 100%;
+  min-height: 36px;
+  white-space: normal;
+}
+
+.tenant-filter {
+  margin-bottom: 14px;
+}
+
+.object-table-wrap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow-x: auto;
+}
+
+.json-cell {
+  display: inline-block;
+  max-width: 34ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.muted-cell {
+  color: var(--text-muted);
+}
+
 .chart {
   display: flex;
   flex-direction: column;

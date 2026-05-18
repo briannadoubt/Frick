@@ -10,11 +10,12 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
 - SQLite-backed server persistence, migrations, health/ready/inspect/admin routes, backup/restore, metrics, request logging, CORS enforcement, and admin bearer auth.
 - Fricken Dashboard, served locally by `frick dashboard` and mountable at
   `/_frick/dashboard`, for inspecting health, readiness, schema identity,
-  schema resources, metrics, jobs, migrations, and DevTools events against a
-  running server. Standalone mode reads platform event pipeline health and
-  tenant-scoped product analytics summaries through authenticated inspection
-  routes; mounted mode exposes the same product views through authenticated
-  dashboard APIs.
+  schema resources, tenant-visible schema object rows, metrics, jobs,
+  migrations, and DevTools events against a running server. Standalone mode
+  reads platform event pipeline health and tenant-scoped product analytics
+  summaries through authenticated inspection routes; mounted mode exposes the
+  same product views and read-only object data through authenticated dashboard
+  APIs.
 - TypeScript `@frick/core` runtime and `@frick/react` hooks for objects, streams, projections, presence, signals, auth, blobs, search, realtime wrappers, drafts, and background sync.
 - First-class platform events for framework telemetry, job lifecycle events,
   and authenticated product analytics ingestion through TypeScript, Swift, and

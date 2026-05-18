@@ -4,6 +4,8 @@ const STORAGE_KEYS = {
   endpoint: "fricken-dashboard:endpoint",
   token: "fricken-dashboard:token",
   route: "fricken-dashboard:route",
+  objectType: "fricken-dashboard:objectType",
+  tenantId: "fricken-dashboard:tenantId",
 };
 
 const app = document.getElementById("app");
@@ -42,6 +44,8 @@ const state = {
   devUserId: "user-ada",
   eventFilter: "",
   selectedEventId: undefined,
+  selectedObjectType: localStorage.getItem(STORAGE_KEYS.objectType) || "",
+  dataTenantId: localStorage.getItem(STORAGE_KEYS.tenantId) || "",
   loading: false,
   lastRefresh: undefined,
   data: {},
@@ -169,6 +173,28 @@ function platformEventsUnavailableDetail() {
   return "Platform event inspection route required.";
 }
 
+function dashboardObjectResources(metadata = state.data.dashboardMetadata) {
+  return (metadata?.resources || []).filter((resource) => resource.kind === "object");
+}
+
+function selectedDashboardObjectType(metadata = state.data.dashboardMetadata) {
+  const resources = dashboardObjectResources(metadata);
+  if (!resources.length) return "";
+  if (
+    state.selectedObjectType &&
+    resources.some((resource) => resource.name === state.selectedObjectType)
+  ) {
+    return state.selectedObjectType;
+  }
+  if (
+    state.data.dashboardObjectData?.type &&
+    resources.some((resource) => resource.name === state.data.dashboardObjectData.type)
+  ) {
+    return state.data.dashboardObjectData.type;
+  }
+  return resources[0].name;
+}
+
 function requestRows() {
   const rows = metricEntries("counters").filter((entry) => entry.name === "frick.http.requests.total");
   const grouped = new Map();
@@ -273,6 +299,17 @@ async function refreshData() {
     }),
   );
 
+  if (isMountedDashboard()) {
+    const objectType = selectedDashboardObjectType(nextData.dashboardMetadata);
+    if (objectType) {
+      try {
+        nextData.dashboardObjectData = await fetchDashboardObjectData(objectType);
+      } catch (error) {
+        nextErrors.dashboardObjectData = error;
+      }
+    }
+  }
+
   state.data = nextData;
   state.errors = nextErrors;
   state.lastRefresh = new Date().toISOString();
@@ -297,6 +334,15 @@ async function fetchPlatformEventsHealth() {
     ? "/_frick/dashboard/api/platform-events/health"
     : "/_frick/inspect/platform-events";
   return fetchJson(path, { auth: true });
+}
+
+async function fetchDashboardObjectData(type) {
+  if (!isMountedDashboard() || !type) return undefined;
+  const params = new URLSearchParams({ limit: "25" });
+  if (state.dataTenantId) params.set("tenantId", state.dataTenantId);
+  return fetchJson(`/_frick/dashboard/api/data/objects/${encodeURIComponent(type)}?${params}`, {
+    auth: true,
+  });
 }
 
 async function devLogin() {
@@ -682,7 +728,7 @@ function renderData() {
   const projections = state.data.projections?.projections || [];
   const search = state.data.search;
   return `
-    ${pageHeader("Data", "Inspect persistence readiness, migrations, projections, search indexes, and cache pressure.")}
+    ${pageHeader("Data", "Inspect schema-defined objects, persistence readiness, migrations, projections, search indexes, and cache pressure.")}
     ${statusStrip()}
     <div class="dashboard-grid">
       <div class="primary-stack">
@@ -691,6 +737,7 @@ function renderData() {
           ${metricCard("Migrations", migrations.length, migrations.at(-1)?.id || "No migration ledger loaded", migrations.length ? "good" : "warn")}
           ${metricCard("Search adapter", search?.adapter || "unknown", `${search?.indexes?.length ?? 0} indexes registered`, search ? "good" : "warn")}
         </section>
+        ${dashboardObjectBrowser()}
         <section class="panel">
           <header class="panel-header">
             <div>
@@ -708,6 +755,139 @@ function renderData() {
       ${serverInspector()}
     </div>
   `;
+}
+
+function dashboardObjectBrowser() {
+  if (!isMountedDashboard()) {
+    return `
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <span class="panel-kicker">Objects</span>
+            <h2 class="panel-title">Schema data</h2>
+          </div>
+        </header>
+        <div class="panel-body">
+          <div class="empty-state">Mount Fricken Dashboard at /_frick/dashboard to browse schema object rows from the server origin.</div>
+        </div>
+      </section>
+    `;
+  }
+
+  const resources = dashboardObjectResources();
+  const selected = selectedDashboardObjectType();
+  const objectData = state.data.dashboardObjectData;
+  const error = state.errors.dashboardObjectData;
+  return `
+    <section class="panel">
+      <header class="panel-header">
+        <div>
+          <span class="panel-kicker">Objects</span>
+          <h2 class="panel-title">Schema data</h2>
+        </div>
+        ${
+          objectData
+            ? `<span class="status-tag tone-info">${dot("info")} ${escapeHtml(objectData.scope)} / ${escapeHtml(objectData.tenantId)}</span>`
+            : ""
+        }
+      </header>
+      <div class="panel-body">
+        ${
+          resources.length
+            ? `<div class="object-type-list">${resources
+                .map((resource) => `
+                  <button class="button ${resource.name === selected ? "primary" : "secondary"} object-type-button" type="button" data-object-type="${escapeHtml(resource.name)}">
+                    ${icon("database")} ${escapeHtml(resource.name)}
+                  </button>
+                `)
+                .join("")}</div>`
+            : `<div class="empty-state">No schema object metadata loaded. Add a bearer token and refresh.</div>`
+        }
+        <form class="tenant-filter" data-form="object-tenant">
+          <label class="form-row">
+            <span class="field-label">Tenant</span>
+            <span class="inline-fields">
+              <input class="text-input" name="tenantId" value="${escapeHtml(state.dataTenantId)}" placeholder="_default" autocomplete="off" />
+              <button class="button secondary" type="submit">${icon("check")} Apply</button>
+            </span>
+          </label>
+        </form>
+        ${error ? `<div class="error-box">${escapeHtml(error.message)}</div>` : ""}
+        ${objectData ? objectDataSummary(objectData) : ""}
+        ${objectDataTable(objectData)}
+      </div>
+    </section>
+  `;
+}
+
+function objectDataSummary(data) {
+  const detail = data.truncated
+    ? `${data.count} of ${data.total} visible rows`
+    : `${data.total} visible rows`;
+  return `
+    <div class="status-strip compact">
+      <span class="status-pill tone-info">${dot("info")} ${escapeHtml(data.type)}</span>
+      <span class="status-pill tone-info">${dot("info")} ${escapeHtml(detail)}</span>
+      <span class="status-pill tone-info">${dot("info")} limit ${escapeHtml(data.limit)}</span>
+    </div>
+  `;
+}
+
+function objectDataTable(data) {
+  if (!data) {
+    if (state.errors.dashboardObjectData?.skipped) {
+      return `<div class="empty-state">Add a bearer token to load schema object rows.</div>`;
+    }
+    return `<div class="empty-state">Choose a schema object to inspect rows.</div>`;
+  }
+  if (!data.rows.length) {
+    return `<div class="empty-state">No visible rows for ${escapeHtml(data.type)}.</div>`;
+  }
+
+  const columns = objectTableColumns(data.rows);
+  return `
+    <div class="object-table-wrap">
+      <table class="table">
+        <thead><tr>${columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr></thead>
+        <tbody>
+          ${data.rows
+            .map((row) => `
+              <tr>
+                ${columns
+                  .map((column) => `<td>${formatObjectCell(row[column])}</td>`)
+                  .join("")}
+              </tr>
+            `)
+            .join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function objectTableColumns(rows) {
+  const columns = [];
+  for (const preferred of ["id", "userId", "conversationId", "displayName", "title", "status"]) {
+    if (rows.some((row) => Object.prototype.hasOwnProperty.call(row, preferred))) {
+      columns.push(preferred);
+    }
+  }
+  for (const row of rows) {
+    for (const key of Object.keys(row)) {
+      if (!columns.includes(key)) columns.push(key);
+      if (columns.length >= 6) return columns;
+    }
+  }
+  return columns;
+}
+
+function formatObjectCell(value) {
+  if (value === undefined) return `<span class="muted-cell">undefined</span>`;
+  if (value === null) return `<span class="muted-cell">null</span>`;
+  if (typeof value === "object") {
+    return `<code class="code-inline json-cell">${escapeHtml(JSON.stringify(value))}</code>`;
+  }
+  return `<span>${escapeHtml(value)}</span>`;
 }
 
 function migrationTable(rows) {
@@ -1104,6 +1284,15 @@ function bindControls() {
     });
   });
 
+  app.querySelectorAll("[data-object-type]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedObjectType = button.dataset.objectType || "";
+      if (state.selectedObjectType) localStorage.setItem(STORAGE_KEYS.objectType, state.selectedObjectType);
+      else localStorage.removeItem(STORAGE_KEYS.objectType);
+      void refreshData();
+    });
+  });
+
   const endpointInput = app.querySelector("#endpoint-input");
   if (endpointInput) {
     endpointInput.addEventListener("change", () => {
@@ -1164,6 +1353,17 @@ function bindControls() {
     eventFilterForm.addEventListener("submit", (event) => {
       event.preventDefault();
       state.eventFilter = new FormData(eventFilterForm).get("eventFilter")?.toString().trim() || "";
+      void refreshData();
+    });
+  }
+
+  const objectTenantForm = app.querySelector("[data-form='object-tenant']");
+  if (objectTenantForm) {
+    objectTenantForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      state.dataTenantId = new FormData(objectTenantForm).get("tenantId")?.toString().trim() || "";
+      if (state.dataTenantId) localStorage.setItem(STORAGE_KEYS.tenantId, state.dataTenantId);
+      else localStorage.removeItem(STORAGE_KEYS.tenantId);
       void refreshData();
     });
   }

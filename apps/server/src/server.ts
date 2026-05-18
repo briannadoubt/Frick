@@ -685,6 +685,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         url: requestUrl,
         project: runtimeProject,
         appRegistry,
+        store,
         platformEvents,
         analyticsEvents: store.analyticsEvents,
         authenticate: () => inspectionPrincipalFromRequest(request, requestUrl, store, config),

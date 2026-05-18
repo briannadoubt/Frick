@@ -135,6 +135,13 @@ describe("mounted dashboard", () => {
     expect(response.status).toBe(401);
   });
 
+  it("requires authentication for dashboard object data", async () => {
+    app = await startServer();
+    const response = await fetch(`${app.httpUrl}/_frick/dashboard/api/data/objects/User`);
+
+    expect(response.status).toBe(401);
+  });
+
   it("serves dashboard metadata API when authenticated", async () => {
     app = await startServer();
     const response = await fetch(`${app.httpUrl}/_frick/dashboard/api/metadata`, {
@@ -163,6 +170,101 @@ describe("mounted dashboard", () => {
     expect(script).toContain("/_frick/dashboard/api/analytics/summary");
     expect(script).toContain("/_frick/inspect/analytics/summary");
     expect(script).toContain("platform-events/health");
+    expect(script).toContain("/_frick/dashboard/api/data/objects/");
+  });
+
+  it("serves schema object rows through the mounted dashboard data API", async () => {
+    app = await startServer();
+    const response = await fetch(`${app.httpUrl}/_frick/dashboard/api/data/objects/User?limit=1`, {
+      headers: await inspectHeaders(app.httpUrl),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      schemaHash: foundationSchema.hash,
+      type: "User",
+      tenantId: "_default",
+      scope: "tenant",
+      count: 1,
+      limit: 1,
+      truncated: true,
+    });
+    expect(body.rows).toHaveLength(1);
+    expect(body.rows[0]).toMatchObject({
+      id: "user-ada",
+      displayName: "Ada Lovelace",
+    });
+  });
+
+  it("applies user visibility when dashboard object data is tenant scoped", async () => {
+    app = await startServer();
+    app.store.upsertObject("_default", "MessageDraft", "user-ada:conversation-general", {
+      userId: "user-ada",
+      conversationId: "conversation-general",
+      body: "ada draft",
+      updatedAt: 1_700_000_000_000,
+    });
+    app.store.upsertObject("_default", "MessageDraft", "user-grace:conversation-general", {
+      userId: "user-grace",
+      conversationId: "conversation-general",
+      body: "grace draft",
+      updatedAt: 1_700_000_000_001,
+    });
+
+    const response = await fetch(`${app.httpUrl}/_frick/dashboard/api/data/objects/MessageDraft`, {
+      headers: await inspectHeaders(app.httpUrl),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.rows.map((row: { userId?: string }) => row.userId)).toEqual(["user-ada"]);
+  });
+
+  it("lets admin bearer inspect a requested tenant's dashboard object data", async () => {
+    const adminToken = "test-admin-token-1234567890ABCDEF1234567890ABCDEF";
+    app = await startServer({
+      config: { adminToken },
+    });
+    app.store.upsertObject("tenant-x", "User", "user-tenant-x", {
+      displayName: "Tenant X",
+      avatarBlobId: undefined,
+    });
+
+    const response = await fetch(
+      `${app.httpUrl}/_frick/dashboard/api/data/objects/User?tenantId=tenant-x`,
+      { headers: { authorization: `Bearer ${adminToken}` } },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      type: "User",
+      tenantId: "tenant-x",
+      scope: "admin",
+      count: 1,
+      total: 1,
+    });
+    expect(body.rows).toEqual([
+      {
+        id: "user-tenant-x",
+        displayName: "Tenant X",
+        avatarBlobId: null,
+      },
+    ]);
+  });
+
+  it("rejects unknown dashboard object data types", async () => {
+    app = await startServer();
+    const response = await fetch(`${app.httpUrl}/_frick/dashboard/api/data/objects/NotAThing`, {
+      headers: await inspectHeaders(app.httpUrl),
+    });
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: "unknown_object_type",
+      type: "NotAThing",
+    });
   });
 
   it("does not serve dashboard routes under app base paths", async () => {
@@ -225,6 +327,7 @@ async function startServer(options: Parameters<typeof createFrickServer>[0] = {}
   }
   return {
     httpUrl: `http://127.0.0.1:${address.port}`,
+    store: server.store,
     close: server.close,
   };
 }

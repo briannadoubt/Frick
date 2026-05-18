@@ -3,11 +3,13 @@ import type { Principal } from "../authz.js";
 import type { FrickAppRegistry } from "../apps/registry.js";
 import type { PlatformEventPipeline } from "../platform-events/types.js";
 import type { FrickProjectModule } from "../platform/project.js";
+import type { FrickStore } from "../store.js";
 import {
   buildAnalyticsSummary,
   normalizeAnalyticsSummaryWindowMs,
   type AnalyticsEventStore,
 } from "../analytics/summary.js";
+import { buildDashboardObjectData } from "./data.js";
 import { buildDashboardMetadata } from "./metadata.js";
 import { sendDashboardAsset } from "./assets.js";
 
@@ -17,6 +19,7 @@ export interface DashboardRouteInput {
   readonly url: URL;
   readonly project: FrickProjectModule;
   readonly appRegistry: FrickAppRegistry;
+  readonly store: FrickStore;
   readonly platformEvents: PlatformEventPipeline;
   readonly analyticsEvents: AnalyticsEventStore;
   readonly authenticate: () => Principal | Error;
@@ -107,6 +110,32 @@ export async function handleDashboardRoute(input: DashboardRouteInput): Promise<
     return true;
   }
 
+  const objectDataType = parseObjectDataPath(relativePath);
+  if (objectDataType !== undefined) {
+    setDashboardHeaders(input.response);
+    const principal = input.authenticate();
+    if (principal instanceof Error) {
+      input.sendError(principal, "dashboard_unauthorized");
+      return true;
+    }
+
+    const tenantId = input.url.searchParams.get("tenantId") || undefined;
+    const data = buildDashboardObjectData({
+      store: input.store,
+      principal,
+      type: objectDataType,
+      ...(tenantId ? { tenantId } : {}),
+      ...optionalLimit(input.url.searchParams.get("limit")),
+    });
+    if (!data) {
+      sendDashboardJson(input, 404, { error: "unknown_object_type", type: objectDataType });
+      return true;
+    }
+
+    sendDashboardJson(input, 200, data);
+    return true;
+  }
+
   if (relativePath === "/api/platform-events/health") {
     setDashboardHeaders(input.response);
     const principal = input.authenticate();
@@ -140,6 +169,18 @@ function optionalLimit(value: string | null): { limit?: number } {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return {};
   return { limit: parsed };
+}
+
+function parseObjectDataPath(relativePath: string): string | undefined {
+  const prefix = "/api/data/objects/";
+  if (!relativePath.startsWith(prefix)) return undefined;
+  const encodedType = relativePath.slice(prefix.length);
+  if (!encodedType || encodedType.includes("/")) return "";
+  try {
+    return decodeURIComponent(encodedType);
+  } catch {
+    return "";
+  }
 }
 
 function setDashboardHeaders(response: ServerResponse): void {
