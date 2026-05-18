@@ -1,4 +1,5 @@
-import type { FrickConfig } from "../config.js";
+import { FrickConfigError, type FrickConfig } from "../config.js";
+import { KafkaPlatformEventPipeline } from "./kafka.js";
 import type { PlatformEventPipeline } from "./types.js";
 
 export interface CreatePlatformEventPipelineInput {
@@ -11,8 +12,17 @@ export function createPlatformEventPipeline(
   input: CreatePlatformEventPipelineInput,
 ): PlatformEventPipeline {
   if (input.config.platformEventsDriver === "kafka") {
+    if (input.config.platformEventsKafkaBrokers.length === 0) {
+      throw new FrickConfigError(
+        "FRICK_PLATFORM_EVENTS_KAFKA_BROKERS is required when FRICK_PLATFORM_EVENTS_DRIVER=kafka",
+      );
+    }
     if (!input.kafkaFactory) {
-      throw new Error("Kafka platform events require a kafkaFactory until the Kafka adapter is wired");
+      return new KafkaPlatformEventPipeline({
+        brokers: input.config.platformEventsKafkaBrokers,
+        topic: input.config.platformEventsTopic,
+        consumerGroup: "frick-server",
+      });
     }
     return input.kafkaFactory();
   }

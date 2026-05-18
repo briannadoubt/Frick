@@ -54,7 +54,7 @@ describe("platform event pipeline routes", () => {
     expect(body.ok).toBe(true);
   });
 
-  it("fails before opening storage when kafka is selected without an adapter", () => {
+  it("fails before opening storage when kafka is selected without brokers", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "frick-platform-events-kafka-"));
     const dbPath = path.join(dir, "frick.sqlite");
     try {
@@ -67,11 +67,22 @@ describe("platform event pipeline routes", () => {
             platformEventsDriver: "kafka",
           },
         }),
-      ).toThrow(/Kafka platform events require/);
+      ).toThrow(/FRICK_PLATFORM_EVENTS_KAFKA_BROKERS is required/);
       expect(existsSync(dbPath)).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("constructs the kafka adapter lazily when brokers are configured", async () => {
+    app = await startServer({
+      config: {
+        platformEventsDriver: "kafka",
+        platformEventsKafkaBrokers: ["127.0.0.1:9092"],
+      },
+    });
+
+    expect(app.server.platformEvents.adapter).toBe("kafka");
   });
 });
 

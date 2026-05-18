@@ -82,7 +82,12 @@ import { DEFAULT_IDEMPOTENCY_KEY_RETENTION_MS, FrickStore } from "./store.js";
 import { exportDataSubject } from "./compliance/data-subject-export.js";
 import { eraseDataSubject } from "./compliance/data-subject-erase.js";
 import { FrickObjectVersionConflictError } from "./storage/object-errors.js";
-import { loadFrickConfig, type FrickConfig, type FrickConfigOverrides } from "./config.js";
+import {
+  FrickConfigError,
+  loadFrickConfig,
+  type FrickConfig,
+  type FrickConfigOverrides,
+} from "./config.js";
 import { createConsoleLogger, createNoopLogger, type FrickLogger } from "./logger.js";
 import { FrickLimitError, mergeLimits, type FrickLimits } from "./limits.js";
 import { resolveTenantLimits } from "./tenant-config.js";
@@ -277,8 +282,14 @@ export function createFrickServer(options: ServerOptions = {}) {
   const metrics = options.metrics ?? createInMemoryMetrics();
   const startedAtPerf = performance.now();
   const authAttemptLimiter = new FixedWindowAuthAttemptLimiter();
-  if (options.platformEvents === undefined && config.platformEventsDriver === "kafka") {
-    throw new Error("Kafka platform events require a platformEvents override until the Kafka adapter is wired");
+  if (
+    options.platformEvents === undefined &&
+    config.platformEventsDriver === "kafka" &&
+    config.platformEventsKafkaBrokers.length === 0
+  ) {
+    throw new FrickConfigError(
+      "FRICK_PLATFORM_EVENTS_KAFKA_BROKERS is required when FRICK_PLATFORM_EVENTS_DRIVER=kafka",
+    );
   }
   const project = options.project ? createFrickProjectModule(options.project) : undefined;
   const runtimeSchema =

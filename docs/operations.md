@@ -63,7 +63,7 @@ All variables are optional. Defaults match the runtime mode.
 | `FRICK_INSPECTION_ENABLED`  | `true`                      | `false`                               | Gates `/_frick/inspect/*`. Forcing on in prod logs a warning.        |
 | `FRICK_ADMIN_TOKEN`         | unset                       | unset                                 | Enables `/_frick/admin/*` and production inspection auth. Must be at least 32 chars in production. |
 | `FRICK_IMPLICIT_TENANT_CREATION` | `true`                 | `false`                               | Allows auth routes to create unknown tenants automatically.           |
-| `FRICK_PLATFORM_EVENTS_DRIVER` | `sqlite`                  | `sqlite` unless brokers are set       | One of `sqlite` or `kafka`. Kafka currently requires a prebuilt `createFrickServer({ platformEvents })` pipeline override until the built-in adapter lands. |
+| `FRICK_PLATFORM_EVENTS_DRIVER` | `sqlite`                  | `sqlite` unless brokers are set       | One of `sqlite` or `kafka`. Kafka uses the built-in KafkaJS adapter. |
 | `FRICK_PLATFORM_EVENTS_TOPIC` | `frick.platform.events`    | `frick.platform.events`               | Kafka/Redpanda topic name for platform events.                        |
 | `FRICK_PLATFORM_EVENTS_KAFKA_BROKERS` | unset             | unset                                 | Comma-separated Kafka/Redpanda brokers. When set and no driver is forced, the driver defaults to `kafka`. |
 | `FRICK_PLATFORM_EVENTS_RETENTION_MS` | `604800000` (7d)    | `604800000`                           | SQLite platform event retention window. Positive integer milliseconds. |
@@ -194,6 +194,18 @@ those APIs require the configured admin bearer until the dashboard capability
 system lands. In development, a valid session bearer from `/auth/dev-login` can
 read the dashboard APIs. `/_frick/dashboard/api/platform-events/health`
 returns the same platform-event health payload as the inspection route.
+
+The platform event pipeline defaults to SQLite for local and lightweight
+deployments. Set `FRICK_PLATFORM_EVENTS_DRIVER=kafka` with
+`FRICK_PLATFORM_EVENTS_KAFKA_BROKERS=host:9092` to use the built-in
+KafkaJS adapter against Redpanda or Kafka. The Kafka adapter connects lazily
+on first publish or claim so server construction remains synchronous. This
+baseline commits only contiguous terminal offsets on `ack`, republishes
+retried events to the broker, and publishes poison messages to `<topic>.dlq`.
+Per-consumer health lag is still process-local, and idempotency is enforced by
+the active adapter process after it has published or consumed a matching event;
+cross-process and post-restart Kafka idempotency require a durable key index in
+a follow-up hardening pass.
 
 For agents that need live runtime context, `frick mcp` runs a stdio MCP server
 owned by the same CLI. It defaults to read-only and exposes documented health,
