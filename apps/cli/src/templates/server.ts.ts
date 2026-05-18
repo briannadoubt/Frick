@@ -22,8 +22,6 @@ const app = createFrickServer({ schema, port });
 
 // frick:projections:register
 
-if (typeof app.start === "function") {
-  await app.start();
-}
+await app.listen();
 `;
 }

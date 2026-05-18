@@ -345,6 +345,10 @@ export function createFrickServer(options: ServerOptions = {}) {
   const store = new FrickStore({
     path: options.dbPath ?? process.env.FRICK_DB_PATH ?? defaultDatabasePath(),
     schema: runtimeSchema,
+    // The default seed seeds foundation-schema rows (User/Conversation/...).
+    // When a project supplies its own schema, those object types don't exist
+    // and the seed crashes — skip it.
+    seed: runtimeSchema === foundationSchema,
     projections,
     searchIndexes,
     ...(options.search?.adapter !== undefined ? { searchAdapter: options.search.adapter } : {}),
