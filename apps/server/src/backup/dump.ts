@@ -106,6 +106,16 @@ const TABLE_ORDER: readonly TableSpec[] = [
     tenantScoped: false,
     orderBy: "consumer ASC, event_id ASC",
   },
+  {
+    name: "analytics_aggregate_buckets",
+    tenantScoped: true,
+    orderBy: "tenant_id ASC, bucket_start ASC, metric_kind ASC, metric_key ASC",
+  },
+  {
+    name: "analytics_recent_events",
+    tenantScoped: true,
+    orderBy: "tenant_id ASC, occurred_at ASC, event_id ASC",
+  },
   { name: "admin_audit_log", tenantScoped: false, infraOnly: true, orderBy: "id ASC" },
   { name: "frick_migrations", tenantScoped: false, infraOnly: true, orderBy: "id ASC" },
 ];

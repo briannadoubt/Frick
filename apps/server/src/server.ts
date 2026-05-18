@@ -97,6 +97,7 @@ import {
   type FrickJobHandler,
 } from "./jobs/registry.js";
 import { createFrickJobWorker } from "./jobs/worker.js";
+import { createFrickAnalyticsEventConsumer } from "./analytics/consumer.js";
 import {
   createFrickPushRegistry,
   type FrickPushRegistry,
@@ -192,6 +193,17 @@ export interface ServerOptions {
     handlers?: Record<string, FrickJobHandler>;
     workerEnabled?: boolean;
     pollIntervalMs?: number;
+  };
+  /**
+   * Product analytics aggregation worker configuration. The worker consumes
+   * `analytics.user_event` envelopes from the configured platform-event
+   * pipeline into the server's durable analytics read model. Defaults to on
+   * outside of test runners.
+   */
+  analytics?: {
+    workerEnabled?: boolean;
+    pollIntervalMs?: number;
+    claimBatchSize?: number;
   };
   /**
    * Push-notification framework configuration. Adapters supplied here are
@@ -491,6 +503,23 @@ export function createFrickServer(options: ServerOptions = {}) {
     worker.start();
   }
 
+  const analyticsConsumer = createFrickAnalyticsEventConsumer({
+    platformEvents,
+    analyticsEvents: store.analyticsEvents,
+    logger,
+    ...(options.analytics?.pollIntervalMs !== undefined
+      ? { pollIntervalMs: options.analytics.pollIntervalMs }
+      : {}),
+    ...(options.analytics?.claimBatchSize !== undefined
+      ? { claimBatchSize: options.analytics.claimBatchSize }
+      : {}),
+  });
+  const analyticsWorkerEnabled =
+    options.analytics?.workerEnabled ?? !inTestRunner;
+  if (analyticsWorkerEnabled) {
+    analyticsConsumer.start();
+  }
+
   async function handleHttp(request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
     const requestId = randomUUID();
@@ -574,7 +603,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         project: runtimeProject,
         appRegistry,
         platformEvents,
-        db: store.db,
+        analyticsEvents: store.analyticsEvents,
         authenticate: () => inspectionPrincipalFromRequest(request, requestUrl, store, config),
         sendJson: (status, body) => sendJson(response, status, body),
         sendError: (error, requestId) => sendErrorWithMetrics(response, error, requestId),
@@ -1786,6 +1815,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     // out) before we tear down the HTTP listener and database. Worker
     // handlers depend on `store`, which is closed below.
     const workerStop = worker.stop();
+    const analyticsConsumerStop = analyticsConsumer.stop();
     sse.closeAll();
     gateway.close();
     // Close any adapters that hold long-lived resources (e.g. APNs HTTP/2
@@ -1818,6 +1848,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     };
     closePromise = (async () => {
       await workerStop;
+      await analyticsConsumerStop;
       await Promise.all(adapterCloses);
     })().then(() => new Promise<void>((resolve, reject) => {
       // Stop accepting new HTTP connections; allow in-flight requests to
@@ -1871,6 +1902,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     notifications: notificationRouter,
     pushRegistry,
     platformEvents,
+    analyticsConsumer,
     apps: appRegistry,
     gateway,
     /** Derived `http://host:port` origin. Resolved after `listen()` binds. */

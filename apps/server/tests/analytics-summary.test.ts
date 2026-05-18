@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { MemoryPlatformEventPipeline } from "../src/platform-events/memory.js";
 import { createFrickServer } from "../src/server.js";
 
 let app: Awaited<ReturnType<typeof startServer>> | undefined;
@@ -36,6 +37,7 @@ describe("dashboard analytics summary", () => {
       name: "button.clicked",
       properties: { buttonId: "compose" },
     });
+    await drainAnalytics(app.server);
 
     const response = await fetch(
       `${app.httpUrl}/_frick/dashboard/api/analytics/summary?windowMs=604800000`,
@@ -101,6 +103,7 @@ describe("dashboard analytics summary", () => {
       name: "screen.viewed",
       properties: { path: "/tenant-b" },
     });
+    await drainAnalytics(app.server);
 
     const response = await fetch(
       `${app.httpUrl}/_frick/dashboard/api/analytics/summary?windowMs=604800000`,
@@ -123,6 +126,36 @@ describe("dashboard analytics summary", () => {
         properties: expect.objectContaining({ path: "/tenant-a" }),
       }),
     ]);
+  });
+
+  it("summarizes events consumed from the configured platform event pipeline", async () => {
+    app = await startServer({
+      platformEvents: new MemoryPlatformEventPipeline(),
+    });
+    const headers = await authHeaders(app.httpUrl, {
+      userId: "user-ada",
+      tenantId: "_default",
+    });
+
+    await postAnalytics(app.httpUrl, headers, {
+      name: "screen.viewed",
+      properties: { path: "/from-memory-pipeline" },
+    });
+    await drainAnalytics(app.server);
+
+    const response = await fetch(
+      `${app.httpUrl}/_frick/dashboard/api/analytics/summary?windowMs=604800000`,
+      { headers },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.totals).toMatchObject({
+      events: 1,
+      uniqueUsers: 1,
+      uniqueTenants: 1,
+    });
+    expect(body.topRoutes).toEqual([{ path: "/from-memory-pipeline", count: 1 }]);
   });
 });
 
@@ -180,4 +213,13 @@ async function postAnalytics(
     body: JSON.stringify(body),
   });
   expect(response.status).toBe(202);
+}
+
+async function drainAnalytics(server: unknown): Promise<void> {
+  const consumer = (server as { analyticsConsumer?: { drainOnce(): Promise<number> } })
+    .analyticsConsumer;
+  if (!consumer) {
+    throw new Error("server did not expose an analytics consumer");
+  }
+  await consumer.drainOnce();
 }

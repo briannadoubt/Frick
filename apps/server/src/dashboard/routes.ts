@@ -1,10 +1,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { DatabaseSync } from "node:sqlite";
 import type { Principal } from "../authz.js";
 import type { FrickAppRegistry } from "../apps/registry.js";
 import type { PlatformEventPipeline } from "../platform-events/types.js";
 import type { FrickProjectModule } from "../platform/project.js";
-import { buildAnalyticsSummary, normalizeAnalyticsSummaryWindowMs } from "../analytics/summary.js";
+import {
+  buildAnalyticsSummary,
+  normalizeAnalyticsSummaryWindowMs,
+  type AnalyticsEventStore,
+} from "../analytics/summary.js";
 import { buildDashboardMetadata } from "./metadata.js";
 import { sendDashboardAsset } from "./assets.js";
 
@@ -15,7 +18,7 @@ export interface DashboardRouteInput {
   readonly project: FrickProjectModule;
   readonly appRegistry: FrickAppRegistry;
   readonly platformEvents: PlatformEventPipeline;
-  readonly db: DatabaseSync;
+  readonly analyticsEvents: AnalyticsEventStore;
   readonly authenticate: () => Principal | Error;
   readonly sendJson: (status: number, body: unknown) => void;
   readonly sendError: (error: unknown, requestId: string) => void;
@@ -96,7 +99,7 @@ export async function handleDashboardRoute(input: DashboardRouteInput): Promise<
     }
 
     sendDashboardJson(input, 200, buildAnalyticsSummary({
-      db: input.db,
+      store: input.analyticsEvents,
       principal,
       windowMs: normalizeAnalyticsSummaryWindowMs(input.url.searchParams.get("windowMs")),
       ...optionalLimit(input.url.searchParams.get("limit")),

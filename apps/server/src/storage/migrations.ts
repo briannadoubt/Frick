@@ -757,6 +757,47 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
         ON platform_event_deliveries (event_id);
     `,
   },
+  {
+    // Durable product analytics read model. Platform events remain the
+    // transport/source log; these tables are the local dashboard/query model
+    // populated by the analytics aggregate consumer, so Kafka/Redpanda
+    // deployments can serve summaries without requiring events to be stored
+    // in the local `platform_events` table.
+    id: "0015_analytics_aggregates",
+    schemaRevision: 1,
+    description: "Create product analytics aggregate tables.",
+    sql: `
+      CREATE TABLE IF NOT EXISTS analytics_aggregate_buckets (
+        bucket_start TEXT NOT NULL,
+        bucket_ms INTEGER NOT NULL,
+        tenant_id TEXT NOT NULL,
+        metric_kind TEXT NOT NULL,
+        metric_key TEXT NOT NULL,
+        count INTEGER NOT NULL,
+        PRIMARY KEY (bucket_start, bucket_ms, tenant_id, metric_kind, metric_key)
+      );
+      CREATE INDEX idx_analytics_buckets_lookup
+        ON analytics_aggregate_buckets (tenant_id, metric_kind, bucket_start DESC, count DESC);
+
+      CREATE TABLE IF NOT EXISTS analytics_recent_events (
+        event_id TEXT PRIMARY KEY,
+        occurred_at TEXT NOT NULL,
+        accepted_at TEXT NOT NULL,
+        processed_at TEXT NOT NULL,
+        tenant_id TEXT,
+        account_id TEXT,
+        subject_id TEXT,
+        trace_id TEXT,
+        name TEXT NOT NULL,
+        properties TEXT NOT NULL,
+        context TEXT NOT NULL
+      );
+      CREATE INDEX idx_analytics_recent_tenant_at
+        ON analytics_recent_events (tenant_id, occurred_at DESC);
+      CREATE INDEX idx_analytics_recent_name_at
+        ON analytics_recent_events (name, occurred_at DESC);
+    `,
+  },
 ];
 
 /** Names of all framework tables (and indexes) the runner manages. Used by the
@@ -786,6 +827,8 @@ export const FRAMEWORK_TABLES: readonly string[] = [
   "devtools_events",
   "platform_events",
   "platform_event_deliveries",
+  "analytics_aggregate_buckets",
+  "analytics_recent_events",
 ];
 
 export interface MigrationRunResult {

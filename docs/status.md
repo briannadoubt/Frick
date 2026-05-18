@@ -17,6 +17,9 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
 - TypeScript `@frick/core` runtime and `@frick/react` hooks for objects, streams, projections, presence, signals, auth, blobs, search, realtime wrappers, drafts, and background sync.
 - First-class platform events for framework telemetry, job lifecycle events,
   and authenticated product analytics ingestion through the TypeScript client.
+  Product analytics summaries are materialized by a built-in platform-event
+  consumer so SQLite and Kafka/Redpanda deployments share the same dashboard
+  read model.
 - Swift and Android WebSocket sync transports with capability handshake, object subscriptions/upserts, presence, packed-frame decoding, cache compatibility, and cross-device draft helpers.
 
 ## Known Limitations

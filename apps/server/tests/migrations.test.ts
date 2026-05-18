@@ -27,6 +27,8 @@ const FOUNDATION_TABLES = [
   "auth_accounts",
   "platform_events",
   "platform_event_deliveries",
+  "analytics_aggregate_buckets",
+  "analytics_recent_events",
 ];
 
 function openDb(): DatabaseSync {
@@ -63,6 +65,7 @@ describe("framework migration runner", () => {
       "0012_audit_chain",
       "0013_auth_session_token_digests",
       "0014_platform_events",
+      "0015_analytics_aggregates",
     ]);
     expect(result.applied[0]?.schemaRevision).toBe(1);
     expect(result.applied[0]?.checksum).toMatch(/^sha256-[0-9a-f]{64}$/);
@@ -84,6 +87,7 @@ describe("framework migration runner", () => {
       "0012_audit_chain",
       "0013_auth_session_token_digests",
       "0014_platform_events",
+      "0015_analytics_aggregates",
     ]);
 
     const tables = listTables(db);
@@ -105,10 +109,10 @@ describe("framework migration runner", () => {
       supportedSchemaRevision: foundationSchema.schemaRevision,
     });
 
-    expect(first.applied).toHaveLength(14);
+    expect(first.applied).toHaveLength(15);
     expect(second.applied).toHaveLength(0);
-    expect(second.alreadyApplied).toHaveLength(14);
-    expect(listAppliedMigrations(db)).toHaveLength(14);
+    expect(second.alreadyApplied).toHaveLength(15);
+    expect(listAppliedMigrations(db)).toHaveLength(15);
 
     db.close();
   });
@@ -244,6 +248,7 @@ describe("framework migration runner", () => {
       "0012_audit_chain",
       "0013_auth_session_token_digests",
       "0014_platform_events",
+      "0015_analytics_aggregates",
       "9000_test_extra",
     ]);
     expect(listTables(db)).toContain("test_extra");

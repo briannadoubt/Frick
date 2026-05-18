@@ -62,6 +62,8 @@ const TENANT_SCOPED_TABLES: readonly string[] = [
   "jobs",
   "push_device_registrations",
   "platform_events",
+  "analytics_aggregate_buckets",
+  "analytics_recent_events",
 ];
 
 const EVENT_CHILD_TABLES: readonly string[] = ["platform_event_deliveries"];

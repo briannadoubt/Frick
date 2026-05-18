@@ -224,7 +224,10 @@ tenant-scoped product analytics summary derived from retained
 `analytics.user_event` platform events, including event totals, unique users,
 top event names, top viewed routes, and recent event metadata. Tenant session
 principals only see their session tenant; production admin bearers see the
-project-wide summary.
+project-wide summary. The server's analytics aggregate consumer materializes
+those events into local analytics read-model tables, so the summary endpoint
+works with both the default SQLite platform-event adapter and the Kafka/Redpanda
+adapter.
 
 The platform event pipeline defaults to SQLite for local and lightweight
 deployments. Set `FRICK_PLATFORM_EVENTS_DRIVER=kafka` with
@@ -239,6 +242,10 @@ events from the same adapter as analytics and telemetry events. SQLite claims
 use a five-minute visibility lease; if a consumer crashes after claiming but
 before `ack`, `retry`, or `deadLetter`, the same consumer name can reclaim that
 event after the lease expires and the delivery attempt count increments.
+The built-in analytics aggregate consumer uses consumer name
+`frick.analytics.aggregates` and is enabled by default outside test runners.
+Tests and embedded runtimes can use `createFrickServer({ analytics: {
+workerEnabled: false } })` or tune `pollIntervalMs` / `claimBatchSize`.
 Terminal actions are matched against the delivery's `attempt` and `claimedAt`
 values so an expired attempt cannot acknowledge, retry, or dead-letter a newer
 claim.

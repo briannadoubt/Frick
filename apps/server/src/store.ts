@@ -58,6 +58,7 @@ import {
   DEFAULT_PLATFORM_EVENTS_RETENTION_MS,
   SqlitePlatformEventPipeline,
 } from "./platform-events/sqlite.js";
+import { AnalyticsEventStore } from "./analytics/summary.js";
 import { DEFAULT_TENANT_ID } from "./tenant.js";
 
 /**
@@ -206,6 +207,7 @@ export class FrickStore {
   readonly pushRegistrations: PushRegistrationStore;
   readonly devtoolsEvents: DevToolsEventStore;
   readonly platformEvents: SqlitePlatformEventPipeline;
+  readonly analyticsEvents: AnalyticsEventStore;
   readonly projections: FrickProjectionRegistry;
   readonly searchAdapter: FrickSearchAdapter;
   readonly searchIndexes: FrickSearchIndexRegistry;
@@ -277,6 +279,7 @@ export class FrickStore {
         options.platformEventsRetentionMs ?? DEFAULT_PLATFORM_EVENTS_RETENTION_MS,
       maxRows: options.platformEventsMaxRows ?? DEFAULT_PLATFORM_EVENTS_MAX_ROWS,
     });
+    this.analyticsEvents = new AnalyticsEventStore(this.#db);
     this.projections = options.projections ?? createFrickProjectionRegistry();
     this.searchAdapter = options.searchAdapter ?? createSqliteFtsSearchAdapter(this.#db);
     this.searchIndexes = options.searchIndexes ?? createFrickSearchIndexRegistry();
