@@ -16,6 +16,7 @@
 import { randomUUID } from "node:crypto";
 import type { FrickLogger } from "../logger.js";
 import type { FrickMetrics } from "../metrics.js";
+import type { PlatformEventPipeline } from "../platform-events/types.js";
 import type { FrickStore } from "../store.js";
 import type { JobRow } from "../storage/job-store.js";
 import { emitDevToolsEvent } from "../devtools/emit.js";
@@ -38,6 +39,7 @@ export interface FrickJobWorkerOptions {
   pollIntervalMs?: number;
   claimBatchSize?: number;
   metrics?: FrickMetrics;
+  platformEvents?: PlatformEventPipeline;
   /** How long `stop()` waits for in-flight handlers before resolving. */
   gracefulShutdownTimeoutMs?: number;
 }
@@ -52,6 +54,7 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
     registry,
     logger,
     metrics,
+    platformEvents,
     pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
     claimBatchSize = DEFAULT_CLAIM_BATCH_SIZE,
     gracefulShutdownTimeoutMs = DEFAULT_SHUTDOWN_TIMEOUT_MS,
@@ -176,6 +179,10 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
         tenantId: job.tenantId,
         fields: { jobType: job.jobType, jobId: job.id, durationMs },
       });
+      publishJobLifecycleEvent("job.completed", job, {
+        attemptCount: job.attemptCount,
+        durationMs,
+      });
       return;
     }
     const retryable = result.retryable ?? false;
@@ -201,12 +208,68 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
         tenantId: job.tenantId,
         fields: { jobType: job.jobType, jobId: job.id, errorCode, attemptCount },
       });
+      publishJobLifecycleEvent("job.dead_lettered", job, {
+        attemptCount,
+        durationMs,
+        errorCode,
+        retryable,
+      });
     } else {
       emitDevToolsEvent(store, {
         kind: "job.failed",
         tenantId: job.tenantId,
         fields: { jobType: job.jobType, jobId: job.id, errorCode, attemptCount },
       });
+      publishJobLifecycleEvent("job.failed", job, {
+        attemptCount,
+        durationMs,
+        errorCode,
+        retryable,
+      });
+    }
+  }
+
+  function publishJobLifecycleEvent(
+    name: "job.completed" | "job.failed" | "job.dead_lettered",
+    job: JobRow,
+    payload: {
+      attemptCount: number;
+      durationMs: number;
+      errorCode?: string;
+      retryable?: boolean;
+    },
+  ): void {
+    if (!platformEvents) return;
+    const fields = {
+      event: "frick.jobs.platform_event_publish_failed",
+      jobId: job.id,
+      jobType: job.jobType,
+      platformEventName: name,
+    };
+    try {
+      void platformEvents.publish({
+        family: "jobs.lifecycle",
+        name,
+        source: "frick.jobs",
+        tenantId: job.tenantId,
+        idempotencyKey: `jobs.lifecycle:${job.tenantId}:${job.id}:${name}:${payload.attemptCount}`,
+        payload: {
+          jobId: job.id,
+          jobType: job.jobType,
+          ...payload,
+        },
+      })
+        .catch((error) => {
+          log.warn("frick.jobs.platform_event_publish_failed", {
+            ...fields,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+    } catch (error) {
+        log.warn("frick.jobs.platform_event_publish_failed", {
+          ...fields,
+          error: error instanceof Error ? error.message : String(error),
+        });
     }
   }
 

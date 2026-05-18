@@ -482,6 +482,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     registry: jobRegistry,
     logger,
     metrics,
+    platformEvents,
     ...(options.jobs?.pollIntervalMs !== undefined
       ? { pollIntervalMs: options.jobs.pollIntervalMs }
       : {}),
