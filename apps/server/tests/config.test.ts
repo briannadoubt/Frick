@@ -19,6 +19,11 @@ describe("loadFrickConfig", () => {
       adminToken: undefined,
       adminEnabled: false,
       implicitTenantCreation: true,
+      platformEventsDriver: "sqlite",
+      platformEventsTopic: "frick.platform.events",
+      platformEventsKafkaBrokers: [],
+      platformEventsRetentionMs: 7 * 24 * 60 * 60 * 1000,
+      platformEventsMaxRows: 1_000_000,
     });
   });
 
@@ -57,6 +62,11 @@ describe("loadFrickConfig", () => {
           FRICK_DB_PATH: "/tmp/frick.sqlite",
           FRICK_BLOB_STORAGE_PATH: "/tmp/frick-blobs",
           FRICK_LOG_LEVEL: "debug",
+          FRICK_PLATFORM_EVENTS_DRIVER: "kafka",
+          FRICK_PLATFORM_EVENTS_TOPIC: "frick.events",
+          FRICK_PLATFORM_EVENTS_KAFKA_BROKERS: "localhost:9092, localhost:19092",
+          FRICK_PLATFORM_EVENTS_RETENTION_MS: "60000",
+          FRICK_PLATFORM_EVENTS_MAX_ROWS: "5000",
         },
         warn: () => {},
       },
@@ -68,6 +78,25 @@ describe("loadFrickConfig", () => {
     expect(config.dbPath).toBe("/tmp/frick.sqlite");
     expect(config.blobStoragePath).toBe("/tmp/frick-blobs");
     expect(config.logLevel).toBe("debug");
+    expect(config.platformEventsDriver).toBe("kafka");
+    expect(config.platformEventsTopic).toBe("frick.events");
+    expect(config.platformEventsKafkaBrokers).toEqual(["localhost:9092", "localhost:19092"]);
+    expect(config.platformEventsRetentionMs).toBe(60000);
+    expect(config.platformEventsMaxRows).toBe(5000);
+  });
+
+  it("defaults platform events to kafka when brokers are configured", () => {
+    const config = loadFrickConfig(
+      {},
+      {
+        env: {
+          FRICK_PLATFORM_EVENTS_KAFKA_BROKERS: "redpanda:9092",
+        },
+        warn: () => {},
+      },
+    );
+    expect(config.platformEventsDriver).toBe("kafka");
+    expect(config.platformEventsKafkaBrokers).toEqual(["redpanda:9092"]);
   });
 
   it("reads env vars when no overrides are provided", () => {
@@ -132,6 +161,18 @@ describe("loadFrickConfig", () => {
   it("throws FrickConfigError on unrecognized log level", () => {
     expect(() =>
       loadFrickConfig({}, { env: { FRICK_LOG_LEVEL: "trace" }, warn: () => {} }),
+    ).toThrow(FrickConfigError);
+  });
+
+  it("throws FrickConfigError on invalid platform events config", () => {
+    expect(() =>
+      loadFrickConfig({}, { env: { FRICK_PLATFORM_EVENTS_DRIVER: "redis" }, warn: () => {} }),
+    ).toThrow(FrickConfigError);
+    expect(() =>
+      loadFrickConfig({}, { env: { FRICK_PLATFORM_EVENTS_RETENTION_MS: "0" }, warn: () => {} }),
+    ).toThrow(FrickConfigError);
+    expect(() =>
+      loadFrickConfig({}, { env: { FRICK_PLATFORM_EVENTS_MAX_ROWS: "-1" }, warn: () => {} }),
     ).toThrow(FrickConfigError);
   });
 });

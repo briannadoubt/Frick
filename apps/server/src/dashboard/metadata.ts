@@ -1,5 +1,6 @@
 import type { FrickSchema } from "@frick/protocol";
 import type { FrickAppRegistry } from "../apps/registry.js";
+import type { PlatformEventHealth } from "../platform-events/types.js";
 import type { FrickProjectModule } from "../platform/project.js";
 
 export interface DashboardResourceSummary {
@@ -27,11 +28,13 @@ export interface DashboardMetadata {
     readonly schemaId: string;
     readonly schemaRevision: number;
   }[];
+  readonly platformEvents?: PlatformEventHealth;
 }
 
 export interface BuildDashboardMetadataInput {
   readonly project: FrickProjectModule;
   readonly appRegistry: FrickAppRegistry;
+  readonly platformEventsHealth?: PlatformEventHealth;
 }
 
 export function buildDashboardMetadata(input: BuildDashboardMetadataInput): DashboardMetadata {
@@ -55,6 +58,7 @@ export function buildDashboardMetadata(input: BuildDashboardMetadataInput): Dash
       schemaId: app.schema.schemaId,
       schemaRevision: app.schema.schemaRevision,
     })),
+    ...(input.platformEventsHealth ? { platformEvents: input.platformEventsHealth } : {}),
   };
 }
 

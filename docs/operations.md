@@ -63,6 +63,11 @@ All variables are optional. Defaults match the runtime mode.
 | `FRICK_INSPECTION_ENABLED`  | `true`                      | `false`                               | Gates `/_frick/inspect/*`. Forcing on in prod logs a warning.        |
 | `FRICK_ADMIN_TOKEN`         | unset                       | unset                                 | Enables `/_frick/admin/*` and production inspection auth. Must be at least 32 chars in production. |
 | `FRICK_IMPLICIT_TENANT_CREATION` | `true`                 | `false`                               | Allows auth routes to create unknown tenants automatically.           |
+| `FRICK_PLATFORM_EVENTS_DRIVER` | `sqlite`                  | `sqlite` unless brokers are set       | One of `sqlite` or `kafka`. Kafka currently requires a prebuilt `createFrickServer({ platformEvents })` pipeline override until the built-in adapter lands. |
+| `FRICK_PLATFORM_EVENTS_TOPIC` | `frick.platform.events`    | `frick.platform.events`               | Kafka/Redpanda topic name for platform events.                        |
+| `FRICK_PLATFORM_EVENTS_KAFKA_BROKERS` | unset             | unset                                 | Comma-separated Kafka/Redpanda brokers. When set and no driver is forced, the driver defaults to `kafka`. |
+| `FRICK_PLATFORM_EVENTS_RETENTION_MS` | `604800000` (7d)    | `604800000`                           | SQLite platform event retention window. Positive integer milliseconds. |
+| `FRICK_PLATFORM_EVENTS_MAX_ROWS` | `1000000`               | `1000000`                             | SQLite platform event row cap after retention pruning. Positive integer. |
 
 Validation errors throw `FrickConfigError` at startup, before any port is
 opened. Unknown env values (e.g. `FRICK_ENV=staging`) are fatal — the
@@ -155,6 +160,10 @@ server exposes these GET endpoints under `/_frick/inspect/`:
   `frick.http.errors.total{code}`, and `frick.ws.frames.total{kind}`. Gauges
   include `frick.ws.connections.current`. No retention or historical
   aggregation — scrape periodically to integrate with a metrics backend.
+- `/_frick/inspect/platform-events` — platform event pipeline health:
+  `{ adapter, ok, pending, claimed, deadLettered, retained, unclaimed,
+  consumers }`. The default adapter is SQLite, with bounded retention and
+  row-cap pruning controlled by the platform event env vars above.
 - `/_frick/inspect/devtools/events` — newest-first DevTools event feed with
   optional `kind`, `tenantId`, `sinceId`, and `limit` filters.
 - `/_frick/inspect/devtools/events/:id` — one DevTools event by numeric id.
@@ -183,7 +192,8 @@ assets contain no sensitive data and may be served without auth; data-bearing
 dashboard APIs under `/_frick/dashboard/api/*` require auth. In production,
 those APIs require the configured admin bearer until the dashboard capability
 system lands. In development, a valid session bearer from `/auth/dev-login` can
-read the dashboard APIs.
+read the dashboard APIs. `/_frick/dashboard/api/platform-events/health`
+returns the same platform-event health payload as the inspection route.
 
 For agents that need live runtime context, `frick mcp` runs a stdio MCP server
 owned by the same CLI. It defaults to read-only and exposes documented health,

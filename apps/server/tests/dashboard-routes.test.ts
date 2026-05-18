@@ -150,6 +150,11 @@ describe("mounted dashboard", () => {
       fieldCount: 2,
       indexCount: 1,
     });
+    expect(body.platformEvents).toMatchObject({
+      adapter: "sqlite",
+      ok: true,
+      retained: expect.any(Number),
+    });
 
     const scriptResponse = await fetch(`${app.httpUrl}/_frick/dashboard/dashboard.js`);
     expect(scriptResponse.status).toBe(200);

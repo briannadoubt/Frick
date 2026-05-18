@@ -119,6 +119,8 @@ import {
   encodeBlobProcessPayload,
 } from "./blobs/processor-job.js";
 import { emitDevToolsEvent } from "./devtools/emit.js";
+import { createPlatformEventPipeline } from "./platform-events/factory.js";
+import type { PlatformEventPipeline } from "./platform-events/types.js";
 import {
   SCHEDULED_SWEEP_JOB_TYPE,
   createScheduledMessageSweepHandler,
@@ -170,6 +172,11 @@ export interface ServerOptions {
    * true. Counters and gauges only — see `apps/server/src/metrics.ts`.
    */
   metrics?: FrickMetrics;
+  /**
+   * Platform event pipeline override. Defaults to the configured pipeline
+   * built from the store's SQLite adapter.
+   */
+  platformEvents?: PlatformEventPipeline;
   /**
    * Background-job framework configuration. Handlers are registered once at
    * boot; the worker polls the {@link JobStore} and dispatches claimed jobs
@@ -270,6 +277,9 @@ export function createFrickServer(options: ServerOptions = {}) {
   const metrics = options.metrics ?? createInMemoryMetrics();
   const startedAtPerf = performance.now();
   const authAttemptLimiter = new FixedWindowAuthAttemptLimiter();
+  if (options.platformEvents === undefined && config.platformEventsDriver === "kafka") {
+    throw new Error("Kafka platform events require a platformEvents override until the Kafka adapter is wired");
+  }
   const project = options.project ? createFrickProjectModule(options.project) : undefined;
   const runtimeSchema =
     options.schema ?? (options.apps === undefined ? project?.schema : undefined) ?? foundationSchema;
@@ -302,7 +312,15 @@ export function createFrickServer(options: ServerOptions = {}) {
     ...(options.idempotencyCacheCapacity !== undefined
       ? { idempotencyCacheCapacity: options.idempotencyCacheCapacity }
       : {}),
+    platformEventsRetentionMs: config.platformEventsRetentionMs,
+    platformEventsMaxRows: config.platformEventsMaxRows,
   });
+  const platformEvents =
+    options.platformEvents ??
+    createPlatformEventPipeline({
+      config,
+      sqlite: store.platformEvents,
+    });
   // Notify the adapter once per index so external engines can allocate
   // per-index state. For the default SQLite adapter this is a no-op.
   for (const def of searchIndexes.list()) {
@@ -543,6 +561,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         url: requestUrl,
         project: runtimeProject,
         appRegistry,
+        platformEvents,
         authenticate: () => inspectionPrincipalFromRequest(request, requestUrl, store, config),
         sendJson: (status, body) => sendJson(response, status, body),
         sendError: (error, requestId) => sendErrorWithMetrics(response, error, requestId),
@@ -646,6 +665,10 @@ export function createFrickServer(options: ServerOptions = {}) {
           counters: snap.counters,
           gauges: snap.gauges,
         });
+        return;
+      }
+      if (sub === "platform-events") {
+        sendJson(response, 200, await platformEvents.health());
         return;
       }
       if (sub === "projections") {
@@ -1732,6 +1755,18 @@ export function createFrickServer(options: ServerOptions = {}) {
         });
       }
     });
+    const platformEventsClose = async () => {
+      if (platformEvents === store.platformEvents) return;
+      try {
+        await platformEvents.close();
+      } catch (err) {
+        logger.warn("frick.platform_events.close_failed", {
+          event: "frick.platform_events.close_failed",
+          adapter: platformEvents.adapter,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    };
     closePromise = (async () => {
       await workerStop;
       await Promise.all(adapterCloses);
@@ -1753,18 +1788,21 @@ export function createFrickServer(options: ServerOptions = {}) {
       server.close((serverError) => {
         clearTimeout(drainTimer);
         wss.close((wsError) => {
-          try {
-            store.close();
-          } catch {
-            // Already closed — fine during shutdown.
-          }
-          logger.info("frick.server.closed", { event: "frick.server.closed" });
-          const error = serverError ?? wsError;
-          if (error && !/Server is not running|not running/i.test(error.message)) {
-            reject(error);
-          } else {
-            resolve();
-          }
+          void (async () => {
+            await platformEventsClose();
+            try {
+              store.close();
+            } catch {
+              // Already closed — fine during shutdown.
+            }
+            logger.info("frick.server.closed", { event: "frick.server.closed" });
+            const error = serverError ?? wsError;
+            if (error && !/Server is not running|not running/i.test(error.message)) {
+              reject(error);
+            } else {
+              resolve();
+            }
+          })().catch(reject);
         });
       });
     }));
@@ -1783,6 +1821,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     close,
     notifications: notificationRouter,
     pushRegistry,
+    platformEvents,
     apps: appRegistry,
     gateway,
     /** Derived `http://host:port` origin. Resolved after `listen()` binds. */
@@ -1823,7 +1862,12 @@ function isFrickConfig(value: FrickConfig | FrickConfigOverrides): value is Fric
     typeof v.host === "string" &&
     typeof v.port === "number" &&
     typeof v.dbPath === "string" &&
-    typeof v.logLevel === "string"
+    typeof v.logLevel === "string" &&
+    typeof v.platformEventsDriver === "string" &&
+    typeof v.platformEventsTopic === "string" &&
+    Array.isArray(v.platformEventsKafkaBrokers) &&
+    typeof v.platformEventsRetentionMs === "number" &&
+    typeof v.platformEventsMaxRows === "number"
   );
 }
 

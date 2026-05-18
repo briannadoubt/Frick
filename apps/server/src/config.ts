@@ -12,6 +12,8 @@ export type FrickEnv = "development" | "test" | "production";
 
 export type FrickLogLevel = "debug" | "info" | "warn" | "error";
 
+export type FrickPlatformEventsDriver = "sqlite" | "kafka";
+
 export interface FrickConfig {
   /** Runtime environment. Drives defaults for the rest of the config. */
   env: FrickEnv;
@@ -82,6 +84,19 @@ export interface FrickConfig {
    * "unknownTenant"` so an admin must pre-create the tenant.
    */
   implicitTenantCreation: boolean;
+  /**
+   * Platform event pipeline driver. Defaults to `sqlite` unless Kafka brokers
+   * are configured, in which case it defaults to `kafka`.
+   */
+  platformEventsDriver: FrickPlatformEventsDriver;
+  /** Topic used by Kafka/Redpanda platform event adapters. */
+  platformEventsTopic: string;
+  /** Kafka/Redpanda broker list for the platform event pipeline. */
+  platformEventsKafkaBrokers: string[];
+  /** Retention window for local SQLite platform events. */
+  platformEventsRetentionMs: number;
+  /** Hard row cap for local SQLite platform events. */
+  platformEventsMaxRows: number;
 }
 
 export class FrickConfigError extends Error {
@@ -95,6 +110,9 @@ const DEFAULT_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days
 const DEFAULT_PORT = 4099;
 const DEFAULT_DB_PATH = "./frick.sqlite";
 const DEFAULT_BLOB_STORAGE_PATH = "./frick-blobs/";
+const DEFAULT_PLATFORM_EVENTS_TOPIC = "frick.platform.events";
+const DEFAULT_PLATFORM_EVENTS_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_PLATFORM_EVENTS_MAX_ROWS = 1_000_000;
 
 const VALID_ENVS: ReadonlySet<FrickEnv> = new Set<FrickEnv>(["development", "test", "production"]);
 const VALID_LOG_LEVELS: ReadonlySet<FrickLogLevel> = new Set<FrickLogLevel>([
@@ -103,6 +121,8 @@ const VALID_LOG_LEVELS: ReadonlySet<FrickLogLevel> = new Set<FrickLogLevel>([
   "warn",
   "error",
 ]);
+const VALID_PLATFORM_EVENTS_DRIVERS: ReadonlySet<FrickPlatformEventsDriver> =
+  new Set<FrickPlatformEventsDriver>(["sqlite", "kafka"]);
 
 export type FrickConfigOverrides = Partial<FrickConfig>;
 
@@ -156,6 +176,36 @@ export function loadFrickConfig(
       implicitTenantDefault,
       "FRICK_IMPLICIT_TENANT_CREATION",
     );
+  const platformEventsKafkaBrokers =
+    overrides.platformEventsKafkaBrokers ??
+    parseCommaSeparated(env.FRICK_PLATFORM_EVENTS_KAFKA_BROKERS);
+  const platformEventsDriver =
+    overrides.platformEventsDriver ??
+    parsePlatformEventsDriver(env.FRICK_PLATFORM_EVENTS_DRIVER, platformEventsKafkaBrokers);
+  const platformEventsTopic = validateNonEmptyString(
+    overrides.platformEventsTopic ??
+      parseString(env.FRICK_PLATFORM_EVENTS_TOPIC) ??
+      DEFAULT_PLATFORM_EVENTS_TOPIC,
+    "FRICK_PLATFORM_EVENTS_TOPIC",
+  );
+  const platformEventsRetentionMs = validatePositiveInteger(
+    overrides.platformEventsRetentionMs ??
+      parsePositiveInteger(
+        env.FRICK_PLATFORM_EVENTS_RETENTION_MS,
+        DEFAULT_PLATFORM_EVENTS_RETENTION_MS,
+        "FRICK_PLATFORM_EVENTS_RETENTION_MS",
+      ),
+    "platformEventsRetentionMs",
+  );
+  const platformEventsMaxRows = validatePositiveInteger(
+    overrides.platformEventsMaxRows ??
+      parsePositiveInteger(
+        env.FRICK_PLATFORM_EVENTS_MAX_ROWS,
+        DEFAULT_PLATFORM_EVENTS_MAX_ROWS,
+        "FRICK_PLATFORM_EVENTS_MAX_ROWS",
+      ),
+    "platformEventsMaxRows",
+  );
 
   if (runtimeEnv === "production" && demoAuthEnabled) {
     throw new FrickConfigError(
@@ -193,6 +243,11 @@ export function loadFrickConfig(
     adminToken,
     adminEnabled,
     implicitTenantCreation,
+    platformEventsDriver,
+    platformEventsTopic,
+    platformEventsKafkaBrokers,
+    platformEventsRetentionMs,
+    platformEventsMaxRows,
   };
 }
 
@@ -253,6 +308,14 @@ function parseString(value: string | undefined): string | undefined {
   return value;
 }
 
+function validateNonEmptyString(value: string, varName: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    throw new FrickConfigError(`${varName} must not be empty`);
+  }
+  return trimmed;
+}
+
 function parseLogLevel(value: string | undefined, fallback: FrickLogLevel): FrickLogLevel {
   if (value === undefined || value === "") return fallback;
   if (VALID_LOG_LEVELS.has(value as FrickLogLevel)) {
@@ -261,6 +324,47 @@ function parseLogLevel(value: string | undefined, fallback: FrickLogLevel): Fric
   throw new FrickConfigError(
     `FRICK_LOG_LEVEL must be one of debug, info, warn, error (got ${JSON.stringify(value)})`,
   );
+}
+
+function parsePlatformEventsDriver(
+  value: string | undefined,
+  brokers: readonly string[],
+): FrickPlatformEventsDriver {
+  if (value === undefined || value === "") {
+    return brokers.length > 0 ? "kafka" : "sqlite";
+  }
+  if (VALID_PLATFORM_EVENTS_DRIVERS.has(value as FrickPlatformEventsDriver)) {
+    return value as FrickPlatformEventsDriver;
+  }
+  throw new FrickConfigError(
+    `FRICK_PLATFORM_EVENTS_DRIVER must be one of sqlite, kafka (got ${JSON.stringify(value)})`,
+  );
+}
+
+function parseCommaSeparated(value: string | undefined): string[] {
+  if (value === undefined || value === "") return [];
+  return value
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+}
+
+function parsePositiveInteger(value: string | undefined, fallback: number, varName: string): number {
+  if (value === undefined || value === "") {
+    return fallback;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new FrickConfigError(`${varName} must be a positive integer (got ${JSON.stringify(value)})`);
+  }
+  return parsed;
+}
+
+function validatePositiveInteger(value: number, fieldName: string): number {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new FrickConfigError(`${fieldName} must be a positive integer`);
+  }
+  return value;
 }
 
 function parseAllowedOrigins(value: string | undefined, env: FrickEnv): string[] {

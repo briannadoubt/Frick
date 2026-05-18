@@ -76,6 +76,7 @@ A multi-commit rollout that lifts the client SDKs from "you can hand-write it" t
 - **FCM v1 push adapter** — `fcm.googleapis.com/v1/projects/{projectId}/messages:send` via `fetch`; service-account JWT exchanged for an OAuth2 access token and cached for `expires_in`. Maps `UNREGISTERED` / `INVALID_ARGUMENT` / `SENDER_ID_MISMATCH` onto revocation codes; preserves quota and server errors with stable codes. Wire via `createFrickFcmAdapter()`.
 - **Per-tenant push credentials** — stored in `tenant_settings` wrapped with AES-256-GCM. The encryption key comes from `FRICK_PUSH_CRED_KEY` (base64-encoded 32 bytes); when unset the adapters return a `push.credentials.disabled` skipped-delivery rather than running without encryption.
 - **`frick.push.delivery` DevTools events** — every fan-out attempt records intent, platform, status, error code, and receipt id so operators can read back exactly what landed where.
+- **Platform event pipeline baseline** — the server now ships a durable SQLite platform event pipeline, preserves it in framework backups, and exposes authenticated health at `/_frick/inspect/platform-events` plus `/_frick/dashboard/api/platform-events/health`.
 - WebSocket presence subscribe/set/clear frames now run through authz. Foundation `TypingState` enforces known conversation membership and prevents clients from writing another user's typing state.
 
 ### CLI (`@frick/cli`)

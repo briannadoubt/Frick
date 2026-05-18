@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Principal } from "../authz.js";
 import type { FrickAppRegistry } from "../apps/registry.js";
+import type { PlatformEventPipeline } from "../platform-events/types.js";
 import type { FrickProjectModule } from "../platform/project.js";
 import { buildDashboardMetadata } from "./metadata.js";
 import { sendDashboardAsset } from "./assets.js";
@@ -11,6 +12,7 @@ export interface DashboardRouteInput {
   readonly url: URL;
   readonly project: FrickProjectModule;
   readonly appRegistry: FrickAppRegistry;
+  readonly platformEvents: PlatformEventPipeline;
   readonly authenticate: () => Principal | Error;
   readonly sendJson: (status: number, body: unknown) => void;
   readonly sendError: (error: unknown, requestId: string) => void;
@@ -77,7 +79,20 @@ export async function handleDashboardRoute(input: DashboardRouteInput): Promise<
     sendDashboardJson(input, 200, buildDashboardMetadata({
       project: input.project,
       appRegistry: input.appRegistry,
+      platformEventsHealth: await input.platformEvents.health(),
     }));
+    return true;
+  }
+
+  if (relativePath === "/api/platform-events/health") {
+    setDashboardHeaders(input.response);
+    const principal = input.authenticate();
+    if (principal instanceof Error) {
+      input.sendError(principal, "dashboard_unauthorized");
+      return true;
+    }
+
+    sendDashboardJson(input, 200, await input.platformEvents.health());
     return true;
   }
 
