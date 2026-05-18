@@ -18,6 +18,42 @@ describe("dashboard analytics summary", () => {
     expect(response.status).toBe(401);
   });
 
+  it("exposes the analytics summary through authenticated inspection for standalone dashboard", async () => {
+    app = await startServer();
+    const headers = await authHeaders(app.httpUrl, {
+      userId: "user-ada",
+      tenantId: "_default",
+    });
+
+    await postAnalytics(app.httpUrl, headers, {
+      name: "screen.viewed",
+      properties: { path: "/standalone" },
+    });
+    await drainAnalytics(app.server);
+
+    const response = await fetch(
+      `${app.httpUrl}/_frick/inspect/analytics/summary?windowMs=604800000`,
+      { headers },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      family: "analytics.user_event",
+      windowMs: 604800000,
+      scope: {
+        kind: "tenant",
+        tenantId: "_default",
+      },
+      totals: {
+        events: 1,
+        uniqueUsers: 1,
+        uniqueTenants: 1,
+      },
+      topRoutes: [{ path: "/standalone", count: 1 }],
+    });
+  });
+
   it("summarizes accepted product analytics events for the authenticated tenant", async () => {
     app = await startServer();
     const headers = await authHeaders(app.httpUrl, {

@@ -159,14 +159,14 @@ function analyticsUnavailableDetail() {
   const error = state.errors.analyticsSummary;
   if (error?.skipped) return "Add a bearer token to load product analytics.";
   if (error) return error.message;
-  return "Mounted dashboard route required.";
+  return "Analytics inspection route required.";
 }
 
 function platformEventsUnavailableDetail() {
   const error = state.errors.platformEvents;
   if (error?.skipped) return "Add a bearer token to load pipeline health.";
   if (error) return error.message;
-  return "Mounted dashboard route required.";
+  return "Platform event inspection route required.";
 }
 
 function requestRows() {
@@ -286,13 +286,17 @@ async function fetchDashboardMetadata() {
 }
 
 async function fetchAnalyticsSummary() {
-  if (!isMountedDashboard()) return undefined;
-  return fetchJson("/_frick/dashboard/api/analytics/summary?windowMs=86400000", { auth: true });
+  const path = isMountedDashboard()
+    ? "/_frick/dashboard/api/analytics/summary?windowMs=86400000"
+    : "/_frick/inspect/analytics/summary?windowMs=86400000";
+  return fetchJson(path, { auth: true });
 }
 
 async function fetchPlatformEventsHealth() {
-  if (!isMountedDashboard()) return undefined;
-  return fetchJson("/_frick/dashboard/api/platform-events/health", { auth: true });
+  const path = isMountedDashboard()
+    ? "/_frick/dashboard/api/platform-events/health"
+    : "/_frick/inspect/platform-events";
+  return fetchJson(path, { auth: true });
 }
 
 async function devLogin() {

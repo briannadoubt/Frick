@@ -161,6 +161,7 @@ describe("mounted dashboard", () => {
     const script = await scriptResponse.text();
     expect(script).toContain("/_frick/dashboard/api/metadata");
     expect(script).toContain("/_frick/dashboard/api/analytics/summary");
+    expect(script).toContain("/_frick/inspect/analytics/summary");
     expect(script).toContain("platform-events/health");
   });
 

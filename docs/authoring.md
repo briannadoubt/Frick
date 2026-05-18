@@ -147,12 +147,13 @@ available, records the initial route, and records subsequent
 </FrickProvider>
 ```
 
-Mounted Fricken Dashboard reads those accepted events through
-`/_frick/dashboard/api/analytics/summary` and shows tenant-scoped product event
-counts plus route activity without requiring app-local analytics tables. The
-server materializes the summary through its built-in platform-event consumer,
-so apps keep one analytics ingestion path whether local development uses SQLite
-or production uses Kafka/Redpanda.
+Fricken Dashboard reads those accepted events through
+`/_frick/inspect/analytics/summary` in standalone local mode and
+`/_frick/dashboard/api/analytics/summary` in mounted mode. Both surfaces show
+tenant-scoped product event counts plus route activity without requiring
+app-local analytics tables. The server materializes the summary through its
+built-in platform-event consumer, so apps keep one analytics ingestion path
+whether local development uses SQLite or production uses Kafka/Redpanda.
 
 Pass an options object to customize the browser source, event name, route
 properties, or error handler:

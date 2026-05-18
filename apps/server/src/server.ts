@@ -105,6 +105,10 @@ import {
 import { createFrickJobWorker } from "./jobs/worker.js";
 import { createFrickAnalyticsEventConsumer } from "./analytics/consumer.js";
 import {
+  buildAnalyticsSummary,
+  normalizeAnalyticsSummaryWindowMs,
+} from "./analytics/summary.js";
+import {
   createFrickPushRegistry,
   type FrickPushRegistry,
 } from "./push/registry.js";
@@ -786,6 +790,15 @@ export function createFrickServer(options: ServerOptions = {}) {
       }
       if (sub === "platform-events") {
         sendJson(response, 200, await platformEvents.health());
+        return;
+      }
+      if (sub === "analytics/summary") {
+        sendJson(response, 200, buildAnalyticsSummary({
+          store: store.analyticsEvents,
+          principal: inspectionPrincipal,
+          windowMs: normalizeAnalyticsSummaryWindowMs(url.searchParams.get("windowMs")),
+          ...optionalPositiveLimit(url.searchParams.get("limit")),
+        }));
         return;
       }
       if (sub === "projections") {
@@ -2583,6 +2596,13 @@ function optionalHeader(
   const value = headerValue(request, header);
   if (value === undefined) return undefined;
   return requireString(value, name);
+}
+
+function optionalPositiveLimit(value: string | null): { limit?: number } {
+  if (value === null || value === "") return {};
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return {};
+  return { limit: parsed };
 }
 
 function parseBlobContentPath(url: URL): string | undefined {

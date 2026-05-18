@@ -213,6 +213,10 @@ server exposes these GET endpoints under `/_frick/inspect/`:
   `{ adapter, ok, pending, claimed, deadLettered, retained, unclaimed,
   consumers }`. The default adapter is SQLite, with bounded retention and
   row-cap pruning controlled by the platform event env vars above.
+- `/_frick/inspect/analytics/summary?windowMs=86400000` — authenticated,
+  tenant-scoped product analytics summary derived from the same materialized
+  read model as the mounted dashboard API. The response includes event totals,
+  unique users, top event names, top viewed routes, and recent event metadata.
 - `/_frick/inspect/devtools/events` — newest-first DevTools event feed with
   optional `kind`, `tenantId`, `sinceId`, and `limit` filters.
 - `/_frick/inspect/devtools/events/:id` — one DevTools event by numeric id.
@@ -232,7 +236,10 @@ For local development, `frick dashboard` serves Fricken Dashboard at
 static console that reads `/health`, `/ready`, and the authenticated
 `/_frick/inspect/*` endpoints from the configured Frick HTTP server. Use
 `--endpoint <url>` to point it at another server, and use its Dev Login flow or
-paste a bearer token before opening inspection-backed panels.
+paste a bearer token before opening inspection-backed panels. Standalone mode
+loads platform-event health from `/_frick/inspect/platform-events` and product
+analytics from `/_frick/inspect/analytics/summary`, so local dashboard views
+work without mounting the dashboard into the server process.
 
 For production deployments, the Frick server can mount Fricken Dashboard at
 `/_frick/dashboard`. Mounted mode is the preferred production shape because the
