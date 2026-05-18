@@ -17,11 +17,11 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
   dashboard APIs.
 - TypeScript `@frick/core` runtime and `@frick/react` hooks for objects, streams, projections, presence, signals, auth, blobs, search, realtime wrappers, drafts, and background sync.
 - First-class platform events for framework telemetry, job lifecycle events,
-  and authenticated product analytics ingestion through the TypeScript client.
-  React route analytics is enabled by default after a session is available,
-  and product analytics summaries are materialized by a built-in platform-event
-  consumer so SQLite and Kafka/Redpanda deployments share the same dashboard
-  read model.
+  and authenticated product analytics ingestion through TypeScript, Swift, and
+  Android/Kotlin clients. React route analytics is enabled by default after a
+  session is available, and product analytics summaries are materialized by a
+  built-in platform-event consumer so SQLite and Kafka/Redpanda deployments
+  share the same dashboard read model.
 - Server-side OpenTelemetry export for HTTP request spans, WebSocket
   connection/frame telemetry, job-run spans, and request/WebSocket/job metrics
   with bounded WebSocket labels and sanitized close telemetry, enabled by OTLP

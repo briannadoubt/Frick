@@ -118,15 +118,34 @@ can still query for inspection and operations.
 
 ## Product analytics
 
-The TypeScript client SDK can send product analytics without adding app-local
-routes or tables. Events are authenticated with the current Frick session and
-land in the server's platform event pipeline as `analytics.user_event`.
+The TypeScript, Swift, and Android/Kotlin client SDKs can send product
+analytics without adding app-local routes or tables. Events are authenticated
+with the current Frick session and land in the server's platform event
+pipeline as `analytics.user_event`.
 
 ```ts
 await client.track("button.clicked", { label: "Save" }, {
   idempotencyKey: "click-save-123",
   traceId: "trace-abc",
 });
+```
+
+Native clients use the same route and receipt shape:
+
+```swift
+try await client.track(
+    "button.clicked",
+    properties: ["label": .string("Save")],
+    options: FrickAnalyticsTrackOptions(idempotencyKey: "click-save-123")
+)
+```
+
+```kotlin
+client.track(
+    name = "button.clicked",
+    properties = mapOf("label" to JsonPrimitive("Save")),
+    idempotencyKey = "click-save-123",
+)
 ```
 
 React apps can use the matching hook:

@@ -103,6 +103,15 @@ data class FrickSearchResponse(
     val hits: List<FrickSearchHit>,
 )
 
+@Serializable
+data class FrickAnalyticsTrackReceipt(
+    val ok: Boolean,
+    val eventId: String,
+    val sequence: Long,
+    val acceptedAt: String,
+    val duplicate: Boolean,
+)
+
 data class CreatedConversation(
     val schemaHash: String?,
     val conversation: ConversationDto,
@@ -171,6 +180,17 @@ private data class ConversationCreateRequest(
     val title: String?,
     val kind: String,
     val participantUserIds: List<String>,
+)
+
+@Serializable
+private data class AnalyticsTrackRequest(
+    val name: String,
+    val properties: Map<String, JsonElement>? = null,
+    val context: Map<String, JsonElement>? = null,
+    val attributes: Map<String, JsonPrimitive>? = null,
+    val traceId: String? = null,
+    val idempotencyKey: String? = null,
+    val occurredAt: String? = null,
 )
 
 class FrickSchemaMismatchException(
@@ -1015,6 +1035,33 @@ class FrickClient(
         val raw = transport.post(
             path = "/search",
             body = frickJson.encodeToString(JsonObject(body)),
+        )
+        frickJson.decodeFromString(raw)
+    }
+
+    suspend fun track(
+        name: String,
+        properties: Map<String, JsonElement> = emptyMap(),
+        context: Map<String, JsonElement>? = null,
+        attributes: Map<String, JsonPrimitive>? = null,
+        traceId: String? = null,
+        idempotencyKey: String? = null,
+        occurredAt: String? = null,
+    ): FrickAnalyticsTrackReceipt = withContext(Dispatchers.IO) {
+        requireAuthenticatedSession()
+        val raw = transport.post(
+            path = "/analytics/events",
+            body = frickJson.encodeToString(
+                AnalyticsTrackRequest(
+                    name = name,
+                    properties = properties.takeIf { eventProperties -> eventProperties.isNotEmpty() },
+                    context = context?.takeIf { eventContext -> eventContext.isNotEmpty() },
+                    attributes = attributes?.takeIf { eventAttributes -> eventAttributes.isNotEmpty() },
+                    traceId = traceId,
+                    idempotencyKey = idempotencyKey,
+                    occurredAt = occurredAt,
+                ),
+            ),
         )
         frickJson.decodeFromString(raw)
     }

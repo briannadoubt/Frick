@@ -213,6 +213,65 @@ public struct FrickSearchResponse: Codable, Equatable, Sendable {
     }
 }
 
+public enum FrickAnalyticsAttributeValue: Encodable, Equatable, Sendable {
+    case string(String)
+    case int(Int)
+    case double(Double)
+    case bool(Bool)
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .string(let value):
+            try container.encode(value)
+        case .int(let value):
+            try container.encode(value)
+        case .double(let value):
+            try container.encode(value)
+        case .bool(let value):
+            try container.encode(value)
+        }
+    }
+}
+
+public struct FrickAnalyticsTrackOptions: Equatable, Sendable {
+    public let context: [String: FrickJSONValue]?
+    public let attributes: [String: FrickAnalyticsAttributeValue]?
+    public let traceId: String?
+    public let idempotencyKey: String?
+    public let occurredAt: String?
+
+    public init(
+        context: [String: FrickJSONValue]? = nil,
+        attributes: [String: FrickAnalyticsAttributeValue]? = nil,
+        traceId: String? = nil,
+        idempotencyKey: String? = nil,
+        occurredAt: String? = nil
+    ) {
+        self.context = context
+        self.attributes = attributes
+        self.traceId = traceId
+        self.idempotencyKey = idempotencyKey
+        self.occurredAt = occurredAt
+    }
+}
+
+public struct FrickAnalyticsTrackReceipt: Codable, Equatable, Sendable {
+    public let ok: Bool
+    public let eventId: String
+    public let sequence: Int
+    public let acceptedAt: String
+    public let duplicate: Bool
+
+    public init(ok: Bool, eventId: String, sequence: Int, acceptedAt: String, duplicate: Bool) {
+        self.ok = ok
+        self.eventId = eventId
+        self.sequence = sequence
+        self.acceptedAt = acceptedAt
+        self.duplicate = duplicate
+    }
+}
+
 public struct FrickBlobMetadata: Codable, Equatable, Sendable, Identifiable {
     public var id: String { blobId }
 
@@ -1200,6 +1259,32 @@ public final class FrickClient: Sendable {
         let filter: [String: String]?
     }
 
+    @discardableResult
+    public func track(
+        _ name: String,
+        properties: [String: FrickJSONValue] = [:],
+        options: FrickAnalyticsTrackOptions = FrickAnalyticsTrackOptions()
+    ) async throws -> FrickAnalyticsTrackReceipt {
+        _ = try requireAuthenticatedSession()
+        var request = URLRequest(url: baseURL.appending(path: "analytics").appending(path: "events"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try encoder.encode(AnalyticsTrackRequest(
+            name: name,
+            properties: properties,
+            context: options.context,
+            attributes: options.attributes,
+            traceId: options.traceId,
+            idempotencyKey: options.idempotencyKey,
+            occurredAt: options.occurredAt
+        ))
+        authenticate(&request)
+
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+        return try decoder.decode(FrickAnalyticsTrackReceipt.self, from: data)
+    }
+
     public func sendSignal<Value: Encodable & Sendable>(
         name: String,
         key: String,
@@ -1676,6 +1761,16 @@ private struct ConversationCreateRequest: Encodable, Sendable {
     let title: String?
     let kind: String
     let participantUserIds: [String]
+}
+
+private struct AnalyticsTrackRequest: Encodable, Sendable {
+    let name: String
+    let properties: [String: FrickJSONValue]
+    let context: [String: FrickJSONValue]?
+    let attributes: [String: FrickAnalyticsAttributeValue]?
+    let traceId: String?
+    let idempotencyKey: String?
+    let occurredAt: String?
 }
 
 private func extractId<Object: Encodable>(from object: Object) -> String? {

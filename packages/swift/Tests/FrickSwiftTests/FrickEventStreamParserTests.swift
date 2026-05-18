@@ -192,6 +192,79 @@ final class FrickEventStreamParserTests: XCTestCase {
         XCTAssertEqual(body["participantUserIds"] as? [String], ["user-grace"])
     }
 
+    func testTrackPostsProductAnalyticsWithSessionAuth() async throws {
+        FrickStreamingURLProtocol.reset()
+        FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-ada", token: "token-ada"), for: "/auth/dev-login")
+        FrickStreamingURLProtocol.enqueue(
+            """
+            {
+              "ok": true,
+              "eventId": "platform-event-ios-1",
+              "sequence": 42,
+              "acceptedAt": "2026-05-17T12:00:00.000Z",
+              "duplicate": false
+            }
+            """,
+            for: "/analytics/events"
+        )
+        let client = try makeTestClient()
+
+        _ = try await client.devLogin(userId: "user-ada")
+        let receipt = try await client.track(
+            "screen.viewed",
+            properties: [
+                "path": .string("/settings"),
+                "attempt": .int(3),
+            ],
+            options: FrickAnalyticsTrackOptions(
+                context: ["source": .string("ios")],
+                attributes: [
+                    "coldStart": .bool(true),
+                    "launchCount": .int(2),
+                ],
+                traceId: "trace-ios-1",
+                idempotencyKey: "screen-ios-1",
+                occurredAt: "2026-05-17T11:59:00.000Z"
+            )
+        )
+
+        XCTAssertEqual(receipt.eventId, "platform-event-ios-1")
+        XCTAssertEqual(receipt.sequence, 42)
+        XCTAssertFalse(receipt.duplicate)
+        let requests = FrickStreamingURLProtocol.recordedRequests
+        XCTAssertEqual(requests.map(\.path), ["/auth/dev-login", "/analytics/events"])
+        XCTAssertEqual(requests.last?.method, "POST")
+        XCTAssertEqual(requests.last?.headerValue("authorization"), "Bearer token-ada")
+        XCTAssertEqual(requests.last?.headerValue("content-type"), "application/json")
+        let body = try XCTUnwrap(requests.last?.jsonBody)
+        XCTAssertEqual(body["name"] as? String, "screen.viewed")
+        let properties = try XCTUnwrap(body["properties"] as? [String: Any])
+        XCTAssertEqual(properties["path"] as? String, "/settings")
+        XCTAssertEqual(properties["attempt"] as? Int, 3)
+        let context = try XCTUnwrap(body["context"] as? [String: Any])
+        XCTAssertEqual(context["source"] as? String, "ios")
+        let attributes = try XCTUnwrap(body["attributes"] as? [String: Any])
+        XCTAssertEqual(attributes["coldStart"] as? Bool, true)
+        XCTAssertEqual(attributes["launchCount"] as? Int, 2)
+        XCTAssertEqual(body["traceId"] as? String, "trace-ios-1")
+        XCTAssertEqual(body["idempotencyKey"] as? String, "screen-ios-1")
+        XCTAssertEqual(body["occurredAt"] as? String, "2026-05-17T11:59:00.000Z")
+    }
+
+    func testTrackRequiresSessionBeforePosting() async throws {
+        FrickStreamingURLProtocol.reset()
+        let client = try makeTestClient()
+
+        do {
+            _ = try await client.track("button.clicked")
+            XCTFail("expected auth requirement before posting analytics")
+        } catch is FrickAuthenticationRequiredError {
+            // expected
+        }
+
+        XCTAssertEqual(FrickStreamingURLProtocol.recordedRequests, [])
+    }
+
     func testSignOutClearsCurrentSession() async throws {
         FrickStreamingURLProtocol.reset()
         FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-ada", token: "token-ada"), for: "/auth/dev-login")
@@ -1184,7 +1257,7 @@ private final class FrickStreamingURLProtocol: URLProtocol {
                 Self.posts.append(json)
             }
             let queued: QueuedResponse?
-            if path.hasPrefix("/auth/") || path == "/conversations" || path == "/append" {
+            if path.hasPrefix("/auth/") || path == "/conversations" || path == "/append" || path == "/analytics/events" {
                 var queuedResponses = Self.responses[path] ?? []
                 queued = queuedResponses.isEmpty ? nil : queuedResponses.removeFirst()
                 Self.responses[path] = queuedResponses

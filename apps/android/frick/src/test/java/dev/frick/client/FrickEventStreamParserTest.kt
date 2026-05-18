@@ -332,6 +332,78 @@ class FrickEventStreamParserTest {
     }
 
     @Test
+    fun trackPostsProductAnalyticsWithStoredSession() = runBlocking {
+        val storage = MemoryFrickStorage(session = testSession())
+        val transport = FakeFrickTransport(
+            postResponses = mapOf(
+                "/analytics/events" to """
+                    {
+                      "ok": true,
+                      "eventId": "platform-event-android-1",
+                      "sequence": 2147483648,
+                      "acceptedAt": "2026-05-17T12:00:00.000Z",
+                      "duplicate": false
+                    }
+                """.trimIndent(),
+            ),
+        )
+        val client = FrickClient(transport = transport, storage = storage)
+
+        val receipt = client.track(
+            name = "screen.viewed",
+            properties = mapOf(
+                "path" to JsonPrimitive("/settings"),
+                "attempt" to JsonPrimitive(3),
+            ),
+            context = mapOf("source" to JsonPrimitive("android")),
+            attributes = mapOf(
+                "coldStart" to JsonPrimitive(true),
+                "launchCount" to JsonPrimitive(2),
+            ),
+            traceId = "trace-android-1",
+            idempotencyKey = "screen-android-1",
+            occurredAt = "2026-05-17T11:59:00.000Z",
+        )
+
+        assertEquals(
+            FrickAnalyticsTrackReceipt(
+                ok = true,
+                eventId = "platform-event-android-1",
+                sequence = 2147483648L,
+                acceptedAt = "2026-05-17T12:00:00.000Z",
+                duplicate = false,
+            ),
+            receipt,
+        )
+        assertEquals("/analytics/events", transport.posts.single().path)
+        val body = Json.parseToJsonElement(transport.posts.single().body).jsonObject
+        assertEquals("screen.viewed", body.getValue("name").jsonPrimitive.content)
+        assertEquals("/settings", body.getValue("properties").jsonObject.getValue("path").jsonPrimitive.content)
+        assertEquals(3, body.getValue("properties").jsonObject.getValue("attempt").jsonPrimitive.int)
+        assertEquals("android", body.getValue("context").jsonObject.getValue("source").jsonPrimitive.content)
+        assertEquals(true, body.getValue("attributes").jsonObject.getValue("coldStart").jsonPrimitive.content.toBoolean())
+        assertEquals(2, body.getValue("attributes").jsonObject.getValue("launchCount").jsonPrimitive.int)
+        assertEquals("trace-android-1", body.getValue("traceId").jsonPrimitive.content)
+        assertEquals("screen-android-1", body.getValue("idempotencyKey").jsonPrimitive.content)
+        assertEquals("2026-05-17T11:59:00.000Z", body.getValue("occurredAt").jsonPrimitive.content)
+    }
+
+    @Test
+    fun trackRequiresStoredSessionBeforePosting() = runBlocking {
+        val transport = FakeFrickTransport()
+        val client = FrickClient(transport = transport, storage = MemoryFrickStorage())
+
+        try {
+            client.track("button.clicked")
+            fail("expected auth requirement before posting analytics")
+        } catch (_: FrickAuthenticationRequiredException) {
+            // expected
+        }
+
+        assertEquals(emptyList<FakeFrickTransport.Post>(), transport.postAttempts)
+    }
+
+    @Test
     fun signOutClearsStoredSession() {
         val session = FrickSession(
             schemaHash = FRICK_SCHEMA_HASH,

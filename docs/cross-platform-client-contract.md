@@ -169,7 +169,26 @@ Pending appends are preserved across compatible reloads. When an incompatible-ca
 | Local cache stamps schema identity on save | ✓ | ✓ (via `verifyCacheCompatibility`) | ✓ (via `verifyCacheCompatibility`) |
 | Throws typed incompatible-cache error on schema-id or revision mismatch | `FrickCacheIncompatibleError` | `FrickCacheIncompatibleError` | `FrickCacheIncompatibleException` |
 | Destructive cache reset entry point | `cache.clear()` | `FrickClient.resetCache()` | `FrickClient.resetCache()` |
+| Authenticated product analytics tracking | `FrickClient.track(...)` | `FrickClient.track(...)` | `FrickClient.track(...)` |
 | Capability negotiation in handshake | ✓ (WebSocket) | ✓ (WebSocket) | ✓ (WebSocket) |
+
+## Product Analytics
+
+All client SDKs expose a session-authenticated product analytics track call
+that posts to `/analytics/events`. The server derives tenant, subject, device,
+and replica identity from the active session; SDKs must not allow callers to
+spoof those identity fields in the request body. The shared request semantics
+are event `name`, optional JSON `properties`, optional JSON `context`,
+optional primitive `attributes`, optional `traceId`, optional
+`idempotencyKey`, and optional canonical ISO `occurredAt`.
+
+Swift and Android/Kotlin track calls require a current session before making
+the HTTP request. TypeScript `FrickClient.track(...)` attaches the current
+session token when one is configured, and standalone helper calls without a
+token are rejected by the authenticated server route. All SDK track calls
+return the shared receipt `{ ok, eventId, sequence, acceptedAt, duplicate }`;
+native SDKs must use a receipt sequence type wide enough for server platform
+event sequences.
 
 ## Client Telemetry
 
