@@ -136,6 +136,32 @@ const track = useTrackAnalyticsEvent();
 await track("screen.viewed", { screen: "Settings" });
 ```
 
+For browser route/screen analytics, pass `autoAnalytics` to
+`<FrickProvider>`. This installs a small browser tracker after a session is
+available, records the initial route, and records subsequent
+`history.pushState`, `history.replaceState`, and `popstate` route changes.
+
+```tsx
+<FrickProvider session={session} autoAnalytics>
+  <App />
+</FrickProvider>
+```
+
+Pass an options object to customize the browser source, event name, route
+properties, or error handler:
+
+```tsx
+<FrickProvider
+  session={session}
+  autoAnalytics={{
+    screenName: () => "screen.viewed",
+    routeProperties: (location) => ({ path: location.pathname }),
+  }}
+>
+  <App />
+</FrickProvider>
+```
+
 The server owns tenant/user/device identity from the session. App code supplies
 the event `name`, optional `properties`, optional `context`, optional primitive
 `attributes`, optional `traceId`, optional `idempotencyKey`, and optional

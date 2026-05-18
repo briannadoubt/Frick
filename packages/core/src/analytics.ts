@@ -27,6 +27,47 @@ export interface AnalyticsTrackReceipt {
   duplicate: boolean;
 }
 
+export interface AnalyticsTrackingClient {
+  track(
+    name: string,
+    properties?: PlainObject,
+    options?: Omit<AnalyticsTrackOptions, "properties">,
+  ): Promise<AnalyticsTrackReceipt>;
+}
+
+export interface BrowserAnalyticsWindow {
+  location: {
+    href: string;
+    pathname: string;
+    search: string;
+    hash: string;
+  };
+  document?: {
+    title?: string;
+  };
+  history?: {
+    pushState?: (...args: [unknown, string, string | URL | null | undefined]) => unknown;
+    replaceState?: (...args: [unknown, string, string | URL | null | undefined]) => unknown;
+  };
+  addEventListener?: (type: string, listener: () => void) => void;
+  removeEventListener?: (type: string, listener: () => void) => void;
+}
+
+export interface BrowserAnalyticsTrackingOptions {
+  window?: BrowserAnalyticsWindow;
+  trackInitialRoute?: boolean;
+  trackHistoryChanges?: boolean;
+  screenName?: (location: BrowserAnalyticsWindow["location"]) => string | undefined;
+  routeProperties?: (location: BrowserAnalyticsWindow["location"]) => PlainObject;
+  onError?: (error: unknown) => void;
+}
+
+export interface BrowserAnalyticsTracker {
+  trackCurrentRoute(): Promise<AnalyticsTrackReceipt | undefined>;
+  flush(): Promise<void>;
+  dispose(): void;
+}
+
 export async function trackAnalyticsEvent({
   httpEndpoint,
   sessionToken,
@@ -62,9 +103,187 @@ export async function trackAnalyticsEvent({
   return (await response.json()) as AnalyticsTrackReceipt;
 }
 
+export function installBrowserAnalyticsTracking(
+  client: AnalyticsTrackingClient,
+  options: BrowserAnalyticsTrackingOptions = {},
+): BrowserAnalyticsTracker {
+  const browser = options.window ?? browserWindow();
+  if (!browser) {
+    return noopBrowserAnalyticsTracker();
+  }
+  const trackInitialRoute = options.trackInitialRoute ?? true;
+  const trackHistoryChanges = options.trackHistoryChanges ?? true;
+  const routeProperties = options.routeProperties ?? ((location) => defaultRouteProperties(browser, location));
+  const screenName = options.screenName ?? (() => "screen.viewed");
+  const onError = options.onError ?? (() => undefined);
+  const pending = new Set<Promise<void>>();
+  let disposed = false;
+  let lastRouteKey: string | undefined;
+
+  const enqueue = (promise: Promise<unknown>): void => {
+    const wrapped = promise.then(
+      () => undefined,
+      (error) => {
+        onError(error);
+      },
+    );
+    pending.add(wrapped);
+    void wrapped.finally(() => pending.delete(wrapped));
+  };
+
+  const trackCurrentRoute = async (): Promise<AnalyticsTrackReceipt | undefined> => {
+    if (disposed) return undefined;
+    const routeKey = `${browser.location.pathname}${browser.location.search}${browser.location.hash}`;
+    if (routeKey === lastRouteKey) return undefined;
+    lastRouteKey = routeKey;
+    const name = screenName(browser.location);
+    if (!name) return undefined;
+    return client.track(name, routeProperties(browser.location));
+  };
+
+  const scheduleRouteTrack = (): void => {
+    enqueue(trackCurrentRoute());
+  };
+
+  const detachHistoryTracking =
+    trackHistoryChanges && browser.history
+      ? attachHistoryTracking(browser, scheduleRouteTrack)
+      : undefined;
+
+  if (trackInitialRoute) {
+    scheduleRouteTrack();
+  }
+
+  return {
+    trackCurrentRoute,
+    async flush() {
+      await Promise.allSettled(Array.from(pending));
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      detachHistoryTracking?.();
+    },
+  };
+}
+
 function frickHttpUrl(httpEndpoint: string, path: string): URL {
   const baseUrl = `${httpEndpoint.replace(/\/$/, "")}/`;
   return new URL(path.replace(/^\/+/, ""), baseUrl);
+}
+
+function browserWindow(): BrowserAnalyticsWindow | undefined {
+  const candidate = (globalThis as { window?: BrowserAnalyticsWindow }).window;
+  return candidate?.location ? candidate : undefined;
+}
+
+function noopBrowserAnalyticsTracker(): BrowserAnalyticsTracker {
+  return {
+    async trackCurrentRoute() {
+      return undefined;
+    },
+    async flush() {
+      return undefined;
+    },
+    dispose() {
+      return undefined;
+    },
+  };
+}
+
+function defaultRouteProperties(
+  browser: BrowserAnalyticsWindow,
+  location: BrowserAnalyticsWindow["location"],
+): PlainObject {
+  const title = browser.document?.title ?? "";
+  return {
+    path: location.pathname,
+    search: location.search,
+    hash: location.hash,
+    url: location.href,
+    title,
+  };
+}
+
+interface HistoryPatchState {
+  browser: BrowserAnalyticsWindow;
+  originalPushState?: NonNullable<NonNullable<BrowserAnalyticsWindow["history"]>["pushState"]>;
+  originalReplaceState?: NonNullable<NonNullable<BrowserAnalyticsWindow["history"]>["replaceState"]>;
+  patchedPushState?: NonNullable<NonNullable<BrowserAnalyticsWindow["history"]>["pushState"]>;
+  patchedReplaceState?: NonNullable<NonNullable<BrowserAnalyticsWindow["history"]>["replaceState"]>;
+  listeners: Set<() => void>;
+  popstateListener: () => void;
+}
+
+const historyPatches = new WeakMap<BrowserAnalyticsWindow, HistoryPatchState>();
+
+function attachHistoryTracking(browser: BrowserAnalyticsWindow, listener: () => void): () => void {
+  let state = historyPatches.get(browser);
+  if (!state) {
+    state = createHistoryPatch(browser);
+    historyPatches.set(browser, state);
+  }
+  state.listeners.add(listener);
+  return () => {
+    const current = historyPatches.get(browser);
+    if (!current) return;
+    current.listeners.delete(listener);
+    if (current.listeners.size > 0) return;
+    restoreHistoryPatch(current);
+    historyPatches.delete(browser);
+  };
+}
+
+function createHistoryPatch(browser: BrowserAnalyticsWindow): HistoryPatchState {
+  const history = browser.history!;
+  const state: HistoryPatchState = {
+    browser,
+    listeners: new Set(),
+    popstateListener: () => notifyHistoryListeners(state),
+  };
+  if (history.pushState) {
+    state.originalPushState = history.pushState;
+  }
+  if (history.replaceState) {
+    state.originalReplaceState = history.replaceState;
+  }
+  if (state.originalPushState) {
+    state.patchedPushState = (...args) => {
+      const result = state.originalPushState!.apply(history, args);
+      notifyHistoryListeners(state);
+      return result;
+    };
+    history.pushState = state.patchedPushState;
+  }
+  if (state.originalReplaceState) {
+    state.patchedReplaceState = (...args) => {
+      const result = state.originalReplaceState!.apply(history, args);
+      notifyHistoryListeners(state);
+      return result;
+    };
+    history.replaceState = state.patchedReplaceState;
+  }
+  browser.addEventListener?.("popstate", state.popstateListener);
+  return state;
+}
+
+function notifyHistoryListeners(state: HistoryPatchState): void {
+  for (const listener of state.listeners) {
+    listener();
+  }
+}
+
+function restoreHistoryPatch(state: HistoryPatchState): void {
+  const history = state.browser.history;
+  if (history) {
+    if (state.originalPushState && history.pushState === state.patchedPushState) {
+      history.pushState = state.originalPushState;
+    }
+    if (state.originalReplaceState && history.replaceState === state.patchedReplaceState) {
+      history.replaceState = state.originalReplaceState;
+    }
+  }
+  state.browser.removeEventListener?.("popstate", state.popstateListener);
 }
 
 function authorizedJsonHeaders(sessionToken: string | undefined): Record<string, string> {

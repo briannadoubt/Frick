@@ -250,7 +250,9 @@ session; clients cannot spoof those identity fields. Accepted events publish as
 `analytics.user_event` with source `frick.analytics.ingest` and return
 `202 { ok, eventId, sequence, acceptedAt, duplicate }`. The TypeScript SDK
 wraps this route as `trackAnalyticsEvent(...)`, `FrickClient.track(...)`, and
-`useTrackAnalyticsEvent()`.
+`useTrackAnalyticsEvent()`. React browser apps can opt into automatic route
+analytics with `<FrickProvider autoAnalytics>`; the tracker starts only when a
+session token is available and tears down its history listeners on unmount.
 
 For agents that need live runtime context, `frick mcp` runs a stdio MCP server
 owned by the same CLI. It defaults to read-only and exposes documented health,

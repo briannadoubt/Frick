@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { foundationSchema } from "@frick/protocol";
-import { FrickClient, trackAnalyticsEvent } from "../src/index.js";
+import { FrickClient, installBrowserAnalyticsTracking, trackAnalyticsEvent } from "../src/index.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -122,6 +122,156 @@ describe("FrickClient.track", () => {
   });
 });
 
+describe("installBrowserAnalyticsTracking", () => {
+  test("tracks the initial route and subsequent history changes once per route", async () => {
+    const calls: Array<{ name: string; properties?: Record<string, unknown> }> = [];
+    const client = {
+      track: vi.fn(async (name: string, properties?: Record<string, unknown>) => {
+        calls.push({ name, properties });
+        return {
+          ok: true as const,
+          eventId: `event-${calls.length}`,
+          sequence: calls.length,
+          acceptedAt: "2026-05-17T12:00:00.000Z",
+          duplicate: false,
+        };
+      }),
+    };
+    const browser = new FakeBrowserWindow("https://app.example.test/");
+
+    const tracker = installBrowserAnalyticsTracking(client, { window: browser });
+    await tracker.flush();
+    browser.history.pushState({}, "", "/settings?tab=billing#plans");
+    browser.history.pushState({}, "", "/settings?tab=billing#plans");
+    await tracker.flush();
+
+    expect(calls).toEqual([
+      {
+        name: "screen.viewed",
+        properties: {
+          path: "/",
+          search: "",
+          hash: "",
+          url: "https://app.example.test/",
+          title: "Frick Test App",
+        },
+      },
+      {
+        name: "screen.viewed",
+        properties: {
+          path: "/settings",
+          search: "?tab=billing",
+          hash: "#plans",
+          url: "https://app.example.test/settings?tab=billing#plans",
+          title: "Frick Test App",
+        },
+      },
+    ]);
+  });
+
+  test("stops tracking after dispose", async () => {
+    const client = {
+      track: vi.fn(async () => ({
+        ok: true as const,
+        eventId: "event-1",
+        sequence: 1,
+        acceptedAt: "2026-05-17T12:00:00.000Z",
+        duplicate: false,
+      })),
+    };
+    const browser = new FakeBrowserWindow("https://app.example.test/");
+    const tracker = installBrowserAnalyticsTracking(client, { window: browser });
+    await tracker.flush();
+
+    tracker.dispose();
+    browser.history.pushState({}, "", "/after-dispose");
+    await tracker.flush();
+
+    expect(client.track).toHaveBeenCalledTimes(1);
+  });
+
+  test("keeps history patched until every tracker is disposed", async () => {
+    const first = trackingClient();
+    const second = trackingClient();
+    const browser = new FakeBrowserWindow("https://app.example.test/");
+    const originalPushState = browser.history.pushState;
+
+    const firstTracker = installBrowserAnalyticsTracking(first, { window: browser });
+    const secondTracker = installBrowserAnalyticsTracking(second, { window: browser });
+    await firstTracker.flush();
+    await secondTracker.flush();
+
+    firstTracker.dispose();
+    browser.history.pushState({}, "", "/still-tracked");
+    await secondTracker.flush();
+
+    expect(first.track).toHaveBeenCalledTimes(1);
+    expect(second.track).toHaveBeenCalledTimes(2);
+
+    secondTracker.dispose();
+    expect(browser.history.pushState).toBe(originalPushState);
+  });
+});
+
 function headersObject(headers: HeadersInit | undefined): Record<string, string> {
   return Object.fromEntries(new Headers(headers).entries());
+}
+
+class FakeBrowserWindow {
+  readonly document = {
+    title: "Frick Test App",
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  };
+  readonly listeners = new Map<string, Set<() => void>>();
+  location: URL;
+  history: {
+    pushState: (_state: unknown, _unused: string, url?: string | URL | null) => void;
+    replaceState: (_state: unknown, _unused: string, url?: string | URL | null) => void;
+  };
+
+  constructor(initialUrl: string) {
+    this.location = new URL(initialUrl);
+    this.history = {
+      pushState: (_state: unknown, _unused: string, url?: string | URL | null) => {
+        this.setUrl(url);
+      },
+      replaceState: (_state: unknown, _unused: string, url?: string | URL | null) => {
+        this.setUrl(url);
+      },
+    };
+  }
+
+  addEventListener(type: string, listener: () => void): void {
+    const listeners = this.listeners.get(type) ?? new Set();
+    listeners.add(listener);
+    this.listeners.set(type, listeners);
+  }
+
+  removeEventListener(type: string, listener: () => void): void {
+    this.listeners.get(type)?.delete(listener);
+  }
+
+  dispatch(type: string): void {
+    for (const listener of this.listeners.get(type) ?? []) {
+      listener();
+    }
+  }
+
+  private setUrl(url?: string | URL | null): void {
+    if (url === undefined || url === null) return;
+    this.location = new URL(url, this.location.href);
+  }
+}
+
+function trackingClient() {
+  return {
+    track: vi.fn(async () => ({
+      ok: true as const,
+      eventId: "event-1",
+      sequence: 1,
+      acceptedAt: "2026-05-17T12:00:00.000Z",
+      duplicate: false,
+    })),
+  };
 }

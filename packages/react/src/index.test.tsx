@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import {
   createAuthorizedFetchInit,
   FrickProvider,
@@ -11,7 +12,7 @@ import {
   useProjection,
   useProjectionRows,
 } from "./index.js";
-import { FrickClient } from "@frick/core";
+import { FrickClient, type BrowserAnalyticsWindow } from "@frick/core";
 import { foundationSchema } from "@frick/protocol";
 
 describe("resolveHttpEndpoint", () => {
@@ -84,6 +85,143 @@ describe("useTrackAnalyticsEvent", () => {
     await expect(callback?.("button.clicked", properties, options)).resolves.toBe(receipt);
     expect(track).toHaveBeenCalledWith("button.clicked", properties, options);
   });
+
+  test("FrickProvider installs opt-in browser auto tracking and disposes it on unmount", async () => {
+    const client = new FrickClient({
+      endpoint: "ws://unused",
+      schema: foundationSchema,
+      session: {
+        schemaHash: foundationSchema.hash,
+        sessionToken: "session-token-123",
+        tenantId: "tenant-a",
+        userId: "user-ada",
+        deviceId: "device-web",
+        replicaId: "replica-web",
+        expiresAt: "2026-05-17T13:00:00.000Z",
+      },
+    });
+    vi.spyOn(client, "connect").mockImplementation(() => undefined);
+    vi.spyOn(client, "disconnect").mockImplementation(() => undefined);
+    const track = vi.spyOn(client, "track").mockResolvedValue({
+      ok: true,
+      eventId: "platform-event-1",
+      sequence: 1,
+      acceptedAt: "2026-05-17T12:00:00.000Z",
+      duplicate: false,
+    });
+    const browser = new FakeProviderBrowserWindow("https://app.example.test/");
+    let renderer: ReactTestRenderer | undefined;
+
+    await act(async () => {
+      renderer = create(
+        createElement(FrickProvider, {
+          client,
+          autoAnalytics: { window: browser },
+          children: createElement("div"),
+        }),
+      );
+    });
+    await act(async () => undefined);
+    browser.history.pushState({}, "", "/settings");
+    await act(async () => undefined);
+
+    expect(track).toHaveBeenCalledTimes(2);
+    expect(track).toHaveBeenNthCalledWith(
+      1,
+      "screen.viewed",
+      expect.objectContaining({ path: "/" }),
+    );
+    expect(track).toHaveBeenNthCalledWith(
+      2,
+      "screen.viewed",
+      expect.objectContaining({ path: "/settings" }),
+    );
+
+    await act(async () => {
+      renderer?.unmount();
+    });
+    browser.history.pushState({}, "", "/after-unmount");
+    await act(async () => undefined);
+
+    expect(track).toHaveBeenCalledTimes(2);
+  });
+
+  test("FrickProvider starts and stops auto tracking when the client session changes after mount", async () => {
+    const client = new FrickClient({ endpoint: "ws://unused", schema: foundationSchema });
+    vi.spyOn(client, "connect").mockImplementation(() => undefined);
+    vi.spyOn(client, "disconnect").mockImplementation(() => undefined);
+    const track = vi.spyOn(client, "track").mockResolvedValue({
+      ok: true,
+      eventId: "platform-event-1",
+      sequence: 1,
+      acceptedAt: "2026-05-17T12:00:00.000Z",
+      duplicate: false,
+    });
+    const browser = new FakeProviderBrowserWindow("https://app.example.test/");
+
+    await act(async () => {
+      create(
+        createElement(FrickProvider, {
+          client,
+          autoAnalytics: { window: browser },
+          children: createElement("div"),
+        }),
+      );
+    });
+    expect(track).not.toHaveBeenCalled();
+
+    await act(async () => {
+      client.setSession(testSession());
+    });
+    await act(async () => undefined);
+    expect(track).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      client.setSession(null);
+    });
+    browser.history.pushState({}, "", "/after-logout");
+    await act(async () => undefined);
+
+    expect(track).toHaveBeenCalledTimes(1);
+  });
+
+  test("FrickProvider does not reinstall auto analytics for equivalent inline options", async () => {
+    const client = new FrickClient({ endpoint: "ws://unused", schema: foundationSchema, session: testSession() });
+    vi.spyOn(client, "connect").mockImplementation(() => undefined);
+    vi.spyOn(client, "disconnect").mockImplementation(() => undefined);
+    const track = vi.spyOn(client, "track").mockResolvedValue({
+      ok: true,
+      eventId: "platform-event-1",
+      sequence: 1,
+      acceptedAt: "2026-05-17T12:00:00.000Z",
+      duplicate: false,
+    });
+    const browser = new FakeProviderBrowserWindow("https://app.example.test/");
+    let renderer: ReactTestRenderer | undefined;
+
+    await act(async () => {
+      renderer = create(
+        createElement(FrickProvider, {
+          client,
+          autoAnalytics: { window: browser },
+          children: createElement("div"),
+        }),
+      );
+    });
+    await act(async () => undefined);
+    await act(async () => {
+      renderer?.update(
+        createElement(FrickProvider, {
+          client,
+          autoAnalytics: { window: browser },
+          children: createElement("div"),
+        }),
+      );
+    });
+    await act(async () => undefined);
+
+    expect(track).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("authorized optional endpoint requests", () => {
@@ -128,3 +266,49 @@ describe("authorized optional endpoint requests", () => {
     });
   });
 });
+
+class FakeProviderBrowserWindow implements BrowserAnalyticsWindow {
+  readonly document = { title: "Frick Test App" };
+  readonly listeners = new Map<string, Set<() => void>>();
+  location: URL;
+  history: Required<NonNullable<BrowserAnalyticsWindow["history"]>>;
+
+  constructor(initialUrl: string) {
+    this.location = new URL(initialUrl);
+    this.history = {
+      pushState: (_state: unknown, _unused: string, url?: string | URL | null) => {
+        this.setUrl(url);
+      },
+      replaceState: (_state: unknown, _unused: string, url?: string | URL | null) => {
+        this.setUrl(url);
+      },
+    };
+  }
+
+  addEventListener(type: string, listener: () => void): void {
+    const listeners = this.listeners.get(type) ?? new Set();
+    listeners.add(listener);
+    this.listeners.set(type, listeners);
+  }
+
+  removeEventListener(type: string, listener: () => void): void {
+    this.listeners.get(type)?.delete(listener);
+  }
+
+  private setUrl(url?: string | URL | null): void {
+    if (url === undefined || url === null) return;
+    this.location = new URL(url, this.location.href);
+  }
+}
+
+function testSession() {
+  return {
+    schemaHash: foundationSchema.hash,
+    sessionToken: "session-token-123",
+    tenantId: "tenant-a",
+    userId: "user-ada",
+    deviceId: "device-web",
+    replicaId: "replica-web",
+    expiresAt: "2026-05-17T13:00:00.000Z",
+  };
+}
