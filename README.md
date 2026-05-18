@@ -22,6 +22,7 @@ pnpm schema:generate          # regenerate Swift + Kotlin DTOs from the foundati
 pnpm server                   # http://127.0.0.1:4099
 pnpm web                      # http://127.0.0.1:5173
 pnpm cli dashboard            # Fricken Dashboard at http://127.0.0.1:4299
+pnpm cli dev --profile redpanda --dry-run  # print the Redpanda/Kafka local profile
 ```
 
 ## Where to go next

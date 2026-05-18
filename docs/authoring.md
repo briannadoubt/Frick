@@ -116,6 +116,32 @@ objects, streams, or projections require an explicit `policyHooks` allow for
 the `search.query` action before tenant users can query them; admin principals
 can still query for inspection and operations.
 
+## Product analytics
+
+The TypeScript client SDK can send product analytics without adding app-local
+routes or tables. Events are authenticated with the current Frick session and
+land in the server's platform event pipeline as `analytics.user_event`.
+
+```ts
+await client.track("button.clicked", { label: "Save" }, {
+  idempotencyKey: "click-save-123",
+  traceId: "trace-abc",
+});
+```
+
+React apps can use the matching hook:
+
+```tsx
+const track = useTrackAnalyticsEvent();
+await track("screen.viewed", { screen: "Settings" });
+```
+
+The server owns tenant/user/device identity from the session. App code supplies
+the event `name`, optional `properties`, optional `context`, optional primitive
+`attributes`, optional `traceId`, optional `idempotencyKey`, and optional
+canonical ISO `occurredAt`. Use idempotency keys for events that may be retried
+after navigation or network loss.
+
 For schema evolution and the migration story, see
 [operations.md](./operations.md#backup-and-restore) and the framework
 hardening spec in `internal/`.

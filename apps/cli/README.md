@@ -16,6 +16,7 @@ During development:
 pnpm cli <command> [args]
 # e.g.
 pnpm cli doctor --db-path ./frick.sqlite --env development
+pnpm cli dev --profile redpanda --dry-run
 pnpm cli dashboard --endpoint http://127.0.0.1:4099
 ```
 
@@ -124,6 +125,18 @@ the process alive until interrupted.
 - `--port` defaults to `4299`; use `--port 0` to bind any free port.
 - `--endpoint` defaults to `http://127.0.0.1:4099` and is passed into the
   dashboard URL so the UI points at that server on first load.
+
+### `frick dev [--profile sqlite|redpanda] [--dry-run]`
+
+Prints or starts a local Frick runtime profile. The default `sqlite` profile
+prints the standard server, web demo, and dashboard loop without starting
+Docker. The `redpanda` profile points the platform event pipeline at the local
+Redpanda/Kafka broker from `ops/local/redpanda.compose.yaml`.
+
+- `--profile sqlite` emits `FRICK_PLATFORM_EVENTS_DRIVER=sqlite`.
+- `--profile redpanda` emits Kafka/Redpanda env vars and, without `--dry-run`,
+  runs `docker compose -f ops/local/redpanda.compose.yaml up -d --wait redpanda`.
+- `--dry-run` prints the JSON plan without starting any process.
 
 ### `frick mcp [--endpoint <url>] [--readonly] [--allow-writes] [--tenant <id>] [--user <id>] [--token <bearer>] [--print-config]`
 

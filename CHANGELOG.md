@@ -49,6 +49,7 @@ A multi-commit rollout that lifts the client SDKs from "you can hand-write it" t
 
 - Outbound email: `FrickEmailAdapter` interface + `createFrickTestEmailAdapter` (default) + `createFrickResendEmailAdapter` (Resend reference implementation, `RESEND_API_KEY` from env). `createFrickEmailRouter(...)` wraps every send with `frick.email.delivery` devtools telemetry, `redactEmail`-masked recipient logs, and convenience helpers `sendVerificationEmail` / `sendPasswordResetEmail`.
 - Composer drafts: `useDraft(conversationId)` in `@frick/react` persists composer text per `(user, conversation)` in `localStorage` with a 250ms debounce by default. Passing `{ sync: true }` uses the `MessageDraft` foundation object for cross-device drafts, with last-write-wins retry on version conflicts.
+- Product analytics client API: `trackAnalyticsEvent(...)`, `FrickClient.track(...)`, and `useTrackAnalyticsEvent()` send authenticated `analytics.user_event` records to the platform event pipeline.
 - Web demo hardening: Vite serve/preview responses now include CSP and browser security headers, and production builds emit the strict header set to `dist/_headers` for static hosts that honor it. Preview uses a stricter no-`unsafe-inline`/no-`unsafe-eval` CSP; dev keeps the local HMR allowances Vite needs. Demo auth sessions are kept in memory only; startup, sign-in, and logout purge legacy browser-stored bearer tokens and logout clears browser push-registration state.
 - Web background sync: `apps/web/public/frick-sw.js` Service Worker handles the `frick-pending-appends` sync tag (posts `frick:flush` to clients) and push receive + `notificationclick` deep-link routing. Notification click targets are normalized to same-origin app routes before `postMessage` / `openWindow`. `registerFrickBackgroundSync({ onFlush, onNavigate })` helper in `@frick/core` does the registration dance with graceful degradation when the Background Sync API is missing.
 
@@ -60,6 +61,10 @@ A multi-commit rollout that lifts the client SDKs from "you can hand-write it" t
 
 ### Server (`@frick/server`)
 
+- `POST /analytics/events` now ingests authenticated product analytics into
+  the platform event pipeline as `analytics.user_event`, deriving tenant,
+  subject, device, and replica identity from the active session and returning
+  pipeline receipts with idempotency duplicate status.
 - Structured logger redaction now recurses through nested fields and redacts common secret-shaped names such as tokens, passwords, authorization headers, API keys, and private keys.
 - Auth sessions now store a SHA-256 digest of the bearer token in SQLite instead of the raw replayable token; the migration rebuilds `auth_sessions`, revoking pre-existing sessions.
 - `POST /search` now applies source-level visibility to custom search indexes before returning hits; object-backed hits are checked against object visibility, stream/projection hits without provable source identity fail closed, and framework-reserved source fields are not exposed.
@@ -81,6 +86,9 @@ A multi-commit rollout that lifts the client SDKs from "you can hand-write it" t
 
 ### CLI (`@frick/cli`)
 
+- New `frick dev` command prints local runtime profiles; `--profile redpanda`
+  starts the checked-in Redpanda Compose service and emits the Kafka platform
+  event env vars for local conformance testing.
 - New `frick tenants set-push` subcommand:
   - `--platform apns --p8 <file> --key-id ... --team-id ... --bundle-id ... [--sandbox]` encrypts and stores APNs credentials.
   - `--platform fcm --service-account <google-svc-account.json>` encrypts and stores FCM service-account credentials.
@@ -98,6 +106,9 @@ A multi-commit rollout that lifts the client SDKs from "you can hand-write it" t
 
 ### Repository
 
+- Added Redpanda local infrastructure at `ops/local/redpanda.compose.yaml`
+  for testing the Kafka-compatible platform event pipeline without generating
+  infrastructure into app source trees.
 - Added the first Frick Platform runtime boundary: project modules can supply
   schema/manifest metadata, and the server can mount authenticated Fricken
   Dashboard routes plus project/schema metadata at `/_frick/dashboard`.

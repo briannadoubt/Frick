@@ -73,6 +73,31 @@ Validation errors throw `FrickConfigError` at startup, before any port is
 opened. Unknown env values (e.g. `FRICK_ENV=staging`) are fatal — the
 server refuses to boot.
 
+## Local runtime profiles
+
+`frick dev` prints the standard local runtime plan as JSON. The default
+`sqlite` profile is zero-infrastructure and uses the SQLite platform event
+pipeline:
+
+```bash
+frick dev --dry-run
+```
+
+Use the Redpanda profile when you want to test the Kafka-compatible event
+pipeline locally:
+
+```bash
+frick dev --profile redpanda
+```
+
+That command starts only the Redpanda service from
+`ops/local/redpanda.compose.yaml` with Docker Compose and waits for it to be
+healthy. The profile binds broker access to `127.0.0.1:19092`, sets
+`FRICK_PLATFORM_EVENTS_DRIVER=kafka`, points
+`FRICK_PLATFORM_EVENTS_KAFKA_BROKERS` and `FRICK_TEST_KAFKA_BROKERS` at the
+local broker, and prints the server/web/dashboard commands to run against it.
+Use `--dry-run` to inspect the plan without starting Docker.
+
 ## Runtime limits
 
 `createFrickServer({ limits })` accepts partial `FrickLimits` overrides. Any
@@ -215,6 +240,17 @@ Per-consumer health lag is still process-local, and idempotency is enforced by
 the active adapter process after it has published or consumed a matching event;
 cross-process and post-restart Kafka idempotency require a durable key index in
 a follow-up hardening pass.
+
+Product analytics enters through the same pipeline. Authenticated clients can
+`POST /analytics/events` with a JSON body containing `name`, optional
+`properties`, optional `context`, optional `attributes`, optional `traceId`,
+optional `idempotencyKey`, and optional canonical ISO `occurredAt`. The server
+derives `tenantId`, `subjectId`, `deviceId`, and `replicaId` from the active
+session; clients cannot spoof those identity fields. Accepted events publish as
+`analytics.user_event` with source `frick.analytics.ingest` and return
+`202 { ok, eventId, sequence, acceptedAt, duplicate }`. The TypeScript SDK
+wraps this route as `trackAnalyticsEvent(...)`, `FrickClient.track(...)`, and
+`useTrackAnalyticsEvent()`.
 
 For agents that need live runtime context, `frick mcp` runs a stdio MCP server
 owned by the same CLI. It defaults to read-only and exposes documented health,
