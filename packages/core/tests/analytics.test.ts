@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { foundationSchema } from "@frick/protocol";
-import { FrickClient, installBrowserAnalyticsTracking, trackAnalyticsEvent } from "../src/index.js";
+import {
+  FrickClient,
+  installBrowserAnalyticsTracking,
+  trackAnalyticsEvent,
+  setDefaultClientTelemetryRuntime,
+  type FrickClientTelemetryRuntime,
+  type FrickClientTelemetrySpanResult,
+  type FrickClientTelemetrySpanStart,
+} from "../src/index.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -74,6 +82,132 @@ describe("trackAnalyticsEvent", () => {
         fetchImpl,
       }),
     ).rejects.toThrow("occurredAt must be a canonical ISO timestamp string");
+  });
+
+  test("records client telemetry, injects trace headers, and correlates analytics events", async () => {
+    const telemetry = new RecordingClientTelemetryRuntime("trace-analytics-auto");
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    const fetchImpl = async (input: URL, init?: RequestInit) => {
+      calls.push({ url: input.toString(), init });
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          eventId: "platform-event-otel",
+          sequence: 9,
+          acceptedAt: "2026-05-17T12:00:03.000Z",
+          duplicate: false,
+        }),
+        { status: 202 },
+      );
+    };
+
+    await trackAnalyticsEvent({
+      httpEndpoint: "http://127.0.0.1:4099",
+      sessionToken: "session-token-123",
+      name: "screen.viewed",
+      properties: { path: "/settings" },
+      telemetry,
+      fetchImpl,
+    });
+
+    expect(headersObject(calls[0]?.init?.headers)).toMatchObject({
+      traceparent: "00-trace-analytics-auto-span-01",
+    });
+    expect(JSON.parse(String(calls[0]?.init?.body))).toMatchObject({
+      traceId: "trace-analytics-auto",
+    });
+    expect(telemetry.spans).toEqual([
+      expect.objectContaining({
+        input: expect.objectContaining({
+          name: "frick.analytics.track",
+          kind: "client",
+          attributes: expect.objectContaining({
+            "frick.analytics.event_name": "screen.viewed",
+            "url.path": "/analytics/events",
+          }),
+        }),
+        result: expect.objectContaining({
+          status: "ok",
+          attributes: expect.objectContaining({
+            "http.response.status_code": 202,
+            "frick.analytics.duplicate": false,
+          }),
+        }),
+      }),
+    ]);
+    expect(telemetry.counters).toContainEqual({
+      name: "frick.client.analytics.events.total",
+      value: 1,
+      attributes: { status: "accepted" },
+    });
+    expect(telemetry.histograms).toEqual([
+      expect.objectContaining({
+        name: "frick.client.analytics.duration_ms",
+        attributes: { status: "accepted" },
+      }),
+    ]);
+  });
+
+  test("keeps analytics requests alive when telemetry throws", async () => {
+    const fetchImpl = async () =>
+      new Response(
+        JSON.stringify({
+          ok: true,
+          eventId: "platform-event-resilient",
+          sequence: 10,
+          acceptedAt: "2026-05-17T12:00:04.000Z",
+          duplicate: false,
+        }),
+        { status: 202 },
+      );
+
+    await expect(
+      trackAnalyticsEvent({
+        httpEndpoint: "http://127.0.0.1:4099",
+        sessionToken: "session-token-123",
+        name: "button.clicked",
+        telemetry: new ThrowingClientTelemetryRuntime(),
+        fetchImpl,
+      }),
+    ).resolves.toMatchObject({ eventId: "platform-event-resilient" });
+  });
+
+  test("uses the default client telemetry runtime for standalone analytics calls", async () => {
+    const telemetry = new RecordingClientTelemetryRuntime("trace-standalone-default");
+    const restoreTelemetry = setDefaultClientTelemetryRuntime(telemetry);
+    const calls: { init: RequestInit | undefined }[] = [];
+    const fetchImpl = async (_input: URL, init?: RequestInit) => {
+      calls.push({ init });
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          eventId: "platform-event-default",
+          sequence: 11,
+          acceptedAt: "2026-05-17T12:00:05.000Z",
+          duplicate: false,
+        }),
+        { status: 202 },
+      );
+    };
+
+    try {
+      await trackAnalyticsEvent({
+        httpEndpoint: "http://127.0.0.1:4099",
+        sessionToken: "session-token-123",
+        name: "screen.viewed",
+        fetchImpl,
+      });
+    } finally {
+      restoreTelemetry();
+    }
+
+    expect(headersObject(calls[0]?.init?.headers)).toMatchObject({
+      traceparent: "00-trace-standalone-default-span-01",
+    });
+    expect(JSON.parse(String(calls[0]?.init?.body))).toMatchObject({
+      traceId: "trace-standalone-default",
+    });
+    expect(telemetry.spans).toHaveLength(1);
   });
 });
 
@@ -274,4 +408,62 @@ function trackingClient() {
       duplicate: false,
     })),
   };
+}
+
+class RecordingClientTelemetryRuntime implements FrickClientTelemetryRuntime {
+  readonly spans: Array<{
+    input: FrickClientTelemetrySpanStart;
+    result?: FrickClientTelemetrySpanResult;
+  }> = [];
+  readonly counters: Array<{
+    name: string;
+    value: number;
+    attributes?: Record<string, string | number | boolean>;
+  }> = [];
+  readonly histograms: Array<{
+    name: string;
+    value: number;
+    attributes?: Record<string, string | number | boolean>;
+  }> = [];
+
+  constructor(private readonly traceId = "trace-test") {}
+
+  startSpan(input: FrickClientTelemetrySpanStart) {
+    const record: {
+      input: FrickClientTelemetrySpanStart;
+      result?: FrickClientTelemetrySpanResult;
+    } = { input };
+    this.spans.push(record);
+    return {
+      traceId: this.traceId,
+      injectHeaders: (headers: Record<string, string>) => {
+        headers.traceparent = `00-${this.traceId}-span-01`;
+      },
+      end: (result?: FrickClientTelemetrySpanResult) => {
+        record.result = result;
+      },
+    };
+  }
+
+  recordCounter(
+    name: string,
+    value: number,
+    attributes?: Record<string, string | number | boolean>,
+  ): void {
+    this.counters.push({ name, value, attributes });
+  }
+
+  recordHistogram(
+    name: string,
+    value: number,
+    attributes?: Record<string, string | number | boolean>,
+  ): void {
+    this.histograms.push({ name, value, attributes });
+  }
+}
+
+class ThrowingClientTelemetryRuntime implements FrickClientTelemetryRuntime {
+  startSpan(): never {
+    throw new Error("telemetry failed");
+  }
 }

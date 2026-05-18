@@ -8,3 +8,4 @@ export * from "./indexeddb-cache.js";
 export * from "./optimistic.js";
 export * from "./runtime.js";
 export * from "./subscriptions.js";
+export * from "./telemetry.js";

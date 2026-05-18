@@ -15,6 +15,9 @@ import {
   FrickObjectConflictError,
   FrickUserStateClearedError,
   MemoryFrickCache,
+  type FrickClientTelemetryRuntime,
+  type FrickClientTelemetrySpanResult,
+  type FrickClientTelemetrySpanStart,
 } from "../src/index.js";
 
 const HELLO_ACK_FRAME_KIND = (FrameKind as typeof FrameKind & { HelloAck?: number }).HelloAck ?? 18;
@@ -358,6 +361,159 @@ describe("foundation runtime", () => {
 
     expect(client.syncStatus.value.serverCapabilities).toEqual(serverCapabilities);
     expect(client.syncStatus.value.schemaCompatibility).toEqual(schemaCompatibility);
+  });
+
+  it("records client WebSocket spans and bounded frame metrics", () => {
+    const telemetry = new RecordingClientTelemetryRuntime();
+    const socket = TestWebSocket.prepare();
+    const client = new FrickClient({
+      endpoint: "ws://test/_frick/sync",
+      schema: foundationSchema,
+      WebSocketImpl: TestWebSocket as never,
+      telemetry,
+    });
+
+    client.connect();
+    socket.emit("open", {});
+    socket.emit("message", {
+      data: encodeFrame([
+        FrameKind.Ping,
+        { sentAt: 1 },
+      ]),
+    });
+    socket.emit("message", {
+      data: encodeFrame([999_999, {}] as never),
+    });
+    socket.emit("close", { code: 1000, reason: "secret=session-token" });
+
+    expect(telemetry.spans).toEqual([
+      expect.objectContaining({
+        input: expect.objectContaining({
+          name: "WebSocket /_frick/sync",
+          kind: "client",
+          attributes: expect.objectContaining({
+            "network.protocol.name": "websocket",
+            "url.path": "/_frick/sync",
+            "frick.schema_id": foundationSchema.schemaId,
+          }),
+        }),
+        result: expect.objectContaining({
+          status: "ok",
+          attributes: expect.objectContaining({
+            "frick.ws.close_code": 1000,
+            "frick.ws.close_category": "normal",
+          }),
+        }),
+      }),
+    ]);
+    expect(JSON.stringify(telemetry.spans)).not.toContain("secret=session-token");
+    expect(telemetry.counters).toContainEqual({
+      name: "frick.client.ws.frames.sent.total",
+      value: 1,
+      attributes: { kind: "Hello" },
+    });
+    expect(telemetry.counters).toContainEqual({
+      name: "frick.client.ws.frames.received.total",
+      value: 1,
+      attributes: { kind: "Ping" },
+    });
+    expect(telemetry.counters).toContainEqual({
+      name: "frick.client.ws.frames.received.total",
+      value: 1,
+      attributes: { kind: "unknown" },
+    });
+    expect(telemetry.histograms).toEqual([
+      expect.objectContaining({
+        name: "frick.client.ws.connection.duration_ms",
+        attributes: { closeCategory: "normal" },
+      }),
+    ]);
+  });
+
+  it("closes WebSocket telemetry when manual disconnect clears the socket before close fires", () => {
+    const telemetry = new RecordingClientTelemetryRuntime();
+    const socket = TestWebSocket.prepare();
+    const client = new FrickClient({
+      endpoint: "ws://test/_frick/sync",
+      schema: foundationSchema,
+      WebSocketImpl: TestWebSocket as never,
+      telemetry,
+    });
+
+    client.connect();
+    socket.emit("open", {});
+    client.disconnect();
+    socket.emit("close", { code: 1000 });
+
+    expect(telemetry.spans[0]?.result).toMatchObject({
+      status: "ok",
+      attributes: expect.objectContaining({
+        "frick.ws.close_code": 1000,
+        "frick.ws.close_category": "normal",
+      }),
+    });
+    expect(telemetry.histograms).toEqual([
+      expect.objectContaining({
+        name: "frick.client.ws.connection.duration_ms",
+        attributes: { closeCategory: "normal" },
+      }),
+    ]);
+  });
+
+  it("keeps closing socket telemetry separate from an immediate reconnect", () => {
+    const telemetry = new RecordingClientTelemetryRuntime();
+    const sockets: TestWebSocket[] = [];
+    const Impl: any = function (endpoint?: string) {
+      const socket = new TestWebSocket(endpoint);
+      sockets.push(socket);
+      return socket;
+    };
+    const client = new FrickClient({
+      endpoint: "ws://test/_frick/sync",
+      schema: foundationSchema,
+      WebSocketImpl: Impl,
+      telemetry,
+      session: tenantAdaSession,
+    });
+
+    client.connect();
+    const firstSocket = sockets[0]!;
+    firstSocket.emit("open", {});
+    client.setSession({
+      ...tenantAdaSession,
+      sessionToken: "session-token-b",
+      userId: "user-grace",
+      deviceId: "device-b",
+      replicaId: "replica-b",
+    });
+    const secondSocket = sockets[1]!;
+    secondSocket.emit("open", {});
+    firstSocket.emit("close", { code: 1000 });
+    secondSocket.emit("close", { code: 1001 });
+
+    expect(telemetry.spans.map((record) => record.result?.attributes?.["frick.ws.close_category"])).toEqual([
+      "normal",
+      "going_away",
+    ]);
+    expect(telemetry.histograms.map((record) => record.attributes)).toEqual([
+      { closeCategory: "normal" },
+      { closeCategory: "going_away" },
+    ]);
+  });
+
+  it("keeps WebSocket connect alive when telemetry throws", () => {
+    const socket = TestWebSocket.prepare();
+    const client = new FrickClient({
+      endpoint: "ws://test/_frick/sync",
+      schema: foundationSchema,
+      WebSocketImpl: TestWebSocket as never,
+      telemetry: new ThrowingClientTelemetryRuntime(),
+    });
+
+    client.connect();
+    socket.emit("open", {});
+
+    expect(socket.sent.map((bytes) => decodeFrame(bytes as Uint8Array))[0]?.[0]).toBe(FrameKind.Hello);
   });
 
   it("stores shared error envelopes from nack frames while clearing pending appends", async () => {
@@ -800,12 +956,67 @@ class TestWebSocket {
 
   close(): void {
     this.readyState = 3;
-    this.emit("close", {});
   }
 
   emit(name: string, event: unknown): void {
     for (const listener of this.#listeners.get(name) ?? []) {
       listener(event);
     }
+  }
+}
+
+class RecordingClientTelemetryRuntime implements FrickClientTelemetryRuntime {
+  readonly spans: Array<{
+    input: FrickClientTelemetrySpanStart;
+    result?: FrickClientTelemetrySpanResult;
+  }> = [];
+  readonly counters: Array<{
+    name: string;
+    value: number;
+    attributes?: Record<string, string | number | boolean>;
+  }> = [];
+  readonly histograms: Array<{
+    name: string;
+    value: number;
+    attributes?: Record<string, string | number | boolean>;
+  }> = [];
+
+  startSpan(input: FrickClientTelemetrySpanStart) {
+    const record: {
+      input: FrickClientTelemetrySpanStart;
+      result?: FrickClientTelemetrySpanResult;
+    } = { input };
+    this.spans.push(record);
+    return {
+      end: (result?: FrickClientTelemetrySpanResult) => {
+        record.result = result;
+      },
+    };
+  }
+
+  recordCounter(
+    name: string,
+    value: number,
+    attributes?: Record<string, string | number | boolean>,
+  ): void {
+    this.counters.push({ name, value, attributes });
+  }
+
+  recordHistogram(
+    name: string,
+    value: number,
+    attributes?: Record<string, string | number | boolean>,
+  ): void {
+    this.histograms.push({ name, value, attributes });
+  }
+}
+
+class ThrowingClientTelemetryRuntime implements FrickClientTelemetryRuntime {
+  startSpan(): never {
+    throw new Error("telemetry failed");
+  }
+
+  recordCounter(): never {
+    throw new Error("telemetry failed");
   }
 }

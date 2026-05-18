@@ -25,6 +25,10 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
   with bounded WebSocket labels and sanitized close telemetry, enabled by OTLP
   env vars and included in the Redpanda local profile through the checked-in
   collector config.
+- TypeScript client OpenTelemetry API bridge for analytics requests and sync
+  WebSocket transport metrics/spans. The bridge is active by default but is a
+  no-op until the app installs an OTel provider; native SDK telemetry capture is
+  still pending.
 - Swift and Android WebSocket sync transports with capability handshake, object subscriptions/upserts, presence, packed-frame decoding, cache compatibility, and cross-device draft helpers.
 
 ## Known Limitations

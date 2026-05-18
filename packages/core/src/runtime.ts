@@ -31,6 +31,16 @@ import {
   type AnalyticsTrackOptions,
   type AnalyticsTrackReceipt,
 } from "./analytics.js";
+import {
+  createNoopClientTelemetryRuntime,
+  defaultClientTelemetryRuntime,
+  finishClientTelemetrySpan,
+  recordClientTelemetryCounter,
+  recordClientTelemetryHistogram,
+  startClientTelemetrySpan,
+  type FrickClientTelemetryRuntime,
+  type FrickClientTelemetrySpan,
+} from "./telemetry.js";
 
 const SOCKET_OPEN = 1;
 const HELLO_ACK_FRAME_KIND = (FrameKind as typeof FrameKind & { HelloAck?: number }).HelloAck ?? 18;
@@ -80,6 +90,12 @@ export interface FrickClientOptions {
   session?: FrickSession | null | undefined;
   sessionToken?: string | undefined;
   WebSocketImpl?: typeof WebSocket;
+  /**
+   * Client-side telemetry runtime. Defaults to the OpenTelemetry API bridge,
+   * which is a no-op until the host app installs an OTel provider. Pass
+   * `false` to disable framework telemetry entirely.
+   */
+  telemetry?: FrickClientTelemetryRuntime | false;
   /** Maximum number of unacknowledged appends queued before rejecting new ones. Defaults to 1_000. */
   maxPendingAppends?: number;
 }
@@ -155,8 +171,13 @@ export class FrickClient {
   readonly #maxReconnectDelayMs: number;
   readonly #maxPendingAppends: number;
   readonly #WebSocketImpl: typeof WebSocket | undefined;
+  readonly #telemetry: FrickClientTelemetryRuntime;
 
   #socket: WebSocket | undefined;
+  readonly #socketTelemetry = new WeakMap<
+    WebSocket,
+    { span: FrickClientTelemetrySpan; startedAtMs: number }
+  >();
   #manualDisconnect = false;
   #reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   #reconnectAttempts = 0;
@@ -200,6 +221,10 @@ export class FrickClient {
     this.#maxReconnectDelayMs = options.maxReconnectDelayMs ?? 30_000;
     this.#maxPendingAppends = options.maxPendingAppends ?? 1_000;
     this.#WebSocketImpl = options.WebSocketImpl;
+    this.#telemetry =
+      options.telemetry === false
+        ? createNoopClientTelemetryRuntime()
+        : options.telemetry ?? defaultClientTelemetryRuntime();
     this.#setSessionStatus();
     this.#hydrateFromCache();
   }
@@ -284,6 +309,10 @@ export class FrickClient {
     const socket = new WebSocketCtor(this.#webSocketEndpoint());
     socket.binaryType = "arraybuffer";
     this.#socket = socket;
+    this.#socketTelemetry.set(socket, {
+      span: this.#startWebSocketTelemetrySpan(),
+      startedAtMs: Date.now(),
+    });
 
     addSocketListener(socket, "open", () => {
       if (this.#socket !== socket) {
@@ -316,10 +345,12 @@ export class FrickClient {
       void this.#receive(data);
     });
 
-    addSocketListener(socket, "close", () => {
+    addSocketListener(socket, "close", (event) => {
       if (this.#socket !== socket) {
+        this.#finishWebSocketTelemetrySpan(socket, event);
         return;
       }
+      this.#finishWebSocketTelemetrySpan(socket, event);
       this.#socket = undefined;
       this.#setStatus({ connected: false });
       if (!this.#manualDisconnect) {
@@ -545,6 +576,7 @@ export class FrickClient {
       sessionToken: this.#sessionToken,
       name,
       properties,
+      telemetry: this.#telemetry,
     });
   }
 
@@ -625,6 +657,7 @@ export class FrickClient {
   }
 
   #handleFrame(frame: FrickFrame): void {
+    this.#recordWebSocketFrameTelemetry("received", frame[0]);
     if (frame[0] === HELLO_ACK_FRAME_KIND) {
       const helloAck = frame as HelloAckFrame;
       this.#setStatus({
@@ -869,6 +902,7 @@ export class FrickClient {
   #send(frame: FrickFrame): void {
     if (this.#socket?.readyState === SOCKET_OPEN) {
       this.#socket.send(encodeFrame(frame));
+      this.#recordWebSocketFrameTelemetry("sent", frame[0]);
     }
   }
 
@@ -913,6 +947,45 @@ export class FrickClient {
 
   #webSocketEndpoint(): string {
     return stripSessionTokenQuery(this.#endpoint);
+  }
+
+  #startWebSocketTelemetrySpan(): FrickClientTelemetrySpan {
+    return startClientTelemetrySpan(this.#telemetry, {
+      name: "WebSocket /_frick/sync",
+      kind: "client",
+      attributes: {
+        "network.protocol.name": "websocket",
+        "url.path": urlPath(this.#webSocketEndpoint()),
+        "frick.schema_id": this.schema.schemaId,
+        "frick.schema_revision": this.schema.schemaRevision,
+        "frick.authenticated": Boolean(this.#sessionToken),
+      },
+    });
+  }
+
+  #finishWebSocketTelemetrySpan(socket: WebSocket, event: unknown): void {
+    const telemetry = this.#socketTelemetry.get(socket);
+    if (!telemetry) return;
+    this.#socketTelemetry.delete(socket);
+    const closeCode = closeCodeFromEvent(event);
+    const closeCategory = webSocketCloseCategory(closeCode);
+    const durationMs = Math.max(0, Date.now() - telemetry.startedAtMs);
+    finishClientTelemetrySpan(telemetry.span, {
+      status: closeCategory === "normal" ? "ok" : "error",
+      attributes: {
+        ...(closeCode !== undefined ? { "frick.ws.close_code": closeCode } : {}),
+        "frick.ws.close_category": closeCategory,
+      },
+    });
+    recordClientTelemetryHistogram(this.#telemetry, "frick.client.ws.connection.duration_ms", durationMs, {
+      closeCategory,
+    });
+  }
+
+  #recordWebSocketFrameTelemetry(direction: "sent" | "received", kind: unknown): void {
+    recordClientTelemetryCounter(this.#telemetry, `frick.client.ws.frames.${direction}.total`, 1, {
+      kind: frameKindLabel(kind),
+    });
   }
 
   /** HTTP endpoint used by REST helpers such as `loadOlder`. */
@@ -1003,4 +1076,68 @@ function stripSessionTokenQuery(endpoint: string): string {
   }
   url.searchParams.delete("sessionToken");
   return url.toString();
+}
+
+function frameKindLabel(kind: unknown): string {
+  if (typeof kind !== "number" || !Number.isInteger(kind)) {
+    return "unknown";
+  }
+  const label = FrameKind[kind];
+  return typeof label === "string" ? label : "unknown";
+}
+
+function urlPath(endpoint: string): string {
+  try {
+    return new URL(endpoint).pathname || "/";
+  } catch {
+    return "/";
+  }
+}
+
+function closeCodeFromEvent(event: unknown): number | undefined {
+  if (!event || typeof event !== "object" || !("code" in event)) {
+    return undefined;
+  }
+  const code = (event as { code?: unknown }).code;
+  return typeof code === "number" && Number.isInteger(code) ? code : undefined;
+}
+
+function webSocketCloseCategory(code: number | undefined): string {
+  switch (code) {
+    case 1000:
+      return "normal";
+    case 1001:
+      return "going_away";
+    case 1002:
+      return "protocol_error";
+    case 1003:
+      return "unsupported_data";
+    case 1005:
+      return "no_status";
+    case 1006:
+      return "abnormal";
+    case 1007:
+      return "invalid_payload";
+    case 1008:
+      return "policy_violation";
+    case 1009:
+      return "too_large";
+    case 1010:
+      return "mandatory_extension";
+    case 1011:
+      return "internal_error";
+    case 1012:
+      return "service_restart";
+    case 1013:
+      return "try_again_later";
+    case 1014:
+      return "bad_gateway";
+    case 1015:
+      return "tls_handshake";
+    default:
+      if (code !== undefined && code >= 4000 && code <= 4999) {
+        return "private";
+      }
+      return "unknown";
+  }
 }

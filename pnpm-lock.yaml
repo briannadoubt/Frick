@@ -146,6 +146,9 @@ importers:
       '@frick/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@opentelemetry/api':
+        specifier: ^1.9.1
+        version: 1.9.1
     devDependencies:
       fake-indexeddb:
         specifier: ^6.2.5

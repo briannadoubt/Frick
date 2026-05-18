@@ -171,6 +171,34 @@ Pending appends are preserved across compatible reloads. When an incompatible-ca
 | Destructive cache reset entry point | `cache.clear()` | `FrickClient.resetCache()` | `FrickClient.resetCache()` |
 | Capability negotiation in handshake | ✓ (WebSocket) | ✓ (WebSocket) | ✓ (WebSocket) |
 
+## Client Telemetry
+
+Client telemetry must observe framework behavior without changing it.
+Telemetry failures are isolated from sync, writes, cache, and analytics
+requests. Metric labels stay bounded; user, tenant, and app-provided values are
+span attributes or analytics payload fields, not framework metric labels.
+
+The TypeScript runtime currently provides the first implementation:
+
+- `FrickClient` accepts `telemetry?: FrickClientTelemetryRuntime | false` and
+  defaults to an OpenTelemetry API bridge. With no app-installed OTel provider,
+  the bridge is a no-op. `setDefaultClientTelemetryRuntime(...)` can replace
+  the process default for standalone helpers or host adapters.
+- Analytics posts create `frick.analytics.track` client spans and
+  `frick.client.analytics.events.total{status}` /
+  `frick.client.analytics.duration_ms{status}` metrics. If the app does not
+  supply `traceId`, the active telemetry span trace id is copied into the
+  analytics event so server-side aggregates can correlate back to traces.
+- Sync sockets create `WebSocket /_frick/sync` client spans plus sent/received
+  frame counters and connection duration histograms. Frame `kind` labels are
+  bounded to known protocol frame names or `unknown`, and close telemetry uses
+  close code/category rather than raw close reason text.
+  Analytics header injection sends `traceparent` only; app-defined OTel baggage
+  is not forwarded by the default bridge.
+
+Swift and Android should follow these semantics when their telemetry capture
+surfaces land.
+
 ## Object Upserts Over the Sync Socket
 
 Object upserts flow over the sync WebSocket via `FrameKind.ObjectUpsert`. The server honors the schema's `mergePolicy`: `lastWriteWins` accepts any write and increments the version, `versionPrecondition` requires `expectedVersion` to match the on-disk row and Nacks with `storage.conflict` otherwise. Successful upserts reply with an `Ack` carrying the new version. TypeScript exposes `FrickClient.upsertObject`, Swift exposes `FrickSyncSocket.upsertObject`, and Android exposes `FrickSyncSocket.upsertObject`; each queues or buffers writes while disconnected and flushes on reconnect.

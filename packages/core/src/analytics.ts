@@ -1,4 +1,13 @@
 import type { FrickErrorEnvelope, PlainObject } from "@frick/protocol";
+import {
+  defaultClientTelemetryRuntime,
+  finishClientTelemetrySpan,
+  injectClientTelemetryHeaders,
+  recordClientTelemetryCounter,
+  recordClientTelemetryHistogram,
+  startClientTelemetrySpan,
+  type FrickClientTelemetryRuntime,
+} from "./telemetry.js";
 
 export type AnalyticsAttributes = Record<string, string | number | boolean>;
 type FetchImpl = (input: URL, init?: RequestInit) => Promise<Response>;
@@ -17,6 +26,7 @@ export interface TrackAnalyticsEventInput extends AnalyticsTrackOptions {
   sessionToken?: string | undefined;
   name: string;
   fetchImpl?: FetchImpl | undefined;
+  telemetry?: FrickClientTelemetryRuntime | undefined;
 }
 
 export interface AnalyticsTrackReceipt {
@@ -79,28 +89,103 @@ export async function trackAnalyticsEvent({
   idempotencyKey,
   occurredAt,
   fetchImpl = fetch,
+  telemetry = defaultClientTelemetryRuntime(),
 }: TrackAnalyticsEventInput): Promise<AnalyticsTrackReceipt> {
-  const response = await fetchImpl(frickHttpUrl(httpEndpoint, "analytics/events"), {
-    method: "POST",
-    headers: authorizedJsonHeaders(sessionToken),
-    body: JSON.stringify(
-      withoutUndefined({
-        name,
-        properties,
-        context,
-        attributes,
-        traceId,
-        idempotencyKey,
-        occurredAt: occurredAt instanceof Date ? occurredAt.toISOString() : occurredAt,
-      }),
-    ),
+  const startedAtMs = Date.now();
+  const span = startClientTelemetrySpan(telemetry, {
+    name: "frick.analytics.track",
+    kind: "client",
+    attributes: {
+      "frick.analytics.event_name": name,
+      "url.path": "/analytics/events",
+    },
   });
+  const headers = authorizedJsonHeaders(sessionToken);
+  injectClientTelemetryHeaders(span, headers);
+  let finished = false;
+  const finish = (result: {
+    status: "ok" | "error";
+    metricStatus: string;
+    httpStatusCode?: number;
+    duplicate?: boolean;
+    error?: unknown;
+  }): void => {
+    if (finished) return;
+    finished = true;
+    const durationMs = Date.now() - startedAtMs;
+    const attributes: AnalyticsAttributes = {
+      "frick.analytics.status": result.metricStatus,
+      ...(result.httpStatusCode !== undefined ? { "http.response.status_code": result.httpStatusCode } : {}),
+      ...(result.duplicate !== undefined ? { "frick.analytics.duplicate": result.duplicate } : {}),
+    };
+    finishClientTelemetrySpan(span, {
+      status: result.status,
+      attributes,
+      ...(result.error !== undefined ? { error: result.error } : {}),
+    });
+    recordClientTelemetryCounter(telemetry, "frick.client.analytics.events.total", 1, {
+      status: result.metricStatus,
+    });
+    recordClientTelemetryHistogram(telemetry, "frick.client.analytics.duration_ms", durationMs, {
+      status: result.metricStatus,
+    });
+  };
 
-  if (!response.ok) {
-    throw new Error(await analyticsErrorMessage(response));
+  let response: Response;
+  try {
+    response = await fetchImpl(frickHttpUrl(httpEndpoint, "analytics/events"), {
+      method: "POST",
+      headers,
+      body: JSON.stringify(
+        withoutUndefined({
+          name,
+          properties,
+          context,
+          attributes,
+          traceId: traceId ?? span.traceId,
+          idempotencyKey,
+          occurredAt: occurredAt instanceof Date ? occurredAt.toISOString() : occurredAt,
+        }),
+      ),
+    });
+  } catch (error) {
+    finish({
+      status: "error",
+      metricStatus: "network_error",
+      error,
+    });
+    throw error;
   }
 
-  return (await response.json()) as AnalyticsTrackReceipt;
+  if (!response.ok) {
+    const message = await analyticsErrorMessage(response);
+    finish({
+      status: "error",
+      metricStatus: "rejected",
+      httpStatusCode: response.status,
+      error: new Error(message),
+    });
+    throw new Error(message);
+  }
+
+  try {
+    const receipt = (await response.json()) as AnalyticsTrackReceipt;
+    finish({
+      status: "ok",
+      metricStatus: receipt.duplicate ? "duplicate" : "accepted",
+      httpStatusCode: response.status,
+      duplicate: receipt.duplicate,
+    });
+    return receipt;
+  } catch (error) {
+    finish({
+      status: "error",
+      metricStatus: "rejected",
+      httpStatusCode: response.status,
+      error,
+    });
+    throw error;
+  }
 }
 
 export function installBrowserAnalyticsTracking(

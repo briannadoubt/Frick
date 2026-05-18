@@ -175,6 +175,48 @@ the event `name`, optional `properties`, optional `context`, optional primitive
 canonical ISO `occurredAt`. Use idempotency keys for events that may be retried
 after navigation or network loss.
 
+## Client telemetry
+
+The TypeScript runtime emits OpenTelemetry-compatible client spans and metrics
+without generated app code. `FrickClient` defaults to the OpenTelemetry API
+bridge from `@frick/core`; if the host app installs a browser OTel provider,
+Frick sync and analytics operations show up automatically. Without a provider,
+the bridge is a no-op.
+
+```ts
+import { FrickClient, createOpenTelemetryClientRuntime } from "@frick/core";
+
+const client = new FrickClient({
+  endpoint: "wss://api.example.com/_frick/sync",
+  telemetry: createOpenTelemetryClientRuntime(),
+});
+```
+
+The standalone `trackAnalyticsEvent(...)` helper uses the same default bridge.
+Pass `telemetry: false` to `FrickClient` to disable framework client telemetry,
+or pass a custom `FrickClientTelemetryRuntime` to route spans and metrics into
+another collector adapter. For standalone helpers, either pass `telemetry` on
+the call or install a process-wide default with
+`setDefaultClientTelemetryRuntime(...)`. Telemetry failures are isolated from
+sync, writes, and analytics requests.
+
+The built-in instrumentation covers:
+
+- analytics posts: `frick.analytics.track` spans,
+  `frick.client.analytics.events.total{status}`, and
+  `frick.client.analytics.duration_ms{status}`. When app code does not supply
+  `traceId`, the active telemetry span trace id is copied into the
+  `analytics.user_event` payload for dashboard/server correlation.
+- sync WebSocket transport: `WebSocket /_frick/sync` client spans,
+  `frick.client.ws.frames.sent.total{kind}`,
+  `frick.client.ws.frames.received.total{kind}`, and
+  `frick.client.ws.connection.duration_ms{closeCategory}`.
+
+Frame `kind` labels are bounded to known protocol names or `unknown`; close
+telemetry records close code/category and never raw close text. The default
+bridge injects only the W3C `traceparent` header for analytics POST
+correlation; it does not forward OTel baggage.
+
 For schema evolution and the migration story, see
 [operations.md](./operations.md#backup-and-restore) and the framework
 hardening spec in `internal/`.

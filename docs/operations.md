@@ -290,6 +290,20 @@ wraps this route as `trackAnalyticsEvent(...)`, `FrickClient.track(...)`, and
 `useTrackAnalyticsEvent()`. React browser apps can opt into automatic route
 analytics with `<FrickProvider autoAnalytics>`; the tracker starts only when a
 session token is available and tears down its history listeners on unmount.
+The TypeScript client also includes an OpenTelemetry API bridge by default:
+analytics posts emit `frick.analytics.track` spans plus
+`frick.client.analytics.events.total{status}` and
+`frick.client.analytics.duration_ms{status}` metrics, and sync sockets emit
+`WebSocket /_frick/sync` client spans plus
+`frick.client.ws.frames.sent.total{kind}`,
+`frick.client.ws.frames.received.total{kind}`, and
+`frick.client.ws.connection.duration_ms{closeCategory}`. The bridge is a no-op
+until the host app installs an OTel provider; pass `telemetry: false` to
+`FrickClient` to disable it, or `setDefaultClientTelemetryRuntime(...)` to
+replace the default for standalone helpers. Frame labels are bounded to known
+protocol names or `unknown`, close telemetry records a bounded category rather
+than raw close text, and the default analytics header injection sends only
+`traceparent`.
 
 For agents that need live runtime context, `frick mcp` runs a stdio MCP server
 owned by the same CLI. It defaults to read-only and exposes documented health,
