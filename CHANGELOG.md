@@ -54,6 +54,9 @@ A multi-commit rollout that lifts the client SDKs from "you can hand-write it" t
 - TypeScript client OpenTelemetry bridge: `FrickClient` and standalone analytics helpers now emit OTel-compatible analytics and sync WebSocket spans/metrics by default, correlate analytics events with active trace ids, bound frame labels, sanitize close telemetry, and allow `telemetry: false`, `setDefaultClientTelemetryRuntime(...)`, or a custom `FrickClientTelemetryRuntime`.
 - Swift and Android client telemetry hooks: native `FrickClient.track(...)` calls now emit dependency-light `frick.analytics.track` spans plus analytics event/duration metrics through host-provided runtimes, correlate missing analytics `traceId` values from the active span, and optionally propagate `traceparent` without bundling native OTel SDKs. Android custom transports can keep implementing `post(path, body)` and override the header-aware overload only when they need `traceparent` forwarding.
 - Server package boundary: `@frick/server` now has an import-safe package entrypoint, build script, dist export map, documented push-adapter subpath exports, and a separate `src/dev.ts` runnable entry so importing the package no longer starts a listener. Scaffolded servers and smoke tests use `app.listen()` / `app.close()`, and custom-schema servers skip foundation seed rows that do not belong to the app schema.
+- `@frick/server` now exports job handler/registry/result types from its
+  package entrypoint so deployable app modules can register jobs without deep
+  imports.
 - Web demo hardening: Vite serve/preview responses now include CSP and browser security headers, and production builds emit the strict header set to `dist/_headers` for static hosts that honor it. Preview uses a stricter no-`unsafe-inline`/no-`unsafe-eval` CSP; dev keeps the local HMR allowances Vite needs. Demo auth sessions are kept in memory only; startup, sign-in, and logout purge legacy browser-stored bearer tokens and logout clears browser push-registration state.
 - Web background sync: `apps/web/public/frick-sw.js` Service Worker handles the `frick-pending-appends` sync tag (posts `frick:flush` to clients) and push receive + `notificationclick` deep-link routing. Notification click targets are normalized to same-origin app routes before `postMessage` / `openWindow`. `registerFrickBackgroundSync({ onFlush, onNavigate })` helper in `@frick/core` does the registration dance with graceful degradation when the Background Sync API is missing.
 
@@ -98,6 +101,9 @@ A multi-commit rollout that lifts the client SDKs from "you can hand-write it" t
   server-mounted dashboard, Redpanda/Kafka platform events, and OTel collector;
   the lightweight profile keeps the same server shape with SQLite platform
   events.
+- New `frick deploy image` action builds the server image consumed by deploy
+  profiles, with `--tag`, `--dockerfile`, `--context`, `--push`, and
+  `--dry-run` support while preserving JSON-only stdout.
 - New `frick dev` command prints local runtime profiles; `--profile redpanda`
   starts the checked-in Redpanda Compose service and emits the Kafka platform
   event env vars for local conformance testing.
@@ -122,6 +128,8 @@ A multi-commit rollout that lifts the client SDKs from "you can hand-write it" t
   `ops/deploy/lightweight.compose.yaml` for production-shaped and lightweight
   Frick runtime deployments without copying platform code into app source
   trees.
+- Added `ops/deploy/server.Dockerfile` and a root `.dockerignore` for building
+  the canonical Node 24 Frick server image with mounted dashboard assets.
 - Added Redpanda local infrastructure at `ops/local/redpanda.compose.yaml`
   for testing the Kafka-compatible platform event pipeline without generating
   infrastructure into app source trees.

@@ -19,6 +19,7 @@ pnpm cli <command> [args]
 pnpm cli doctor --db-path ./frick.sqlite --env development
 pnpm cli dev --profile redpanda --dry-run
 pnpm cli dashboard --endpoint http://127.0.0.1:4099
+pnpm cli deploy image --dry-run
 pnpm cli deploy --profile compose --dry-run
 ```
 
@@ -156,6 +157,18 @@ when Docker Compose runs.
 - `--profile lightweight` runs the same server/dashboard shape with the SQLite
   platform event pipeline and no collector.
 - `--dry-run` prints the JSON plan without starting Docker.
+
+### `frick deploy image [--tag <image>] [--dockerfile <path>] [--context <path>] [--push] [--dry-run]`
+
+Builds the server image consumed by `frick deploy` profiles. The default uses
+`ops/deploy/server.Dockerfile`, context `.`, and tag `frick-server:latest`.
+
+- `--tag` sets the Docker image tag and should match `FRICK_SERVER_IMAGE` when
+  running a deployment profile.
+- `--dockerfile` and `--context` let app/runtime images provide their own build
+  inputs while keeping the deploy profiles unchanged.
+- `--push` runs `docker push <tag>` after a successful build.
+- `--dry-run` prints the JSON build/push plan without starting Docker.
 
 ### `frick mcp [--endpoint <url>] [--readonly] [--allow-writes] [--tenant <id>] [--user <id>] [--token <bearer>] [--print-config]`
 

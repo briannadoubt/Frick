@@ -16,8 +16,9 @@ Status: Contract baseline audit.
 - `apps/server`: Frick server runtime. Public baseline API is the
   `@frick/server` package entrypoint: `createFrickServer`, documented server
   options, telemetry types, project/module helpers, reset/migration helpers,
-  and the documented cluster bus. Production push adapters are exported through
-  documented package subpaths. Route and storage internals remain private.
+  job handler types, and the documented cluster bus. Production push adapters
+  are exported through documented package subpaths. Route and storage internals
+  remain private.
 - Mounted dashboard routes under `/_frick/dashboard` and documented
   `/_frick/dashboard/api/*` responses are operator-facing surfaces. Internal
   route helper modules under `apps/server/src/dashboard/*` remain private

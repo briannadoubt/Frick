@@ -1,5 +1,11 @@
 export { createFrickServer, defaultDatabasePath, type ServerOptions } from "./server.js";
 export {
+  type FrickJobContext,
+  type FrickJobHandler,
+  type FrickJobRegistry,
+  type FrickJobResult,
+} from "./jobs/registry.js";
+export {
   createFrickAppRegistry,
   type FrickAppDefinition,
   type FrickAppRegistry,

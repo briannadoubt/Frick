@@ -334,6 +334,90 @@ describe("frick deploy", () => {
     expect(err.error.code).toBe("cli.usage");
     expect(err.error.message).toContain("--profile");
   });
+
+  it("prints the standard server image build plan without running Docker", async () => {
+    const result = await runCli(["deploy", "image", "--dry-run"]);
+    expect(result.exitCode).toBe(0);
+    const body = parseFirstJson(result.stdout) as {
+      ok: boolean;
+      command: string;
+      action: string;
+      dryRun: boolean;
+      built: boolean;
+      tag: string;
+      dockerfile: string;
+      context: string;
+      push: boolean;
+      steps: string[];
+    };
+    expect(body.ok).toBe(true);
+    expect(body.command).toBe("deploy");
+    expect(body.action).toBe("image");
+    expect(body.dryRun).toBe(true);
+    expect(body.built).toBe(false);
+    expect(body.tag).toBe("frick-server:latest");
+    expect(body.push).toBe(false);
+    expect(body.dockerfile).toContain("ops/deploy/server.Dockerfile");
+    expect(existsSync(body.dockerfile)).toBe(true);
+    expect(readFileSync(body.dockerfile, "utf8")).toContain("apps/dev-dashboard");
+    expect(body.context).toContain("Frick");
+    expect(body.steps).toContain("docker build -f ops/deploy/server.Dockerfile -t frick-server:latest .");
+  });
+
+  it("accepts custom server image build inputs", async () => {
+    const result = await runCli([
+      "deploy",
+      "image",
+      "--tag",
+      "registry.example.com/frick/app:abc123",
+      "--dockerfile",
+      "ops/deploy/server.Dockerfile",
+      "--context",
+      ".",
+      "--push",
+      "--dry-run",
+    ]);
+    expect(result.exitCode).toBe(0);
+    const body = parseFirstJson(result.stdout) as {
+      tag: string;
+      dockerfile: string;
+      context: string;
+      push: boolean;
+      steps: string[];
+    };
+    expect(body.tag).toBe("registry.example.com/frick/app:abc123");
+    expect(body.dockerfile).toContain("ops/deploy/server.Dockerfile");
+    expect(body.context).toContain("Frick");
+    expect(body.steps).toContain(
+      "docker build -f ops/deploy/server.Dockerfile -t registry.example.com/frick/app:abc123 .",
+    );
+    expect(body.push).toBe(true);
+    expect(body.steps).toContain("docker push registry.example.com/frick/app:abc123");
+  });
+
+  it("rejects unknown deploy actions", async () => {
+    const result = await runCli(["deploy", "unknown", "--dry-run"]);
+    expect(result.exitCode).toBe(2);
+    const err = parseLastJson(result.stderr) as { error: { code: string; message: string } };
+    expect(err.error.code).toBe("cli.usage");
+    expect(err.error.message).toContain("deploy action");
+  });
+
+  it("rejects deploy image string flags without values", async () => {
+    const result = await runCli(["deploy", "image", "--tag", "--dry-run"]);
+    expect(result.exitCode).toBe(2);
+    const err = parseLastJson(result.stderr) as { error: { code: string; message: string } };
+    expect(err.error.code).toBe("cli.usage");
+    expect(err.error.message).toContain("--tag");
+  });
+
+  it("rejects extra deploy image positionals", async () => {
+    const result = await runCli(["deploy", "image", "extra", "--dry-run"]);
+    expect(result.exitCode).toBe(2);
+    const err = parseLastJson(result.stderr) as { error: { code: string; message: string } };
+    expect(err.error.code).toBe("cli.usage");
+    expect(err.error.message).toContain("deploy image");
+  });
 });
 
 describe("frick schema check", () => {

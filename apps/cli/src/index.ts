@@ -30,7 +30,7 @@ const COMMANDS: readonly CommandSpec[] = [
   { name: "backup", summary: "Stream a framework database dump as NDJSON" },
   { name: "restore", summary: "Restore a framework database from NDJSON (requires --confirm yes)" },
   { name: "dev", summary: "Print or start a local Frick runtime profile" },
-  { name: "deploy", summary: "Print or start a standard Frick deployment profile" },
+  { name: "deploy", summary: "Print, build, or start a standard Frick deployment profile", subcommands: ["image"] },
   { name: "init", summary: "Scaffold a new Frick application at the given directory" },
   { name: "scaffold", summary: "Add an object, stream, or projection stub to a scaffolded app", subcommands: ["object", "stream", "projection"] },
   { name: "dashboard", summary: "Serve Fricken Dashboard for a running Frick server" },

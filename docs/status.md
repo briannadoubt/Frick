@@ -27,10 +27,11 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
   with bounded WebSocket labels and sanitized close telemetry, enabled by OTLP
   env vars and included in the Redpanda local profile through the checked-in
   collector config.
-- Standard Docker Compose deployment profiles are available through
-  `frick deploy --profile compose|lightweight`. The compose profile wires the
-  mounted dashboard, Redpanda/Kafka platform events, and OTel collector around
-  a built `FRICK_SERVER_IMAGE`; the lightweight profile keeps the same server
+- Standard image and Docker Compose deployment profiles are available through
+  `frick deploy image` and `frick deploy --profile compose|lightweight`. The
+  image command builds or pushes the `FRICK_SERVER_IMAGE`; the compose profile
+  wires the mounted dashboard, Redpanda/Kafka platform events, and OTel
+  collector around that image; the lightweight profile keeps the same server
   shape with SQLite platform events.
 - TypeScript client OpenTelemetry API bridge for analytics requests and sync
   WebSocket transport metrics/spans. The bridge is active by default but is a
@@ -42,8 +43,9 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
 ## Known Limitations
 
 - The CLI is still private to the monorepo. Development uses `pnpm cli <command>`; publishing a standalone npm CLI remains release work.
-- Deployment profiles expect a built Frick app/runtime container image via
-  `FRICK_SERVER_IMAGE`; image build/publish automation is still a follow-up.
+- The default deploy image builds the canonical monorepo server runtime.
+  Published-package and scaffolded-app image recipes are still follow-up
+  release work.
 - `@frick/server` has an import-safe package entrypoint and documented export
   map for the baseline server, telemetry, project, migration/reset, cluster
   bus, and production push-adapter surfaces. Deep route/storage imports remain

@@ -114,9 +114,23 @@ provided as a built image through `FRICK_SERVER_IMAGE` and the checked-in
 Compose files wire the Frick runtime services around it.
 
 ```bash
+frick deploy image --dry-run
 frick deploy --profile compose --dry-run
 frick deploy --profile lightweight --dry-run
 ```
+
+`frick deploy image` builds the server image consumed by the profiles. By
+default it runs:
+
+```bash
+docker build -f ops/deploy/server.Dockerfile -t frick-server:latest .
+```
+
+Pass `--tag <image>` to set the image tag, `--dockerfile <path>` and
+`--context <path>` to point at app/runtime-specific build inputs, and `--push`
+to publish the tag after a successful build. The default Dockerfile builds the
+monorepo Frick server package with Node 24, includes the mounted dashboard
+assets, creates `/var/lib/frick`, and runs as the non-root `node` user.
 
 `--profile compose` uses `ops/deploy/compose.yaml` and is the
 production-shaped self-hosted profile: `frick-server` serves the app and the
