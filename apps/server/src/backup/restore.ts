@@ -61,7 +61,10 @@ const TENANT_SCOPED_TABLES: readonly string[] = [
   "tenant_settings",
   "jobs",
   "push_device_registrations",
+  "platform_events",
 ];
+
+const EVENT_CHILD_TABLES: readonly string[] = ["platform_event_deliveries"];
 
 const INFRA_TABLES: readonly string[] = [
   "tenants",
@@ -69,7 +72,16 @@ const INFRA_TABLES: readonly string[] = [
   "frick_migrations",
 ];
 
-const ALL_TABLES: readonly string[] = [...TENANT_SCOPED_TABLES, ...INFRA_TABLES];
+const ALL_TABLES: readonly string[] = [
+  ...TENANT_SCOPED_TABLES,
+  ...EVENT_CHILD_TABLES,
+  ...INFRA_TABLES,
+];
+const TRUNCATE_ALL_TABLES: readonly string[] = [
+  ...EVENT_CHILD_TABLES,
+  ...TENANT_SCOPED_TABLES,
+  ...INFRA_TABLES,
+];
 const TENANT_ID_CONSTRAINED_TABLES = new Set([...TENANT_SCOPED_TABLES, "tenants"]);
 
 export async function restoreFrickDatabase(
@@ -157,6 +169,9 @@ export async function restoreFrickDatabase(
       if (tenantScope !== "all" && TENANT_ID_CONSTRAINED_TABLES.has(parsed.type)) {
         assertRowTenantMatchesScope(parsed.type, parsed.row, tenantScope, lineNumber);
       }
+      if (tenantScope !== "all" && parsed.type === "platform_event_deliveries") {
+        assertPlatformEventDeliveryMatchesScope(db, parsed.row, tenantScope, lineNumber);
+      }
       try {
         insertRow(db, parsed.type, parsed.row, columnCache);
         rowCountsByType[parsed.type] = (rowCountsByType[parsed.type] ?? 0) + 1;
@@ -198,6 +213,32 @@ function assertRowTenantMatchesScope(
     "tenantScopeMismatch",
     `Refusing to restore ${table} row for tenant ${String(row.tenant_id)} into tenant-scoped dump ${tenantScope}`,
     { table, tenantId: row.tenant_id, expectedTenantId: tenantScope, line: lineNumber },
+  );
+}
+
+function assertPlatformEventDeliveryMatchesScope(
+  db: DatabaseSync,
+  row: Record<string, unknown>,
+  tenantScope: string,
+  lineNumber: number,
+): void {
+  const eventId = row.event_id;
+  const event =
+    typeof eventId === "string"
+      ? (db
+        .prepare("SELECT tenant_id FROM platform_events WHERE event_id = ?")
+        .get(eventId) as { tenant_id: string | null } | undefined)
+      : undefined;
+  if (event?.tenant_id === tenantScope) return;
+  throw new FrickRestoreRefusedError(
+    "tenantScopeMismatch",
+    `Refusing to restore platform_event_deliveries row for event ${String(eventId)} into tenant-scoped dump ${tenantScope}`,
+    {
+      table: "platform_event_deliveries",
+      eventId,
+      expectedTenantId: tenantScope,
+      line: lineNumber,
+    },
   );
 }
 
@@ -262,10 +303,11 @@ function truncateScope(db: DatabaseSync, tenantScope: string): void {
   try {
     db.exec("PRAGMA foreign_keys = OFF");
     if (tenantScope === "all") {
-      for (const t of ALL_TABLES) {
+      for (const t of TRUNCATE_ALL_TABLES) {
         if (tableExists(db, t)) db.exec(`DELETE FROM ${t}`);
       }
     } else {
+      deletePlatformEventDeliveriesForTenant(db, tenantScope);
       for (const t of TENANT_SCOPED_TABLES) {
         if (tableExists(db, t)) {
           db.prepare(`DELETE FROM ${t} WHERE tenant_id = ?`).run(tenantScope);
@@ -290,7 +332,7 @@ function truncateScope(db: DatabaseSync, tenantScope: string): void {
 
 function assertScopeEmpty(db: DatabaseSync, tenantScope: string): void {
   if (tenantScope === "all") {
-    for (const t of TENANT_SCOPED_TABLES) {
+    for (const t of [...TENANT_SCOPED_TABLES, ...EVENT_CHILD_TABLES]) {
       if (!tableExists(db, t)) continue;
       const row = db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number };
       if (Number(row.n) > 0) {
@@ -303,6 +345,7 @@ function assertScopeEmpty(db: DatabaseSync, tenantScope: string): void {
     }
     return;
   }
+  assertPlatformEventDeliveriesEmptyForTenant(db, tenantScope);
   for (const t of TENANT_SCOPED_TABLES) {
     if (!tableExists(db, t)) continue;
     const row = db
@@ -315,6 +358,44 @@ function assertScopeEmpty(db: DatabaseSync, tenantScope: string): void {
         { table: t, tenantId: tenantScope },
       );
     }
+  }
+}
+
+function deletePlatformEventDeliveriesForTenant(db: DatabaseSync, tenantScope: string): void {
+  if (!tableExists(db, "platform_event_deliveries") || !tableExists(db, "platform_events")) {
+    return;
+  }
+  db
+    .prepare(
+      `DELETE FROM platform_event_deliveries
+        WHERE event_id IN (
+          SELECT event_id FROM platform_events WHERE tenant_id = ?
+        )`,
+    )
+    .run(tenantScope);
+}
+
+function assertPlatformEventDeliveriesEmptyForTenant(
+  db: DatabaseSync,
+  tenantScope: string,
+): void {
+  if (!tableExists(db, "platform_event_deliveries") || !tableExists(db, "platform_events")) {
+    return;
+  }
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n
+        FROM platform_event_deliveries d
+        JOIN platform_events e ON e.event_id = d.event_id
+        WHERE e.tenant_id = ?`,
+    )
+    .get(tenantScope) as { n: number };
+  if (Number(row.n) > 0) {
+    throw new FrickRestoreRefusedError(
+      "targetNotEmpty",
+      `Target database already has data for tenant ${tenantScope} (table platform_event_deliveries); pass overwrite: true to replace`,
+      { table: "platform_event_deliveries", tenantId: tenantScope },
+    );
   }
 }
 

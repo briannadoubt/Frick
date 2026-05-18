@@ -112,6 +112,49 @@ describe("restoreFrickDatabase", () => {
     }
   });
 
+  it("round-trips platform events and delivery state", async () => {
+    const source = new FrickStore({ path: ":memory:", seed: false });
+    try {
+      source.tenants.create("tenant-alpha");
+      const receipt = await source.platformEvents.publish({
+        family: "analytics.user_event",
+        name: "message.sent",
+        source: "test",
+        tenantId: "tenant-alpha",
+        payload: { messageId: "alpha-message" },
+      });
+      await source.platformEvents.claim("analytics-worker");
+
+      const lines = await dumpToLines(source, "tenant-alpha");
+      const target = new FrickStore({ path: ":memory:", seed: false });
+      try {
+        const report = await restoreFrickDatabase({
+          target,
+          source: fromLines(lines),
+          confirm: "yes",
+        });
+        expect(report.rowCountsByType.platform_events).toBe(1);
+        expect(report.rowCountsByType.platform_event_deliveries).toBe(1);
+
+        const health = await target.platformEvents.health();
+        expect(health).toMatchObject({
+          retained: 1,
+          claimed: 1,
+          unclaimed: 0,
+        });
+        expect(await target.platformEvents.claim("analytics-worker")).toEqual([]);
+
+        const [delivery] = await target.platformEvents.claim("export-worker");
+        expect(delivery?.event.id).toBe(receipt.id);
+        expect(delivery?.event.payload).toEqual({ messageId: "alpha-message" });
+      } finally {
+        target.close();
+      }
+    } finally {
+      source.close();
+    }
+  });
+
   it("refuses to restore over a non-empty target without overwrite", async () => {
     const source = new FrickStore({ path: ":memory:", seed: false });
     const target = new FrickStore({ path: ":memory:" });

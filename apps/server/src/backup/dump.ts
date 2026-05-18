@@ -96,6 +96,16 @@ const TABLE_ORDER: readonly TableSpec[] = [
     tenantScoped: true,
     orderBy: "tenant_id ASC, registration_id ASC",
   },
+  {
+    name: "platform_events",
+    tenantScoped: true,
+    orderBy: "tenant_id ASC, id ASC",
+  },
+  {
+    name: "platform_event_deliveries",
+    tenantScoped: false,
+    orderBy: "consumer ASC, event_id ASC",
+  },
   { name: "admin_audit_log", tenantScoped: false, infraOnly: true, orderBy: "id ASC" },
   { name: "frick_migrations", tenantScoped: false, infraOnly: true, orderBy: "id ASC" },
 ];
@@ -134,12 +144,8 @@ export async function* dumpFrickDatabase(
 
     if (!tableExists(db, table.name)) continue;
 
-    const sql = buildSelect(table, wholeDb, tenantScope);
-    const rows = table.tenantScoped && !wholeDb
-      ? (db.prepare(sql).all(tenantScope) as Array<Record<string, unknown>>)
-      : table.name === "tenants" && !wholeDb
-        ? (db.prepare(sql).all(tenantScope) as Array<Record<string, unknown>>)
-        : (db.prepare(sql).all() as Array<Record<string, unknown>>);
+    const { sql, params } = buildSelect(table, wholeDb, tenantScope);
+    const rows = db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
 
     for (const row of rows) {
       yield JSON.stringify({ type: table.name, row: encodeRow(row) });
@@ -147,14 +153,36 @@ export async function* dumpFrickDatabase(
   }
 }
 
-function buildSelect(table: TableSpec, wholeDb: boolean, tenantId: string): string {
+function buildSelect(
+  table: TableSpec,
+  wholeDb: boolean,
+  tenantId: string,
+): { sql: string; params: string[] } {
   if (table.name === "tenants" && !wholeDb) {
-    return `SELECT * FROM tenants WHERE tenant_id = ? ORDER BY ${table.orderBy}`;
+    return {
+      sql: `SELECT * FROM tenants WHERE tenant_id = ? ORDER BY ${table.orderBy}`,
+      params: [tenantId],
+    };
   }
   if (table.tenantScoped && !wholeDb) {
-    return `SELECT * FROM ${table.name} WHERE tenant_id = ? ORDER BY ${table.orderBy}`;
+    return {
+      sql: `SELECT * FROM ${table.name} WHERE tenant_id = ? ORDER BY ${table.orderBy}`,
+      params: [tenantId],
+    };
   }
-  return `SELECT * FROM ${table.name} ORDER BY ${table.orderBy}`;
+  if (table.name === "platform_event_deliveries" && !wholeDb) {
+    return {
+      sql: `
+        SELECT d.*
+          FROM platform_event_deliveries d
+          JOIN platform_events e ON e.event_id = d.event_id
+          WHERE e.tenant_id = ?
+          ORDER BY d.consumer ASC, e.id ASC
+      `,
+      params: [tenantId],
+    };
+  }
+  return { sql: `SELECT * FROM ${table.name} ORDER BY ${table.orderBy}`, params: [] };
 }
 
 function tableExists(db: DatabaseSync, name: string): boolean {

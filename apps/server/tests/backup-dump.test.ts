@@ -154,6 +154,51 @@ describe("dumpFrickDatabase", () => {
     }
   });
 
+  it("per-tenant dump includes platform events and only matching delivery state", async () => {
+    const store = new FrickStore({ path: ":memory:", seed: false });
+    try {
+      store.tenants.create("tenant-alpha");
+      store.tenants.create("tenant-beta");
+      const alpha = await store.platformEvents.publish({
+        family: "analytics.user_event",
+        name: "message.sent",
+        source: "test",
+        tenantId: "tenant-alpha",
+        payload: { messageId: "alpha-message" },
+      });
+      const beta = await store.platformEvents.publish({
+        family: "analytics.user_event",
+        name: "message.sent",
+        source: "test",
+        tenantId: "tenant-beta",
+        payload: { messageId: "beta-message" },
+      });
+      await store.platformEvents.claim("analytics-worker", { batchSize: 10 });
+
+      const lines = await collect(dumpFrickDatabase(store, { tenantId: "tenant-alpha" }));
+      const rows = lines
+        .slice(1)
+        .map((l) => JSON.parse(l) as { type: string; row: Record<string, unknown> });
+      const platformEvents = rows.filter((r) => r.type === "platform_events");
+      const deliveries = rows.filter((r) => r.type === "platform_event_deliveries");
+
+      expect(platformEvents).toHaveLength(1);
+      expect(platformEvents[0]?.row).toMatchObject({
+        event_id: alpha.id,
+        tenant_id: "tenant-alpha",
+      });
+      expect(platformEvents[0]?.row.event_id).not.toBe(beta.id);
+      expect(deliveries).toHaveLength(1);
+      expect(deliveries[0]?.row).toMatchObject({
+        event_id: alpha.id,
+        consumer: "analytics-worker",
+        status: "claimed",
+      });
+    } finally {
+      store.close();
+    }
+  });
+
   it("whole-database dump includes admin_audit_log and frick_migrations", async () => {
     const store = new FrickStore({ path: ":memory:" });
     try {
