@@ -26,6 +26,11 @@ import {
 import { Signal, objectKey, streamKey } from "./subscriptions.js";
 import { resolveHttpEndpoint } from "./http.js";
 import { OptimisticConflictError, OptimisticOverlay } from "./optimistic.js";
+import {
+  trackAnalyticsEvent,
+  type AnalyticsTrackOptions,
+  type AnalyticsTrackReceipt,
+} from "./analytics.js";
 
 const SOCKET_OPEN = 1;
 const HELLO_ACK_FRAME_KIND = (FrameKind as typeof FrameKind & { HelloAck?: number }).HelloAck ?? 18;
@@ -527,6 +532,20 @@ export class FrickClient {
 
   async sendSignal(name: string, key: string, value: PlainObject): Promise<void> {
     this.#send([FrameKind.SignalSend, { requestId: randomId(), name, key, value }]);
+  }
+
+  track(
+    name: string,
+    properties: PlainObject = {},
+    options: Omit<AnalyticsTrackOptions, "properties"> = {},
+  ): Promise<AnalyticsTrackReceipt> {
+    return trackAnalyticsEvent({
+      ...options,
+      httpEndpoint: this.#httpEndpoint,
+      sessionToken: this.#sessionToken,
+      name,
+      properties,
+    });
   }
 
   /**

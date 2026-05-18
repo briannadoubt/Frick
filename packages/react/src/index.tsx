@@ -7,7 +7,13 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { FrickClient, type FrickSession, type SyncStatus } from "@frick/core";
+import {
+  FrickClient,
+  type AnalyticsTrackOptions,
+  type AnalyticsTrackReceipt,
+  type FrickSession,
+  type SyncStatus,
+} from "@frick/core";
 import {
   foundationSchema,
   type FrickSchema,
@@ -224,6 +230,19 @@ export function useSendSignal(
 ): (value: PlainObject) => Promise<void> {
   const client = useFrick();
   return useCallback((value: PlainObject) => client.sendSignal(name, key, value), [client, name, key]);
+}
+
+export function useTrackAnalyticsEvent(): (
+  name: string,
+  properties?: PlainObject,
+  options?: Omit<AnalyticsTrackOptions, "properties">,
+) => Promise<AnalyticsTrackReceipt> {
+  const client = useFrick();
+  return useCallback(
+    (name: string, properties: PlainObject = {}, options: Omit<AnalyticsTrackOptions, "properties"> = {}) =>
+      client.track(name, properties, options),
+    [client],
+  );
 }
 
 /**

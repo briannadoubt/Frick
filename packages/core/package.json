@@ -19,6 +19,11 @@
       "import": "./dist/chat.js",
       "default": "./dist/chat.js"
     },
+    "./analytics": {
+      "types": "./dist/analytics.d.ts",
+      "import": "./dist/analytics.js",
+      "default": "./dist/analytics.js"
+    },
     "./errors": {
       "types": "./dist/generated/errors.d.ts",
       "import": "./dist/generated/errors.js",
