@@ -320,6 +320,15 @@ session principals are pinned to their session tenant; admin bearers may pass
 `tenantId` to inspect a tenant account directory. The endpoint caps `limit` at
 200 rows and reports whether additional rows were truncated.
 
+`/_frick/dashboard/api/jobs?limit=50&tenantId=_default&status=ready&jobType=blob.process`
+returns sanitized background-job rows for the mounted dashboard Jobs view:
+`id`, `tenantId`, `jobType`, `status`, attempt counters, lifecycle timestamps,
+and `lastErrorCode`. Tenant session principals are pinned to their session
+tenant; admin bearers may pass `tenantId`, `status`, and `jobType` filters. The
+endpoint caps `limit` at 200 rows, reports truncation, and never returns job
+payloads, completed results, idempotency keys, worker ids, or last error
+messages.
+
 `/_frick/dashboard/api/blobs?limit=50&tenantId=_default&ownerId=user-ada`
 returns read-only blob metadata for the mounted dashboard Storage view:
 `tenantId`, `blobId`, `ownerId`, `contentHash`, `byteLength`, `mimeType`, and

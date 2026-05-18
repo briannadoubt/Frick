@@ -7,6 +7,8 @@ const STORAGE_KEYS = {
   objectType: "fricken-dashboard:objectType",
   tenantId: "fricken-dashboard:tenantId",
   blobOwnerId: "fricken-dashboard:blobOwnerId",
+  jobType: "fricken-dashboard:jobType",
+  jobStatus: "fricken-dashboard:jobStatus",
 };
 
 const app = document.getElementById("app");
@@ -48,6 +50,8 @@ const state = {
   selectedObjectType: localStorage.getItem(STORAGE_KEYS.objectType) || "",
   dataTenantId: localStorage.getItem(STORAGE_KEYS.tenantId) || "",
   blobOwnerId: localStorage.getItem(STORAGE_KEYS.blobOwnerId) || "",
+  jobType: localStorage.getItem(STORAGE_KEYS.jobType) || "",
+  jobStatus: localStorage.getItem(STORAGE_KEYS.jobStatus) || "",
   loading: false,
   lastRefresh: undefined,
   data: {},
@@ -349,6 +353,14 @@ async function refreshData() {
       nextErrors.dashboardBlobs = error;
     }
 
+    try {
+      nextData.dashboardJobs = await fetchDashboardJobs(
+        selectedDashboardTenantId(nextData.dashboardTenants),
+      );
+    } catch (error) {
+      nextErrors.dashboardJobs = error;
+    }
+
     const objectType = selectedDashboardObjectType(nextData.dashboardMetadata);
     if (objectType) {
       try {
@@ -420,6 +432,15 @@ async function fetchDashboardBlobs(tenantId) {
   if (tenantId) params.set("tenantId", tenantId);
   if (state.blobOwnerId) params.set("ownerId", state.blobOwnerId);
   return fetchJson(`/_frick/dashboard/api/blobs?${params}`, { auth: true });
+}
+
+async function fetchDashboardJobs(tenantId) {
+  if (!isMountedDashboard()) return undefined;
+  const params = new URLSearchParams({ limit: "25" });
+  if (tenantId) params.set("tenantId", tenantId);
+  if (state.jobStatus) params.set("status", state.jobStatus);
+  if (state.jobType) params.set("jobType", state.jobType);
+  return fetchJson(`/_frick/dashboard/api/jobs?${params}`, { auth: true });
 }
 
 async function devLogin() {
@@ -1337,6 +1358,7 @@ function renderJobs() {
           ${metricCard("Handlers", handlers.length, handlers.join(", ") || "No handlers reported", handlers.length ? "good" : "warn")}
           ${metricCard("Queued statuses", Object.keys(counts).length, "Distinct job states in storage", Object.keys(counts).length ? "good" : "info")}
         </section>
+        ${dashboardJobsPanel()}
         <div class="split-panel">
           ${definitionListPanel("Registered handlers", handlers.map((handler) => [handler, "job handler"]))}
           ${definitionListPanel("Queue counts", rows)}
@@ -1345,6 +1367,152 @@ function renderJobs() {
       </div>
       ${serverInspector()}
     </div>
+  `;
+}
+
+function dashboardJobsPanel() {
+  if (!isMountedDashboard()) {
+    return `
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <span class="panel-kicker">Queue</span>
+            <h2 class="panel-title">Recent jobs</h2>
+          </div>
+        </header>
+        <div class="panel-body">
+          <div class="empty-state">Mount Fricken Dashboard at /_frick/dashboard to browse sanitized job rows from the server origin.</div>
+        </div>
+      </section>
+    `;
+  }
+
+  const dashboardJobs = state.data.dashboardJobs;
+  const error = state.errors.dashboardJobs;
+  const selectedTenantId = selectedDashboardTenantId();
+  return `
+    <section class="panel">
+      <header class="panel-header">
+        <div>
+          <span class="panel-kicker">Queue</span>
+          <h2 class="panel-title">Recent jobs</h2>
+        </div>
+        ${
+          dashboardJobs
+            ? `<span class="status-tag tone-info">${dot("info")} ${escapeHtml(dashboardJobs.scope)}${dashboardJobs.tenantId ? ` / ${escapeHtml(dashboardJobs.tenantId)}` : ""}</span>`
+            : ""
+        }
+      </header>
+      <div class="panel-body">
+        <form class="form-grid" data-form="job-filter">
+          <label class="form-row">
+            <span class="field-label">Tenant</span>
+            <input class="text-input" name="tenantId" value="${escapeHtml(selectedTenantId)}" placeholder="_default" autocomplete="off" />
+          </label>
+          <label class="form-row">
+            <span class="field-label">Status</span>
+            <select class="select-input" name="status">
+              ${jobStatusOptions()}
+            </select>
+          </label>
+          <label class="form-row">
+            <span class="field-label">Job type</span>
+            <span class="inline-fields">
+              <input class="text-input" name="jobType" value="${escapeHtml(state.jobType)}" placeholder="blob.process" autocomplete="off" />
+              <button class="button secondary" type="submit">${icon("check")} Apply</button>
+            </span>
+          </label>
+        </form>
+        ${error ? `<div class="error-box">${escapeHtml(error.message)}</div>` : ""}
+        ${dashboardJobs ? jobsSummary(dashboardJobs) : ""}
+        ${jobsTable(dashboardJobs)}
+      </div>
+    </section>
+  `;
+}
+
+function jobStatusOptions() {
+  const options = [
+    ["", "Any status"],
+    ["ready", "Ready"],
+    ["running", "Running"],
+    ["completed", "Completed"],
+    ["dead_lettered", "Dead lettered"],
+  ];
+  return options
+    .map(([value, label]) => `
+      <option value="${escapeHtml(value)}"${state.jobStatus === value ? " selected" : ""}>${escapeHtml(label)}</option>
+    `)
+    .join("");
+}
+
+function jobsSummary(data) {
+  const detail = data.truncated
+    ? `${data.count} visible jobs, more available`
+    : `${data.count} visible jobs`;
+  return `
+    <div class="status-strip compact">
+      <span class="status-pill tone-info">${dot("info")} ${escapeHtml(detail)}</span>
+      <span class="status-pill tone-info">${dot("info")} ${escapeHtml(data.status || "all statuses")}</span>
+      <span class="status-pill tone-info">${dot("info")} ${escapeHtml(data.jobType || "all job types")}</span>
+      <span class="status-pill tone-info">${dot("info")} limit ${escapeHtml(data.limit)}</span>
+    </div>
+  `;
+}
+
+function jobsTable(data) {
+  if (!data) {
+    if (state.errors.dashboardJobs?.skipped) {
+      return `<div class="empty-state">Add a bearer token to load job rows.</div>`;
+    }
+    return `<div class="empty-state">No job rows loaded yet.</div>`;
+  }
+  if (!data.jobs.length) {
+    return `<div class="empty-state">No jobs match the current filters.</div>`;
+  }
+  return `
+    <div class="object-table-wrap">
+      <table class="table">
+        <thead><tr><th>ID</th><th>Type</th><th>Status</th><th>Attempts</th><th>Schedule</th><th>Last state</th></tr></thead>
+        <tbody>
+          ${data.jobs
+            .map((job) => `
+              <tr>
+                <td><code class="code-inline">#${escapeHtml(job.id)}</code></td>
+                <td>
+                  <code class="code-inline">${escapeHtml(job.jobType)}</code>
+                  <div class="table-note">${escapeHtml(job.tenantId)}</div>
+                </td>
+                <td><span class="status-tag ${toneClass(jobStatusTone(job.status))}">${dot(jobStatusTone(job.status))} ${escapeHtml(job.status)}</span></td>
+                <td>${escapeHtml(job.attemptCount)} / ${escapeHtml(job.maxAttempts)}</td>
+                <td>
+                  ${escapeHtml(new Date(job.availableAt).toLocaleString())}
+                  <div class="table-note">created ${escapeHtml(formatAge(job.createdAt))}</div>
+                </td>
+                <td>${formatJobLastState(job)}</td>
+              </tr>
+            `)
+            .join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function jobStatusTone(status) {
+  if (status === "completed") return "good";
+  if (status === "dead_lettered") return "bad";
+  if (status === "running") return "warn";
+  return "info";
+}
+
+function formatJobLastState(job) {
+  const timestamp = job.deadLetteredAt || job.completedAt || job.failedAt || job.claimedAt || job.createdAt;
+  const details = [];
+  if (job.lastErrorCode) details.push(job.lastErrorCode);
+  return `
+    ${escapeHtml(formatAge(timestamp))}
+    ${details.map((detail) => `<div class="table-note">${escapeHtml(detail)}</div>`).join("")}
   `;
 }
 
@@ -1958,6 +2126,24 @@ function bindControls() {
       else localStorage.removeItem(STORAGE_KEYS.tenantId);
       if (state.blobOwnerId) localStorage.setItem(STORAGE_KEYS.blobOwnerId, state.blobOwnerId);
       else localStorage.removeItem(STORAGE_KEYS.blobOwnerId);
+      void refreshData();
+    });
+  }
+
+  const jobFilterForm = app.querySelector("[data-form='job-filter']");
+  if (jobFilterForm) {
+    jobFilterForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const form = new FormData(jobFilterForm);
+      state.dataTenantId = form.get("tenantId")?.toString().trim() || "";
+      state.jobStatus = form.get("status")?.toString().trim() || "";
+      state.jobType = form.get("jobType")?.toString().trim() || "";
+      if (state.dataTenantId) localStorage.setItem(STORAGE_KEYS.tenantId, state.dataTenantId);
+      else localStorage.removeItem(STORAGE_KEYS.tenantId);
+      if (state.jobStatus) localStorage.setItem(STORAGE_KEYS.jobStatus, state.jobStatus);
+      else localStorage.removeItem(STORAGE_KEYS.jobStatus);
+      if (state.jobType) localStorage.setItem(STORAGE_KEYS.jobType, state.jobType);
+      else localStorage.removeItem(STORAGE_KEYS.jobType);
       void refreshData();
     });
   }

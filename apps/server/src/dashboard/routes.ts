@@ -12,6 +12,7 @@ import {
 import { buildDashboardAccounts } from "./accounts.js";
 import { buildDashboardBlobs } from "./blobs.js";
 import { buildDashboardObjectData } from "./data.js";
+import { buildDashboardJobs } from "./jobs.js";
 import { buildDashboardMetadata } from "./metadata.js";
 import { buildDashboardTenantSettings } from "./tenant-settings.js";
 import { buildDashboardTenants } from "./tenants.js";
@@ -181,6 +182,28 @@ export async function handleDashboardRoute(input: DashboardRouteInput): Promise<
       principal,
       ...(tenantId ? { tenantId } : {}),
       ...(ownerId ? { ownerId } : {}),
+      ...optionalLimit(input.url.searchParams.get("limit")),
+    }));
+    return true;
+  }
+
+  if (relativePath === "/api/jobs") {
+    setDashboardHeaders(input.response);
+    const principal = input.authenticate();
+    if (principal instanceof Error) {
+      input.sendError(principal, "dashboard_unauthorized");
+      return true;
+    }
+
+    const tenantId = input.url.searchParams.get("tenantId") || undefined;
+    const status = input.url.searchParams.get("status") || undefined;
+    const jobType = input.url.searchParams.get("jobType") || undefined;
+    sendDashboardJson(input, 200, buildDashboardJobs({
+      store: input.store,
+      principal,
+      ...(tenantId ? { tenantId } : {}),
+      ...(status ? { status } : {}),
+      ...(jobType ? { jobType } : {}),
       ...optionalLimit(input.url.searchParams.get("limit")),
     }));
     return true;

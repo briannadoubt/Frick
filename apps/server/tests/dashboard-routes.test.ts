@@ -170,6 +170,13 @@ describe("mounted dashboard", () => {
     expect(response.status).toBe(401);
   });
 
+  it("requires authentication for dashboard jobs", async () => {
+    app = await startServer();
+    const response = await fetch(`${app.httpUrl}/_frick/dashboard/api/jobs`);
+
+    expect(response.status).toBe(401);
+  });
+
   it("serves dashboard metadata API when authenticated", async () => {
     app = await startServer();
     const response = await fetch(`${app.httpUrl}/_frick/dashboard/api/metadata`, {
@@ -203,6 +210,7 @@ describe("mounted dashboard", () => {
     expect(script).toContain("/_frick/dashboard/api/tenants");
     expect(script).toContain("/_frick/dashboard/api/tenant-settings");
     expect(script).toContain("/_frick/dashboard/api/blobs");
+    expect(script).toContain("/_frick/dashboard/api/jobs");
   });
 
   it("serves schema object rows through the mounted dashboard data API", async () => {
@@ -791,6 +799,123 @@ describe("mounted dashboard", () => {
     expect(serialized).not.toContain("gps secret");
     expect(serialized).not.toContain("sensitive sidecar metadata");
     expect(serialized).not.toContain("tenant-other/secret");
+  });
+
+  it("serves tenant-scoped dashboard jobs without payloads or secret errors", async () => {
+    app = await startServer();
+    const row = app.store.jobs.enqueue({
+      tenantId: "tenant-session",
+      jobType: "EmailDigest",
+      payload: {
+        recipient: "secret@example.com",
+        token: "secret-token",
+      },
+      idempotencyKey: "secret-idempotency-key",
+    });
+    app.store.jobs.fail(row.id, "email.provider_error", "smtp password leaked in error", false);
+    app.store.jobs.enqueue({
+      tenantId: "tenant-other",
+      jobType: "EmailDigest",
+      payload: { recipient: "other@example.com" },
+    });
+    const login = await fetch(`${app.httpUrl}/auth/dev-login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tenantId: "tenant-session", userId: "user-tenant-session" }),
+    });
+    expect(login.status).toBe(200);
+    const { sessionToken } = (await login.json()) as { sessionToken: string };
+
+    const response = await fetch(
+      `${app.httpUrl}/_frick/dashboard/api/jobs?tenantId=tenant-other&limit=10`,
+      { headers: { authorization: `Bearer ${sessionToken}` } },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      schemaHash: foundationSchema.hash,
+      tenantId: "tenant-session",
+      scope: "tenant",
+      count: 1,
+      limit: 10,
+      truncated: false,
+    });
+    expect(body.jobs).toEqual([
+      {
+        id: row.id,
+        tenantId: "tenant-session",
+        jobType: "EmailDigest",
+        status: "dead_lettered",
+        attemptCount: 0,
+        maxAttempts: 5,
+        availableAt: expect.any(String),
+        createdAt: expect.any(String),
+        failedAt: expect.any(String),
+        deadLetteredAt: expect.any(String),
+        lastErrorCode: "email.provider_error",
+      },
+    ]);
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain("secret@example.com");
+    expect(serialized).not.toContain("secret-token");
+    expect(serialized).not.toContain("secret-idempotency-key");
+    expect(serialized).not.toContain("smtp password leaked");
+    expect(serialized).not.toContain("tenant-other");
+  });
+
+  it("lets admin bearer filter dashboard jobs by tenant, type, and status", async () => {
+    const adminToken = "test-admin-token-1234567890ABCDEF1234567890ABCDEF";
+    app = await startServer({
+      config: { adminToken },
+    });
+    app.store.jobs.enqueue({
+      tenantId: "tenant-jobs",
+      jobType: "Digest",
+      payload: { batch: 1 },
+    });
+    app.store.jobs.enqueue({
+      tenantId: "tenant-jobs",
+      jobType: "Digest",
+      payload: { batch: 2 },
+    });
+    app.store.jobs.enqueue({
+      tenantId: "tenant-jobs",
+      jobType: "Cleanup",
+      payload: { batch: 3 },
+    });
+    app.store.jobs.enqueue({
+      tenantId: "tenant-other",
+      jobType: "Digest",
+      payload: { batch: 4 },
+    });
+
+    const response = await fetch(
+      `${app.httpUrl}/_frick/dashboard/api/jobs?tenantId=tenant-jobs&jobType=Digest&status=ready&limit=1`,
+      { headers: { authorization: `Bearer ${adminToken}` } },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      schemaHash: foundationSchema.hash,
+      tenantId: "tenant-jobs",
+      scope: "admin",
+      status: "ready",
+      jobType: "Digest",
+      count: 1,
+      limit: 1,
+      truncated: true,
+    });
+    expect(body.jobs).toEqual([
+      expect.objectContaining({
+        tenantId: "tenant-jobs",
+        jobType: "Digest",
+        status: "ready",
+      }),
+    ]);
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain("tenant-other");
   });
 
   it("rejects unknown dashboard object data types", async () => {
