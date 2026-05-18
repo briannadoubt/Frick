@@ -284,9 +284,6 @@ describe("installBrowserAnalyticsTracking", () => {
         name: "screen.viewed",
         properties: {
           path: "/",
-          search: "",
-          hash: "",
-          url: "https://app.example.test/",
           title: "Frick Test App",
         },
       },
@@ -294,9 +291,6 @@ describe("installBrowserAnalyticsTracking", () => {
         name: "screen.viewed",
         properties: {
           path: "/settings",
-          search: "?tab=billing",
-          hash: "#plans",
-          url: "https://app.example.test/settings?tab=billing#plans",
           title: "Frick Test App",
         },
       },

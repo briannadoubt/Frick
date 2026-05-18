@@ -86,7 +86,7 @@ describe("useTrackAnalyticsEvent", () => {
     expect(track).toHaveBeenCalledWith("button.clicked", properties, options);
   });
 
-  test("FrickProvider installs opt-in browser auto tracking and disposes it on unmount", async () => {
+  test("FrickProvider installs browser auto tracking by default and disposes it on unmount", async () => {
     const client = new FrickClient({
       endpoint: "ws://unused",
       schema: foundationSchema,
@@ -111,39 +111,83 @@ describe("useTrackAnalyticsEvent", () => {
     });
     const browser = new FakeProviderBrowserWindow("https://app.example.test/");
     let renderer: ReactTestRenderer | undefined;
+    const globalWithWindow = globalThis as { window?: BrowserAnalyticsWindow };
+    const previousWindow = globalWithWindow.window;
+    globalWithWindow.window = browser;
 
-    await act(async () => {
-      renderer = create(
-        createElement(FrickProvider, {
-          client,
-          autoAnalytics: { window: browser },
-          children: createElement("div"),
-        }),
+    try {
+      await act(async () => {
+        renderer = create(
+          createElement(FrickProvider, {
+            client,
+            children: createElement("div"),
+          }),
+        );
+      });
+      await act(async () => undefined);
+      browser.history.pushState({}, "", "/settings");
+      await act(async () => undefined);
+
+      expect(track).toHaveBeenCalledTimes(2);
+      expect(track).toHaveBeenNthCalledWith(
+        1,
+        "screen.viewed",
+        expect.objectContaining({ path: "/" }),
       );
+      expect(track).toHaveBeenNthCalledWith(
+        2,
+        "screen.viewed",
+        expect.objectContaining({ path: "/settings" }),
+      );
+
+      await act(async () => {
+        renderer?.unmount();
+      });
+      browser.history.pushState({}, "", "/after-unmount");
+      await act(async () => undefined);
+
+      expect(track).toHaveBeenCalledTimes(2);
+    } finally {
+      if (previousWindow) globalWithWindow.window = previousWindow;
+      else delete globalWithWindow.window;
+    }
+  });
+
+  test("FrickProvider disables default browser auto tracking when opted out", async () => {
+    const client = new FrickClient({ endpoint: "ws://unused", schema: foundationSchema, session: testSession() });
+    vi.spyOn(client, "connect").mockImplementation(() => undefined);
+    vi.spyOn(client, "disconnect").mockImplementation(() => undefined);
+    const track = vi.spyOn(client, "track").mockResolvedValue({
+      ok: true,
+      eventId: "platform-event-1",
+      sequence: 1,
+      acceptedAt: "2026-05-17T12:00:00.000Z",
+      duplicate: false,
     });
-    await act(async () => undefined);
-    browser.history.pushState({}, "", "/settings");
-    await act(async () => undefined);
+    const browser = new FakeProviderBrowserWindow("https://app.example.test/");
+    const globalWithWindow = globalThis as { window?: BrowserAnalyticsWindow };
+    const previousWindow = globalWithWindow.window;
+    globalWithWindow.window = browser;
 
-    expect(track).toHaveBeenCalledTimes(2);
-    expect(track).toHaveBeenNthCalledWith(
-      1,
-      "screen.viewed",
-      expect.objectContaining({ path: "/" }),
-    );
-    expect(track).toHaveBeenNthCalledWith(
-      2,
-      "screen.viewed",
-      expect.objectContaining({ path: "/settings" }),
-    );
+    try {
+      await act(async () => {
+        create(
+          createElement(FrickProvider, {
+            client,
+            autoAnalytics: false,
+            children: createElement("div"),
+          }),
+        );
+      });
+      await act(async () => undefined);
+      browser.history.pushState({}, "", "/settings");
+      await act(async () => undefined);
 
-    await act(async () => {
-      renderer?.unmount();
-    });
-    browser.history.pushState({}, "", "/after-unmount");
-    await act(async () => undefined);
-
-    expect(track).toHaveBeenCalledTimes(2);
+      expect(track).not.toHaveBeenCalled();
+    } finally {
+      if (previousWindow) globalWithWindow.window = previousWindow;
+      else delete globalWithWindow.window;
+    }
   });
 
   test("FrickProvider starts and stops auto tracking when the client session changes after mount", async () => {
@@ -221,6 +265,59 @@ describe("useTrackAnalyticsEvent", () => {
     await act(async () => undefined);
 
     expect(track).toHaveBeenCalledTimes(1);
+  });
+
+  test("FrickProvider applies custom auto analytics options after default tracking installed", async () => {
+    const client = new FrickClient({ endpoint: "ws://unused", schema: foundationSchema, session: testSession() });
+    vi.spyOn(client, "connect").mockImplementation(() => undefined);
+    vi.spyOn(client, "disconnect").mockImplementation(() => undefined);
+    const track = vi.spyOn(client, "track").mockResolvedValue({
+      ok: true,
+      eventId: "platform-event-1",
+      sequence: 1,
+      acceptedAt: "2026-05-17T12:00:00.000Z",
+      duplicate: false,
+    });
+    const browser = new FakeProviderBrowserWindow("https://app.example.test/");
+    const globalWithWindow = globalThis as { window?: BrowserAnalyticsWindow };
+    const previousWindow = globalWithWindow.window;
+    globalWithWindow.window = browser;
+    let renderer: ReactTestRenderer | undefined;
+
+    try {
+      await act(async () => {
+        renderer = create(
+          createElement(FrickProvider, {
+            client,
+            children: createElement("div"),
+          }),
+        );
+      });
+      await act(async () => undefined);
+      expect(track).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        renderer?.update(
+          createElement(FrickProvider, {
+            client,
+            autoAnalytics: {
+              window: browser,
+              trackInitialRoute: false,
+              routeProperties: (location) => ({ customPath: location.pathname }),
+            },
+            children: createElement("div"),
+          }),
+        );
+      });
+      browser.history.pushState({}, "", "/custom");
+      await act(async () => undefined);
+
+      expect(track).toHaveBeenCalledTimes(2);
+      expect(track).toHaveBeenNthCalledWith(2, "screen.viewed", { customPath: "/custom" });
+    } finally {
+      if (previousWindow) globalWithWindow.window = previousWindow;
+      else delete globalWithWindow.window;
+    }
   });
 });
 

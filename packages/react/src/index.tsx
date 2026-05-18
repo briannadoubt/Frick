@@ -4,7 +4,6 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -49,7 +48,7 @@ export function FrickProvider({
   schema = foundationSchema,
   client,
   session,
-  autoAnalytics,
+  autoAnalytics = true,
 }: FrickProviderProps) {
   const resolvedHttpEndpoint = client?.httpEndpoint ?? httpEndpoint ?? resolveHttpEndpoint(endpoint);
   const frick = useMemo(
@@ -73,10 +72,20 @@ export function FrickProvider({
   );
 
   const status = useSignalValue(frick.syncStatus);
-  const autoAnalyticsEnabled = Boolean(autoAnalytics);
-  const autoAnalyticsOptionsRef = useRef<BrowserAnalyticsTrackingOptions | undefined>(undefined);
-  autoAnalyticsOptionsRef.current =
+  const autoAnalyticsEnabled = autoAnalytics !== false;
+  const autoAnalyticsOptions =
     autoAnalytics && autoAnalytics !== true ? autoAnalytics : undefined;
+  const autoAnalyticsOptionsForInstall = useMemo(
+    () => autoAnalyticsOptions,
+    [
+      autoAnalyticsOptions?.window,
+      autoAnalyticsOptions?.trackInitialRoute,
+      autoAnalyticsOptions?.trackHistoryChanges,
+      autoAnalyticsOptions?.screenName,
+      autoAnalyticsOptions?.routeProperties,
+      autoAnalyticsOptions?.onError,
+    ],
+  );
 
   useEffect(() => {
     if (session !== undefined) {
@@ -96,10 +105,10 @@ export function FrickProvider({
     }
     const tracker = installBrowserAnalyticsTracking(
       frick,
-      autoAnalyticsOptionsRef.current,
+      autoAnalyticsOptionsForInstall,
     );
     return () => tracker.dispose();
-  }, [autoAnalyticsEnabled, autoAnalyticsSessionToken, frick]);
+  }, [autoAnalyticsEnabled, autoAnalyticsSessionToken, autoAnalyticsOptionsForInstall, frick]);
 
   return <FrickContext.Provider value={value}>{children}</FrickContext.Provider>;
 }

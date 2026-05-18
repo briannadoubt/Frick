@@ -294,9 +294,12 @@ session; clients cannot spoof those identity fields. Accepted events publish as
 `analytics.user_event` with source `frick.analytics.ingest` and return
 `202 { ok, eventId, sequence, acceptedAt, duplicate }`. The TypeScript SDK
 wraps this route as `trackAnalyticsEvent(...)`, `FrickClient.track(...)`, and
-`useTrackAnalyticsEvent()`. React browser apps can opt into automatic route
-analytics with `<FrickProvider autoAnalytics>`; the tracker starts only when a
-session token is available and tears down its history listeners on unmount.
+`useTrackAnalyticsEvent()`. React browser apps using `<FrickProvider>` record
+automatic route analytics by default after a session token is available; pass
+`autoAnalytics={false}` to opt out. The tracker tears down its history
+listeners on unmount. Default route properties include only `path` and
+document `title`; apps must provide `routeProperties` explicitly to include
+query strings, hash fragments, or full URLs.
 The TypeScript client also includes an OpenTelemetry API bridge by default:
 analytics posts emit `frick.analytics.track` spans plus
 `frick.client.analytics.events.total{status}` and

@@ -136,13 +136,15 @@ const track = useTrackAnalyticsEvent();
 await track("screen.viewed", { screen: "Settings" });
 ```
 
-For browser route/screen analytics, pass `autoAnalytics` to
-`<FrickProvider>`. This installs a small browser tracker after a session is
-available, records the initial route, and records subsequent
-`history.pushState`, `history.replaceState`, and `popstate` route changes.
+For browser route/screen analytics, `<FrickProvider>` installs a small tracker
+by default after a session is available. It records the initial route and
+subsequent `history.pushState`, `history.replaceState`, and `popstate` route
+changes. The default route payload includes only `path` and document `title`;
+query strings, hash fragments, and full URLs are not sent unless you opt in
+through `routeProperties`.
 
 ```tsx
-<FrickProvider session={session} autoAnalytics>
+<FrickProvider session={session}>
   <App />
 </FrickProvider>
 ```
@@ -155,8 +157,9 @@ app-local analytics tables. The server materializes the summary through its
 built-in platform-event consumer, so apps keep one analytics ingestion path
 whether local development uses SQLite or production uses Kafka/Redpanda.
 
-Pass an options object to customize the browser source, event name, route
-properties, or error handler:
+Pass `autoAnalytics={false}` to opt out, or pass an options object to customize
+the browser source, event name, route properties, or error handler. Include
+query strings or hashes only when they are known not to contain secrets:
 
 ```tsx
 <FrickProvider

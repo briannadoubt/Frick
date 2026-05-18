@@ -283,9 +283,6 @@ function defaultRouteProperties(
   const title = browser.document?.title ?? "";
   return {
     path: location.pathname,
-    search: location.search,
-    hash: location.hash,
-    url: location.href,
     title,
   };
 }
