@@ -19,6 +19,7 @@ pnpm cli <command> [args]
 pnpm cli doctor --db-path ./frick.sqlite --env development
 pnpm cli dev --profile redpanda --dry-run
 pnpm cli dashboard --endpoint http://127.0.0.1:4099
+pnpm cli deploy --profile compose --dry-run
 ```
 
 After `pnpm --filter @frick/cli build`:
@@ -140,6 +141,21 @@ Redpanda/Kafka broker and exports server OTel to the local collector from
   `--dry-run`, runs `docker compose -f ops/local/redpanda.compose.yaml up -d
   --wait redpanda otel-collector`.
 - `--dry-run` prints the JSON plan without starting any process.
+
+### `frick deploy [--profile compose|lightweight] [--dry-run]`
+
+Prints or starts a standard Docker Compose deployment profile. This deploys
+the Frick-owned runtime shape; app source stays focused on schema, handlers,
+jobs, projections, and config. The profile expects `FRICK_SERVER_IMAGE` to
+point at a built Frick app/runtime image, defaulting to `frick-server:latest`
+when Docker Compose runs.
+
+- `--profile compose` is the production-shaped profile. It runs the server
+  with the mounted dashboard, Redpanda/Kafka platform events, and the local
+  OTel collector.
+- `--profile lightweight` runs the same server/dashboard shape with the SQLite
+  platform event pipeline and no collector.
+- `--dry-run` prints the JSON plan without starting Docker.
 
 ### `frick mcp [--endpoint <url>] [--readonly] [--allow-writes] [--tenant <id>] [--user <id>] [--token <bearer>] [--print-config]`
 

@@ -43,7 +43,11 @@ Demo apps prove framework behavior. They must not contain protocol, auth/session
 
 ## Local Tooling
 
-- `apps/cli`: operational and scaffolding CLI. Command behavior is public only when documented in `apps/cli/README.md` or `docs/operations.md`; implementation imports from `apps/server/src/*` remain internal until the server package has a formal exported API.
+- `apps/cli`: operational and scaffolding CLI. Command behavior is public only
+  when documented in `apps/cli/README.md` or `docs/operations.md`.
+  Implementation may still import selected server internals for operations that
+  do not yet have package-level helpers; those imports remain internal and
+  should not be copied by apps.
 - `apps/dev-dashboard`: static dashboard app served locally by `frick dashboard`
   and mountable by the server at `/_frick/dashboard`. It may read documented
   `/health`, `/ready`, `/_frick/inspect/*`, and `/_frick/dashboard/api/*`

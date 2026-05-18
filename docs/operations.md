@@ -106,6 +106,37 @@ local broker, enables OTel export with
 server/web/dashboard commands to run against it. Use `--dry-run` to inspect
 the plan without starting Docker.
 
+## Deployment profiles
+
+`frick deploy` prints or starts the standard Docker Compose deployment profile
+as JSON. It does not generate platform code into an app repository; the app is
+provided as a built image through `FRICK_SERVER_IMAGE` and the checked-in
+Compose files wire the Frick runtime services around it.
+
+```bash
+frick deploy --profile compose --dry-run
+frick deploy --profile lightweight --dry-run
+```
+
+`--profile compose` uses `ops/deploy/compose.yaml` and is the
+production-shaped self-hosted profile: `frick-server` serves the app and the
+mounted dashboard, Redpanda backs the Kafka-compatible platform event pipeline,
+and the OTel collector receives server telemetry. The emitted plan sets
+`FRICK_ENV=production`,
+`FRICK_PLATFORM_EVENTS_DRIVER=kafka`,
+`FRICK_PLATFORM_EVENTS_KAFKA_BROKERS=redpanda:9092`,
+`FRICK_OTEL_ENABLED=true`, and
+`FRICK_OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318`.
+
+`--profile lightweight` uses `ops/deploy/lightweight.compose.yaml` and keeps
+the same server/dashboard deployment shape with the SQLite platform event
+pipeline and OTel disabled. This is intended for small self-hosted installs
+and smoke environments that do not need a broker.
+
+Without `--dry-run`, the CLI runs `docker compose -f <profile> up -d --wait`
+and emits the same plan with `started` and `exitCode`. Docker output stays off
+stdout so automation can always parse the JSON record.
+
 ## Runtime limits
 
 `createFrickServer({ limits })` accepts partial `FrickLimits` overrides. Any

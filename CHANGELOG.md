@@ -93,6 +93,11 @@ A multi-commit rollout that lifts the client SDKs from "you can hand-write it" t
 
 ### CLI (`@frick/cli`)
 
+- New `frick deploy --profile compose|lightweight` command prints or starts
+  standard Docker Compose deployment profiles. The compose profile wires the
+  server-mounted dashboard, Redpanda/Kafka platform events, and OTel collector;
+  the lightweight profile keeps the same server shape with SQLite platform
+  events.
 - New `frick dev` command prints local runtime profiles; `--profile redpanda`
   starts the checked-in Redpanda Compose service and emits the Kafka platform
   event env vars for local conformance testing.
@@ -113,6 +118,10 @@ A multi-commit rollout that lifts the client SDKs from "you can hand-write it" t
 
 ### Repository
 
+- Added standard self-hosted Compose profiles at `ops/deploy/compose.yaml` and
+  `ops/deploy/lightweight.compose.yaml` for production-shaped and lightweight
+  Frick runtime deployments without copying platform code into app source
+  trees.
 - Added Redpanda local infrastructure at `ops/local/redpanda.compose.yaml`
   for testing the Kafka-compatible platform event pipeline without generating
   infrastructure into app source trees.

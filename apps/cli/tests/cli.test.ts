@@ -151,6 +151,7 @@ describe("frick --help", () => {
     expect(names).toContain("inspect");
     expect(names).toContain("verify");
     expect(names).toContain("dev");
+    expect(names).toContain("deploy");
     expect(names).toContain("dashboard");
     expect(names).toContain("mcp");
   });
@@ -269,6 +270,65 @@ describe("frick dev", () => {
 
   it("rejects unknown dev profiles", async () => {
     const result = await runCli(["dev", "--profile", "nope", "--dry-run"]);
+    expect(result.exitCode).toBe(2);
+    const err = parseLastJson(result.stderr) as { error: { code: string; message: string } };
+    expect(err.error.code).toBe("cli.usage");
+    expect(err.error.message).toContain("--profile");
+  });
+});
+
+describe("frick deploy", () => {
+  it("prints the production compose deployment plan without starting Docker", async () => {
+    const result = await runCli(["deploy", "--profile", "compose", "--dry-run"]);
+    expect(result.exitCode).toBe(0);
+    const body = parseFirstJson(result.stdout) as {
+      ok: boolean;
+      command: string;
+      profile: string;
+      composeFiles: string[];
+      env: Record<string, string>;
+      services: string[];
+      steps: string[];
+      started: boolean;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.command).toBe("deploy");
+    expect(body.profile).toBe("compose");
+    expect(body.composeFiles).toHaveLength(1);
+    expect(body.composeFiles[0]).toContain("ops/deploy/compose.yaml");
+    expect(body.env.FRICK_ENV).toBe("production");
+    expect(body.env.FRICK_PLATFORM_EVENTS_DRIVER).toBe("kafka");
+    expect(body.env.FRICK_PLATFORM_EVENTS_KAFKA_BROKERS).toBe("redpanda:9092");
+    expect(body.env.FRICK_OTEL_ENABLED).toBe("true");
+    expect(body.env.FRICK_OTEL_EXPORTER_OTLP_ENDPOINT).toBe("http://otel-collector:4318");
+    expect(body.services).toEqual(["frick-server", "redpanda", "otel-collector"]);
+    expect(body.steps).toContain("docker compose -f ops/deploy/compose.yaml up -d --wait");
+    expect(body.started).toBe(false);
+  });
+
+  it("prints the lightweight SQLite deployment plan", async () => {
+    const result = await runCli(["deploy", "--profile", "lightweight", "--dry-run"]);
+    expect(result.exitCode).toBe(0);
+    const body = parseFirstJson(result.stdout) as {
+      ok: boolean;
+      profile: string;
+      composeFiles: string[];
+      env: Record<string, string>;
+      services: string[];
+      started: boolean;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.profile).toBe("lightweight");
+    expect(body.composeFiles[0]).toContain("ops/deploy/lightweight.compose.yaml");
+    expect(body.env.FRICK_ENV).toBe("production");
+    expect(body.env.FRICK_PLATFORM_EVENTS_DRIVER).toBe("sqlite");
+    expect(body.env.FRICK_OTEL_ENABLED).toBe("false");
+    expect(body.services).toEqual(["frick-server"]);
+    expect(body.started).toBe(false);
+  });
+
+  it("rejects unknown deployment profiles", async () => {
+    const result = await runCli(["deploy", "--profile", "nope", "--dry-run"]);
     expect(result.exitCode).toBe(2);
     const err = parseLastJson(result.stderr) as { error: { code: string; message: string } };
     expect(err.error.code).toBe("cli.usage");
