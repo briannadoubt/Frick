@@ -41,7 +41,12 @@ const SESSION_TTL_DAYS = 30;
 
 export interface IdentityProvidersConfig {
   apple?: AppleProviderConfig;
-  // Google + email/password slots in here.
+  /**
+   * Enable the email/password provider. Mounts /auth/email/signup and
+   * /auth/email/login. Wraps Frick's internal account store + threads
+   * tenant decisions through the same `onFirstSignIn` hook Apple uses.
+   */
+  email?: EmailProviderConfig;
 
   /**
    * Schema object name + field mapping that points Frick at the app's
@@ -79,6 +84,11 @@ export interface AppleProviderConfig {
   audience: string;
 }
 
+export interface EmailProviderConfig {
+  /** Minimum password length. Defaults to 8. */
+  minPasswordLength?: number;
+}
+
 export interface UserObjectMapping {
   type?: string;
   appleSubjectField?: string;
@@ -97,7 +107,12 @@ export interface UserObjectMapping {
 }
 
 export interface OnFirstSignInInput {
-  provider: "apple" | "google";
+  provider: "apple" | "google" | "email";
+  /**
+   * Stable provider-side identifier:
+   *   apple/google → the IdP's `sub` claim
+   *   email        → the lowercased email
+   */
   subject: string;
   email: string | undefined;
   fullName: { givenName?: string; familyName?: string } | undefined;
@@ -312,6 +327,192 @@ export function createIdentityRouter(
     });
   }
 
+  async function handleEmailSignup(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    if (!options.config.email) {
+      sendJson(res, 404, { error: "email_provider_not_configured" });
+      return;
+    }
+    let body: { email?: unknown; password?: unknown; displayName?: unknown };
+    try {
+      body = (await readJsonBody(req)) as typeof body;
+    } catch {
+      sendJson(res, 400, { error: "invalid_json" });
+      return;
+    }
+    const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+    const password = typeof body.password === "string" ? body.password : "";
+    const submittedName = typeof body.displayName === "string" ? body.displayName.trim() : "";
+    const minLen = options.config.email.minPasswordLength ?? 8;
+    if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      sendJson(res, 400, { error: "invalid_email" });
+      return;
+    }
+    if (password.length < minLen) {
+      sendJson(res, 400, {
+        error: "password_too_short",
+        message: `Password must be at least ${minLen} characters.`,
+      });
+      return;
+    }
+
+    // Duplicate-email check via the schema User index. Frick's
+    // auth_accounts has its own UNIQUE on (tenant_id, handle) so the
+    // SQL layer also enforces — but we want a clean 409 before then.
+    const existing = findUserBySubject(
+      options.store,
+      userObject,
+      userObject.emailField,
+      email,
+    );
+    if (existing) {
+      sendJson(res, 409, { error: "email_already_registered" });
+      return;
+    }
+
+    const fullName = submittedName ? { givenName: submittedName } : undefined;
+    let hook: OnFirstSignInResult;
+    try {
+      const cb = options.config.onFirstSignIn;
+      hook = cb
+        ? await cb({ provider: "email", subject: email, email, fullName })
+        : { tenantId: SYSTEM_TENANT };
+    } catch (err) {
+      log.error("auth.email.onFirstSignIn_failed", {
+        event: "auth.email.onFirstSignIn_failed",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      sendJson(res, 500, { error: "first_sign_in_failed" });
+      return;
+    }
+
+    const userId = hook.userId ?? `user-${randomUUID()}`;
+    const displayName = hook.displayName ?? submittedName ?? email.split("@")[0]!;
+    const now = Date.now();
+    const userRow: Record<string, unknown> = {
+      [userObject.displayNameField]: displayName,
+      [userObject.emailField]: email,
+      [userObject.appleSubjectField]: undefined,
+      [userObject.googleSubjectField]: undefined,
+      [userObject.createdAtField]: now,
+      [userObject.revokedAtField]: undefined,
+      [userObject.primaryTenantField]: hook.tenantId,
+      ...(hook.extraUserFields ?? {}),
+    };
+    options.store.upsertObject(SYSTEM_TENANT, userObject.type, userId, userRow);
+
+    try {
+      // Account creation also handles password hashing inside Frick's
+      // accounts store. The handle is the email — Frick's UNIQUE
+      // (tenant_id, handle) gives us a per-tenant uniqueness check.
+      options.store.createAccountUser({
+        tenantId: hook.tenantId,
+        userId,
+        handle: email,
+        displayName,
+        password,
+      });
+    } catch (err) {
+      log.error("auth.email.account_create_failed", {
+        event: "auth.email.account_create_failed",
+        userId,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      sendJson(res, 500, { error: "account_create_failed" });
+      return;
+    }
+
+    const session = mintSession({
+      store: options.store,
+      userId,
+      tenantId: hook.tenantId,
+      displayName,
+      skipAccountCreate: true, // already created above
+    });
+    log.info("auth.email.signup", {
+      event: "auth.email.signup",
+      userId,
+      tenantId: hook.tenantId,
+    });
+    sendJson(res, 200, {
+      session: toFrickSessionShape(session, options.store.schema.hash),
+      user: { id: userId, ...userRow },
+      isNewUser: true,
+    });
+  }
+
+  async function handleEmailLogin(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    if (!options.config.email) {
+      sendJson(res, 404, { error: "email_provider_not_configured" });
+      return;
+    }
+    let body: { email?: unknown; password?: unknown };
+    try {
+      body = (await readJsonBody(req)) as typeof body;
+    } catch {
+      sendJson(res, 400, { error: "invalid_json" });
+      return;
+    }
+    const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+    const password = typeof body.password === "string" ? body.password : "";
+    if (!email || !password) {
+      sendJson(res, 400, { error: "email_and_password_required" });
+      return;
+    }
+
+    const user = findUserBySubject(
+      options.store,
+      userObject,
+      userObject.emailField,
+      email,
+    );
+    if (!user) {
+      // Same response shape as bad-password so we don't leak whether
+      // the email is registered.
+      sendJson(res, 401, { error: "invalid_credentials" });
+      return;
+    }
+    if (user[userObject.revokedAtField]) {
+      sendJson(res, 403, {
+        error: "user_revoked",
+        message: "This account has been revoked.",
+      });
+      return;
+    }
+
+    const primaryTenantId =
+      (user[userObject.primaryTenantField] as string | undefined) ??
+      findPrimaryTenantForUser(options.store, user.id);
+    const account = options.store.verifyAccountPassword(primaryTenantId, email, password);
+    if (!account) {
+      sendJson(res, 401, { error: "invalid_credentials" });
+      return;
+    }
+
+    const session = mintSession({
+      store: options.store,
+      userId: user.id,
+      tenantId: primaryTenantId,
+      displayName: (user[userObject.displayNameField] as string) ?? email,
+      skipAccountCreate: true,
+    });
+    log.info("auth.email.signin", {
+      event: "auth.email.signin",
+      userId: user.id,
+      tenantId: primaryTenantId,
+    });
+    sendJson(res, 200, {
+      session: toFrickSessionShape(session, options.store.schema.hash),
+      user,
+      isNewUser: false,
+    });
+  }
+
   async function handleAppleNotifications(
     req: IncomingMessage,
     res: ServerResponse,
@@ -462,6 +663,14 @@ export function createIdentityRouter(
         await handleAppleNotifications(req, res);
         return true;
       }
+      if (req.method === "POST" && url.pathname === "/auth/email/signup") {
+        await handleEmailSignup(req, res);
+        return true;
+      }
+      if (req.method === "POST" && url.pathname === "/auth/email/login") {
+        await handleEmailLogin(req, res);
+        return true;
+      }
       return false;
     },
   };
@@ -528,8 +737,15 @@ function mintSession(input: {
   displayName: string;
   deviceId?: string | undefined;
   replicaId?: string | undefined;
+  /**
+   * Skip the auto-create-account-if-missing path. Useful for the
+   * email provider where we've already called `createAccountUser`
+   * with a real password and don't want the helper to clobber it
+   * with a random throwaway.
+   */
+  skipAccountCreate?: boolean;
 }): MintedSession {
-  if (!input.store.hasUser(input.tenantId, input.userId)) {
+  if (!input.skipAccountCreate && !input.store.hasUser(input.tenantId, input.userId)) {
     input.store.createAccountUser({
       tenantId: input.tenantId,
       userId: input.userId,

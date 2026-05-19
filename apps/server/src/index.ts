@@ -10,6 +10,7 @@ export { createNoopLogger, type FrickLogger } from "./logger.js";
 export {
   type IdentityProvidersConfig,
   type AppleProviderConfig,
+  type EmailProviderConfig,
   type UserObjectMapping,
   type OnFirstSignIn,
   type OnFirstSignInInput,

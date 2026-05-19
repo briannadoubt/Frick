@@ -1077,6 +1077,65 @@ public final class FrickClient: Sendable {
         )
     }
 
+    /// Email/password sign-up via Frick's identityProviders.email surface.
+    /// Hits `/auth/email/signup`, which wraps the framework account store
+    /// and threads the app's `onFirstSignIn` hook for tenant creation —
+    /// same shape as `signInWithApple`. The returned session is stored in
+    /// the client, ready for `fetchObjects` / `writeObject` calls.
+    @discardableResult
+    public func signUpWithEmail(
+        email: String,
+        password: String,
+        displayName: String? = nil
+    ) async throws -> SignInWithEmailResult {
+        var request = URLRequest(
+            url: baseURL.appending(path: "auth").appending(path: "email").appending(path: "signup"),
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try encoder.encode(
+            EmailSignupRequest(email: email, password: password, displayName: displayName),
+        )
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+        let envelope = try decoder.decode(SignInWithEmailEnvelope.self, from: data)
+        try envelope.session.requireCompatibleSchema()
+        sessionStore.session = envelope.session
+        return SignInWithEmailResult(
+            session: envelope.session,
+            user: envelope.user,
+            isNewUser: envelope.isNewUser,
+        )
+    }
+
+    /// Email/password sign-in via Frick's identityProviders.email surface.
+    /// Hits `/auth/email/login`, returning the session bound to the user's
+    /// primary tenant (read from `User.primaryTenantId`).
+    @discardableResult
+    public func signInWithEmail(
+        email: String,
+        password: String
+    ) async throws -> SignInWithEmailResult {
+        var request = URLRequest(
+            url: baseURL.appending(path: "auth").appending(path: "email").appending(path: "login"),
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try encoder.encode(
+            EmailLoginRequest(email: email, password: password),
+        )
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+        let envelope = try decoder.decode(SignInWithEmailEnvelope.self, from: data)
+        try envelope.session.requireCompatibleSchema()
+        sessionStore.session = envelope.session
+        return SignInWithEmailResult(
+            session: envelope.session,
+            user: envelope.user,
+            isNewUser: envelope.isNewUser,
+        )
+    }
+
     public func signUp(
         displayName: String,
         handle: String,
@@ -1627,6 +1686,31 @@ private struct SignInWithAppleRequest: Encodable, Sendable {
 }
 
 private struct SignInWithAppleEnvelope: Decodable {
+    let session: FrickSession
+    let user: [String: FrickJSONValue]
+    let isNewUser: Bool
+}
+
+/// Outcome of `signUpWithEmail` / `signInWithEmail`. Shape mirrors
+/// `SignInWithAppleResult` so UI code can treat the providers uniformly.
+public struct SignInWithEmailResult: Sendable {
+    public let session: FrickSession
+    public let user: [String: FrickJSONValue]
+    public let isNewUser: Bool
+}
+
+private struct EmailSignupRequest: Encodable, Sendable {
+    let email: String
+    let password: String
+    let displayName: String?
+}
+
+private struct EmailLoginRequest: Encodable, Sendable {
+    let email: String
+    let password: String
+}
+
+private struct SignInWithEmailEnvelope: Decodable {
     let session: FrickSession
     let user: [String: FrickJSONValue]
     let isNewUser: Bool

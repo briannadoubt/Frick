@@ -98,6 +98,7 @@ beforeAll(async () => {
     jobs: { workerEnabled: false },
     identityProviders: {
       apple: { audience: APPLE_AUDIENCE },
+      email: { minPasswordLength: 8 },
       appleJwksOverride: testJwks,
       onFirstSignIn: async ({ subject }) => ({
         tenantId: `tenant-${subject}`,
@@ -224,6 +225,87 @@ describe("Frick identityProviders.apple", () => {
   it("rejects empty identity token with 400", async () => {
     const res = await post("/auth/apple/verify", {});
     expect(res.status).toBe(400);
+  });
+});
+
+describe("Frick identityProviders.email", () => {
+  it("signup creates a User row + account + mints a session", async () => {
+    const res = await post("/auth/email/signup", {
+      email: "alice@example.test",
+      password: "correcthorsebattery",
+      displayName: "Alice",
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.isNewUser).toBe(true);
+    expect(res.body.session.tenantId).toBe("tenant-alice@example.test");
+    expect(res.body.user.email).toBe("alice@example.test");
+  });
+
+  it("signup rejects too-short passwords with 400", async () => {
+    const res = await post("/auth/email/signup", {
+      email: "x@y.z",
+      password: "short",
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("password_too_short");
+  });
+
+  it("signup rejects malformed emails with 400", async () => {
+    const res = await post("/auth/email/signup", {
+      email: "not-an-email",
+      password: "longenoughpassword",
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_email");
+  });
+
+  it("signup is idempotent on email — 409 on duplicate", async () => {
+    await post("/auth/email/signup", {
+      email: "dup@example.test",
+      password: "correcthorsebattery",
+    });
+    const second = await post("/auth/email/signup", {
+      email: "dup@example.test",
+      password: "correcthorsebattery",
+    });
+    expect(second.status).toBe(409);
+    expect(second.body.error).toBe("email_already_registered");
+  });
+
+  it("login with correct password returns the same tenant", async () => {
+    await post("/auth/email/signup", {
+      email: "login@example.test",
+      password: "correcthorsebattery",
+    });
+    const login = await post("/auth/email/login", {
+      email: "login@example.test",
+      password: "correcthorsebattery",
+    });
+    expect(login.status).toBe(200);
+    expect(login.body.isNewUser).toBe(false);
+    expect(login.body.session.tenantId).toBe("tenant-login@example.test");
+  });
+
+  it("login with wrong password returns 401 invalid_credentials", async () => {
+    await post("/auth/email/signup", {
+      email: "wrongpw@example.test",
+      password: "correcthorsebattery",
+    });
+    const login = await post("/auth/email/login", {
+      email: "wrongpw@example.test",
+      password: "wrong",
+    });
+    expect(login.status).toBe(401);
+    expect(login.body.error).toBe("invalid_credentials");
+  });
+
+  it("login with unknown email returns 401 invalid_credentials (no email enumeration)", async () => {
+    const login = await post("/auth/email/login", {
+      email: "ghost@example.test",
+      password: "whatever",
+    });
+    expect(login.status).toBe(401);
+    expect(login.body.error).toBe("invalid_credentials");
   });
 });
 
