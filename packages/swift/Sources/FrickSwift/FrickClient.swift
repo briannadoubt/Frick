@@ -1136,6 +1136,37 @@ public final class FrickClient: Sendable {
         )
     }
 
+    /// Sign in via a Google ID token. Pass the `id_token` you received
+    /// from whichever Google sign-in flow you're using on the client
+    /// (GoogleSignIn iOS SDK, ASWebAuthenticationSession's OpenID Connect
+    /// redirect, a server-side web flow). Frick verifies against Google's
+    /// JWKS and mints a session bound to the Crate tenant.
+    @discardableResult
+    public func signInWithGoogle(
+        idToken: String,
+        deviceId: String? = nil,
+        replicaId: String? = nil
+    ) async throws -> SignInWithGoogleResult {
+        var request = URLRequest(
+            url: baseURL.appending(path: "auth").appending(path: "google").appending(path: "verify"),
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try encoder.encode(
+            SignInWithGoogleRequest(idToken: idToken, deviceId: deviceId, replicaId: replicaId),
+        )
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+        let envelope = try decoder.decode(SignInWithGoogleEnvelope.self, from: data)
+        try envelope.session.requireCompatibleSchema()
+        sessionStore.session = envelope.session
+        return SignInWithGoogleResult(
+            session: envelope.session,
+            user: envelope.user,
+            isNewUser: envelope.isNewUser,
+        )
+    }
+
     public func signUp(
         displayName: String,
         handle: String,
@@ -1711,6 +1742,26 @@ private struct EmailLoginRequest: Encodable, Sendable {
 }
 
 private struct SignInWithEmailEnvelope: Decodable {
+    let session: FrickSession
+    let user: [String: FrickJSONValue]
+    let isNewUser: Bool
+}
+
+/// Outcome of `signInWithGoogle`. Mirrors the Apple/email shapes so UI
+/// code can route through the same `isNewUser` branch for onboarding.
+public struct SignInWithGoogleResult: Sendable {
+    public let session: FrickSession
+    public let user: [String: FrickJSONValue]
+    public let isNewUser: Bool
+}
+
+private struct SignInWithGoogleRequest: Encodable, Sendable {
+    let idToken: String
+    let deviceId: String?
+    let replicaId: String?
+}
+
+private struct SignInWithGoogleEnvelope: Decodable {
     let session: FrickSession
     let user: [String: FrickJSONValue]
     let isNewUser: Bool

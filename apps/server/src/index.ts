@@ -11,6 +11,7 @@ export {
   type IdentityProvidersConfig,
   type AppleProviderConfig,
   type EmailProviderConfig,
+  type GoogleProviderConfig,
   type UserObjectMapping,
   type OnFirstSignIn,
   type OnFirstSignInInput,

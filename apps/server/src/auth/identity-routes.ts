@@ -7,6 +7,7 @@ import {
   verifyAppleIdentityToken,
   verifyAppleNotificationPayload,
 } from "./apple.js";
+import { verifyGoogleIdToken } from "./google.js";
 
 /**
  * Third-party identity provider routes.
@@ -47,6 +48,14 @@ export interface IdentityProvidersConfig {
    * tenant decisions through the same `onFirstSignIn` hook Apple uses.
    */
   email?: EmailProviderConfig;
+  /**
+   * Enable Google Sign-In. Mounts /auth/google/verify. The iOS app
+   * obtains an `id_token` via Sign in with Google (any flavor:
+   * GoogleSignIn SDK, ASWebAuthenticationSession, or a web client) and
+   * POSTs it; Frick verifies against Google's JWKS and mints a session
+   * via the same `onFirstSignIn` path Apple uses (provider:"google").
+   */
+  google?: GoogleProviderConfig;
 
   /**
    * Schema object name + field mapping that points Frick at the app's
@@ -77,6 +86,8 @@ export interface IdentityProvidersConfig {
    * real keys endpoint. Production code leaves this undefined.
    */
   appleJwksOverride?: ReturnType<typeof createRemoteJWKSet>;
+  /** Same idea, for Google. */
+  googleJwksOverride?: ReturnType<typeof createRemoteJWKSet>;
 }
 
 export interface AppleProviderConfig {
@@ -87,6 +98,13 @@ export interface AppleProviderConfig {
 export interface EmailProviderConfig {
   /** Minimum password length. Defaults to 8. */
   minPasswordLength?: number;
+}
+
+export interface GoogleProviderConfig {
+  /** OAuth 2.0 client id registered with Google — must match `aud` on
+   * the id_token. For iOS-driven sign-in this is your iOS OAuth client
+   * id (it ends in `.apps.googleusercontent.com`). */
+  clientId: string;
 }
 
 export interface UserObjectMapping {
@@ -317,6 +335,154 @@ export function createIdentityRouter(
     });
     log.info("auth.apple.signin_new", {
       event: "auth.apple.signin_new",
+      userId,
+      tenantId: hook.tenantId,
+    });
+    sendJson(res, 200, {
+      session: toFrickSessionShape(session, options.store.schema.hash),
+      user: { id: userId, ...userRow },
+      isNewUser: true,
+    });
+  }
+
+  async function handleGoogleVerify(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    if (!options.config.google) {
+      sendJson(res, 404, { error: "google_provider_not_configured" });
+      return;
+    }
+    let body: { idToken?: unknown; deviceId?: unknown; replicaId?: unknown };
+    try {
+      body = (await readJsonBody(req)) as typeof body;
+    } catch {
+      sendJson(res, 400, { error: "invalid_json" });
+      return;
+    }
+    const idToken = typeof body.idToken === "string" ? body.idToken : "";
+    if (!idToken) {
+      sendJson(res, 400, { error: "idToken required" });
+      return;
+    }
+
+    let verified;
+    try {
+      verified = await verifyGoogleIdToken(idToken, {
+        audience: options.config.google.clientId,
+        ...(options.config.googleJwksOverride
+          ? { jwksOverride: options.config.googleJwksOverride }
+          : {}),
+      });
+    } catch (err) {
+      const code = (err as { code?: string }).code ?? "JWTVerifyError";
+      log.info("auth.google.verify_failed", { event: "auth.google.verify_failed", code });
+      sendJson(res, 401, {
+        error: "google_token_invalid",
+        code,
+        message: err instanceof Error ? err.message : "verification failed",
+      });
+      return;
+    }
+
+    const deviceId = typeof body.deviceId === "string" ? body.deviceId : undefined;
+    const replicaId = typeof body.replicaId === "string" ? body.replicaId : undefined;
+
+    const existing = findUserBySubject(
+      options.store,
+      userObject,
+      userObject.googleSubjectField,
+      verified.subject,
+    );
+
+    if (existing) {
+      if (existing[userObject.revokedAtField]) {
+        log.info("auth.google.signin_blocked_revoked", {
+          event: "auth.google.signin_blocked_revoked",
+          userId: existing.id as string,
+        });
+        sendJson(res, 403, {
+          error: "user_revoked",
+          message: "This account was disconnected.",
+        });
+        return;
+      }
+      const primaryTenantId =
+        (existing[userObject.primaryTenantField] as string | undefined) ??
+        findPrimaryTenantForUser(options.store, existing.id as string);
+      const session = mintSession({
+        store: options.store,
+        userId: existing.id as string,
+        tenantId: primaryTenantId,
+        displayName: (existing[userObject.displayNameField] as string) ?? "Crate user",
+        deviceId,
+        replicaId,
+      });
+      log.info("auth.google.signin_existing", {
+        event: "auth.google.signin_existing",
+        userId: existing.id,
+        tenantId: primaryTenantId,
+      });
+      sendJson(res, 200, {
+        session: toFrickSessionShape(session, options.store.schema.hash),
+        user: existing,
+        isNewUser: false,
+      });
+      return;
+    }
+
+    // First sign-in. Google's id_token carries `name` directly, so we
+    // don't need a fullName-on-first-signin dance like Apple.
+    const defaultDisplayName =
+      verified.name ?? (verified.email ? verified.email.split("@")[0]! : "Crate user");
+    let hook: OnFirstSignInResult;
+    try {
+      const cb = options.config.onFirstSignIn;
+      const fullName = verified.name
+        ? { givenName: verified.name }
+        : undefined;
+      hook = cb
+        ? await cb({
+            provider: "google",
+            subject: verified.subject,
+            email: verified.email,
+            fullName,
+          })
+        : { tenantId: SYSTEM_TENANT };
+    } catch (err) {
+      log.error("auth.google.onFirstSignIn_failed", {
+        event: "auth.google.onFirstSignIn_failed",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      sendJson(res, 500, { error: "first_sign_in_failed" });
+      return;
+    }
+
+    const userId = hook.userId ?? `user-${randomUUID()}`;
+    const displayName = hook.displayName ?? defaultDisplayName;
+    const now = Date.now();
+    const userRow: Record<string, unknown> = {
+      [userObject.displayNameField]: displayName,
+      [userObject.emailField]: verified.email,
+      [userObject.appleSubjectField]: undefined,
+      [userObject.googleSubjectField]: verified.subject,
+      [userObject.createdAtField]: now,
+      [userObject.revokedAtField]: undefined,
+      [userObject.primaryTenantField]: hook.tenantId,
+      ...(hook.extraUserFields ?? {}),
+    };
+    options.store.upsertObject(SYSTEM_TENANT, userObject.type, userId, userRow);
+
+    const session = mintSession({
+      store: options.store,
+      userId,
+      tenantId: hook.tenantId,
+      displayName,
+      deviceId,
+      replicaId,
+    });
+    log.info("auth.google.signin_new", {
+      event: "auth.google.signin_new",
       userId,
       tenantId: hook.tenantId,
     });
@@ -669,6 +835,10 @@ export function createIdentityRouter(
       }
       if (req.method === "POST" && url.pathname === "/auth/email/login") {
         await handleEmailLogin(req, res);
+        return true;
+      }
+      if (req.method === "POST" && url.pathname === "/auth/google/verify") {
+        await handleGoogleVerify(req, res);
         return true;
       }
       return false;

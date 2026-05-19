@@ -27,6 +27,8 @@ import { createFrickServer } from "../src/server.js";
 
 const APPLE_AUDIENCE = "com.test.crate";
 const APPLE_ISSUER = "https://appleid.apple.com";
+const GOOGLE_AUDIENCE = "111-test.apps.googleusercontent.com";
+const GOOGLE_ISSUER = "https://accounts.google.com";
 
 const testSchema: FrickSchema = {
   name: "identity-test",
@@ -99,7 +101,9 @@ beforeAll(async () => {
     identityProviders: {
       apple: { audience: APPLE_AUDIENCE },
       email: { minPasswordLength: 8 },
+      google: { clientId: GOOGLE_AUDIENCE },
       appleJwksOverride: testJwks,
+      googleJwksOverride: testJwks,
       onFirstSignIn: async ({ subject }) => ({
         tenantId: `tenant-${subject}`,
       }),
@@ -306,6 +310,54 @@ describe("Frick identityProviders.email", () => {
     });
     expect(login.status).toBe(401);
     expect(login.body.error).toBe("invalid_credentials");
+  });
+});
+
+describe("Frick identityProviders.google", () => {
+  async function signGoogleIdToken(payload: Record<string, unknown>): Promise<string> {
+    return new SignJWT(payload)
+      .setProtectedHeader({ alg: "RS256", kid })
+      .setIssuer(GOOGLE_ISSUER)
+      .setAudience(GOOGLE_AUDIENCE)
+      .setIssuedAt()
+      .setExpirationTime("5m")
+      .sign(signingKey);
+  }
+
+  it("first sign-in creates a User keyed on googleSubject", async () => {
+    const idToken = await signGoogleIdToken({
+      sub: "google-sub-1",
+      email: "alice@gmail.test",
+      email_verified: true,
+      name: "Alice Adams",
+    });
+    const res = await post("/auth/google/verify", { idToken });
+    expect(res.status).toBe(200);
+    expect(res.body.isNewUser).toBe(true);
+    expect(res.body.session.tenantId).toBe("tenant-google-sub-1");
+    expect(res.body.user.googleSubject).toBe("google-sub-1");
+    expect(res.body.user.email).toBe("alice@gmail.test");
+  });
+
+  it("returning sign-in reuses the same User + tenant", async () => {
+    const idToken1 = await signGoogleIdToken({ sub: "google-sub-returning", email: "x@y.z" });
+    const first = await post("/auth/google/verify", { idToken: idToken1 });
+    const idToken2 = await signGoogleIdToken({ sub: "google-sub-returning", email: "x@y.z" });
+    const second = await post("/auth/google/verify", { idToken: idToken2 });
+    expect(second.body.user.id).toBe(first.body.user.id);
+    expect(second.body.session.tenantId).toBe(first.body.session.tenantId);
+    expect(second.body.isNewUser).toBe(false);
+  });
+
+  it("rejects bogus tokens with 401", async () => {
+    const res = await post("/auth/google/verify", { idToken: "not.a.jwt" });
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe("google_token_invalid");
+  });
+
+  it("rejects empty idToken with 400", async () => {
+    const res = await post("/auth/google/verify", {});
+    expect(res.status).toBe(400);
   });
 });
 
