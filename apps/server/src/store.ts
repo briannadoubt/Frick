@@ -18,7 +18,6 @@ import {
   createFrickBlobProcessorRegistry,
   type FrickBlobProcessorRegistry,
 } from "./blobs/processor.js";
-import { InboxStore, type ConversationInboxRow } from "./storage/inbox-store.js";
 import { JobStore, type StoredJob } from "./storage/job-store.js";
 import { ObjectStore, type ObjectUpsertResult } from "./storage/object-store.js";
 import { PresenceStore } from "./storage/presence-store.js";
@@ -122,15 +121,13 @@ export interface StoreOptions {
   projections?: FrickProjectionRegistry;
   /**
    * Optional search adapter. When omitted, the store constructs the default
-   * {@link createSqliteFtsSearchAdapter} bound to its own SQLite handle so
-   * the framework's built-in `messages-fts` index works out of the box.
+   * {@link createSqliteFtsSearchAdapter} bound to its own SQLite handle.
    */
   searchAdapter?: FrickSearchAdapter;
   /**
-   * Optional search-index registry. Apps register custom indexes against
-   * source primitives (objects, streams, projections); the framework
-   * pre-registers `messages-fts`. When omitted, the store creates an empty
-   * registry — `createFrickServer` registers the built-ins.
+   * Optional search-index registry. Apps register indexes against source
+   * primitives (objects, streams, projections). When omitted, the store
+   * creates an empty registry.
    */
   searchIndexes?: FrickSearchIndexRegistry;
   /**
@@ -176,12 +173,6 @@ export interface StoreOptions {
   platformEventsPruneIntervalMs?: number;
 }
 
-export interface CreatedConversation {
-  conversation: PlainObject;
-  member: PlainObject;
-  members: PlainObject[];
-}
-
 export class FrickStore {
   readonly schema: FrickSchema;
   readonly objects: ObjectStore;
@@ -197,7 +188,6 @@ export class FrickStore {
   readonly blobs: BlobStore;
   readonly blobDerivatives: BlobDerivativeStore;
   readonly blobProcessors: FrickBlobProcessorRegistry;
-  readonly inbox: InboxStore;
   readonly jobs: JobStore;
   readonly sessions: SessionStore;
   readonly accounts: AccountStore;
@@ -261,7 +251,6 @@ export class FrickStore {
     this.blobs = new BlobStore(this.#db);
     this.blobDerivatives = new BlobDerivativeStore(this.#db);
     this.blobProcessors = createFrickBlobProcessorRegistry();
-    this.inbox = new InboxStore(this.#db);
     this.jobs = new JobStore(this.#db);
     this.sessions = new SessionStore(this.#db);
     this.accounts = new AccountStore(this.#db);
@@ -284,11 +273,7 @@ export class FrickStore {
     this.searchAdapter = options.searchAdapter ?? createSqliteFtsSearchAdapter(this.#db);
     this.searchIndexes = options.searchIndexes ?? createFrickSearchIndexRegistry();
     this.#logger = options.logger ?? createNoopLogger();
-    this.inbox.repairInvalidReadCursors();
-
-    if (options.seed ?? true) {
-      this.seedFoundation();
-    }
+    void options.seed;
 
     // Run once at startup to mop up after a crashed previous run, then on a
     // recurring timer. Both are guarded against post-close calls.
@@ -547,35 +532,6 @@ export class FrickStore {
     return this.#db;
   }
 
-  seedFoundation(): void {
-    // Default tenant only — the seed exists to give a fresh dev database
-    // something to read.
-    this.upsertObject("User", "user-ada", {
-      displayName: "Ada Lovelace",
-      avatarBlobId: undefined,
-    });
-    this.upsertObject("User", "user-grace", {
-      displayName: "Grace Hopper",
-      avatarBlobId: undefined,
-    });
-    this.upsertObject("Conversation", "conversation-general", {
-      kind: "channel",
-      title: "Foundation General",
-      createdBy: "user-ada",
-      lastMessageEventId: undefined,
-    });
-    this.upsertObject("RoomMember", "member-general-ada", {
-      conversationId: "conversation-general",
-      userId: "user-ada",
-      role: "owner",
-    });
-    this.upsertObject("RoomMember", "member-general-grace", {
-      conversationId: "conversation-general",
-      userId: "user-grace",
-      role: "member",
-    });
-  }
-
   // ---- Tenant-scoped facades --------------------------------------------
   //
   // The legacy API used method names like `upsertObject(type, id, value)`
@@ -723,22 +679,10 @@ export class FrickStore {
     const type = d !== undefined ? (b as string) : a;
     const object = d !== undefined ? (c as PlainObject) : (b as PlainObject);
     const userId = d !== undefined ? d : (c as string);
-    if (type === "Conversation") {
-      return typeof object.id === "string" && this.isRoomMember(tenantId, object.id, userId);
-    }
-    if (type === "RoomMember") {
-      return (
-        typeof object.conversationId === "string" &&
-        this.isRoomMember(tenantId, object.conversationId, userId)
-      );
-    }
-    if (type === "MessageDraft") {
-      // Drafts are private to the authoring user. The cross-SDK id
-      // convention is `${userId}:${conversationId}`, but we match on
-      // the `userId` field directly so a malicious client can't peek
-      // at someone else's drafts by guessing the id.
-      return object.userId === userId;
-    }
+    void tenantId;
+    void type;
+    void object;
+    void userId;
     return true;
   }
 
@@ -982,40 +926,13 @@ export class FrickStore {
     return this.blobs.readContent(DEFAULT_TENANT_ID, a);
   }
 
-  listInbox(userId: string): ConversationInboxRow[];
-  listInbox(tenantId: string, userId: string): ConversationInboxRow[];
-  listInbox(a: string, b?: string): ConversationInboxRow[] {
-    if (b !== undefined) {
-      return this.inbox.listForUser(a, b);
-    }
-    return this.inbox.listForUser(DEFAULT_TENANT_ID, a);
-  }
-
-  isRoomMember(conversationId: string, userId: string): boolean;
-  isRoomMember(tenantId: string, conversationId: string, userId: string): boolean;
-  isRoomMember(a: string, b: string, c?: string): boolean {
-    const tenantId = c !== undefined ? a : DEFAULT_TENANT_ID;
-    const conversationId = c !== undefined ? b : a;
-    const userId = c !== undefined ? c : b;
-    return this.listRoomMembers(tenantId, conversationId).some((member) => member.userId === userId);
-  }
-
-  hasConversation(conversationId: string): boolean;
-  hasConversation(tenantId: string, conversationId: string): boolean;
-  hasConversation(a: string, b?: string): boolean {
-    if (b !== undefined) {
-      return this.readObject(a, "Conversation", b) !== undefined;
-    }
-    return this.readObject(DEFAULT_TENANT_ID, "Conversation", a) !== undefined;
-  }
-
   hasUser(userId: string): boolean;
   hasUser(tenantId: string, userId: string): boolean;
   hasUser(a: string, b?: string): boolean {
     if (b !== undefined) {
-      return this.readObject(a, "User", b) !== undefined;
+      return this.accounts.readByIdentity(a, b) !== undefined;
     }
-    return this.readObject(DEFAULT_TENANT_ID, "User", a) !== undefined;
+    return this.accounts.readByIdentity(DEFAULT_TENANT_ID, a) !== undefined;
   }
 
   createAccountUser(input: {
@@ -1026,85 +943,13 @@ export class FrickStore {
     tenantId?: string;
   }): StoredAccount {
     const tenantId = input.tenantId ?? DEFAULT_TENANT_ID;
-    if (this.hasUser(tenantId, input.userId)) {
-      throw new Error("Handle is already taken");
-    }
-
-    const account = this.accounts.create({
+    return this.accounts.create({
       tenantId,
       userId: input.userId,
       handle: input.handle,
       displayName: input.displayName,
       password: input.password,
     });
-    this.upsertObject(tenantId, "User", input.userId, {
-      displayName: input.displayName,
-      avatarBlobId: undefined,
-    });
-    // Auto-membership in the seeded `conversation-general` only applies in
-    // the default tenant. New tenants start empty — apps create their own
-    // conversations via /conversations.
-    if (tenantId === DEFAULT_TENANT_ID) {
-      this.upsertObject(
-        tenantId,
-        "RoomMember",
-        `member-general-${input.userId.replace(/^user-/, "")}`,
-        {
-          conversationId: "conversation-general",
-          userId: input.userId,
-          role: "member",
-        },
-      );
-    }
-    return account;
-  }
-
-  createConversation(input: {
-    conversationId: string;
-    title?: string;
-    kind: "dm" | "group" | "channel";
-    createdBy: string;
-    participantUserIds: string[];
-    tenantId?: string;
-  }): CreatedConversation {
-    const tenantId = input.tenantId ?? DEFAULT_TENANT_ID;
-    if (!this.hasUser(tenantId, input.createdBy)) {
-      throw new Error(`Unknown user ${input.createdBy}`);
-    }
-    if (this.readObject(tenantId, "Conversation", input.conversationId)) {
-      throw new Error(`Conversation ${input.conversationId} already exists`);
-    }
-    const participantUserIds = unique([input.createdBy, ...input.participantUserIds]);
-    if (input.kind === "dm" && participantUserIds.length !== 2) {
-      throw new Error("dm conversations must have exactly two participants");
-    }
-    if (participantUserIds.length < 1) {
-      throw new Error("conversation must have at least one participant");
-    }
-    for (const userId of participantUserIds) {
-      if (!this.hasUser(tenantId, userId)) {
-        throw new Error(`Unknown user ${userId}`);
-      }
-    }
-
-    const conversation = {
-      id: input.conversationId,
-      kind: input.kind,
-      ...(input.title !== undefined ? { title: input.title } : {}),
-      createdBy: input.createdBy,
-      lastMessageEventId: undefined,
-    };
-    const members = participantUserIds.map((userId) => ({
-      id: memberIdFor(input.conversationId, userId),
-      conversationId: input.conversationId,
-      userId,
-      role: userId === input.createdBy ? "owner" : "member",
-    }));
-    this.upsertObject(tenantId, "Conversation", input.conversationId, conversation);
-    for (const member of members) {
-      this.upsertObject(tenantId, "RoomMember", member.id, member);
-    }
-    return { conversation, member: members[0]!, members };
   }
 
   verifyAccountPassword(identity: string, password: string): StoredAccount | undefined;
@@ -1118,14 +963,6 @@ export class FrickStore {
       return this.accounts.verifyPassword(a, b, c);
     }
     return this.accounts.verifyPassword(DEFAULT_TENANT_ID, a, b);
-  }
-
-  recordUserDevice(deviceId: string, userId: string, platform: string, lastSeenAt = new Date().toISOString(), tenantId: string = DEFAULT_TENANT_ID): void {
-    this.upsertObject(tenantId, "UserDevice", deviceId, {
-      userId,
-      platform,
-      lastSeenAt,
-    });
   }
 
   createSession(input: {
@@ -1152,6 +989,17 @@ export class FrickStore {
 
   deleteSession(sessionToken: string): boolean {
     return this.sessions.delete(sessionToken);
+  }
+
+  /**
+   * Invalidate every session belonging to a user. Used by app-level
+   * revoke flows (e.g. Apple's server-to-server consent-revoked
+   * notification). Returns the number of session rows removed.
+   *
+   * Scope optionally to a single tenant; omit `tenantId` to kill all.
+   */
+  deleteSessionsForUser(userId: string, tenantId?: string): number {
+    return this.sessions.deleteForUser(userId, tenantId);
   }
 
   enqueueJob(type: string, value: PlainObject): void;
@@ -1181,26 +1029,4 @@ export class FrickStore {
       )
       .run(this.schema.hash, Buffer.from(encode(this.schema)), new Date().toISOString());
   }
-
-  private listRoomMembers(
-    tenantId: string,
-    conversationId: string,
-  ): Array<{ id: string; conversationId: string; userId: string; role: string }> {
-    return this.listObjects(tenantId, "RoomMember")
-      .filter((member) => member.conversationId === conversationId && typeof member.userId === "string")
-      .map((member) => ({
-        id: String(member.id),
-        conversationId,
-        userId: member.userId as string,
-        role: typeof member.role === "string" ? member.role : "member",
-      }));
-  }
-}
-
-function memberIdFor(conversationId: string, userId: string): string {
-  return `member-${conversationId.replace(/^conversation-/, "")}-${userId.replace(/^user-/, "")}`;
-}
-
-function unique(values: string[]): string[] {
-  return Array.from(new Set(values));
 }

@@ -72,7 +72,7 @@ curl -s http://127.0.0.1:4099/_frick/inspect/server \
   -H "Authorization: Bearer $TOKEN" | jq
 ```
 
-Now open `http://127.0.0.1:5173` in **two browser tabs**. The demo is a thin conversation harness over the `conversation-general` stream. Type a message in tab A and submit it. Tab B should receive the `MessageSent` event within a few hundred milliseconds — that's the same `MessageStream` subscription, served via the WebSocket frame protocol, and applied to the local cache via a projection delta.
+Now open `http://127.0.0.1:5173` in **two browser tabs**. The web app is a product demo layered on top of the generic framework primitives. Frick itself ships an empty foundation schema; real apps define their own objects, streams, projections, and policy hooks before building product-specific flows.
 
 To prove the round-trip durability, kill the server (`Ctrl-C` in terminal 1), restart it (`pnpm server`), and reload both tabs. The history is still there, replayed from `apps/server/data/frick.sqlite`.
 

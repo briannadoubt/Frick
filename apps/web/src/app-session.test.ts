@@ -6,7 +6,7 @@ import {
   readStoredSession,
   writeStoredSession,
 } from "./App.js";
-import type { AuthSession } from "@frick/core/chat";
+import type { AuthSession } from "./chat-foundation.js";
 
 class MemoryStorage {
   readonly values = new Map<string, string>();

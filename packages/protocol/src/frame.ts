@@ -163,7 +163,7 @@ export interface ProjectionDeltaChange {
 }
 
 export interface ProjectionDeltaPayload {
-  /** Registered projection name, e.g. `"conversation-inbox"`. */
+  /** Registered projection name, e.g. `"activity-feed"`. */
   projection: string;
   changes: ProjectionDeltaChange[];
 }

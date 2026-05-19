@@ -123,6 +123,20 @@ export class StreamStore {
     }));
   }
 
+  listAll(tenantId: string): StoredEvent[] {
+    const rows = this.db
+      .prepare(
+        `SELECT packed FROM stream_events
+          WHERE tenant_id = ?
+          ORDER BY stream_type ASC, stream_id ASC, sequence ASC`,
+      )
+      .all(tenantId) as unknown as EventRow[];
+    return rows.map((row) => ({
+      ...unpackStreamEvent(this.schema, decode(row.packed) as PackedStreamEvent),
+      tenantId,
+    }));
+  }
+
   read(
     tenantId: string,
     stream: string,

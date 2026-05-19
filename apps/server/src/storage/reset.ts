@@ -34,7 +34,7 @@ export class FrickResetRefusedError extends Error {
 /**
  * Dev-only path that drops every framework-managed table (objects, stream
  * events, idempotency keys, presence, signals, sessions, accounts, jobs,
- * inbox, blob metadata + content, schema_versions, and the frick_migrations
+ * blob metadata + content, schema_versions, and the frick_migrations
  * ledger itself). Intentionally exposed as a separate exported function
  * rather than an HTTP route — operators must opt in by calling it directly.
  *

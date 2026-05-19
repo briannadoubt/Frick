@@ -20,8 +20,8 @@
  */
 
 import { useCallback, useRef, useState } from "react";
-import type { AttachmentMetadata } from "@frick/core/chat";
-import { useUploadBlob, type UploadOptions } from "./blob.js";
+import type { AttachmentMetadata } from "./chat-foundation.js";
+import { useUploadBlob, type UploadOptions } from "./demo-blob.js";
 
 export interface MediaRecorderControls {
   readonly state: "idle" | "recording" | "uploading";

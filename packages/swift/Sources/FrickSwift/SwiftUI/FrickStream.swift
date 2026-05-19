@@ -11,7 +11,7 @@ import Foundation
 /// Delta automatically — no manual `Task { for try await … }` boilerplate.
 ///
 ///     struct ConvoView: View {
-///         @FrickStream("MessageStream", key: "room-1") var events
+///         @FrickStream("ActivityStream", key: "item-1") var events
 ///         var body: some View { List(events, id: \.eventId) { … } }
 ///     }
 ///

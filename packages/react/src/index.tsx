@@ -452,17 +452,6 @@ export function createAuthorizedFetchInit(
   };
 }
 
-// Re-exports for the new React-layer hooks that landed in Phase 3.
-export * from "./auth.js";
-export * from "./blob.js";
-export * from "./search.js";
-// Phase 4 — realtime UX wrappers (reactions, typing, receipts, cursors,
-// message actions). Pure on top of existing primitives; no server changes.
-export * from "./realtime.js";
-export * from "./media.js";
-// Phase 6 — composer draft persistence (local-device only for v1).
-export * from "./draft.js";
-
 function useSignalValue<T>(signal: { value: T; subscribe(listener: (value: T) => void): () => void }): T {
   const [value, setValue] = useState(signal.value);
   useEffect(() => signal.subscribe(setValue), [signal]);

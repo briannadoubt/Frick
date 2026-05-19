@@ -105,6 +105,26 @@ export class SessionStore {
       .run(sessionTokenDigest(sessionToken));
     return result.changes > 0;
   }
+
+  /**
+   * Invalidate every session belonging to `userId`. Used when a user's
+   * identity provider tells us consent has been revoked (Apple's
+   * account-delete / consent-revoked notifications) or when an admin
+   * forcibly signs them out. Returns the number of session rows removed.
+   *
+   * Optionally scoped to a single tenant — pass `tenantId` to leave
+   * sessions in other tenants alone. Omit to kill them all.
+   */
+  deleteForUser(userId: string, tenantId?: string): number {
+    if (tenantId !== undefined) {
+      return this.db
+        .prepare("DELETE FROM auth_sessions WHERE user_id = ? AND tenant_id = ?")
+        .run(userId, tenantId).changes as number;
+    }
+    return this.db
+      .prepare("DELETE FROM auth_sessions WHERE user_id = ?")
+      .run(userId).changes as number;
+  }
 }
 
 function fromRow(row: SessionRow, sessionToken: string): StoredSession {

@@ -9,28 +9,13 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import {
-  FileDropzone,
   FrickProvider,
-  RequireAuth,
-  clearLocalDraftsForUser,
   useAppend,
-  useDraft,
-  useMessageActions,
-  useReadReceipts,
-  useSignIn,
-  useSignUp,
-  useTyping,
-  useVoiceMemo,
   useFrickHttpEndpoint,
   useInbox,
   useObjects,
-  usePasteImageUpload,
-  usePresence,
   useProjection,
-  useReactions,
-  useSearch,
   useSendSignal,
-  useSetPresence,
   useSignalChannel,
   useStream,
   useSyncStatus,
@@ -54,9 +39,6 @@ import {
   WorkspaceShell,
 } from "@frick/design-web";
 import { resolveInitialTheme, type ThemePreference } from "./theme.js";
-// Helpers moved into @frick/core/chat (Phase 1c). The local
-// `chat-foundation.ts` shim was deleted in Phase 3b; imports now point
-// at the canonical home.
 import {
   appendAttachmentMarker,
   blobDerivativeUrl,
@@ -85,7 +67,28 @@ import {
   type RoomMember,
   type SearchHit,
   type User,
-} from "@frick/core/chat";
+} from "./chat-foundation.js";
+import {
+  RequireAuth,
+  useSignIn,
+  useSignUp,
+} from "./demo-auth.js";
+import {
+  FileDropzone,
+  usePasteImageUpload,
+} from "./demo-blob.js";
+import {
+  clearLocalDraftsForUser,
+  useDraft,
+} from "./demo-draft.js";
+import {
+  useMessageActions,
+  useReadReceipts,
+  useReactions,
+  useTyping,
+} from "./demo-realtime.js";
+import { useVoiceMemo } from "./demo-media.js";
+import { useSearch } from "./demo-search.js";
 
 const defaultConversationId = "conversation-general";
 const demoHttpEndpoint = import.meta.env.VITE_FRICK_HTTP ?? "http://127.0.0.1:4099";

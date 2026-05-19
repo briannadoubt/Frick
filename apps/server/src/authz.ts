@@ -27,16 +27,6 @@ export interface Principal {
 
 export interface MembershipReader {
   hasUser(userId: string): boolean;
-  isRoomMember(conversationId: string, userId: string): boolean;
-  /**
-   * Returns `true` when a conversation with this id exists. Used by
-   * {@link assertCanSignal} to scope membership enforcement to signals
-   * keyed by a known conversation — signals keyed by unrelated rooms
-   * (e.g. ad-hoc call ids) are not gated by conversation membership.
-   * Optional for backwards compatibility with callers built against
-   * the original two-method interface.
-   */
-  hasConversation?(conversationId: string): boolean;
 }
 
 /**
@@ -51,15 +41,11 @@ export interface MembershipReader {
 export function tenantMembershipReader(
   store: {
     hasUser(tenantId: string, userId: string): boolean;
-    isRoomMember(tenantId: string, conversationId: string, userId: string): boolean;
-    hasConversation(tenantId: string, conversationId: string): boolean;
   },
   tenantId: string,
 ): MembershipReader {
   return {
     hasUser: (userId) => store.hasUser(tenantId, userId),
-    isRoomMember: (conversationId, userId) => store.isRoomMember(tenantId, conversationId, userId),
-    hasConversation: (conversationId) => store.hasConversation(tenantId, conversationId),
   };
 }
 
@@ -79,7 +65,6 @@ export type FrickAction =
   | "signal.read"
   | "blob.read"
   | "blob.write"
-  | "inbox.read"
   | "projection.read"
   | "search.query";
 
@@ -103,22 +88,9 @@ export type FrickDecision =
 
 export const ALLOW: FrickDecision = { allow: true, reason: "allow" };
 
-const FOUNDATION_DIRECT_WRITE_DENIED_OBJECTS = new Set([
-  "RoomMember",
-  "Conversation",
-  "UserSession",
-  "UserDevice",
-  "CallRoom",
-]);
-
-const FOUNDATION_OWNER_SCOPED_OBJECTS = new Set(["MessageDraft", "ScheduledMessage"]);
-const BUILT_IN_FOUNDATION_SEARCH_INDEXES = new Set(["messages-fts"]);
-const FOUNDATION_SEARCH_STREAMS_WITH_SOURCE_VISIBILITY = new Set(["MessageStream"]);
-const FOUNDATION_SEARCH_OBJECTS_WITH_SOURCE_VISIBILITY = new Set([
-  "Conversation",
-  "RoomMember",
-  "MessageDraft",
-]);
+const BUILT_IN_FOUNDATION_SEARCH_INDEXES = new Set<string>();
+const FOUNDATION_SEARCH_STREAMS_WITH_SOURCE_VISIBILITY = new Set<string>();
+const FOUNDATION_SEARCH_OBJECTS_WITH_SOURCE_VISIBILITY = new Set<string>();
 
 export function deny(
   reason: Exclude<FrickDecisionReason, "allow">,
@@ -233,16 +205,6 @@ export function decide(input: FrickPolicyInput, memberships: MembershipReader): 
   }
 
   switch (action) {
-    case "inbox.read": {
-      const ownerId = resource.ownerId ?? resource.key;
-      if (ownerId !== principal.userId) {
-        return deny("notAuthorizedForResource", "Inbox userId must match the principal");
-      }
-      if (!memberships.hasUser(principal.userId)) {
-        return deny("notAuthorizedForResource", `Unknown inbox principal ${principal.userId}`);
-      }
-      return ALLOW;
-    }
     case "blob.write":
     case "blob.read": {
       if (resource.ownerId !== principal.userId) {
@@ -284,34 +246,13 @@ export function decide(input: FrickPolicyInput, memberships: MembershipReader): 
       if (!objectType) {
         return deny("notAuthorizedForResource", "Object type is required");
       }
-      if (objectType === "User") {
-        return decideSelfUserWrite(principal, resource.key, input.context?.value);
-      }
-      if (FOUNDATION_DIRECT_WRITE_DENIED_OBJECTS.has(objectType)) {
-        return deny(
-          "notAuthorizedForResource",
-          `${objectType} objects must be written through framework routes`,
-        );
-      }
-      if (FOUNDATION_OWNER_SCOPED_OBJECTS.has(objectType)) {
-        return decideOwnerScopedObjectWrite(principal, objectType, input.context?.value, memberships);
-      }
+      void memberships;
       // Custom app objects are app-owned and remain writable by authenticated
       // tenant users unless a policy hook tightens the decision.
       return ALLOW;
     }
     case "stream.read":
     case "stream.append": {
-      if (resource.name !== "MessageStream") {
-        return ALLOW;
-      }
-      const conversationId = resource.key;
-      if (!conversationId || !memberships.isRoomMember(conversationId, principal.userId)) {
-        return deny(
-          "notMember",
-          `${principal.userId} is not a member of ${conversationId ?? "the conversation"}`,
-        );
-      }
       return ALLOW;
     }
     default:
@@ -324,17 +265,9 @@ function decideSignalAccess(
   key: string | undefined,
   memberships: MembershipReader,
 ): FrickDecision {
-  if (!key) {
-    return ALLOW;
-  }
-  // Only enforce membership when the key references a known conversation.
-  // Signals keyed by unrelated ad-hoc rooms remain allowed.
-  if (!memberships.hasConversation || !memberships.hasConversation(key)) {
-    return ALLOW;
-  }
-  if (!memberships.isRoomMember(key, principal.userId)) {
-    return deny("notMember", `${principal.userId} is not a member of ${key}`);
-  }
+  void principal;
+  void key;
+  void memberships;
   return ALLOW;
 }
 
@@ -345,96 +278,12 @@ function decidePresenceAccess(
   value: unknown,
   memberships: MembershipReader,
 ): FrickDecision {
-  if (name !== "TypingState") {
-    return ALLOW;
-  }
-  const resource = typingStateResource(key, value);
-  for (const ownerId of resource.userIds) {
-    if (ownerId !== principal.userId) {
-      return deny("ownerMismatch", "TypingState userId must match the principal");
-    }
-  }
-  for (const conversationId of resource.conversationIds) {
-    if (
-      memberships.hasConversation?.(conversationId) &&
-      !memberships.isRoomMember(conversationId, principal.userId)
-    ) {
-      return deny("notMember", `${principal.userId} is not a member of ${conversationId}`);
-    }
-  }
+  void principal;
+  void name;
+  void key;
+  void value;
+  void memberships;
   return ALLOW;
-}
-
-function typingStateResource(
-  key: string | undefined,
-  value: unknown,
-): { conversationIds: Set<string>; userIds: Set<string> } {
-  const conversationIds = new Set<string>();
-  const userIds = new Set<string>();
-  if (key) {
-    const [conversationId, userId] = key.split(":");
-    if (conversationId) conversationIds.add(conversationId);
-    if (userId) userIds.add(userId);
-  }
-  if (isRecord(value)) {
-    if (typeof value.conversationId === "string") {
-      conversationIds.add(value.conversationId);
-    }
-    if (typeof value.userId === "string") {
-      userIds.add(value.userId);
-    }
-  }
-  return { conversationIds, userIds };
-}
-
-function decideSelfUserWrite(
-  principal: Principal,
-  objectId: string | undefined,
-  value: unknown,
-): FrickDecision {
-  if (objectId !== principal.userId) {
-    return deny("ownerMismatch", "User object id must match the principal");
-  }
-  if (!isRecord(value)) {
-    return deny("notAuthorizedForResource", "User value must be an object");
-  }
-  if (typeof value.id === "string" && value.id !== principal.userId) {
-    return deny("ownerMismatch", "User value id must match the principal");
-  }
-  return ALLOW;
-}
-
-function decideOwnerScopedObjectWrite(
-  principal: Principal,
-  objectType: string,
-  value: unknown,
-  memberships: MembershipReader,
-): FrickDecision {
-  if (!isRecord(value)) {
-    return deny("notAuthorizedForResource", `${objectType} value must be an object`);
-  }
-  const ownerId = typeof value.userId === "string" ? value.userId : undefined;
-  if (ownerId !== principal.userId) {
-    return deny("ownerMismatch", `${objectType} userId must match the principal`);
-  }
-  const conversationId =
-    typeof value.conversationId === "string" ? value.conversationId : undefined;
-  if (
-    !conversationId ||
-    !memberships.hasConversation ||
-    !memberships.hasConversation(conversationId) ||
-    !memberships.isRoomMember(conversationId, principal.userId)
-  ) {
-    return deny(
-      "notMember",
-      `${principal.userId} is not a member of ${conversationId ?? "the conversation"}`,
-    );
-  }
-  return ALLOW;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 /**
@@ -577,23 +426,9 @@ export function assertCanAppend(
   if (!decision.allow) {
     throw new AuthorizationError(decision);
   }
-  if (stream !== "MessageStream") {
-    return;
-  }
-  if (event === "MessageSent" && payload?.senderId !== principal.userId) {
-    throw new AuthorizationError(
-      deny("ownerMismatch", "MessageSent senderId must match the principal") as FrickDecision & {
-        allow: false;
-      },
-    );
-  }
-  if (event === "ReceiptAdvanced" && payload?.userId !== principal.userId) {
-    throw new AuthorizationError(
-      deny("ownerMismatch", "ReceiptAdvanced userId must match the principal") as FrickDecision & {
-        allow: false;
-      },
-    );
-  }
+  void stream;
+  void event;
+  void payload;
 }
 
 export function assertCanWriteObject(
@@ -758,31 +593,11 @@ export function assertCanSignal(
   memberships?: MembershipReader,
   hooks?: readonly FrickPolicyHook[],
 ): void {
-  // Without a membership reader we can't tell whether the signal key is
-  // a conversation we should gate on. This is the legacy code path
-  // (e.g. the WebSocket gateway) and remains permissive for now —
-  // conversation-keyed enforcement happens only when a reader is supplied.
   if (!memberships) {
     return;
   }
   const decision = decideWithHooks(
     { principal, action: "signal.send", resource: { kind: "signal", name: signal, key } },
-    memberships,
-    hooks,
-  );
-  if (!decision.allow) {
-    throw new AuthorizationError(decision);
-  }
-}
-
-export function assertCanReadInbox(
-  principal: Principal,
-  userId: string,
-  memberships: MembershipReader,
-  hooks?: readonly FrickPolicyHook[],
-): void {
-  const decision = decideWithHooks(
-    { principal, action: "inbox.read", resource: { kind: "inbox", key: userId, ownerId: userId } },
     memberships,
     hooks,
   );
@@ -823,16 +638,8 @@ export function assertBlobOwnership(
 
 const NULL_MEMBERSHIP: MembershipReader = {
   hasUser: () => false,
-  isRoomMember: () => false,
-  hasConversation: () => false,
 };
 
 function userIdFromReplica(replicaId: string): string {
-  if (replicaId.includes("grace")) {
-    return "user-grace";
-  }
-  if (replicaId.includes("mallory")) {
-    return "user-mallory";
-  }
-  return "user-ada";
+  return `user-${replicaId}`;
 }

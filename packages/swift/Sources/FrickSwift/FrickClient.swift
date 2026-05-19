@@ -21,6 +21,26 @@ public struct ObjectsResponse<Object: Decodable>: Decodable {
     }
 }
 
+/// Server reply shape for `POST /objects/:type/:id`. Internal — used by
+/// `FrickClient.writeObject`. Surfaced to callers as `WriteObjectResult`.
+struct WriteObjectEnvelope: Decodable {
+    let schemaHash: String?
+    let version: Int
+    let previousVersion: Int?
+    let mergePolicy: String?
+}
+
+/// Outcome of a `writeObject` call. `version` is the new authoritative
+/// version on the server (use it as `expectedVersion` on the next write to
+/// keep the optimistic-concurrency chain). `created` distinguishes a fresh
+/// insert (HTTP 201) from an update (HTTP 200).
+public struct WriteObjectResult: Sendable, Equatable {
+    public let id: String
+    public let version: Int
+    public let previousVersion: Int?
+    public let created: Bool
+}
+
 public struct StreamEventsResponse: Decodable {
     public let schemaHash: String?
     public let stream: String?
@@ -111,72 +131,6 @@ public struct SignalsResponse: Decodable {
                 actualSchemaHash: schemaHash
             )
         }
-    }
-}
-
-public struct InboxResponse: Decodable {
-    public let schemaHash: String?
-    public let data: [FrickInboxItem]
-
-    public func requireCompatibleSchema() throws {
-        guard schemaHash == nil || schemaHash == FrickSchema.schemaHash else {
-            throw FrickSchemaMismatchError(
-                expectedSchemaHash: FrickSchema.schemaHash,
-                actualSchemaHash: schemaHash
-            )
-        }
-    }
-}
-
-public struct CreatedConversationResponse: Decodable, Equatable, Sendable {
-    public let schemaHash: String?
-    public let conversation: ConversationDTO
-    public let member: RoomMemberDTO
-    public let members: [RoomMemberDTO]
-
-    public func requireCompatibleSchema() throws {
-        guard schemaHash == nil || schemaHash == FrickSchema.schemaHash else {
-            throw FrickSchemaMismatchError(
-                expectedSchemaHash: FrickSchema.schemaHash,
-                actualSchemaHash: schemaHash
-            )
-        }
-    }
-}
-
-public struct FrickInboxItem: Codable, Equatable, Sendable, Identifiable {
-    public var id: String { conversationId }
-
-    public let conversationId: String
-    public let userId: String?
-    public let title: String?
-    public let kind: String?
-    public let lastSequence: Int
-    public let lastMessageBody: String?
-    public let lastMessageSenderId: String?
-    public let readSequence: Int
-    public let unreadCount: Int
-
-    public init(
-        conversationId: String,
-        userId: String?,
-        title: String?,
-        kind: String?,
-        lastSequence: Int,
-        lastMessageBody: String?,
-        lastMessageSenderId: String?,
-        readSequence: Int,
-        unreadCount: Int
-    ) {
-        self.conversationId = conversationId
-        self.userId = userId
-        self.title = title
-        self.kind = kind
-        self.lastSequence = lastSequence
-        self.lastMessageBody = lastMessageBody
-        self.lastMessageSenderId = lastMessageSenderId
-        self.readSequence = readSequence
-        self.unreadCount = unreadCount
     }
 }
 
@@ -346,12 +300,6 @@ public struct FrickStreamEvent: Codable, Equatable, Sendable, Identifiable {
         event = try container.decode(String.self, forKey: .event)
         let decodedPayload = try container.decode([String: FrickPayloadValue].self, forKey: .payload)
         payload = decodedPayload.mapValues(\.stringValue)
-    }
-}
-
-public extension FrickStreamEvent {
-    var isVisibleChatMessage: Bool {
-        event == "MessageSent" && !(payload["body"]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
     }
 }
 
@@ -855,25 +803,6 @@ public struct AppendRequest: Encodable, Sendable {
     public let payload: [String: String]
 }
 
-private final class ReadReceiptTracker: @unchecked Sendable {
-    private let lock = NSLock()
-    private var sequences: [String: Int] = [:]
-
-    func shouldAdvance(userId: String, conversationId: String, sequence: Int) -> Bool {
-        guard sequence > 0 else {
-            return false
-        }
-        let key = "\(userId):\(conversationId)"
-        lock.lock()
-        defer { lock.unlock() }
-        if sequence <= (sequences[key] ?? 0) {
-            return false
-        }
-        sequences[key] = sequence
-        return true
-    }
-}
-
 private final class FrickSessionStore: @unchecked Sendable {
     private let lock = NSLock()
     private var storedSession: FrickSession?
@@ -976,7 +905,6 @@ public final class FrickClient: Sendable {
     private let storage: FrickStorage
     private let telemetry: any FrickClientTelemetryRuntime
     private let requestIdFactory: @Sendable () -> String
-    private let readReceiptTracker = ReadReceiptTracker()
     private let sessionStore = FrickSessionStore()
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -1063,8 +991,22 @@ public final class FrickClient: Sendable {
         sessionStore.session = nil
     }
 
+    /// Inject an externally-minted session into the client. Used when the
+    /// app authenticates against a non-Frick provider (Sign in with Apple,
+    /// Google, etc.) and the server hands back a Frick session via an
+    /// app-defined route. Subsequent `fetchObjects` / `writeObject` /
+    /// `connectSync` calls use this session.
+    ///
+    /// The session is treated identically to one produced by
+    /// `devLogin` / `signUp` / `login` — pass a previously-saved session
+    /// to restore across app launches once you wire up persistence.
+    public func restoreSession(_ session: FrickSession) {
+        sessionStore.session = session
+    }
+
     public func devLogin(
         userId: String,
+        tenantId: String? = nil,
         deviceId: String? = nil,
         replicaId: String? = nil,
         platform: String? = nil
@@ -1075,6 +1017,7 @@ public final class FrickClient: Sendable {
         request.httpBody = try encoder.encode(
             DevLoginRequest(
                 userId: userId,
+                tenantId: tenantId,
                 deviceId: deviceId,
                 replicaId: replicaId,
                 platform: platform
@@ -1087,6 +1030,51 @@ public final class FrickClient: Sendable {
         try frickSession.requireCompatibleSchema()
         sessionStore.session = frickSession
         return frickSession
+    }
+
+    /// Sign in (or sign up) via Apple's identity token. Called after
+    /// `ASAuthorizationAppleIDProvider` returns an `identityToken` — pass
+    /// the token bytes (UTF-8 decoded) and Apple's `fullName`, which the
+    /// system only provides on the very first sign-in for a given app.
+    ///
+    /// The server (when configured with an Apple `identityProviders.apple`
+    /// entry) verifies the JWT against Apple's JWKS, finds or creates the
+    /// matching User row, and mints a Frick session.
+    ///
+    /// `WriteObjectResult` for `User` is not surfaced here — the caller
+    /// gets the full server reply (including isNewUser + the user row)
+    /// via the `extraInfo` map.
+    @discardableResult
+    public func signInWithApple(
+        identityToken: String,
+        fullName: AppleFullName? = nil,
+        deviceId: String? = nil,
+        replicaId: String? = nil
+    ) async throws -> SignInWithAppleResult {
+        var request = URLRequest(
+            url: baseURL.appending(path: "auth").appending(path: "apple").appending(path: "verify"),
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try encoder.encode(
+            SignInWithAppleRequest(
+                identityToken: identityToken,
+                fullName: fullName,
+                deviceId: deviceId,
+                replicaId: replicaId,
+            ),
+        )
+
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+        let envelope = try decoder.decode(SignInWithAppleEnvelope.self, from: data)
+        try envelope.session.requireCompatibleSchema()
+        sessionStore.session = envelope.session
+        return SignInWithAppleResult(
+            session: envelope.session,
+            user: envelope.user,
+            isNewUser: envelope.isNewUser,
+        )
     }
 
     public func signUp(
@@ -1127,63 +1115,6 @@ public final class FrickClient: Sendable {
                 platform: platform
             )
         )
-    }
-
-    public func fetchUsers() async throws -> [UserDTO] {
-        try await fetchObjects(type: "User")
-    }
-
-    public func fetchConversations() async throws -> [ConversationDTO] {
-        try await fetchObjects(type: "Conversation")
-    }
-
-    public func fetchRoomMembers() async throws -> [RoomMemberDTO] {
-        try await fetchObjects(type: "RoomMember")
-    }
-
-    public func createConversation(
-        title: String? = nil,
-        kind: String = "group",
-        participantUserIds: [String] = []
-    ) async throws -> CreatedConversationResponse {
-        var request = URLRequest(url: baseURL.appending(path: "conversations"))
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.httpBody = try encoder.encode(ConversationCreateRequest(
-            title: title,
-            kind: kind,
-            participantUserIds: participantUserIds
-        ))
-        authenticate(&request)
-
-        let (data, response) = try await session.data(for: request)
-        try validate(response, data: data)
-        let created = try decoder.decode(CreatedConversationResponse.self, from: data)
-        try created.requireCompatibleSchema()
-        _ = try verifyCacheCompatibility()
-        try storage.saveObjectData(type: "Conversation", id: created.conversation.id, data: encoder.encode(created.conversation), version: 0)
-        for member in created.members {
-            try storage.saveObjectData(type: "RoomMember", id: member.id, data: encoder.encode(member), version: 0)
-        }
-        return created
-    }
-
-    public func fetchInbox(userId: String? = nil) async throws -> [FrickInboxItem] {
-        try? await flushPendingAppends()
-        let resolvedUserId = try userId ?? requireAuthenticatedSession().userId
-        let url = queryURL(path: "/inbox", args: ["userId": resolvedUserId])
-        do {
-            let (data, response) = try await session.data(for: authenticatedRequest(url: url))
-            try validate(response, data: data)
-            let decoded = try decoder.decode(InboxResponse.self, from: data)
-            try decoded.requireCompatibleSchema()
-            return decoded.data
-        } catch {
-            if shouldReturnEmptyRead(error) {
-                return []
-            }
-            throw error
-        }
     }
 
     public func fetchBlobMetadata(blobId: String) async throws -> FrickBlobMetadata? {
@@ -1234,7 +1165,7 @@ public final class FrickClient: Sendable {
     }
 
     /// Full-text search via the server's `/search` route. `index` is the
-    /// FTS index name (e.g. `"messages-fts"`). `filter` is an optional
+    /// FTS index name (e.g. `"activity-fts"`). `filter` is an optional
     /// scope-narrowing map (e.g. `["conversationId": "abc"]`). Mirrors
     /// the Kotlin `FrickClient.search(...)` and TS `searchMessages`
     /// helpers — one canonical search call across every SDK.
@@ -1407,150 +1338,51 @@ public final class FrickClient: Sendable {
         return decoded.data
     }
 
-    public func fetchMessages(
-        conversationId: String = "conversation-general",
-        readUserId: String? = nil
-    ) async throws -> [FrickStreamEvent] {
-        try? await flushPendingAppends()
-        let url = baseURL
-            .appending(path: "streams")
-            .appending(path: "MessageStream")
-            .appending(path: conversationId)
-        do {
-            let (data, response) = try await session.data(for: authenticatedRequest(url: url))
-            try validate(response, data: data)
-            let decoded = try decoder.decode(StreamEventsResponse.self, from: data)
-            try decoded.requireCompatibleSchema()
-            _ = try verifyCacheCompatibility()
-            for event in decoded.data {
-                try storage.saveStreamEvent(event)
-            }
-            try await advanceReadReceiptIfNeeded(
-                conversationId: conversationId,
-                userId: readUserId,
-                events: decoded.data
-            )
-            return decoded.data
-        } catch {
-            let cached = try loadCompatibleStreamEvents(stream: "MessageStream", key: conversationId)
-            if cached.isEmpty {
-                throw error
-            }
-            try await advanceReadReceiptIfNeeded(
-                conversationId: conversationId,
-                userId: readUserId,
-                events: cached
-            )
-            return cached
+    /// Write an object to the server via `POST /objects/:type/:id`. The
+    /// server validates the value against the runtime schema, persists it
+    /// in the store, and broadcasts the resulting delta to any open sync
+    /// connections (so other clients see the update without a refetch).
+    ///
+    /// Pass `expectedVersion` to opt into optimistic concurrency — the
+    /// server returns `storage.conflict` (HTTP 409) when the on-disk
+    /// version doesn't match, surfaced here as
+    /// `FrickObjectVersionConflictError`. Omit it for last-write-wins.
+    ///
+    /// `Object` should match the schema's field shape. The `id` is sent in
+    /// the URL; if the type's payload also carries an `id` field the server
+    /// strips it before persisting.
+    @discardableResult
+    public func writeObject<Object: Codable & Sendable>(
+        type: String,
+        id: String,
+        value: Object,
+        expectedVersion: Int? = nil
+    ) async throws -> WriteObjectResult {
+        _ = try requireAuthenticatedSession()
+        let encodedType = type.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? type
+        let encodedId = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        let url = baseURL.appending(path: "objects").appending(path: encodedType).appending(path: encodedId)
+        var request = authenticatedRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        if let expectedVersion {
+            request.setValue("\(expectedVersion)", forHTTPHeaderField: "if-match")
         }
-    }
+        request.httpBody = try encoder.encode(value)
 
-    public func streamMessages(
-        conversationId: String = "conversation-general",
-        readUserId: String? = nil
-    ) -> AsyncThrowingStream<[FrickStreamEvent], Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    var current = try loadCompatibleStreamEvents(stream: "MessageStream", key: conversationId)
-                    if !current.isEmpty {
-                        continuation.yield(current)
-                        try await advanceReadReceiptIfNeeded(
-                            conversationId: conversationId,
-                            userId: readUserId,
-                            events: current
-                        )
-                    }
-
-                    while !Task.isCancelled {
-                        do {
-                            try? await flushPendingAppends()
-                            let after = current.map(\.sequence).max() ?? 0
-                            let streamRequest = authenticatedRequest(url: streamEventsURL(
-                                stream: "MessageStream",
-                                key: conversationId,
-                                after: after
-                            ))
-                            let (bytes, response) = try await streamingSession.bytes(for: streamRequest)
-                            try validate(response)
-
-                            var parser = FrickEventStreamParser()
-                            var lineBuffer = Data()
-                            for try await byte in bytes {
-                                lineBuffer.append(byte)
-                                guard byte == 10 else {
-                                    continue
-                                }
-                                try await processStreamLine(
-                                    lineBuffer,
-                                    parser: &parser,
-                                    current: &current,
-                                    continuation: continuation,
-                                    conversationId: conversationId,
-                                    readUserId: readUserId
-                                )
-                                lineBuffer.removeAll(keepingCapacity: true)
-                            }
-                            if !lineBuffer.isEmpty {
-                                try await processStreamLine(
-                                    lineBuffer,
-                                    parser: &parser,
-                                    current: &current,
-                                    continuation: continuation,
-                                    conversationId: conversationId,
-                                    readUserId: readUserId
-                                )
-                            }
-                        } catch is CancellationError {
-                            if Task.isCancelled {
-                                throw CancellationError()
-                            }
-                        } catch {
-                            if isTerminalStreamError(error) {
-                                throw error
-                            }
-                        }
-                        try await Task.sleep(nanoseconds: streamReconnectDelayNanoseconds)
-                    }
-                    continuation.finish()
-                } catch is CancellationError {
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
-            continuation.onTermination = { _ in
-                task.cancel()
-            }
-        }
-    }
-
-    private func processStreamLine(
-        _ lineBuffer: Data,
-        parser: inout FrickEventStreamParser,
-        current: inout [FrickStreamEvent],
-        continuation: AsyncThrowingStream<[FrickStreamEvent], Error>.Continuation,
-        conversationId: String,
-        readUserId: String?
-    ) async throws {
-        guard let line = String(data: lineBuffer, encoding: .utf8) else {
-            return
-        }
-        for event in parser.push(line) where event.event == "stream-page" || event.event == "delta" {
-            let decoded = try decoder.decode(StreamEventsResponse.self, from: Data(event.data.utf8))
-            try decoded.requireCompatibleSchema()
-            _ = try verifyCacheCompatibility()
-            for streamEvent in decoded.data {
-                try storage.saveStreamEvent(streamEvent)
-            }
-            current = mergeStreamEvents(current, decoded.data)
-            continuation.yield(current)
-            try await advanceReadReceiptIfNeeded(
-                conversationId: conversationId,
-                userId: readUserId,
-                events: current
-            )
-        }
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+        let envelope = try decoder.decode(WriteObjectEnvelope.self, from: data)
+        // Mirror fetchObjects' cache write so a subsequent fetchObjects
+        // resolves locally without a network round-trip in the same session.
+        try storage.saveObjectData(type: type, id: id, data: try encoder.encode(value), version: envelope.version)
+        let created = (response as? HTTPURLResponse)?.statusCode == 201
+        return WriteObjectResult(
+            id: id,
+            version: envelope.version,
+            previousVersion: envelope.previousVersion,
+            created: created
+        )
     }
 
     private func loadCompatibleStreamEvents(stream: String, key: String) throws -> [FrickStreamEvent] {
@@ -1560,25 +1392,6 @@ public final class FrickClient: Sendable {
             return []
         }
         return try storage.loadStreamEvents(stream: stream, key: key)
-    }
-
-    public func sendMessage(
-        conversationId: String = "conversation-general",
-        senderId: String? = nil,
-        body: String
-    ) async throws {
-        let resolvedSenderId = try senderId ?? requireAuthenticatedSession().userId
-        try await append(
-            stream: "MessageStream",
-            key: conversationId,
-            event: "MessageSent",
-            payload: [
-                "messageId": "message-\(UUID().uuidString)",
-                "senderId": resolvedSenderId,
-                "body": body,
-                "createdAt": ISO8601DateFormatter().string(from: Date()),
-            ]
-        )
     }
 
     public func append(stream: String, key: String, event: String, payload: [String: String]) async throws {
@@ -1614,32 +1427,6 @@ public final class FrickClient: Sendable {
             }
             throw error
         }
-    }
-
-    private func advanceReadReceiptIfNeeded(
-        conversationId: String,
-        userId: String?,
-        events: [FrickStreamEvent]
-    ) async throws {
-        guard let userId else {
-            return
-        }
-        let sequence = events
-            .filter { $0.event != "ReceiptAdvanced" }
-            .map(\.sequence)
-            .max() ?? 0
-        guard readReceiptTracker.shouldAdvance(userId: userId, conversationId: conversationId, sequence: sequence) else {
-            return
-        }
-        try await appendPayload(
-            stream: "MessageStream",
-            key: conversationId,
-            event: "ReceiptAdvanced",
-            payload: [
-                "userId": userId,
-                "sequence": sequence,
-            ]
-        )
     }
 
     public func flushPendingAppends() async throws {
@@ -1809,8 +1596,45 @@ public final class FrickClient: Sendable {
     }
 }
 
+/// Apple's `fullName` payload. Only populated on a user's first sign-in
+/// for the given app — Apple deliberately drops it on subsequent
+/// authorizations.
+public struct AppleFullName: Codable, Sendable, Equatable {
+    public let givenName: String?
+    public let familyName: String?
+
+    public init(givenName: String? = nil, familyName: String? = nil) {
+        self.givenName = givenName
+        self.familyName = familyName
+    }
+}
+
+/// Outcome of `signInWithApple`. `session` is already installed in the
+/// client's session store; surfaced here too in case the caller wants it
+/// (e.g. to persist outside the client). `user` is the server's view of
+/// the User row; `isNewUser` distinguishes signup from signin.
+public struct SignInWithAppleResult: Sendable {
+    public let session: FrickSession
+    public let user: [String: FrickJSONValue]
+    public let isNewUser: Bool
+}
+
+private struct SignInWithAppleRequest: Encodable, Sendable {
+    let identityToken: String
+    let fullName: AppleFullName?
+    let deviceId: String?
+    let replicaId: String?
+}
+
+private struct SignInWithAppleEnvelope: Decodable {
+    let session: FrickSession
+    let user: [String: FrickJSONValue]
+    let isNewUser: Bool
+}
+
 private struct DevLoginRequest: Encodable, Sendable {
     let userId: String
+    let tenantId: String?
     let deviceId: String?
     let replicaId: String?
     let platform: String?
@@ -1831,12 +1655,6 @@ private struct AuthLoginRequest: Encodable, Sendable {
     let deviceId: String?
     let replicaId: String?
     let platform: String?
-}
-
-private struct ConversationCreateRequest: Encodable, Sendable {
-    let title: String?
-    let kind: String
-    let participantUserIds: [String]
 }
 
 private struct AnalyticsTrackRequest: Encodable, Sendable {

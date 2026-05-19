@@ -841,7 +841,7 @@ public actor FrickSyncSocket {
         try await sendFrame(frame)
     }
 
-    /// Subscribe to a presence type (e.g. "TypingState"). Inbound presence
+    /// Subscribe to a presence type (e.g. "CursorState"). Inbound presence
     /// deltas surface via `events` as `.presenceDelta`. Mirrors the gateway's
     /// `kind: "presence"` subscribe payload.
     public func subscribePresence(name: String, key: String) async throws {
@@ -857,7 +857,7 @@ public actor FrickSyncSocket {
 
     /// Publish a presence record. The `key` is opaque to the gateway and must
     /// match how subscribers expect to look it up (the demo composes it as
-    /// "conversationId:userId:deviceId" for TypingState).
+    /// "documentId:userId:deviceId" for a collaborative cursor state).
     public func setPresence(name: String, key: String, value: [String: Any]) async throws {
         let requestId = UUID().uuidString
         let frame = FrickFrame(kind: .presenceSet, payload: .map([

@@ -18,12 +18,6 @@ export function routeSignal(
     if (!client.principal || client.principal.tenantId !== tenantId) {
       continue;
     }
-    if (
-      store.hasConversation(tenantId, payload.key) &&
-      !store.isRoomMember(tenantId, payload.key, client.principal.userId)
-    ) {
-      continue;
-    }
     sendFrame(client.socket, [FrameKind.SignalDeliver, { envelope }], options);
   }
 }

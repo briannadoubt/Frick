@@ -55,7 +55,6 @@ const TENANT_SCOPED_TABLES: readonly string[] = [
   "blob_metadata",
   "blob_content",
   "blob_derivatives",
-  "conversation_inbox",
   "search_indexes",
   "idempotency_keys",
   "tenant_settings",

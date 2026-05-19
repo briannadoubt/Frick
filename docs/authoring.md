@@ -109,12 +109,10 @@ Once you have an app skeleton, grow it with the `scaffold` family:
   via the projection markers.
 
 Search indexes registered through `createFrickServer({ search: { indexes } })`
-are indexed by the framework, but query access is conservative. The built-in
-`messages-fts` index and indexes whose source is a foundation primitive with
-framework visibility checks keep tenant-user access. Indexes over custom app
-objects, streams, or projections require an explicit `policyHooks` allow for
-the `search.query` action before tenant users can query them; admin principals
-can still query for inspection and operations.
+are indexed by the framework, but query access is conservative. App-provided
+indexes over objects, streams, or projections require an explicit `policyHooks`
+allow for the `search.query` action before tenant users can query them; admin
+principals can still query for inspection and operations.
 
 ## Product analytics
 

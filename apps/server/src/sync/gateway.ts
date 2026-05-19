@@ -1476,16 +1476,9 @@ function filterProjectionChangesForPrincipal(
   changes: ProjectionDeltaNotice["changes"],
   principal: Principal,
 ): ProjectionDeltaNotice["changes"] {
-  if (projection !== "conversation-inbox") {
-    return changes;
-  }
-  const keyPrefix = `${principal.userId}:`;
-  return changes.filter((change) => {
-    if (change.key.startsWith(keyPrefix)) {
-      return true;
-    }
-    return change.value?.userId === principal.userId;
-  });
+  void projection;
+  void principal;
+  return changes;
 }
 
 function requireKey(payload: SubscribePayload): string {

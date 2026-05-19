@@ -5,6 +5,18 @@ export {
   type FrickJobRegistry,
   type FrickJobResult,
 } from "./jobs/registry.js";
+export { FrickStore, type StoreOptions } from "./store.js";
+export { createNoopLogger, type FrickLogger } from "./logger.js";
+export {
+  type IdentityProvidersConfig,
+  type AppleProviderConfig,
+  type UserObjectMapping,
+  type OnFirstSignIn,
+  type OnFirstSignInInput,
+  type OnFirstSignInResult,
+  type OnRevoke,
+  type OnRevokeInput,
+} from "./auth/identity-routes.js";
 export {
   createFrickAppRegistry,
   type FrickAppDefinition,

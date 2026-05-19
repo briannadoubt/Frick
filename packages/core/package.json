@@ -14,11 +14,6 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
-    "./chat": {
-      "types": "./dist/chat.d.ts",
-      "import": "./dist/chat.js",
-      "default": "./dist/chat.js"
-    },
     "./analytics": {
       "types": "./dist/analytics.d.ts",
       "import": "./dist/analytics.js",

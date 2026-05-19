@@ -60,7 +60,7 @@ data class FrickPushPayload(
  * payload's `intent` string.
  *
  *   val router = FrickDeepLinkRouter<AppRoute>()
- *     .on("message.new") { payload -> AppRoute.Conversation(payload.threadId ?: "general") }
+ *     .on("activity.created") { payload -> AppRoute.Item(payload.resourceId ?: "default") }
  *     .on("call.ringing") { payload -> AppRoute.Call(payload.data["callId"].orEmpty()) }
  *
  *   router.resolve(payload)?.let { navigator.navigate(it) }

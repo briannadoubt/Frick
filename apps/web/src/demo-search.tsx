@@ -8,8 +8,8 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { searchMessages, type SearchResponse } from "@frick/core/chat";
-import { useFrickHttpEndpoint, useFrickSession } from "./index.js";
+import { searchMessages, type SearchResponse } from "./chat-foundation.js";
+import { useFrickHttpEndpoint, useFrickSession } from "@frick/react";
 
 export interface UseSearchOptions {
   readonly debounceMs?: number;

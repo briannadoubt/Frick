@@ -10,11 +10,10 @@ import type { PlainObject } from "@frick/protocol";
  * implementation is SQLite FTS5).
  *
  * Authz is enforced before any hit leaves the server — see `authz.ts`'s
- * `"search.query"` action and the `POST /search` route. The built-in
- * `messages-fts` index and app indexes backed by foundation sources with
- * framework visibility checks can be queried by tenant users. App indexes
- * over custom sources require an explicit allow from a registered policy
- * hook; admin principals can still query them for inspection and operations.
+ * `"search.query"` action and the `POST /search` route. App indexes require
+ * an explicit allow from a registered policy hook before tenant users can
+ * query them; admin principals can still query them for inspection and
+ * operations.
  */
 
 /** Source primitive an index ingests from. */
@@ -52,7 +51,7 @@ export interface FrickSearchDoc {
 }
 
 export interface FrickSearchIndexDefinition {
-  /** Stable identifier — e.g. "messages-fts". */
+  /** Stable identifier. */
   name: string;
   /** Source primitive the index ingests from. */
   source: FrickSearchIndexSource;

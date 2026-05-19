@@ -62,7 +62,7 @@ import dev.frick.client.FrickPushPayload
 
 class FrickFirebaseMessagingService : FirebaseMessagingService() {
     private val router = FrickDeepLinkRouter<AppRoute>()
-        .on("message.new") { payload -> AppRoute.Conversation(payload.threadId ?: "general") }
+        .on("activity.created") { payload -> AppRoute.Item(payload.resourceId ?: "default") }
         .on("call.ringing") { payload -> AppRoute.Call(payload.data["callId"].orEmpty()) }
 
     override fun onMessageReceived(message: RemoteMessage) {

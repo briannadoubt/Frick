@@ -5,8 +5,8 @@ import type { FrickStore } from "../store.js";
 /**
  * A registered "projection" derives an app-readable view from one or more
  * source write streams (object upserts/deletes, stream appends). The
- * conversation inbox is the canonical example: it watches `MessageStream`
- * events and `RoomMember` upserts to maintain a per-user inbox row.
+ * an app-owned inbox, activity feed, or leaderboard can watch stream events
+ * and object upserts to maintain its own read model.
  *
  * Projections in this slice are HTTP-read-only: a registered projection
  * exposes an optional `read(ctx, query)` method that the framework wires up
@@ -97,7 +97,7 @@ export interface FrickProjectionHandler {
 }
 
 export interface FrickProjection {
-  /** Stable identifier, e.g. `conversation-inbox`. */
+  /** Stable identifier, e.g. `activity-feed`. */
   name: string;
   /** Source writes that trigger `apply(...)`. */
   sources: readonly FrickProjectionSource[];

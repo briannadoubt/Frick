@@ -6,6 +6,14 @@ Each package version is independent — a release header documents which package
 
 ## Unreleased
 
+### Framework Boundary Cleanup
+
+- Removed the public `@frick/core/chat` subpath and moved chat/demo helpers back under `apps/web/src/chat-foundation.ts`.
+- Removed chat-specific React helpers from the public `@frick/react` entrypoint; the web demo now owns its auth, blob, search, draft, media, and realtime wrappers locally.
+- Replaced the shipped foundation schema with an empty generic schema. Frick no longer ships customer-facing `User`, `Conversation`, `MessageStream`, inbox, typing, call, draft, attachment, or push-job product shapes.
+- Removed framework-owned chat routes, projections, search indexes, scheduled-message sweep logic, and conversation inbox storage from the server runtime.
+- Removed chat/inbox/message/draft convenience APIs from the Swift and Android SDKs; apps build those nouns in their own schema and client layer.
+
 ### Cohesive SDK Refactor (Phases 1–6)
 
 A multi-commit rollout that lifts the client SDKs from "you can hand-write it" to "the SDK does the obvious thing":
@@ -16,7 +24,7 @@ A multi-commit rollout that lifts the client SDKs from "you can hand-write it" t
 - New typed error-code generators emit Swift `FrickErrorCode: String` enums, Kotlin `enum class FrickErrorCode(val wireValue: String)` with `fromWire(...)` round-tripping, and a TS const-union + membership predicate — all derived from a single `FRICK_ERROR_CODES` source-of-truth array.
 - `bindSchema(client, schema)` runtime factory in `@frick/core` flattens schema entries into name-keyed bindings that reuse the existing `Signal<T>` cache.
 - New backwards-paginated read primitive: `StreamStore.readBefore(...)` + `?before=N&limit=M` on the `/streams/:name/:key` route + `FrickClient.loadOlder(stream, key, count, before?)`.
-- `apps/web/src/chat-foundation.ts` graduated into `@frick/core/chat`: auth (devLogin/signUp/login), blob (upload/hash/derivatives), search, push registration, conversation create, inbox/read-receipt derivation. The shim was retired in Phase 3b.
+- Chat-demo helpers are app-owned in `apps/web/src/chat-foundation.ts`; framework packages expose the generic runtime primitives they build on.
 
 #### Phase 2 — Optimistic mutations + persistent web cache + devtools
 
@@ -27,14 +35,11 @@ A multi-commit rollout that lifts the client SDKs from "you can hand-write it" t
 #### Phase 3 — Auth/blob/search hooks + breaking `useStream` shape
 
 - `useStream(...)` now returns `{ events, loadOlder, hasMore, loading }` instead of a bare array. **Breaking change** — pre-1.0 with `greenfield-cutover` compatibility makes this safe. `useAppend` / `useUpsertObject` gain optional `{ optimistic }` options threading into the Phase 2 overlay.
-- `packages/react/src/auth.tsx` — `useSession`, `useSignIn`, `useSignUp`, `useDevSignIn`, `useSignOut`, `<RequireAuth fallback>`. Sets the session on the surrounding `<FrickProvider>` so the WebSocket reconnects with the new bearer token automatically.
-- `packages/react/src/blob.tsx` — `useUploadBlob`, `<FileDropzone>`, `usePasteImageUpload`. Optional client-side image compression via `createImageBitmap` + `OffscreenCanvas`.
-- `packages/react/src/search.tsx` — `useSearch(query, opts)` with debounced fetch, race protection, tagged `{ response, isLoading, error }` state.
+- Demo auth, blob upload, and search wrappers now live under `apps/web/src/demo-*.tsx` instead of the framework React package.
 
 #### Phase 4 — Realtime UX wrappers + media memos
 
-- `packages/react/src/realtime.tsx` collapses chat-app primitives: `useReactions`, `useTyping` (debounced presence with auto-stop tail), `useReadReceipts` (over the inbox projection), `useMessageActions` (`edit` / `redact` with optimism), `useLiveCursor`.
-- `packages/react/src/media.tsx` — `useVoiceMemo()` / `useVideoMemo()` wrap `MediaRecorder` + `getUserMedia` into start/stop/cancel with auto-stop at `maxDurationMs`. Pipe captures through `useUploadBlob`.
+- Demo realtime and media wrappers now live under `apps/web/src/demo-*.tsx` instead of the framework React package.
 
 #### Phase 5 — Native parity
 

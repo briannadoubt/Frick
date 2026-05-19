@@ -50,7 +50,7 @@ export interface ObjectBinding<T extends object = PlainObject> {
  * live tail (callers decide how to render history vs live).
  *
  * Event-name-keyed wrappers are surfaced as `stream[eventName].append(...)`
- * by the generator so consumers can do `MessageStream.MessageSent.append`.
+ * by the generator so consumers can call typed object and stream helpers.
  */
 export interface StreamBinding<
   TEvent extends { event: string; payload: object } = { event: string; payload: PlainObject },

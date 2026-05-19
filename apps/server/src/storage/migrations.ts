@@ -166,24 +166,6 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
         FOREIGN KEY (blob_id) REFERENCES blob_metadata(blob_id) ON DELETE CASCADE
       );
 
-      CREATE TABLE IF NOT EXISTS conversation_inbox (
-        conversation_id TEXT NOT NULL,
-        user_id TEXT NOT NULL,
-        title TEXT,
-        kind TEXT NOT NULL,
-        last_sequence INTEGER NOT NULL,
-        last_message_body TEXT,
-        last_message_at TEXT,
-        last_message_sender_id TEXT,
-        read_sequence INTEGER NOT NULL,
-        unread_count INTEGER NOT NULL,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY (conversation_id, user_id)
-      );
-
-      CREATE INDEX IF NOT EXISTS conversation_inbox_by_user
-        ON conversation_inbox (user_id, updated_at DESC);
-
       CREATE TABLE IF NOT EXISTS jobs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         job_type TEXT NOT NULL,
@@ -325,34 +307,6 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
       ALTER TABLE blob_content ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '_default';
       CREATE INDEX IF NOT EXISTS idx_blob_content_tenant
         ON blob_content (tenant_id, blob_id);
-
-      -- conversation_inbox: rebuild so the primary key is tenant-scoped.
-      CREATE TABLE conversation_inbox_new (
-        tenant_id TEXT NOT NULL DEFAULT '_default',
-        conversation_id TEXT NOT NULL,
-        user_id TEXT NOT NULL,
-        title TEXT,
-        kind TEXT NOT NULL,
-        last_sequence INTEGER NOT NULL,
-        last_message_body TEXT,
-        last_message_at TEXT,
-        last_message_sender_id TEXT,
-        read_sequence INTEGER NOT NULL,
-        unread_count INTEGER NOT NULL,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY (tenant_id, conversation_id, user_id)
-      );
-      INSERT INTO conversation_inbox_new
-        (tenant_id, conversation_id, user_id, title, kind, last_sequence,
-         last_message_body, last_message_at, last_message_sender_id,
-         read_sequence, unread_count, updated_at)
-        SELECT '_default', conversation_id, user_id, title, kind, last_sequence,
-               last_message_body, last_message_at, last_message_sender_id,
-               read_sequence, unread_count, updated_at FROM conversation_inbox;
-      DROP TABLE conversation_inbox;
-      ALTER TABLE conversation_inbox_new RENAME TO conversation_inbox;
-      CREATE INDEX idx_conversation_inbox_tenant_user
-        ON conversation_inbox (tenant_id, user_id, updated_at DESC);
 
       ALTER TABLE jobs ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '_default';
       CREATE INDEX IF NOT EXISTS idx_jobs_tenant
@@ -813,7 +767,6 @@ export const FRAMEWORK_TABLES: readonly string[] = [
   "signal_outbox",
   "blob_content",
   "blob_metadata",
-  "conversation_inbox",
   "jobs",
   "auth_sessions",
   "auth_accounts",

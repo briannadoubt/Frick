@@ -22,7 +22,6 @@ import io.ktor.http.contentType
 import io.ktor.utils.io.readLine
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
-import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.currentCoroutineContext
@@ -61,21 +60,6 @@ data class FrickStreamEvent(
     val payload: Map<String, String>,
 )
 
-fun FrickStreamEvent.isVisibleChatMessage(): Boolean =
-    event == "MessageSent" && !payload["body"].isNullOrBlank()
-
-data class FrickInboxItem(
-    val conversationId: String,
-    val userId: String?,
-    val title: String?,
-    val kind: String?,
-    val lastSequence: Int,
-    val lastMessageBody: String?,
-    val lastMessageSenderId: String?,
-    val readSequence: Int,
-    val unreadCount: Int,
-)
-
 data class FrickBlobMetadata(
     val blobId: String,
     val ownerId: String,
@@ -110,13 +94,6 @@ data class FrickAnalyticsTrackReceipt(
     val sequence: Long,
     val acceptedAt: String,
     val duplicate: Boolean,
-)
-
-data class CreatedConversation(
-    val schemaHash: String?,
-    val conversation: ConversationDto,
-    val member: RoomMemberDto,
-    val members: List<RoomMemberDto>,
 )
 
 @Serializable
@@ -173,13 +150,6 @@ private data class LoginRequest(
     val deviceId: String? = null,
     val replicaId: String? = null,
     val platform: String? = null,
-)
-
-@Serializable
-private data class ConversationCreateRequest(
-    val title: String?,
-    val kind: String,
-    val participantUserIds: List<String>,
 )
 
 @Serializable
@@ -808,8 +778,6 @@ class FrickClient(
         const val LocalDevelopmentBaseUrl = "http://10.0.2.2:4099"
     }
 
-    private val readSequenceLock = Any()
-    private val readSequences = mutableMapOf<String, Int>()
 
     fun verifyCacheCompatibility(
         currentMetadata: FrickCacheMetadata = FrickCacheMetadata.currentSchema,
@@ -913,71 +881,6 @@ class FrickClient(
         storage.clearSession()
     }
 
-    suspend fun fetchUsers(): List<UserDto> = withContext(Dispatchers.IO) {
-        verifyCacheCompatibility()
-        runCatching { flushPendingAppends() }
-        val response = transport.get("/objects?type=User")
-        val users = parseUsers(response)
-        cacheObjects(type = "User", responseJson = response)
-        users
-    }
-
-    suspend fun fetchConversations(): List<ConversationDto> = withContext(Dispatchers.IO) {
-        verifyCacheCompatibility()
-        runCatching { flushPendingAppends() }
-        val response = transport.get("/objects?type=Conversation")
-        val conversations = parseConversations(response)
-        cacheObjects(type = "Conversation", responseJson = response)
-        conversations
-    }
-
-    suspend fun fetchRoomMembers(): List<RoomMemberDto> = withContext(Dispatchers.IO) {
-        verifyCacheCompatibility()
-        runCatching { flushPendingAppends() }
-        val response = transport.get("/objects?type=RoomMember")
-        val members = parseRoomMembers(response)
-        cacheObjects(type = "RoomMember", responseJson = response)
-        members
-    }
-
-    suspend fun createConversation(
-        title: String? = null,
-        kind: String = "group",
-        participantUserIds: List<String> = emptyList(),
-    ): CreatedConversation = withContext(Dispatchers.IO) {
-        verifyCacheCompatibility()
-        val response = transport.post(
-            path = "/conversations",
-            body = frickJson.encodeToString(
-                ConversationCreateRequest(
-                    title = title,
-                    kind = kind,
-                    participantUserIds = participantUserIds,
-                ),
-            ),
-        )
-        val created = parseCreatedConversation(response)
-        storage.saveObjectJson(type = "Conversation", id = created.conversation.id, json = conversationJson(created.conversation), version = 0)
-        created.members.forEach { member ->
-            storage.saveObjectJson(type = "RoomMember", id = member.id, json = roomMemberJson(member), version = 0)
-        }
-        created
-    }
-
-    suspend fun fetchInbox(userId: String? = null): List<FrickInboxItem> = withContext(Dispatchers.IO) {
-        runCatching { flushPendingAppends() }
-        val resolvedUserId = userId ?: authenticatedUserId()
-        try {
-            parseInboxItems(transport.get("/inbox?userId=${encodeQueryValue(resolvedUserId)}"))
-        } catch (error: Exception) {
-            if (shouldReturnEmptyRead(error)) {
-                emptyList()
-            } else {
-                throw error
-            }
-        }
-    }
-
     suspend fun fetchBlobMetadata(blobId: String): FrickBlobMetadata? = withContext(Dispatchers.IO) {
         try {
             parseBlobMetadata(transport.get("/blobs/${encodePathSegment(blobId)}"))
@@ -1020,7 +923,7 @@ class FrickClient(
     /**
      * Full-text search via the server's `/search` route. Mirrors the
      * Swift / TS `searchMessages` helper. `index` is the FTS index name
-     * (e.g. `"messages-fts"` for chat-app message search). `filter` is
+     * (e.g. `"activity-fts"` for app-owned activity search). `filter` is
      * an optional `{ conversationId: "..." }` map; pass `null` to search
      * across the tenant.
      */
@@ -1164,75 +1067,6 @@ class FrickClient(
         }
     }
 
-    suspend fun fetchMessages(
-        conversationId: String = "conversation-general",
-        readUserId: String? = null,
-    ): List<FrickStreamEvent> =
-        withContext(Dispatchers.IO) {
-            verifyCacheCompatibility()
-            runCatching { flushPendingAppends() }
-            try {
-                val events = parseStreamEvents(transport.get("/streams/MessageStream/$conversationId"))
-                events.forEach(storage::saveStreamEvent)
-                advanceReadReceiptIfNeeded(conversationId = conversationId, userId = readUserId, events = events)
-                events
-            } catch (error: Exception) {
-                val cached = storage.loadStreamEvents(stream = "MessageStream", key = conversationId)
-                if (cached.isNotEmpty()) {
-                    advanceReadReceiptIfNeeded(conversationId = conversationId, userId = readUserId, events = cached)
-                    cached
-                } else {
-                    throw error
-                }
-            }
-        }
-
-    fun streamMessages(
-        conversationId: String = "conversation-general",
-        readUserId: String? = null,
-    ): Flow<List<FrickStreamEvent>> = flow {
-        verifyCacheCompatibility()
-        var current = storage.loadStreamEvents(stream = "MessageStream", key = conversationId)
-        val after = current.maxOfOrNull { event -> event.sequence } ?: 0
-        val parser = FrickEventStreamParser()
-
-        if (current.isNotEmpty()) {
-            emit(current)
-            advanceReadReceiptIfNeeded(conversationId = conversationId, userId = readUserId, events = current)
-        }
-        runCatching { flushPendingAppends() }
-        transport.stream("/streams/MessageStream/$conversationId/events?after=$after").collect { chunk ->
-            parser.push(chunk)
-                .filter { event -> event.event == "stream-page" || event.event == "delta" }
-                .forEach { event ->
-                    val nextEvents = parseStreamEvents(event.data)
-                    nextEvents.forEach(storage::saveStreamEvent)
-                    current = mergeStreamEvents(current, nextEvents)
-                    emit(current)
-                    advanceReadReceiptIfNeeded(conversationId = conversationId, userId = readUserId, events = current)
-                }
-        }
-    }.flowOn(Dispatchers.IO)
-
-    suspend fun sendMessage(
-        conversationId: String = "conversation-general",
-        senderId: String? = null,
-        body: String,
-    ) {
-        val resolvedSenderId = senderId ?: authenticatedUserId()
-        append(
-            stream = "MessageStream",
-            key = conversationId,
-            event = "MessageSent",
-            payload = mapOf(
-                "messageId" to "message-${UUID.randomUUID()}",
-                "senderId" to resolvedSenderId,
-                "body" to body,
-                "createdAt" to Instant.now().toString(),
-            ),
-        )
-    }
-
     suspend fun append(stream: String, key: String, event: String, payload: Map<String, String>) {
         val requestId = requestIdFactory()
         val body = frickJson.encodeToString(
@@ -1255,72 +1089,6 @@ class FrickClient(
                 return
             }
             throw error
-        }
-    }
-
-    private suspend fun appendJsonPayload(stream: String, key: String, event: String, payload: Map<String, JsonElement>) {
-        val requestId = requestIdFactory()
-        val body = frickJson.encodeToString(
-            AppendRequest(
-                requestId = requestId,
-                replicaId = replicaId,
-                stream = stream,
-                key = key,
-                event = event,
-                payload = payload,
-            ),
-        )
-        val append = PendingAppend(requestId = requestId, body = body)
-        try {
-            sendAppend(append)
-        } catch (error: Exception) {
-            if (shouldQueueAppend(error)) {
-                verifyCacheCompatibility()
-                storage.appendPendingAppend(append)
-                return
-            }
-            throw error
-        }
-    }
-
-    private suspend fun advanceReadReceiptIfNeeded(
-        conversationId: String,
-        userId: String?,
-        events: List<FrickStreamEvent>,
-    ) {
-        if (userId == null) {
-            return
-        }
-        val sequence = events
-            .filterNot { event -> event.event == "ReceiptAdvanced" }
-            .maxOfOrNull { event -> event.sequence } ?: 0
-        if (!shouldAdvanceReadReceipt(userId = userId, conversationId = conversationId, sequence = sequence)) {
-            return
-        }
-        appendJsonPayload(
-            stream = "MessageStream",
-            key = conversationId,
-            event = "ReceiptAdvanced",
-            payload = mapOf(
-                "userId" to JsonPrimitive(userId),
-                "sequence" to JsonPrimitive(sequence),
-            ),
-        )
-    }
-
-    private fun shouldAdvanceReadReceipt(userId: String, conversationId: String, sequence: Int): Boolean {
-        if (sequence <= 0) {
-            return false
-        }
-        val key = "$userId:$conversationId"
-        return synchronized(readSequenceLock) {
-            val previous = readSequences[key] ?: 0
-            if (sequence <= previous) {
-                false
-            } else {
-                readSequences[key] = sequence
-                true
-            }
         }
     }
 
@@ -1425,76 +1193,6 @@ class FrickEventStreamParser {
     }
 }
 
-fun parseUsers(responseJson: String): List<UserDto> =
-    parseResponseObject(responseJson)
-        .requiredArray("data")
-        .map { item ->
-            val user = item.jsonObject
-            UserDto(
-                id = user.requiredString("id"),
-                displayName = user.requiredString("displayName"),
-                avatarBlobId = user.optionalString("avatarBlobId"),
-            )
-        }
-
-fun parseConversations(responseJson: String): List<ConversationDto> =
-    parseResponseObject(responseJson)
-        .requiredArray("data")
-        .map { item -> parseConversation(item.jsonObject) }
-
-fun parseRoomMembers(responseJson: String): List<RoomMemberDto> =
-    parseResponseObject(responseJson)
-        .requiredArray("data")
-        .map { item -> parseRoomMember(item.jsonObject) }
-
-fun parseCreatedConversation(responseJson: String): CreatedConversation {
-    val response = parseResponseObject(responseJson)
-    return CreatedConversation(
-        schemaHash = response.optionalString("schemaHash"),
-        conversation = parseConversation(response.requiredObject("conversation")),
-        member = parseRoomMember(response.requiredObject("member")),
-        members = response.requiredArray("members").map { item -> parseRoomMember(item.jsonObject) },
-    )
-}
-
-private fun parseConversation(conversation: JsonObject): ConversationDto =
-    ConversationDto(
-        id = conversation.requiredString("id"),
-        kind = conversation.requiredString("kind"),
-        title = conversation.optionalString("title"),
-        createdBy = conversation.requiredString("createdBy"),
-        lastMessageEventId = conversation.optionalString("lastMessageEventId"),
-    )
-
-private fun parseRoomMember(member: JsonObject): RoomMemberDto =
-    RoomMemberDto(
-        id = member.requiredString("id"),
-        conversationId = member.requiredString("conversationId"),
-        userId = member.requiredString("userId"),
-        role = member.requiredString("role"),
-    )
-
-private fun conversationJson(conversation: ConversationDto): String =
-    JsonObject(
-        buildMap {
-            put("id", JsonPrimitive(conversation.id))
-            put("kind", JsonPrimitive(conversation.kind))
-            conversation.title?.let { put("title", JsonPrimitive(it)) }
-            put("createdBy", JsonPrimitive(conversation.createdBy))
-            conversation.lastMessageEventId?.let { put("lastMessageEventId", JsonPrimitive(it)) }
-        },
-    ).toString()
-
-private fun roomMemberJson(member: RoomMemberDto): String =
-    JsonObject(
-        mapOf(
-            "id" to JsonPrimitive(member.id),
-            "conversationId" to JsonPrimitive(member.conversationId),
-            "userId" to JsonPrimitive(member.userId),
-            "role" to JsonPrimitive(member.role),
-        ),
-    ).toString()
-
 fun parseStreamEvents(responseJson: String): List<FrickStreamEvent> =
     parseResponseObject(responseJson)
         .requiredArray("data")
@@ -1507,24 +1205,6 @@ fun parseStreamEvents(responseJson: String): List<FrickStreamEvent> =
                 eventId = event.requiredString("eventId"),
                 event = event.requiredString("event"),
                 payload = event.requiredObject("payload").toStringMap(),
-            )
-        }
-
-fun parseInboxItems(responseJson: String): List<FrickInboxItem> =
-    parseResponseObject(responseJson)
-        .requiredArray("data")
-        .map { item ->
-            val inboxItem = item.jsonObject
-            FrickInboxItem(
-                conversationId = inboxItem.requiredString("conversationId"),
-                userId = inboxItem.optionalString("userId"),
-                title = inboxItem.optionalString("title"),
-                kind = inboxItem.optionalString("kind"),
-                lastSequence = inboxItem.requiredInt("lastSequence"),
-                lastMessageBody = inboxItem.optionalString("lastMessageBody"),
-                lastMessageSenderId = inboxItem.optionalString("lastMessageSenderId"),
-                readSequence = inboxItem.requiredInt("readSequence"),
-                unreadCount = inboxItem.requiredInt("unreadCount"),
             )
         }
 

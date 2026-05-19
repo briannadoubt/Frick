@@ -24,15 +24,12 @@ export interface DataSubjectEraseReport {
  *    revocable identity surface, and keeping them after a GDPR-style erase
  *    would let the user keep authenticating with stale credentials.
  *  - PSEUDONYMIZE auth_accounts in place. Replacing the row entirely would
- *    cascade-break foreign-key-ish references from stream_events and
- *    conversations; instead we set `handle = "erased-<userId>"`, blank the
- *    password fingerprint so login fails, and rewrite display_name to a
- *    redaction marker.
- *  - PSEUDONYMIZE stream_events the user authored. The event ordering is
- *    durable history (other members rely on the sequence), so we keep the
- *    row but re-pack the payload with `senderId: null` and `body: null`.
- *    This is the standard "tombstone-in-place" pattern for log-shaped
- *    stores.
+ *    cascade-break references from app-owned rows and stream events; instead
+ *    we set `handle = "erased-<userId>"`, blank the password fingerprint so
+ *    login fails, and rewrite display_name to a redaction marker.
+ *  - PSEUDONYMIZE stream_events whose decoded payload has `senderId` equal
+ *    to the erased user. Apps that use different author fields should add an
+ *    app-specific erasure hook; the framework does not infer product shapes.
  *
  * Returns a report listing the row counts touched, so an admin endpoint
  * can return it verbatim.
@@ -61,7 +58,7 @@ export function eraseDataSubject(
   );
 
   const authoredEvents = store.streams
-    .listAllByStreamType(tenantId, "MessageStream")
+    .listAll(tenantId)
     .filter((event) => (event.payload as { senderId?: unknown }).senderId === userId);
   const authoredEventIds = authoredEvents.map((event) => event.eventId);
   const oldSearchDocs = collectProjectedSearchDocs(store, tenantId, authoredEvents);

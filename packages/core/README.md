@@ -17,8 +17,17 @@ pnpm add @frick/core @frick/protocol
 - `MemoryFrickCache` with schema-identity compatibility enforcement (throws `FrickCacheIncompatibleError` on schema-id mismatch or revision rollback)
 - `client.objects(type)`, `client.stream(name, key)`, `client.presence(name, key)`, `client.signalChannel(name, key)`, `client.projection(name)`
 - Append/upsert APIs with bounded pending queue and reconnect flush
+- `client.track(...)` plus `trackAnalyticsEvent(...)` for authenticated product analytics
 - `SyncStatus` with `serverCapabilities`, `schemaCompatibility`, `lastError`
 - OpenTelemetry-compatible client telemetry for analytics requests and sync WebSocket transport. The default bridge is a no-op until the host app installs an OTel provider; pass `telemetry: false` to `FrickClient` to disable it.
+- Generated error-code constants and guards exported from `@frick/core/errors`
+
+## Public subpaths
+
+- `@frick/core` — client runtime, cache, sync, auth, analytics, and telemetry defaults.
+- `@frick/core/analytics` — standalone analytics posting helpers.
+- `@frick/core/telemetry` — telemetry runtime types and OTel bridge helpers.
+- `@frick/core/errors` — generated error-code constants and guards for structured envelopes.
 
 See [`docs/cross-platform-client-contract.md`](../../docs/cross-platform-client-contract.md) for the wire contract every client implements.
 

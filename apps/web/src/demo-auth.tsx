@@ -1,7 +1,7 @@
 /**
  * Auth React surface.
  *
- * Wraps the HTTP auth helpers that graduated into `@frick/core/chat`
+ * Wraps the HTTP auth helpers that graduated into `./chat-foundation.js`
  * (`devLogin`, `signUp`, `login`) into one-line hooks plus a
  * `<RequireAuth>` boundary component. The hooks own the local
  * mutable-session state via `FrickClient.setSession(...)`, so after a
@@ -22,8 +22,8 @@ import {
   logout as logoutCore,
   signUp as signUpCore,
   type AuthSession,
-} from "@frick/core/chat";
-import { useFrick, useFrickHttpEndpoint, useFrickSession } from "./index.js";
+} from "./chat-foundation.js";
+import { useFrick, useFrickHttpEndpoint, useFrickSession } from "@frick/react";
 
 export function useSession(): AuthSession | undefined {
   // Re-uses the provider-tracked session. Cast: the runtime `FrickSession`

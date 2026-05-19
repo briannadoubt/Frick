@@ -43,7 +43,7 @@ export class SubscriptionRegistry {
   projectionSubscribers(name: string): Array<{ client: SyncClient; subscription: SubscribePayload }> {
     // Projection subscriptions are coarse-grained today: a subscriber gets
     // every row change for the projection. The optional `key` is reserved
-    // for future per-row scoping (e.g. inbox-row-for-this-user) but is not
+    // for future per-row scoping (e.g. feed-row-for-this-user) but is not
     // enforced here.
     return this.matching((subscription) => subscription.kind === "projection" && subscription.name === name);
   }

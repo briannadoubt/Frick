@@ -230,7 +230,7 @@ Object upserts flow over the sync WebSocket via `FrameKind.ObjectUpsert`. The se
 
 ## Presence Authorization
 
-Presence subscriptions and writes over the sync WebSocket require an authenticated, active principal and run through the same structured authz envelope path as streams, objects, and signals. Foundation `TypingState` rows use the key shape `conversationId:userId:deviceId`; when the conversation is known locally, the server enforces conversation membership, and any user id present in the key or value must match the session principal. Failures Nack with `auth.forbidden` and `details.reason` such as `notMember` or `ownerMismatch`.
+Presence subscriptions and writes over the sync WebSocket require an authenticated, active principal and run through the same structured authz envelope path as streams, objects, and signals. The foundation schema does not ship product-specific presence rows; apps define their own presence types and can tighten access with policy hooks. Failures Nack with `auth.forbidden` and `details.reason` such as `notAuthorizedForResource` or `ownerMismatch`.
 
 ## Versioning
 

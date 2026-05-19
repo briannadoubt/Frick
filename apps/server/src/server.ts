@@ -21,7 +21,6 @@ import {
   assertCanAppend,
   assertCanQuerySearch,
   assertCanReadBlob,
-  assertCanReadInbox,
   assertCanReadSignal,
   assertCanSignal,
   assertCanSubscribe,
@@ -53,12 +52,16 @@ import {
   type FrickProjectModuleInput,
 } from "./platform/project.js";
 import { handleDashboardRoute } from "./dashboard/routes.js";
+import {
+  createIdentityRouter,
+  type IdentityProvidersConfig,
+  type IdentityRouter,
+} from "./auth/identity-routes.js";
 import { SseRegistry } from "./sync/sse.js";
 import {
   createFrickProjectionRegistry,
   type FrickProjectionContext,
 } from "./projections/registry.js";
-import { createConversationInboxProjection } from "./projections/conversation-inbox.js";
 import {
   createFrickSearchIndexRegistry,
   DEFAULT_SEARCH_LIMIT,
@@ -69,7 +72,6 @@ import {
   type FrickSearchIndexRegistry,
   type FrickSearchProjectInput,
 } from "./search/types.js";
-import { createMessagesSearchIndex } from "./search/messages-index.js";
 import {
   isReservedSearchField,
   searchSourceFromHit,
@@ -137,10 +139,6 @@ import {
 import { emitDevToolsEvent } from "./devtools/emit.js";
 import { createPlatformEventPipeline } from "./platform-events/factory.js";
 import type { PlatformEventPipeline } from "./platform-events/types.js";
-import {
-  SCHEDULED_SWEEP_JOB_TYPE,
-  createScheduledMessageSweepHandler,
-} from "./scheduled-messages/sweep.js";
 import type { FrickClusterBus } from "./cluster/bus.js";
 
 export interface ServerOptions {
@@ -240,10 +238,9 @@ export interface ServerOptions {
    */
   blobProcessors?: FrickBlobProcessor[];
   /**
-   * Search subsystem configuration. The framework pre-registers the default
-   * `messages-fts` index against `MessageStream`; apps can add their own via
-   * `searchIndexes`. Supplying an `adapter` overrides the default SQLite FTS5
-   * implementation — useful for routing to Meilisearch or another engine.
+   * Search subsystem configuration. Apps register indexes via `searchIndexes`.
+   * Supplying an `adapter` overrides the default SQLite FTS5 implementation —
+   * useful for routing to Meilisearch or another engine.
    */
   search?: {
     adapter?: FrickSearchAdapter;
@@ -263,6 +260,16 @@ export interface ServerOptions {
    * supported and take precedence for backwards compatibility.
    */
   project?: FrickProjectModule | FrickProjectModuleInput;
+  /**
+   * Third-party identity providers. When set, Frick auto-mounts the
+   * matching routes (e.g. `/auth/apple/verify`, `/auth/apple/notifications`)
+   * and handles JWT verification + session minting. Apps wire their own
+   * User-shaped schema object via `userObject` and an optional
+   * `onFirstSignIn` hook for per-user setup (tenants, memberships, etc.).
+   *
+   * See {@link IdentityProvidersConfig}.
+   */
+  identityProviders?: IdentityProvidersConfig;
   /**
    * Mount multiple Frick "apps" on the same server. Each app gets a URL
    * prefix; `GET <basePath>/schema` returns that app's schema, and Hello
@@ -334,21 +341,14 @@ export function createFrickServer(options: ServerOptions = {}) {
     sendError(response, error, requestId);
   }
   const projections = createFrickProjectionRegistry();
-  projections.register(createConversationInboxProjection());
   const searchIndexes = createFrickSearchIndexRegistry();
-  // Built-in: index MessageStream events as searchable docs. Apps override
-  // by passing their own index with the same name first via `search.indexes`.
-  searchIndexes.register(createMessagesSearchIndex());
   for (const def of options.search?.indexes ?? []) {
     searchIndexes.register(def);
   }
   const store = new FrickStore({
     path: options.dbPath ?? process.env.FRICK_DB_PATH ?? defaultDatabasePath(),
     schema: runtimeSchema,
-    // Seed only when the runtime schema can accept the foundation dev rows.
-    // Empty scaffold schemas must boot without User/Conversation/RoomMember,
-    // while foundation-extending schemas still need Ada/Grace for dev auth.
-    seed: supportsFoundationSeed(runtimeSchema),
+    seed: false,
     projections,
     searchIndexes,
     ...(options.search?.adapter !== undefined ? { searchAdapter: options.search.adapter } : {}),
@@ -398,7 +398,9 @@ export function createFrickServer(options: ServerOptions = {}) {
   const adminTokenFingerprint = config.adminToken
     ? createHash("sha256").update(config.adminToken).digest("hex").slice(0, 12)
     : "";
-  const policyHooks: readonly FrickPolicyHook[] = options.policyHooks ?? [];
+  const policyHooks: readonly FrickPolicyHook[] = [
+    ...(options.policyHooks ?? []),
+  ];
   let inFlight = 0;
   let closing = false;
 
@@ -483,6 +485,14 @@ export function createFrickServer(options: ServerOptions = {}) {
       maxBufferedBytes: limits.maxSseOutboundBufferedBytes,
     },
   );
+  const identityRouter: IdentityRouter | undefined = options.identityProviders
+    ? createIdentityRouter({
+        store,
+        config: options.identityProviders,
+        logger,
+      })
+    : undefined;
+
   const gateway = new SyncGateway(wss, store, {
     onStreamEvent: (event) => sse.publishStreamEvent(event),
     limits,
@@ -543,12 +553,6 @@ export function createFrickServer(options: ServerOptions = {}) {
         blobProcessors: store.blobProcessors,
         logger,
       }),
-    );
-  }
-  if (!jobRegistry.resolve(SCHEDULED_SWEEP_JOB_TYPE)) {
-    jobRegistry.register(
-      SCHEDULED_SWEEP_JOB_TYPE,
-      createScheduledMessageSweepHandler({ store, logger }),
     );
   }
   // Default: worker runs in non-test envs. Tests would otherwise have a
@@ -711,6 +715,13 @@ export function createFrickServer(options: ServerOptions = {}) {
     if (request.method === "GET" && url.pathname === "/health") {
       sendJson(response, 200, { ok: true, service: "frick-server", status: "ok" });
       return;
+    }
+
+    // Third-party identity provider routes (Apple, Google, ...). Mounted
+    // when the app passes `identityProviders` to createFrickServer.
+    if (identityRouter) {
+      const claimed = await identityRouter.handle(request, response);
+      if (claimed) return;
     }
 
     if (request.method === "GET" && url.pathname === "/ready") {
@@ -1058,19 +1069,13 @@ export function createFrickServer(options: ServerOptions = {}) {
           clientIp: clientIpFromRequest(request),
           limits,
         });
-        // Dev-login: in the default tenant, seed users (user-ada, user-grace)
-        // exist; on first dev-login in any other tenant, create the user
-        // object on the fly so explicit-tenant tests don't need a separate
-        // signup round-trip. This auto-create branch is a development
-        // convenience and is gated on `config.demoAuthEnabled` — production
-        // deployments require an explicit `/auth/signup` first.
         if (!store.hasUser(tenantId, userId)) {
-          if (!config.demoAuthEnabled || tenantId === DEFAULT_TENANT_ID) {
-            throw new AccountNotFoundError("Account not found");
-          }
-          store.upsertObject(tenantId, "User", userId, {
+          store.createAccountUser({
+            tenantId,
+            userId,
+            handle: devHandleFromUserId(userId),
             displayName: userId,
-            avatarBlobId: undefined,
+            password: randomToken(32),
           });
           logger.info("frick.auth.dev_login_auto_create", {
             event: "frick.auth.dev_login_auto_create",
@@ -1165,43 +1170,15 @@ export function createFrickServer(options: ServerOptions = {}) {
       return;
     }
 
-    if (request.method === "POST" && url.pathname === "/conversations") {
-      try {
-        const body = await readJsonBody(request, tenantLimits.maxHttpBodyBytes);
-        const kind = parseConversationKind(typeof body.kind === "string" ? body.kind : "group");
-        const title =
-          typeof body.title === "string" && body.title.trim().length > 0
-            ? normalizeConversationTitle(body.title)
-            : undefined;
-        if (!title && kind !== "dm") {
-          throw new Error("title must be a non-empty string");
-        }
-        const participantUserIds = parseParticipantUserIds(body.participantUserIds);
-        const conversationId = createConversationId(store, principal.tenantId, title ?? kind);
-        const created = store.createConversation({
-          conversationId,
-          ...(title !== undefined ? { title } : {}),
-          kind,
-          createdBy: principal.userId,
-          participantUserIds,
-          tenantId: principal.tenantId,
-        });
-        gateway.publishObjects("Conversation", [created.conversation], principal.tenantId);
-        gateway.publishObjects("RoomMember", created.members, principal.tenantId);
-        sendJson(response, 201, {
-          schemaHash: store.schema.hash,
-          conversation: created.conversation,
-          member: created.member,
-          members: created.members,
-        });
-      } catch (error) {
-        sendErrorWithMetrics(response, error, "conversation_rejected");
-      }
-      return;
-    }
-
     if (request.method === "GET" && url.pathname === "/objects") {
-      const type = url.searchParams.get("type") ?? "Conversation";
+      const type = url.searchParams.get("type");
+      if (!type) {
+        sendJson(response, 400, {
+          error: "type_required",
+          message: "Query parameter type is required",
+        });
+        return;
+      }
       sendJson(response, 200, {
         schemaHash: store.schema.hash,
         type,
@@ -1272,26 +1249,6 @@ export function createFrickServer(options: ServerOptions = {}) {
           return;
         }
         sendErrorWithMetrics(response, error, "object_write_rejected");
-      }
-      return;
-    }
-
-    if (request.method === "GET" && url.pathname === "/inbox") {
-      const userId = url.searchParams.get("userId") ?? principal.userId;
-      try {
-        assertCanReadInbox(
-          principal,
-          userId,
-          tenantMembershipReader(store, principal.tenantId),
-          policyHooks,
-        );
-        sendJson(response, 200, {
-          schemaHash: store.schema.hash,
-          userId,
-          data: store.listInbox(principal.tenantId, userId),
-        });
-      } catch (error) {
-        sendErrorWithMetrics(response, error, "inbox_rejected");
       }
       return;
     }
@@ -1398,14 +1355,6 @@ export function createFrickServer(options: ServerOptions = {}) {
           tenantMembershipReader(store, principal.tenantId),
           policyHooks,
         );
-        if (name === "conversation-inbox" && query.userId !== undefined) {
-          assertCanReadInbox(
-            principal,
-            query.userId,
-            tenantMembershipReader(store, principal.tenantId),
-            policyHooks,
-          );
-        }
         const ctx: FrickProjectionContext = {
           tenantId: principal.tenantId,
           store,
@@ -2036,21 +1985,6 @@ function safeListAppliedMigrations(store: FrickStore) {
   }
 }
 
-function supportsFoundationSeed(schema: FrickSchema): boolean {
-  const objects = new Map(schema.objects.map((object) => [object.name, object]));
-  const requirements: Record<string, readonly string[]> = {
-    User: ["displayName"],
-    Conversation: ["kind", "title", "createdBy"],
-    RoomMember: ["conversationId", "userId", "role"],
-  };
-  return Object.entries(requirements).every(([name, fields]) => {
-    const object = objects.get(name);
-    if (!object) return false;
-    const availableFields = new Set(object.fields.map((field) => field.name));
-    return fields.every((field) => availableFields.has(field));
-  });
-}
-
 function resolveConfig(input: FrickConfig | FrickConfigOverrides | undefined): FrickConfig {
   if (!input) {
     return loadFrickConfig();
@@ -2110,19 +2044,6 @@ class CorsOriginRejectedError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "CorsOriginRejectedError";
-  }
-}
-
-/**
- * Thrown by `/auth/dev-login` when demo-auth auto-create is disabled and
- * the (tenantId, userId) pair does not yet exist. Maps to 401 +
- * `auth.unauthenticated` with `details.reason = "accountNotFound"`.
- */
-class AccountNotFoundError extends Error {
-  readonly reason = "accountNotFound";
-  constructor(message = "Account not found") {
-    super(message);
-    this.name = "AccountNotFoundError";
   }
 }
 
@@ -2335,9 +2256,7 @@ function sendError(response: http.ServerResponse, error: unknown, requestId: str
         ? 415
         : error instanceof AdminAuditWriteError
           ? 500
-          : error instanceof AccountNotFoundError
-            ? 401
-            : error instanceof AuthenticationError
+          : error instanceof AuthenticationError
               ? 401
               : error instanceof AuthorizationError
                 ? 403
@@ -2363,9 +2282,6 @@ function sendError(response: http.ServerResponse, error: unknown, requestId: str
     }
   }
   if (error instanceof CorsOriginRejectedError) {
-    details.reason = error.reason;
-  }
-  if (error instanceof AccountNotFoundError) {
     details.reason = error.reason;
   }
   if (error instanceof AdminAuditWriteError) {
@@ -2428,9 +2344,6 @@ function httpLimitStatus(error: FrickLimitError): number {
 function httpErrorCode(error: unknown): FrickErrorCode {
   if (error instanceof SessionExpiredError) {
     return "auth.sessionExpired";
-  }
-  if (error instanceof AccountNotFoundError) {
-    return "auth.unauthenticated";
   }
   if (error instanceof AuthenticationError) {
     return "auth.unauthenticated";
@@ -3775,10 +3688,8 @@ function isProtectedPath(pathname: string): boolean {
   return (
     pathname === "/objects" ||
     pathname.startsWith("/objects/") ||
-    pathname === "/inbox" ||
     pathname === "/projections" ||
     pathname.startsWith("/projections/") ||
-    pathname === "/conversations" ||
     pathname === "/blobs" ||
     pathname.startsWith("/blobs/") ||
     pathname === "/signals" ||
@@ -4046,7 +3957,7 @@ function createSessionForUser(
 ): StoredSession {
   const expiresAt = new Date(Date.now() + config.sessionTtlSeconds * 1000).toISOString();
   const sessionToken = randomToken(32);
-  store.recordUserDevice(deviceId, userId, platform, new Date().toISOString(), tenantId);
+  void platform;
   return store.createSession({ sessionToken, userId, deviceId, replicaId, expiresAt, tenantId });
 }
 
@@ -4087,14 +3998,6 @@ function normalizePassword(value: string): string {
   return value;
 }
 
-function normalizeConversationTitle(value: string): string {
-  const title = value.trim().replace(/\s+/g, " ");
-  if (title.length < 1 || title.length > 80) {
-    throw new Error("title must be between 1 and 80 characters");
-  }
-  return title;
-}
-
 function userIdFromHandle(tenantId: string, handle: string): string {
   // user-id PK is global across tenants; namespace non-default tenants so
   // the same handle in two tenants resolves to distinct user ids without
@@ -4103,53 +4006,8 @@ function userIdFromHandle(tenantId: string, handle: string): string {
   return tenantId === DEFAULT_TENANT_ID ? `user-${base}` : `user-${tenantId}-${base}`;
 }
 
-function parseConversationKind(value: string): "dm" | "group" | "channel" {
-  if (value === "dm" || value === "group" || value === "channel") {
-    return value;
-  }
-  throw new Error("kind must be one of dm, group, channel");
-}
-
-function parseParticipantUserIds(value: unknown): string[] {
-  if (value === undefined) {
-    return [];
-  }
-  if (!Array.isArray(value)) {
-    throw new Error("participantUserIds must be an array");
-  }
-  return Array.from(
-    new Set(
-      value.map((item, index) => {
-        const userId = requireString(item, `participantUserIds[${index}]`).trim();
-        if (!/^user-[a-z0-9][a-z0-9_-]*$/i.test(userId)) {
-          throw new Error(`participantUserIds[${index}] must be a user id`);
-        }
-        return userId;
-      }),
-    ),
-  );
-}
-
-function createConversationId(store: FrickStore, tenantId: string, seed: string): string {
-  const slug = slugFromTitle(seed);
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    const conversationId = `conversation-${slug}-${randomBytes(3).toString("hex")}`;
-    if (!store.readObject(tenantId, "Conversation", conversationId)) {
-      return conversationId;
-    }
-  }
-  throw new Error("Could not allocate a unique conversation id");
-}
-
-function slugFromTitle(title: string): string {
-  const slug = title
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
-  return slug.length > 0 ? slug : "thread";
+function devHandleFromUserId(userId: string): string {
+  return normalizeHandle(userId.replace(/^user-/, "").replace(/[^a-z0-9_-]+/gi, "-").slice(0, 32) || "dev-user");
 }
 
 function randomToken(byteLength: number): string {

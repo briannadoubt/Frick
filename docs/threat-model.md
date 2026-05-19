@@ -60,27 +60,23 @@ with `senderId: "user-grace"` posted from Ada's session.
   `session.replicaId`). Request bodies cannot override these values; the
   WebSocket hello frame's `replicaId`/`deviceId` are accepted as cosmetic
   metadata but are not used for authorization once a session is bound.
-- `assertCanAppend` checks `payload.senderId === principal.userId` for
-  `MessageSent` and `payload.userId === principal.userId` for
-  `ReceiptAdvanced`, producing `ownerMismatch` denials.
-- `TypingState` presence writes reject user spoofing when the row key or
-  value carries a user id that differs from the session principal.
+- `assertCanAppend` authenticates the writer and runs app-provided
+  `policyHooks`; payload ownership checks are app/domain policy.
 - `assertBlobOwnership` requires the upload's `ownerId` to match the
   principal's `userId`, denying with `ownerMismatch`.
 
 **Known gaps.**
 
-- Custom stream/event types beyond `MessageStream` get no payload-binding
-  check by default. App authors must register `policyHooks` on
-  `createFrickServer` to tighten app-specific stream rules.
+- Stream/event payload binding is not inferred by default. App authors must
+  register `policyHooks` on `createFrickServer` to tighten app-specific stream
+  rules.
 
 ---
 
 ## Unauthorized subscriptions
 
 **Threat.** A subscriber asks for a stream, signal, or object collection
-they are not permitted to read (e.g. a non-member subscribing to a private
-conversation's `MessageStream`).
+they are not permitted to read.
 
 **Today.**
 
@@ -91,15 +87,13 @@ conversation's `MessageStream`).
   ownerMismatch, unauthenticated }`.
 - The SyncGateway uses the same primitives for WebSocket subscribe/append,
   signal, and presence frames before opening a delta channel or accepting a
-  write. Foundation `TypingState` presence is gated by conversation
-  membership when the conversation exists locally.
+  write.
 
 **Known gaps.**
 
-- The framework's built-in authz primitives only recognise foundation
-  membership shapes (`MessageStream`, conversation-keyed signals, and
-  `TypingState`). App-specific streams, signals, and presence types are
-  documented as the policy-hook extension point in `authz.ts`.
+- App-specific visibility semantics are owned by policy hooks; without hooks,
+  authenticated tenant users can use declared objects, streams, signals, and
+  presence types inside their tenant.
 
 ---
 
@@ -113,15 +107,9 @@ framework cannot prove.
 
 - `POST /search` requires authentication, resolves the index before querying,
   and scopes adapter calls to `principal.tenantId`.
-- The built-in `messages-fts` index keeps default tenant-user access and is
-  filtered through `MessageStream` membership before hits leave the server.
-- App-provided indexes backed by foundation sources with framework visibility
-  checks, such as `Conversation`, `RoomMember`, `MessageDraft`, and
-  `MessageStream`, can be queried by tenant users and still pass through
-  source-level hit filtering.
-- App-provided indexes over custom app sources are denied to tenant users by
-  default. Apps must register a `policyHooks` handler that returns an explicit
-  allow for the `search.query` action and target index. Deny hooks still win.
+- App-provided indexes are denied to tenant users by default. Apps must
+  register a `policyHooks` handler that returns an explicit allow for the
+  `search.query` action and target index. Deny hooks still win.
 - Admin principals can query custom search indexes for inspection and
   operational workflows.
 
@@ -298,7 +286,7 @@ and durable retention policies remain production-hardening follow-ups.
 
 Frick threads an opaque `tenant_id` column through every framework-managed
 storage table (objects, stream events, presence leases, signal outbox, blob
-metadata + content, conversation inbox, jobs, auth sessions, auth accounts,
+metadata + content, jobs, auth sessions, auth accounts,
 idempotency keys) and a `tenantId` field on every `Principal`. The principal's
 tenant is derived from the session token at the start of each request and
 cannot be overridden by the body or path. Storage reads are tenant-scoped, so

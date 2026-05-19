@@ -11,19 +11,19 @@ pnpm add @frick/react @frick/core @frick/protocol react
 ## Usage
 
 ```tsx
-import { FrickProvider, useObjects, useStream, useProjection, useSyncStatus } from "@frick/react";
+import { FrickProvider, useObjects, useStream, useSyncStatus } from "@frick/react";
 
 function App() {
   return (
     <FrickProvider endpoint="ws://127.0.0.1:4099/_frick/sync">
-      <Inbox />
+      <Items />
     </FrickProvider>
   );
 }
 
-function Inbox() {
-  const rows = useProjection<{ unreadCount: number }>("conversation-inbox");
-  return <pre>{JSON.stringify(rows, null, 2)}</pre>;
+function Items() {
+  const items = useObjects("Item");
+  return <pre>{JSON.stringify(items, null, 2)}</pre>;
 }
 ```
 
@@ -36,8 +36,17 @@ function Inbox() {
 - `usePresence(name, key)` / `useSetPresence(name, key)`
 - `useSignalChannel(name, key)` / `useSendSignal(name, key)`
 - `useAppend(stream, key)`
+- `useTrackAnalyticsEvent()`
 - `useSyncStatus()`
 - `useInbox(userId)` / `useOptionalEndpoint(path)`
+
+## Analytics
+
+`<FrickProvider>` records route analytics after a session is available. The
+default payload includes only `path` and document `title`; pass
+`autoAnalytics={false}` to disable it or an options object to customize event
+names and route properties. `useTrackAnalyticsEvent()` posts explicit
+authenticated product events through the same `/analytics/events` route.
 
 ## License
 

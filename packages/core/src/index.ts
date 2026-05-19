@@ -2,7 +2,6 @@ export * from "./background-sync.js";
 export * from "./analytics.js";
 export * from "./bindings.js";
 export * from "./cache.js";
-export * from "./chat.js";
 export * from "./http.js";
 export * from "./indexeddb-cache.js";
 export * from "./optimistic.js";

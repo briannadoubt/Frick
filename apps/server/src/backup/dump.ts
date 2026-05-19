@@ -79,11 +79,6 @@ const TABLE_ORDER: readonly TableSpec[] = [
     orderBy: "tenant_id ASC, parent_blob_id ASC, derivative_id ASC",
   },
   {
-    name: "conversation_inbox",
-    tenantScoped: true,
-    orderBy: "tenant_id ASC, conversation_id ASC, user_id ASC",
-  },
-  {
     name: "search_indexes",
     tenantScoped: true,
     orderBy: "tenant_id ASC, index_name ASC, doc_id ASC",

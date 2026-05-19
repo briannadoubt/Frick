@@ -101,7 +101,7 @@ Storage migrations live alongside the server. For pure schema-driven changes (ne
 
 - **Field naming.** `camelCase`. Booleans read as predicates (`isArchived`, not `archived`). Timestamps end in `At` (`createdAt`, `expiresAt`). Ids end in `Id` (`messageId`, `userId`).
 - **Stable ids.** Pick the next free numeric `id` and never reuse one. If you delete a field, leave a comment so the next author doesn't accidentally pick the same id.
-- **Objects vs streams vs projections.** Use an **object** for state that has a current value clients want to render directly (User, Conversation, Reaction). Use a **stream** for append-only history that clients want to tail (MessageStream). Use a **projection** for a derived view that's expensive to compute on every client (an unread-count, a leaderboard) — write it once on the server, push deltas to subscribers.
+- **Objects vs streams vs projections.** Use an **object** for state that has a current value clients want to render directly (Profile, Document, Reaction). Use a **stream** for append-only history that clients want to tail (ActivityStream). Use a **projection** for a derived view that's expensive to compute on every client (an unread-count, a leaderboard) — write it once on the server, push deltas to subscribers.
 - **Indexes.** Declare every access pattern you actually rely on. The framework will not create implicit indexes; missing one means a full scan in production.
 - **Enums over free-form strings.** If a field has a known small set of values, model it as `kind: "enum"`. Future-you will get exhaustive switches in Swift and Kotlin for free.
 

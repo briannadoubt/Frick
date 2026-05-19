@@ -39,15 +39,36 @@ export function generateSwiftArtifact(schema: FrickSchema): string {
 }
 
 function swiftSchemaDescriptor(schema: FrickSchema): string {
-  const objectNames = schema.objects.map((t) => `    ${t.id}: ${JSON.stringify(t.name)},`).join("\n");
-  const streamNames = schema.streams.map((t) => `    ${t.id}: ${JSON.stringify(t.name)},`).join("\n");
-  const eventNames = schema.events.map((t) => `    ${t.id}: ${JSON.stringify(t.name)},`).join("\n");
-  const objectFieldEntries = schema.objects
-    .map((t) => `    ${t.id}: [${t.fields.map((f) => `${f.id}: ${JSON.stringify(f.name)}`).join(", ")}],`)
-    .join("\n");
-  const eventFieldEntries = schema.events
-    .map((t) => `    ${t.id}: [${t.fields.map((f) => `${f.id}: ${JSON.stringify(f.name)}`).join(", ")}],`)
-    .join("\n");
+  // Swift parses `[ ]` as an empty array literal, not a dictionary literal —
+  // so an empty schema needs `[:]` instead. Build each map as a single
+  // string that picks the right form based on whether there are entries.
+  const dictMap = <T>(items: readonly T[], render: (item: T) => string): string => {
+    if (items.length === 0) return "[:]";
+    return ["[", ...items.map((item) => `    ${render(item)},`), "  ]"].join("\n");
+  };
+
+  const objectNames = dictMap(
+    schema.objects,
+    (t) => `${t.id}: ${JSON.stringify(t.name)}`,
+  );
+  const streamNames = dictMap(
+    schema.streams,
+    (t) => `${t.id}: ${JSON.stringify(t.name)}`,
+  );
+  const eventNames = dictMap(
+    schema.events,
+    (t) => `${t.id}: ${JSON.stringify(t.name)}`,
+  );
+  const objectFieldEntries = dictMap(
+    schema.objects,
+    (t) =>
+      `${t.id}: [${t.fields.map((f) => `${f.id}: ${JSON.stringify(f.name)}`).join(", ") || ":"}]`,
+  );
+  const eventFieldEntries = dictMap(
+    schema.events,
+    (t) =>
+      `${t.id}: [${t.fields.map((f) => `${f.id}: ${JSON.stringify(f.name)}`).join(", ") || ":"}]`,
+  );
 
   return [
     "/// Type-id → name and (typeId → (fieldId → fieldName)) tables for the",
@@ -55,21 +76,11 @@ function swiftSchemaDescriptor(schema: FrickSchema): string {
     "/// tuples (`PackedObjectRecord` / `PackedStreamEvent`) into named-field",
     "/// shapes for consumers.",
     "public enum FrickSchemaDescriptor {",
-    "  public static let objectNames: [Int: String] = [",
-    objectNames,
-    "  ]",
-    "  public static let streamNames: [Int: String] = [",
-    streamNames,
-    "  ]",
-    "  public static let eventNames: [Int: String] = [",
-    eventNames,
-    "  ]",
-    "  public static let objectFields: [Int: [Int: String]] = [",
-    objectFieldEntries,
-    "  ]",
-    "  public static let eventFields: [Int: [Int: String]] = [",
-    eventFieldEntries,
-    "  ]",
+    `  public static let objectNames: [Int: String] = ${objectNames}`,
+    `  public static let streamNames: [Int: String] = ${streamNames}`,
+    `  public static let eventNames: [Int: String] = ${eventNames}`,
+    `  public static let objectFields: [Int: [Int: String]] = ${objectFieldEntries}`,
+    `  public static let eventFields: [Int: [Int: String]] = ${eventFieldEntries}`,
     "}",
   ].join("\n");
 }

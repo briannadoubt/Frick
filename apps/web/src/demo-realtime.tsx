@@ -13,7 +13,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { readReceiptsForConversation, type InboxRow, type RoomMember } from "@frick/core/chat";
+import { readReceiptsForConversation, type InboxRow, type RoomMember } from "./chat-foundation.js";
 import {
   useAppend,
   useFrick,
@@ -22,8 +22,8 @@ import {
   useProjection,
   useSetPresence,
   useStream,
-} from "./index.js";
-import type { ChatStreamEvent } from "@frick/core/chat";
+} from "@frick/react";
+import type { ChatStreamEvent } from "./chat-foundation.js";
 
 /** Aggregated reactions for a single message, computed from MessageStream events. */
 export interface ReactionAggregate {

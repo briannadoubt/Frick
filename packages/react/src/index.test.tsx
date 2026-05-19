@@ -45,18 +45,18 @@ describe("useProjection", () => {
     expect(typeof useProjection).toBe("function");
     expect(typeof useProjectionRows).toBe("function");
     expect(typeof useTrackAnalyticsEvent).toBe("function");
-    const signal = client.projection<{ unreadCount: number }>("conversation-inbox");
+    const signal = client.projection<{ count: number }>("activity-feed");
     signal.set(
       new Map([
-        ["user-ada:conversation-general", { unreadCount: 2 }],
-        ["user-grace:conversation-general", { unreadCount: 0 }],
+        ["item-a", { count: 2 }],
+        ["item-b", { count: 0 }],
       ]),
     );
     expect(signal.value.size).toBe(2);
-    expect(signal.value.get("user-ada:conversation-general")?.unreadCount).toBe(2);
+    expect(signal.value.get("item-a")?.count).toBe(2);
     // Subsequent calls return the same signal instance — the hook relies on
     // this to keep referential equality stable across renders.
-    expect(client.projection("conversation-inbox")).toBe(signal);
+    expect(client.projection("activity-feed")).toBe(signal);
   });
 });
 

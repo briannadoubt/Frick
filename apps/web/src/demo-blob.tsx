@@ -1,7 +1,7 @@
 /**
  * Blob upload React surface.
  *
- * Wraps `uploadImageAttachment` from `@frick/core/chat` into an
+ * Wraps `uploadImageAttachment` from `./chat-foundation.js` into an
  * ergonomic hook + drop-target component. Adds optional client-side
  * image compression via `createImageBitmap` + `OffscreenCanvas` so the
  * caller doesn't have to thread blob processing through their own code.
@@ -13,8 +13,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
-import { uploadImageAttachment, type AttachmentMetadata } from "@frick/core/chat";
-import { useFrick, useFrickHttpEndpoint, useFrickSession } from "./index.js";
+import { uploadImageAttachment, type AttachmentMetadata } from "./chat-foundation.js";
+import { useFrick, useFrickHttpEndpoint, useFrickSession } from "@frick/react";
 
 export interface UploadOptions {
   /**

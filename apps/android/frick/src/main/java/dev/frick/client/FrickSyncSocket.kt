@@ -464,7 +464,7 @@ class FrickSyncSocket internal constructor(
     }
 
     /**
-     * Set a presence row (e.g. `setPresence("TypingState", "$convo:$user:$device", mapOf("isTyping" to true))`).
+     * Set a presence row (e.g. `setPresence("CursorState", "$doc:$user:$device", mapOf("active" to true))`).
      * The server applies the row's `ttlMs` and broadcasts a
      * [FrickInboundEvent.PresenceDelta] to every subscriber.
      */
