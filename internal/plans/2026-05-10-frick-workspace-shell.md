@@ -1276,7 +1276,7 @@ PATH=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home/bin:/opt/hom
 ./gradlew :app:installDebug
 adb -s emulator-5554 shell am start -n dev.frick.demo/.MainActivity
 adb -s emulator-5554 exec-out uiautomator dump /dev/tty > /tmp/frick-workspace-android.xml
-python3 /Users/bri/.codex/plugins/cache/openai-curated/test-android-apps/63976030/skills/android-emulator-qa/scripts/ui_tree_summarize.py /tmp/frick-workspace-android.xml /tmp/frick-workspace-android.txt
+python3 path/to/ui_tree_summarize.py /tmp/frick-workspace-android.xml /tmp/frick-workspace-android.txt
 cat /tmp/frick-workspace-android.txt
 ```
 
