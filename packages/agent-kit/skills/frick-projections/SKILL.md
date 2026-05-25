@@ -5,7 +5,7 @@ description: Use when adding or debugging Frick projections, derived views, proj
 
 # Frick Projections
 
-Read `docs/onboarding.md` and `docs/authoring.md`. In scaffolded apps, prefer `frick scaffold projection <Name>` or `pnpm cli scaffold projection <Name>`.
+Read `docs/onboarding.md` and `docs/authoring.md`. In scaffolded apps, prefer `frick scaffold projection <name>` or `pnpm cli scaffold projection <name>` with a kebab-case projection name.
 
 Projection guidance:
 - Define source objects, streams, and events in the spine before implementation.

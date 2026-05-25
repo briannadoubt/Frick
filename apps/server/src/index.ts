@@ -1,10 +1,74 @@
-export { createFrickServer, defaultDatabasePath, type ServerOptions } from "./server.js";
+export { createFrickServer, defaultDatabasePath, type FrickAppRoute, type ServerOptions } from "./server.js";
 export {
   type FrickJobContext,
   type FrickJobHandler,
   type FrickJobRegistry,
   type FrickJobResult,
 } from "./jobs/registry.js";
+export {
+  createFrickRecurringRegistry,
+  RECURRING_MIN_INTERVAL_MS,
+  type FrickRecurringJob,
+  type FrickRecurringRegistry,
+} from "./jobs/recurring.js";
+export {
+  createFrickProjectionRegistry,
+  type FrickProjection,
+  type FrickProjectionContext,
+  type FrickProjectionHandler,
+  type FrickProjectionRegistry,
+  type FrickProjectionSource,
+  type FrickProjectionSourceObject,
+  type FrickProjectionSourceStream,
+  type FrickProjectionWriteEvent,
+  type ProjectionApplyResult,
+  type ProjectionChange,
+  type ProjectionDeltaNotice,
+} from "./projections/registry.js";
+export {
+  PUSH_REVOCATION_ERROR_CODES,
+  isPushRevocationError,
+  type FrickNotificationContext,
+  type FrickNotificationIntent,
+  type FrickPushAdapter,
+  type FrickPushDelivery,
+  type PushDeviceRegistration,
+  type PushPlatform,
+} from "./push/types.js";
+export {
+  createFrickApnsAdapter,
+  signApnsJwt,
+  type ApnsAdapterOptions,
+  type FrickApnsAdapter,
+} from "./push/apns-adapter.js";
+export {
+  createFrickFcmAdapter,
+  type FcmAdapterOptions,
+  type FrickFcmAdapter,
+} from "./push/fcm-adapter.js";
+export {
+  createFrickWebPushAdapter,
+  validateWebPushRegistrationToken,
+  type WebPushAdapterOptions,
+  type FrickWebPushAdapter,
+} from "./push/web-push-adapter.js";
+export {
+  APNS_SETTINGS_KEY,
+  FCM_SETTINGS_KEY,
+  WEB_PUSH_SETTINGS_KEY,
+  encryptCredential,
+  decryptCredential,
+  loadApnsCredentials,
+  loadFcmCredentials,
+  loadWebPushCredentials,
+  saveApnsCredentials,
+  saveFcmCredentials,
+  saveWebPushCredentials,
+  type ApnsCredentials,
+  type FcmCredentials,
+  type PushCredentialError,
+  type WebPushCredentials,
+} from "./push/credentials.js";
 export { FrickStore, type StoreOptions } from "./store.js";
 export { createNoopLogger, type FrickLogger } from "./logger.js";
 export {

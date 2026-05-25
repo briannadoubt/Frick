@@ -316,12 +316,42 @@ so a deployment audit can flag it.
 
 ---
 
+## Identity providers (current state)
+
+Apps may configure `createFrickServer({ identityProviders })` to mount provider
+routes for Apple, Google, and email/password accounts. The framework verifies
+Apple identity and notification JWTs with `jose`, Apple's published JWKS,
+issuer `https://appleid.apple.com`, and the app-configured audience. It
+verifies Google ID tokens with Google's published JWKS, accepted Google issuer
+values, and the app-configured OAuth client id. Apple and Google use the
+verified `sub` claim as the stable provider subject, never a client-supplied
+user id.
+
+The app owns the User schema object. Frick writes and reads that row through
+the configured field mapping, calls `onFirstSignIn` so the app can choose the
+tenant and optional user id, and mints a normal bearer session. Email/password
+signup stores password credentials through the server account store and
+normalizes email handles to lowercase. Apple `consent-revoked` and
+`account-delete` notifications set the mapped `revokedAt` field and delete
+active sessions for the user before calling the optional `onRevoke` hook.
+
+**Known gaps.**
+
+- Provider sessions currently use a fixed 30-day lifetime instead of the
+  `FRICK_SESSION_TTL_SECONDS` knob used by built-in password/dev-login
+  sessions.
+- The provider routes do not yet share the built-in auth attempt limiter.
+- Generic OIDC, SAML, and arbitrary OAuth provider routing are not implemented.
+
+---
+
 ## Out-of-scope (deliberate)
 
 The following are recognised threats the framework does not address and is
 not yet planning to:
 
-- Federated identity (OIDC, SAML, OAuth) — deferred indefinitely.
+- Generic federated identity beyond the built-in Apple, Google, and
+  email/password provider routes (OIDC, SAML, or arbitrary OAuth providers).
 - Side-channel attacks on the SQLite file (encryption at rest).
 - Hardware attestation for native clients.
 - End-to-end encryption of message payloads. The framework sees plaintext

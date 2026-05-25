@@ -1,13 +1,16 @@
 # Push notification adapters
 
-Frick ships two production push adapters in `@frick/server`:
+Frick currently has three push adapter implementations:
 
 | Adapter | Module | Platform |
 |---|---|---|
-| APNs | [`apps/server/src/push/apns-adapter.ts`](../apps/server/src/push/apns-adapter.ts) | `apns` |
-| FCM (v1) | [`apps/server/src/push/fcm-adapter.ts`](../apps/server/src/push/fcm-adapter.ts) | `fcm` |
+| APNs | public subpath `@frick/server/push/apns-adapter`; source at [`apps/server/src/push/apns-adapter.ts`](../apps/server/src/push/apns-adapter.ts) | `apns` |
+| FCM (v1) | public subpath `@frick/server/push/fcm-adapter`; source at [`apps/server/src/push/fcm-adapter.ts`](../apps/server/src/push/fcm-adapter.ts) | `fcm` |
+| Web Push | internal source at [`apps/server/src/push/web-push-adapter.ts`](../apps/server/src/push/web-push-adapter.ts) | `webPush` |
 
-Both adapters conform to [`FrickPushAdapter`](../apps/server/src/push/types.ts) and slot into the existing notification router, job framework, and dead-token revocation paths. They only handle the platform-specific encoding + transport step — fan-out, retries, and registration tombstoning live in the router.
+All adapters conform to [`FrickPushAdapter`](../apps/server/src/push/types.ts) and slot into the existing notification router, job framework, and dead-token revocation paths. They only handle the platform-specific encoding + transport step — fan-out, retries, and registration tombstoning live in the router.
+
+APNs and FCM are the documented package exports and have CLI credential workflows today. Web Push registration tokens are accepted by the server and validated as PushSubscription JSON, but the adapter is not yet exported through `@frick/server` and `frick tenants set-push` does not yet write Web Push VAPID credentials.
 
 The framework's in-memory `TestPushAdapter` ships unchanged for local development and tests.
 
@@ -56,7 +59,7 @@ process.on("SIGTERM", async () => {
 });
 ```
 
-The adapters resolve per-tenant credentials at delivery time via `ctx.store.tenantSettings`. There is no per-tenant *adapter instance* — one global APNs adapter handles every tenant, with cached HTTP/2 sessions and JWTs keyed by `(tenantId, endpoint)` and `(tenantId, keyId)` respectively. FCM is the same: one global adapter, OAuth2 access tokens cached per `(tenantId, clientEmail)`.
+The adapters resolve per-tenant credentials at delivery time via `ctx.store.tenantSettings`. There is no per-tenant *adapter instance* — one global APNs adapter handles every tenant, with cached HTTP/2 sessions and JWTs keyed by `(tenantId, endpoint)` and `(tenantId, keyId)` respectively. FCM is the same: one global adapter, OAuth2 access tokens cached per `(tenantId, clientEmail)`. The Web Push implementation signs VAPID JWTs per endpoint origin and deliberately sends an empty push body; encrypted Web Push payloads remain follow-up work.
 
 ## Required environment variable
 
@@ -102,6 +105,15 @@ frick tenants set-push tenant-acme \
 
 The CLI reads `project_id`, `client_email`, and `private_key` out of the service-account JSON and discards the rest. The wrapped envelope is stored under `tenant_settings.push.fcm.encrypted`.
 
+### Web Push
+
+The server accepts `platform: "webPush"` registrations when the registration
+token is JSON for a public HTTPS `PushSubscription`. The current adapter reads
+VAPID credentials from `tenant_settings.push.webPush.encrypted`, but there is
+no public `frick tenants set-push --platform webPush` command yet. Treat Web
+Push credential provisioning as framework-internal until a documented CLI or
+package export is added.
+
 ## Observability
 
 Every fan-out attempt writes a row to the DevTools event feed:
@@ -129,12 +141,12 @@ The adapters normalize platform-specific failures onto a stable set of codes:
 
 | Code | Source | Router behavior |
 |---|---|---|
-| `push.unregistered` | APNs 410 / FCM `UNREGISTERED` | **Revokes** the registration |
-| `push.badDeviceToken` | APNs `BadDeviceToken` / FCM `INVALID_ARGUMENT` / `SENDER_ID_MISMATCH` | **Revokes** the registration |
+| `push.unregistered` | APNs 410 / FCM `UNREGISTERED` / Web Push 404 or 410 | **Revokes** the registration |
+| `push.badDeviceToken` | APNs `BadDeviceToken` / FCM `INVALID_ARGUMENT` / `SENDER_ID_MISMATCH` / invalid Web Push subscription JSON | **Revokes** the registration |
 | `push.tokenExpired` | APNs `ExpiredProviderToken` | **Revokes** the registration |
-| `push.rateLimited` | APNs 429 / FCM `QUOTA_EXCEEDED` / FCM 429 | Surfaced; not revoked |
-| `push.serverError` | APNs 5xx / FCM 5xx | Surfaced; not revoked |
-| `push.payloadTooLarge` | APNs 413 | Surfaced; not revoked |
+| `push.rateLimited` | APNs 429 / FCM `QUOTA_EXCEEDED` / FCM 429 / Web Push 429 | Surfaced; not revoked |
+| `push.serverError` | APNs 5xx / FCM 5xx / Web Push 5xx | Surfaced; not revoked |
+| `push.payloadTooLarge` | APNs 413 / Web Push 413 | Surfaced; not revoked |
 | `push.deliveryFailed` | Anything else | Surfaced; not revoked |
 | `push.credentials.missing` | No `tenant_settings` row | Adapter returns `skipped` |
 | `push.credentials.disabled` | `FRICK_PUSH_CRED_KEY` unset/invalid | Adapter returns `skipped` |
@@ -146,8 +158,8 @@ Apps that want different revocation behavior can subclass the adapter or supply 
 ## Threat model notes
 
 - **At rest:** credentials are AES-256-GCM ciphertext. Anyone with read access to `tenant_settings` plus `FRICK_PUSH_CRED_KEY` can decrypt; without the key, the ciphertext is opaque.
-- **In transit:** APNs uses TLS via HTTP/2; FCM uses TLS via HTTPS. The adapters don't pin certificates.
-- **In memory:** decrypted credentials live on the adapter's HTTP/2 session cache (APNs) or in the closure of the JWT signer (FCM). They are not written to logs.
-- **JWTs:** APNs JWTs are signed with the tenant's `.p8`; FCM service-account JWTs are short-lived (1 hour) and used only to obtain a longer-lived OAuth2 access token. Tokens are not persisted.
+- **In transit:** APNs uses TLS via HTTP/2; FCM and Web Push use TLS via HTTPS. The adapters don't pin certificates.
+- **In memory:** decrypted credentials live on the adapter's HTTP/2 session cache (APNs), in the closure of the JWT signer (FCM), or in the Web Push VAPID signing path. They are not written to logs.
+- **JWTs:** APNs JWTs are signed with the tenant's `.p8`; FCM service-account JWTs are short-lived (1 hour) and used only to obtain a longer-lived OAuth2 access token; Web Push VAPID JWTs are cached per public key and endpoint origin. Tokens are not persisted.
 
 Operators rotating credentials should call `tenants set-push` again with the new material; the adapters will swap to the new JWT on the next refresh window (no restart required for FCM; APNs needs the cached JWT to expire, which happens within ~50 minutes).

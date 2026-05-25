@@ -1,6 +1,6 @@
 # Schema Author Tutorial
 
-This tutorial is for someone adding a new object, event, or projection to the foundation schema (or to a scaffolded app's schema). By the end you will have added a `Reaction` object type end-to-end: edited the schema, regenerated Swift and Kotlin DTOs, confirmed there are no breaking changes via `frick lint`, and decided whether to bump `schemaRevision`.
+This tutorial is for someone adding a new object, event, or projection to the foundation schema (or to a scaffolded app's schema). By the end you will have added a small `Task` object and `TaskEvents` stream end-to-end: edited the schema, regenerated Swift and Kotlin DTOs, confirmed there are no breaking changes via `frick lint`, and decided whether to bump `schemaRevision`.
 
 ## Mental model
 
@@ -19,36 +19,59 @@ Two consequences of "schema is canonical":
 1. **Stable ids matter more than names.** Every object, field, stream, and event has a numeric `id`. The framework tracks compatibility by id — renaming a field is safe, reusing an id is not.
 2. **Drift is detected, not tolerated.** `pnpm verify:generated` regenerates every tracked schema, fixture, and design artifact and fails CI if anything moved. There is no "I'll regenerate later."
 
-## Walkthrough: add a Reaction object
+## Walkthrough: add a Task object and event stream
 
-We'll add a typed `Reaction` object — a row that ties a user, a message id, and an emoji — alongside the existing `ReactionAdded` event in the foundation schema. (`ReactionAdded` is a stream event; the `Reaction` object is a materialized projection target that supports "show me all reactions on this message".)
+Frick's foundation schema is intentionally empty. We'll add a neutral `Task` object plus a `TaskEvents` stream from scratch. The same pattern applies to a scaffolded app's `src/schema.ts`; the foundation path is for framework contract work only.
 
 ### 1. Edit the schema
 
-Open `packages/protocol/src/foundation.ts` and add a new entry to `objects[]`. Pick the next free object id by reading the largest existing `id` and adding one.
+Open `packages/protocol/src/foundation.ts` and add a new entry to `objects[]`. Pick the next free object id by reading the largest existing `id` and adding one. In the current empty foundation schema, `1` is the first available object id.
 
 ```ts
 {
-  id: 7,                         // next free id; never reuse
-  name: "Reaction",
+  id: 1,                         // next free id; never reuse
+  name: "Task",
   fields: [
-    { id: 1, name: "messageId",  kind: "id",        required: true },
-    { id: 2, name: "userId",     kind: "ref", ref: "User", required: true },
-    { id: 3, name: "emoji",      kind: "string",    required: true },
+    { id: 1, name: "title",      kind: "string",    required: true },
+    { id: 2, name: "isComplete", kind: "boolean",   required: true },
+    { id: 3, name: "ownerId",    kind: "id",        required: true },
     { id: 4, name: "createdAt",  kind: "timestamp", required: true },
   ],
   indexes: [
-    { id: 1, name: "byMessage", fields: ["messageId"] },
-    { id: 2, name: "byUser",    fields: ["userId"] },
+    { id: 1, name: "byOwner", fields: ["ownerId"] },
+    { id: 2, name: "byStatus", fields: ["isComplete"] },
   ],
 },
 ```
 
 Notes:
 
-- Field ids start at 1 and are unique **within the object** — they're not globally unique. The `byMessage` and `byUser` index ids are likewise scoped to the object.
-- `kind: "id"` is for stable opaque identifiers the framework treats as primary keys. `kind: "ref"` carries a `ref` to another object name and tells the framework to track foreign-key-style integrity.
+- Field ids start at 1 and are unique **within the object** — they're not globally unique. The `byOwner` and `byStatus` index ids are likewise scoped to the object.
+- `kind: "id"` is for stable opaque identifiers. Use `kind: "ref"` plus a `ref` object name only when the referenced object exists in the same schema and the framework should track foreign-key-style integrity.
 - Required fields cannot be added later without bumping `schemaRevision` (see "versioning interplay" below). Plan accordingly.
+
+Now add an event and stream. Event ids are globally unique within `events[]`; stream ids are unique within `streams[]`.
+
+```ts
+events: [
+  {
+    id: 1,
+    name: "TaskCompleted",
+    fields: [
+      { id: 1, name: "taskId", kind: "id", required: true },
+      { id: 2, name: "completedAt", kind: "timestamp", required: true },
+    ],
+  },
+],
+streams: [
+  {
+    id: 1,
+    name: "TaskEvents",
+    key: "taskId",
+    events: ["TaskCompleted"],
+  },
+],
+```
 
 ### 2. Regenerate native artifacts
 
@@ -56,7 +79,7 @@ Notes:
 pnpm schema:generate
 ```
 
-This regenerates `packages/swift/Sources/FrickGenerated/`, `apps/android/frick/src/main/kotlin/dev/frick/generated/`, and the fixtures used by the codec drift checks. You should see new `Reaction.swift` and `Reaction.kt` DTOs.
+This regenerates `packages/swift/Sources/FrickSwift/Generated/FrickGenerated.swift`, `apps/android/frick/src/main/java/dev/frick/client/FrickGenerated.kt`, and the TypeScript binding surface under `packages/core/src/generated/bindings.ts`. After adding `Task`, the generated native files should include `TaskDto`-style shapes and schema descriptor entries.
 
 Then:
 
@@ -75,7 +98,7 @@ pnpm cli lint --against ./baseline-schema.json
 
 The optional `--against` flag points at a previous-schema snapshot on disk. Without it, `frick lint` only runs single-schema validation (no missing refs, no duplicate ids, etc.). With it, you get a change report: each finding is one JSON Lines record with a `severity` field. Exit code is 1 only when at least one finding is `severity=breaking`.
 
-For an additive change like adding `Reaction`, you should see only `severity=info` or `severity=additive` records.
+For an additive change like adding `Task` and `TaskEvents`, you should see only `severity=info` or `severity=additive` records.
 
 ### 4. Decide whether to bump revision
 
@@ -95,13 +118,13 @@ If the lint reported a `breaking` finding (you removed a required field, changed
 
 ### 5. Add a migration if storage changed
 
-Storage migrations live alongside the server. For pure schema-driven changes (new objects, new fields, new indexes) the framework synthesizes the migration from the schema diff and you don't have to write one. For changes that touch how data is interpreted — backfilling a derived field, splitting one stream into two — write a migration file under `apps/server/src/migrations/` and the migration runner will apply it before the server accepts traffic. See `frick migrate status` and `frick migrate up` in [`apps/cli/README.md`](../apps/cli/README.md).
+Framework storage migrations live in `apps/server/src/storage/migrations.ts`. For pure schema-driven changes (new objects, new fields, new indexes) the framework storage layer derives the needed tables and indexes from the active schema and you don't have to add a framework migration. For changes that reinterpret existing data — backfilling a derived field, splitting one stream into two, or migrating app-owned rows — add an explicit app migration path before accepting traffic. See `frick migrate status` and `frick migrate up` in [`apps/cli/README.md`](../apps/cli/README.md) for the framework migration runner.
 
 ## Authoring conventions
 
-- **Field naming.** `camelCase`. Booleans read as predicates (`isArchived`, not `archived`). Timestamps end in `At` (`createdAt`, `expiresAt`). Ids end in `Id` (`messageId`, `userId`).
+- **Field naming.** `camelCase`. Booleans read as predicates (`isArchived`, not `archived`). Timestamps end in `At` (`createdAt`, `expiresAt`). Ids end in `Id` (`taskId`, `userId`).
 - **Stable ids.** Pick the next free numeric `id` and never reuse one. If you delete a field, leave a comment so the next author doesn't accidentally pick the same id.
-- **Objects vs streams vs projections.** Use an **object** for state that has a current value clients want to render directly (Profile, Document, Reaction). Use a **stream** for append-only history that clients want to tail (ActivityStream). Use a **projection** for a derived view that's expensive to compute on every client (an unread-count, a leaderboard) — write it once on the server, push deltas to subscribers.
+- **Objects vs streams vs projections.** Use an **object** for state that has a current value clients want to render directly (Profile, Document, Task). Use a **stream** for append-only history that clients want to tail (ActivityStream). Use a **projection** for a derived view that's expensive to compute on every client (an unread count, a leaderboard) — write it once on the server, push deltas to subscribers.
 - **Indexes.** Declare every access pattern you actually rely on. The framework will not create implicit indexes; missing one means a full scan in production.
 - **Enums over free-form strings.** If a field has a known small set of values, model it as `kind: "enum"`. Future-you will get exhaustive switches in Swift and Kotlin for free.
 

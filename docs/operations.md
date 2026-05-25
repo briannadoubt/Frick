@@ -175,7 +175,7 @@ and connection caps.
 | `maxWebSocketOutboundBufferedBytes` | 1,048,576 | queued outbound bytes per WebSocket client |
 | `maxSseConnections` | 10,000 | concurrently open SSE connections |
 | `maxSseOutboundBufferedBytes` | 1,048,576 | queued outbound bytes per SSE response |
-| `maxAuthAttemptsPerWindow` | 30 | attempts per `/auth/signup`, `/auth/login`, or `/auth/dev-login` route + tenant + identity/IP bucket |
+| `maxAuthAttemptsPerWindow` | 30 | attempts per built-in `/auth/signup`, `/auth/login`, or `/auth/dev-login` route + tenant + identity/IP bucket |
 | `authRateLimitWindowMs` | 300,000 | fixed auth-attempt rate-limit window |
 
 Forward stream reads return at most `maxStreamPageSize` events by default and
@@ -188,6 +188,44 @@ WebSocket or SSE outbound buffers exceed their configured caps are closed
 rather than allowed to accumulate unbounded queued data. Auth attempts over
 `maxAuthAttemptsPerWindow` in the current fixed window also return
 `429 rateLimit.exceeded`.
+
+## Identity provider routes
+
+`createFrickServer({ identityProviders })` mounts provider-owned auth routes
+alongside the built-in `/auth/signup`, `/auth/login`, and `/auth/dev-login`
+routes. The current implementation supports Apple, Google ID tokens, and
+email/password accounts:
+
+- `POST /auth/apple/verify` verifies an Apple `identityToken` against Apple's
+  JWKS with the configured audience, creates or finds the mapped app-owned User
+  object, and returns `{ session, user, isNewUser }`.
+- `POST /auth/apple/notifications` verifies Apple's server-to-server
+  notification JWT in `{ payload }`. Email update events patch the mapped User
+  object; `consent-revoked` and `account-delete` set the mapped `revokedAt`
+  field and delete active sessions for that user.
+- `POST /auth/google/verify` verifies a Google `idToken` against Google's JWKS
+  and the configured OAuth client id, creates or finds the mapped User object by
+  `googleSubjectField`, and returns `{ session, user, isNewUser }`.
+- `POST /auth/email/signup` creates a mapped User row and password account from
+  `{ email, password, displayName? }`. Email is normalized to lowercase, the
+  default minimum password length is 8, and duplicate emails return `409`.
+- `POST /auth/email/login` verifies `{ email, password }` and returns
+  `{ session, user, isNewUser: false }`. Unknown email and bad password share
+  the same `401 invalid_credentials` response.
+
+These routes are not controlled by `FRICK_DEMO_AUTH_ENABLED`; they are mounted
+only for configured providers. Apps must provide a User object mapping when
+they do not use the conventional `User.appleSubject`, `User.googleSubject`,
+`User.email`, `User.displayName`, `User.primaryTenantId`, and `User.revokedAt`
+fields. On first sign-in, the optional `onFirstSignIn` hook receives
+`provider: "apple" | "google" | "email"` and decides the tenant id, user id
+override, display name, and extra User fields. Provider sessions are normal
+Frick bearer sessions; today these provider routes use a fixed 30-day session
+lifetime rather than `FRICK_SESSION_TTL_SECONDS` and do not share the built-in
+auth attempt limiter.
+
+The framework still does not implement generic OIDC, SAML, or arbitrary OAuth
+provider routing.
 
 ## Health vs. ready
 
@@ -535,7 +573,7 @@ Dumps are newline-delimited JSON (NDJSON). The first line is a header:
 { "type": "header", "row": {
     "frickFormat": 1,
     "createdAt": "2026-05-11T00:00:00.000Z",
-    "schemaId": "frick.foundation",
+    "schemaId": "frick-foundation",
     "schemaVersion": "0.1.0",
     "schemaRevision": 1,
     "schemaHash": "<sha-256>",
@@ -629,6 +667,94 @@ free-form messages; the CLI exits 1 when any finding has severity
 `schema.lint`); the body is `{ previous?: FrickSchema }` and the response
 is `{ findings, breakingCount }`.
 
+## Configuring push credentials
+
+Frick encrypts per-tenant push credentials at rest using AES-256-GCM. Set
+`FRICK_PUSH_CRED_KEY` to a base64-encoded 32-byte random value before
+starting the server. All credential operations fail with
+`push.credentials.disabled` when this variable is unset or malformed.
+
+```bash
+# Generate a key (one-time, keep secret, back up to a secrets manager)
+openssl rand -base64 32
+```
+
+Rotation requires re-saving every tenant's credentials with the new key;
+there is no multi-key decryption in v1.
+
+### APNs (Apple Push Notification service)
+
+1. In App Store Connect, go to Keys and create an APNs auth key. Download
+   `AuthKey_<keyId>.p8`.
+2. Note your Team ID (10-character alphanumeric string visible under
+   Membership).
+3. PUT the credentials to the admin route:
+
+```http
+PUT /_frick/admin/tenants/<tenantId>/push/apns
+Authorization: Bearer <adminToken>
+Content-Type: application/json
+
+{
+  "keyId": "<keyId from filename>",
+  "teamId": "<10-char Team ID>",
+  "bundleId": "com.example.app",
+  "privateKeyPem": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----",
+  "useSandbox": true
+}
+```
+
+Use `"useSandbox": true` for development builds (targets
+`api.sandbox.push.apple.com`). Omit or set `false` for production.
+
+The server returns `204 No Content` on success, `400` with
+`{ "error": "push.credentials.disabled" }` when `FRICK_PUSH_CRED_KEY` is
+unset, or `400` when required fields are missing.
+
+4. Register the adapter at server boot:
+
+```ts
+import { createFrickApnsAdapter } from "@frick/server";
+
+const server = createFrickServer({
+  push: {
+    adapters: [createFrickApnsAdapter()],
+  },
+});
+```
+
+### FCM (Firebase Cloud Messaging)
+
+Download a service-account JSON from the Google Cloud Console and PUT it:
+
+```http
+PUT /_frick/admin/tenants/<tenantId>/push/fcm
+Authorization: Bearer <adminToken>
+Content-Type: application/json
+
+{
+  "projectId": "<project-id>",
+  "clientEmail": "<service-account-email>",
+  "privateKey": "-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
+}
+```
+
+### Web Push (VAPID)
+
+Generate a VAPID keypair and PUT the base64url-encoded keys:
+
+```http
+PUT /_frick/admin/tenants/<tenantId>/push/webpush
+Authorization: Bearer <adminToken>
+Content-Type: application/json
+
+{
+  "subject": "mailto:ops@example.com",
+  "publicKey": "<base64url VAPID public key>",
+  "privateKey": "<base64url VAPID private key>"
+}
+```
+
 ## Known gaps
 
 - CORS is enforced for HTTP preflight requests and WebSocket upgrades.
@@ -641,3 +767,7 @@ is `{ findings, breakingCount }`.
 - Blob content is stored in SQLite today. `FRICK_BLOB_STORAGE_PATH` is
   parsed and exposed for a future filesystem driver, but the current server
   does not write blob bytes there.
+- Outbound email router/adapters live under `apps/server/src/email/*` for
+  framework development and tests, including a Resend adapter that reads
+  `RESEND_API_KEY`; they are not exported from `@frick/server` or documented
+  as an app integration surface yet.

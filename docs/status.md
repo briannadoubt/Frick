@@ -8,6 +8,11 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
 - Shared structured error envelopes across HTTP, WebSocket nacks, and SDK error types.
 - MessagePack WebSocket frames for Hello/HelloAck, subscribe, append, signal, presence, object upsert, snapshot, delta, projection delta, ack, and nack.
 - SQLite-backed server persistence, migrations, health/ready/inspect/admin routes, backup/restore, metrics, request logging, CORS enforcement, and admin bearer auth.
+- Optional identity-provider server routes through
+  `createFrickServer({ identityProviders })`: Apple JWT verification and
+  server-to-server notifications, Google ID-token verification, email/password
+  signup/login, app-owned User object mapping, first-sign-in hooks, and normal
+  session minting.
 - Fricken Dashboard, served locally by `frick dashboard` and mountable at
   `/_frick/dashboard`, for inspecting health, readiness, schema identity,
   schema resources, tenant-visible schema object rows, metrics, jobs,
@@ -54,7 +59,16 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
   bus, and production push-adapter surfaces. Deep route/storage imports remain
   internal.
 - Multi-app servers route by URL prefix and WebSocket Hello schema id, but storage is still shared at the server level.
+- Identity-provider sessions use a fixed 30-day lifetime today and the
+  provider routes do not yet share the built-in auth attempt limiter. Generic
+  OIDC, SAML, and arbitrary OAuth provider routing remain unimplemented.
 - Blob bytes are stored in SQLite today. `FRICK_BLOB_STORAGE_PATH` is parsed for a future filesystem driver but is not the active blob-byte store.
+- Web Push registration validation and adapter code exist, but the documented
+  public push-adapter exports and CLI credential provisioning currently cover
+  APNs and FCM only.
+- Outbound email router/adapters, including the Resend reference adapter, are
+  present under server internals for tests/framework work but are not exported
+  as a documented `@frick/server` app surface.
 - Swift and Android package publication is configured in source, but local verification still depends on the host having Xcode or Android SDK/JDK paths installed.
 - Internal specs and plans are historical. They explain why slices happened, not necessarily what is true now.
 

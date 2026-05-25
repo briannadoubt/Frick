@@ -21,6 +21,7 @@ pnpm cli dev --profile redpanda --dry-run
 pnpm cli dashboard --endpoint http://127.0.0.1:4099
 pnpm cli deploy image --dry-run
 pnpm cli deploy --profile compose --dry-run
+pnpm cli backup --tenant-id _default --output ./backup.ndjson
 ```
 
 After `pnpm --filter @frick/cli build`:
@@ -39,7 +40,10 @@ See `docs/operations.md` for the full list of environment variables.
 
 ## Output
 
-Every command emits exactly one JSON record on stdout. Errors go to stderr as
+Most commands emit exactly one JSON record on stdout. Commands that naturally
+stream records are explicit exceptions: `frick lint` emits JSON Lines findings
+plus a summary, and `frick backup` without `--output` streams NDJSON dump rows
+to stdout with its summary on stderr. Errors go to stderr as
 `{ "error": { "code": "...", "message": "...", "details": { ... } } }`.
 
 Exit codes:
@@ -65,6 +69,13 @@ Validates the foundation schema and emits `{ ok, schemaId, schemaVersion, schema
 
 Convenience wrapper around `pnpm schema:generate` (regenerates native artifacts).
 
+### `frick lint [--against <previous-schema.json>]`
+
+Runs the schema linter against the foundation schema. With `--against`, the CLI
+loads a previous schema snapshot and emits one JSON Lines record per finding
+plus a final summary. Exit code is `1` when any finding has
+`severity: "breaking"`.
+
 ### `frick init <directory> [--agents all|codex,claude,cursor] [--mcp]`
 
 Scaffolds a new Frick application. With `--agents`, the CLI installs the
@@ -77,6 +88,23 @@ Example:
 ```
 frick init my-app --agents all --mcp
 ```
+
+### `frick scaffold object <Name> [--directory <dir>]`
+
+Appends a PascalCase object stub to `src/schema.ts` in an initialized app.
+The scaffold requires the `// frick:objects` marker from `frick init` and
+refuses duplicates.
+
+### `frick scaffold stream <Name> [--directory <dir>]`
+
+Appends a PascalCase stream stub to `src/schema.ts`. Like object scaffolding,
+it uses the generated marker comments and refuses duplicates.
+
+### `frick scaffold projection <name> [--directory <dir>]`
+
+Creates `src/projections/<name>.ts` for a kebab-case projection name and adds
+the import/reference markers to `src/server.ts`. The generated projection is a
+stub; app code still wires the handler into the projection registry.
 
 ### `frick migrate status`
 
@@ -195,6 +223,31 @@ Emits `{ tenants: [...] }` from the tenants ledger.
 ### `frick tenants create <tenantId> [--display-name <name>]`
 
 Inserts a row into the tenants ledger. Exit 1 if the tenant already exists.
+
+### `frick tenants set-push <tenantId> --platform apns --p8 <file> --key-id <id> --team-id <id> --bundle-id <id> [--sandbox]`
+
+Encrypts APNs credentials with `FRICK_PUSH_CRED_KEY` and stores them in
+`tenant_settings` for the tenant. The command writes only a JSON status record
+to stdout; private key material is read from disk and is not echoed.
+
+### `frick tenants set-push <tenantId> --platform fcm --service-account <file>`
+
+Encrypts a Firebase service-account JSON file with `FRICK_PUSH_CRED_KEY` and
+stores it in `tenant_settings`. The file must include `project_id`,
+`client_email`, and `private_key`.
+
+### `frick backup [--tenant-id <id>|all] [--output <path>]`
+
+Streams a portable NDJSON framework database dump. It defaults to the
+`_default` tenant; pass `--tenant-id all` for a whole-database dump. When
+`--output` is omitted, the dump is written to stdout and the final summary goes
+to stderr so stdout remains clean NDJSON.
+
+### `frick restore --input <path> --confirm yes [--overwrite] [--force-schema-drift]`
+
+Restores a framework NDJSON dump into the configured database. It refuses
+without `--confirm yes` and also refuses against production-mode config unless
+`FRICK_RESTORE_ALLOW_PROD=1` is set.
 
 ### `frick verify`
 

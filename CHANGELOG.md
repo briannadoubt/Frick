@@ -9,7 +9,11 @@ Each package version is independent — a release header documents which package
 ### Framework Boundary Cleanup
 
 - Removed the public `@frick/core/chat` subpath and moved chat/demo helpers back under `apps/web/src/chat-foundation.ts`.
-- Removed chat-specific React helpers from the public `@frick/react` entrypoint; the web demo now owns its auth, blob, search, draft, media, and realtime wrappers locally.
+- Removed most chat-specific React helpers from the public `@frick/react`
+  entrypoint; the web demo now owns its auth, blob, search, draft, media, and
+  realtime wrappers locally. `useOptionalEndpoint` remains generic, and
+  `useInbox` remains as a legacy wrapper for apps that still expose `/inbox`;
+  the framework server no longer ships the inbox route.
 - Replaced the shipped foundation schema with an empty generic schema. Frick no longer ships customer-facing `User`, `Conversation`, `MessageStream`, inbox, typing, call, draft, attachment, or push-job product shapes.
 - Removed framework-owned chat routes, projections, search indexes, scheduled-message sweep logic, and conversation inbox storage from the server runtime.
 - Removed chat/inbox/message/draft convenience APIs from the Swift and Android SDKs; apps build those nouns in their own schema and client layer.
@@ -73,6 +77,17 @@ A multi-commit rollout that lifts the client SDKs from "you can hand-write it" t
 
 ### Server (`@frick/server`)
 
+- Added optional `identityProviders.apple` server routes. Apps can mount
+  `POST /auth/apple/verify` for Apple identity-token verification and
+  `POST /auth/apple/notifications` for Apple server-to-server notifications;
+  Frick maps the verified subject into an app-owned User object, calls
+  first-sign-in/revocation hooks, mints normal sessions, and revokes sessions
+  on Apple consent revocation or account deletion.
+- Added optional `identityProviders.google` and `identityProviders.email`
+  routes. Google verifies ID tokens against the configured OAuth client id at
+  `POST /auth/google/verify`; email/password signup and login are available at
+  `POST /auth/email/signup` and `POST /auth/email/login`, using the same
+  app-owned User mapping, first-sign-in hook, and session shape.
 - `POST /analytics/events` now ingests authenticated product analytics into
   the platform event pipeline as `analytics.user_event`, deriving tenant,
   subject, device, and replica identity from the active session and returning

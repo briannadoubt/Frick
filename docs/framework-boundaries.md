@@ -28,6 +28,10 @@ Status: Contract baseline audit.
 
 - Server storage implementations under `apps/server/src/storage/*`.
 - Server route handlers inside `apps/server/src/server.ts`.
+- Server outbound email helpers under `apps/server/src/email/*`. The test and
+  Resend adapters exist for framework development, but they are not exported
+  from `@frick/server` today; apps should not deep-import them until a package
+  surface is documented.
 - Sync gateway internals under `apps/server/src/sync/*`.
 - Protocol generator scripts under `packages/protocol/scripts/*`.
 - Design generator scripts under `packages/design/src/scripts/*`.

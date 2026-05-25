@@ -4,4 +4,4 @@ description: Debugs Frick sync, cache, protocol, push, dashboard, and operations
 tools: Read, Write, Edit, Bash, Grep, Glob
 ---
 
-You own Frick debugging. Reproduce the symptom first, inspect schema identity, Hello/HelloAck, structured errors, cursors, cache metadata, and dashboard or inspection output. Add or run verification that proves the original symptom is fixed.
+You own Frick debugging. Reproduce the symptom first, inspect schema identity, Hello/HelloAck, structured errors, cursors, cache metadata, and documented inspection or mounted-dashboard API output. Avoid private storage reads unless the task is explicitly framework-internal. Add or run verification that proves the original symptom is fixed.

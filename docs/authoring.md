@@ -196,6 +196,56 @@ the event `name`, optional `properties`, optional `context`, optional primitive
 canonical ISO `occurredAt`. Use idempotency keys for events that may be retried
 after navigation or network loss.
 
+## Identity providers
+
+Apps can opt into Frick-managed identity routes by passing
+`identityProviders` to `createFrickServer`. Frick verifies provider
+credentials, creates or finds the app-owned User object, mints a normal Frick
+session, and, for Apple, handles server-to-server notifications.
+
+```ts
+createFrickServer({
+  schema,
+  identityProviders: {
+    apple: { audience: "com.example.myapp" },
+    google: { clientId: "123.apps.googleusercontent.com" },
+    email: { minPasswordLength: 12 },
+    userObject: {
+      type: "User",
+      appleSubjectField: "appleSubject",
+      googleSubjectField: "googleSubject",
+      emailField: "email",
+      primaryTenantField: "primaryTenantId",
+    },
+    onFirstSignIn: async ({ email, subject }) => ({
+      tenantId: "_default",
+      displayName: email?.split("@")[0] ?? subject,
+    }),
+  },
+});
+```
+
+Supported routes:
+
+- `POST /auth/apple/verify` accepts `{ identityToken, fullName?, deviceId?,
+  replicaId? }` and returns `{ session, user, isNewUser }`.
+- `POST /auth/apple/notifications` accepts Apple's `{ payload }` notification
+  JWT; email updates patch the mapped User object, and consent
+  revocation/account delete marks the user revoked and deletes active sessions.
+- `POST /auth/google/verify` accepts `{ idToken, deviceId?, replicaId? }`,
+  verifies the Google ID token against the configured OAuth client id, and
+  returns the same `{ session, user, isNewUser }` shape.
+- `POST /auth/email/signup` accepts `{ email, password, displayName? }`,
+  creates the mapped User row plus a password account, and mints a session.
+- `POST /auth/email/login` accepts `{ email, password }`, avoids email
+  enumeration by returning `invalid_credentials` for unknown emails and bad
+  passwords, and mints a session for valid credentials.
+
+The `session` shape is the same session object used by the TypeScript, Swift,
+and Android clients. The app still owns its User schema, tenant membership
+model, and any first-sign-in side effects through the mapping and hooks above.
+Generic OIDC, SAML, and arbitrary OAuth provider routing are not implemented.
+
 ## Client telemetry
 
 The TypeScript runtime emits OpenTelemetry-compatible client spans and metrics

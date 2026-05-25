@@ -12,10 +12,10 @@ frick mcp --endpoint http://127.0.0.1:4099
 frick mcp --print-config --endpoint http://127.0.0.1:4099
 ```
 
-Default mode is read-only. It exposes resources, tools, and prompts for schema identity, health/readiness, inspection surfaces, stream pages, projection/debug context, and structured error explanation.
+Default mode is read-only. It exposes resources, tools, and prompts for schema identity, health/readiness, documented server/db/jobs inspection surfaces, stream pages, projection/debug context, and structured error explanation.
 
 Guidance:
-- Prefer MCP resources for context the agent should read: schema, health, readiness, inspection, app spine, stream pages.
+- Prefer MCP resources for context the agent should read: schema, health, readiness, server/db/jobs inspection, app spine, and stream pages.
 - Prefer MCP tools for explicit actions: doctor, inspect server/db/jobs, read stream, explain error.
 - Keep write tools behind `--allow-writes` and Frick auth/session/tenant checks.
 - Do not bypass Frick authorization, tenant isolation, schema compatibility, or structured error envelopes.

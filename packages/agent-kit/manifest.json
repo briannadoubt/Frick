@@ -96,7 +96,7 @@
       },
       "cursorRules": ["adapters/cursor/rules/frick-authoring.mdc"],
       "docs": ["docs/onboarding.md", "docs/authoring.md"],
-      "commands": ["pnpm cli scaffold projection <Name>", "pnpm test"]
+      "commands": ["pnpm cli scaffold projection <name>", "pnpm test"]
     },
     {
       "id": "frick-jobs",
@@ -292,7 +292,7 @@
       },
       "cursorRules": ["adapters/cursor/rules/frick-debugging.mdc"],
       "docs": ["docs/operations.md", "apps/cli/README.md"],
-      "commands": ["pnpm dashboard", "pnpm cli doctor", "pnpm cli inspect server"]
+      "commands": ["pnpm dashboard", "pnpm cli doctor", "pnpm cli inspect server", "pnpm cli backup --tenant-id _default --output ./backup.ndjson"]
     },
     {
       "id": "frick-generated-artifacts",

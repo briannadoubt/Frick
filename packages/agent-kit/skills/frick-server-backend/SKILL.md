@@ -10,6 +10,7 @@ Read `docs/framework-boundaries.md`, `docs/authoring.md`, and `docs/operations.m
 Guidance:
 - Use documented server APIs and app scaffold patterns.
 - Do not import server route/storage internals unless the current app is inside the Frick repo and the change is explicitly framework work.
+- Do not tell scaffolded apps to import `apps/server/src/email/*`; outbound email helpers exist internally but are not a documented `@frick/server` surface yet.
 - Keep demo app behavior thin. If real apps need to copy it, promote it to a framework package or document an extension point.
 - Preserve tenant isolation, structured error envelopes, schema compatibility checks, and session revalidation.
 

@@ -1,6 +1,6 @@
 /**
- * `frick scaffold <kind> <Name>` — append a stub for an object, stream, or
- * projection to an already-initialized app.
+ * `frick scaffold <kind> <name>` — append a stub to an already-initialized
+ * app. Objects and streams use PascalCase names; projections use kebab-case.
  *
  * Objects and streams append a typed literal between the `// frick:objects`
  * or `// frick:streams` markers in `src/schema.ts`. Projections create a

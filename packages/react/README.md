@@ -38,7 +38,8 @@ function Items() {
 - `useAppend(stream, key)`
 - `useTrackAnalyticsEvent()`
 - `useSyncStatus()`
-- `useInbox(userId)` / `useOptionalEndpoint(path)`
+- `useOptionalEndpoint(path)` for app-owned HTTP helper routes on the same Frick origin
+- `useInbox(userId)` remains as a legacy optional-endpoint wrapper for apps that still expose `/inbox`; the framework server no longer ships a built-in inbox route.
 
 ## Analytics
 

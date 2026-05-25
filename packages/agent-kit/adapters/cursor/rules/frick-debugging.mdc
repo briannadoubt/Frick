@@ -5,4 +5,4 @@ alwaysApply: false
 
 Debug from evidence: reproduce the symptom, inspect schema identity, Hello/HelloAck, capabilities, auth/session state, cursors, pending mutations, cache metadata, and structured errors.
 
-Use documented health, readiness, dashboard, and inspection surfaces. Keep the dashboard local-only and avoid creating dashboard-only production APIs.
+Use documented health, readiness, dashboard, and inspection surfaces. Keep standalone dashboard use local; mounted dashboard mode should stay static and use only documented `/_frick/dashboard/api/*` server APIs.

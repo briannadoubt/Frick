@@ -25,7 +25,7 @@ const COMMANDS: readonly CommandSpec[] = [
   { name: "doctor", summary: "Composite health check (schema, db, migrations, config)" },
   { name: "inspect", summary: "Inspect runtime state from the local DB", subcommands: ["server", "db", "jobs"] },
   { name: "reset", summary: "Drop framework tables (development only, requires --dev)" },
-  { name: "tenants", summary: "Manage the tenants ledger", subcommands: ["list", "create"] },
+  { name: "tenants", summary: "Manage the tenants ledger", subcommands: ["list", "create", "set-push"] },
   { name: "verify", summary: "Run `pnpm verify:generated` end-to-end" },
   { name: "backup", summary: "Stream a framework database dump as NDJSON" },
   { name: "restore", summary: "Restore a framework database from NDJSON (requires --confirm yes)" },

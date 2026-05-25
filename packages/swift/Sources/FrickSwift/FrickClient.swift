@@ -991,6 +991,26 @@ public final class FrickClient: Sendable {
         sessionStore.session = nil
     }
 
+    /// Server-side logout — POSTs to `/auth/logout` to invalidate the
+    /// session token, then clears the local store. Use this in preference
+    /// to bare `signOut()` for an explicit user-driven sign-out: a stolen
+    /// device or keychain-backup leak otherwise leaves the bearer valid
+    /// on the server until natural expiration.
+    ///
+    /// Always clears the local session, even if the network call fails —
+    /// the user pressed Sign Out, they're getting signed out. Network
+    /// errors are silently swallowed.
+    public func logout() async {
+        if let session = sessionStore.session {
+            var request = URLRequest(url: baseURL.appending(path: "auth").appending(path: "logout"))
+            request.httpMethod = "POST"
+            request.setValue("Bearer \(session.sessionToken)", forHTTPHeaderField: "Authorization")
+            _ = try? await self.session.data(for: request)
+        }
+        try? storage.clearPendingAppends()
+        sessionStore.session = nil
+    }
+
     /// Inject an externally-minted session into the client. Used when the
     /// app authenticates against a non-Frick provider (Sign in with Apple,
     /// Google, etc.) and the server hands back a Frick session via an

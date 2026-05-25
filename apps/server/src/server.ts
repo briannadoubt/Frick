@@ -105,6 +105,12 @@ import {
   type FrickJobHandler,
 } from "./jobs/registry.js";
 import { createFrickJobWorker } from "./jobs/worker.js";
+import {
+  createFrickRecurringRegistry,
+  createRecurringScheduler,
+  type FrickRecurringJob,
+  type FrickRecurringRegistry,
+} from "./jobs/recurring.js";
 import { createFrickAnalyticsEventConsumer } from "./analytics/consumer.js";
 import {
   buildAnalyticsSummary,
@@ -123,6 +129,15 @@ import {
 import type { FrickNotificationIntent, FrickPushAdapter } from "./push/types.js";
 import { isPushPlatform } from "./storage/push-registration-store.js";
 import { validateWebPushRegistrationToken } from "./push/web-push-adapter.js";
+import {
+  saveApnsCredentials,
+  saveFcmCredentials,
+  saveWebPushCredentials,
+  type ApnsCredentials,
+  type FcmCredentials,
+  type PushCredentialError,
+  type WebPushCredentials,
+} from "./push/credentials.js";
 import { dumpFrickDatabase, type FrickDumpOptions } from "./backup/dump.js";
 import {
   FrickRestoreRefusedError,
@@ -140,6 +155,22 @@ import { emitDevToolsEvent } from "./devtools/emit.js";
 import { createPlatformEventPipeline } from "./platform-events/factory.js";
 import type { PlatformEventPipeline } from "./platform-events/types.js";
 import type { FrickClusterBus } from "./cluster/bus.js";
+
+export interface FrickAppRoute {
+  /** URL pathname prefix this route claims. */
+  pathPrefix: string;
+  /** Optional HTTP method filter. Omit to match any method. */
+  method?: string;
+  /**
+   * Returns true if the route handled the request, false to fall through to
+   * the next appRoute entry (or Frick's built-in routing if all fall through).
+   *
+   * CORS for /api/* OPTIONS preflight: app routes are responsible for
+   * setting their own CORS headers. Frick's built-in CORS headers apply only
+   * after all appRoutes have returned false.
+   */
+  handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> | boolean;
+}
 
 export interface ServerOptions {
   port?: number;
@@ -298,6 +329,40 @@ export interface ServerOptions {
    * adapters (e.g. RedisClusterBus) live out-of-tree.
    */
   clusterBus?: FrickClusterBus;
+  /**
+   * App-owned HTTP routes. Each entry handles requests with `request.url`
+   * starting with `pathPrefix` (and matching `method` when set). Returning
+   * `true` from `handle` claims the request; `false` falls through to
+   * Frick's built-in handler. Lets apps mount their own routes (REST APIs,
+   * OAuth callbacks, webhook endpoints) without monkey-patching the
+   * server's `request` listener.
+   *
+   * CORS for /api/* OPTIONS: Frick's built-in CORS shortcut runs only
+   * after all appRoutes entries have returned false. Apps that need CORS on
+   * their own prefixes should handle the OPTIONS method themselves inside
+   * their `handle` function.
+   *
+   * Routes are tested in declaration order; a more-specific route registered
+   * before a less-specific one takes priority.
+   */
+  appRoutes?: readonly FrickAppRoute[];
+  /**
+   * Recurring job configuration. Jobs registered here are automatically
+   * re-enqueued on a time-window schedule without requiring an external cron.
+   * The scheduler fires every `tickIntervalMs` (default 30_000 ms) and
+   * enqueues one job per (tenantId, window) tuple returned by
+   * `resolveTargets`. Idempotency is enforced via
+   * `recurring:<name>:<tenantId>:<windowStart>` so double-ticks within the
+   * same window are no-ops. All jobs must have `intervalMs >= 60_000`.
+   *
+   * The scheduler timer is unref'd so it does not prevent the process from
+   * exiting if the server is closed. Stop is called automatically on
+   * `close()`.
+   */
+  recurring?: {
+    jobs?: readonly FrickRecurringJob[];
+    tickIntervalMs?: number;
+  };
 }
 
 export function createFrickServer(options: ServerOptions = {}) {
@@ -593,6 +658,20 @@ export function createFrickServer(options: ServerOptions = {}) {
     analyticsConsumer.start();
   }
 
+  const recurringJobs = options.recurring?.jobs ?? [];
+  const recurringRegistry: FrickRecurringRegistry = createFrickRecurringRegistry(recurringJobs);
+  const recurringScheduler = createRecurringScheduler({
+    store,
+    logger,
+    jobs: recurringRegistry.list(),
+    ...(options.recurring?.tickIntervalMs !== undefined
+      ? { tickIntervalMs: options.recurring.tickIntervalMs }
+      : {}),
+  });
+  if (!inTestRunner && recurringJobs.length > 0) {
+    recurringScheduler.start();
+  }
+
   async function handleHttp(request: http.IncomingMessage, response: http.ServerResponse): Promise<void> {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
     const requestId = randomUUID();
@@ -664,6 +743,29 @@ export function createFrickServer(options: ServerOptions = {}) {
     requestUrl: URL,
     onPrincipal: (principal: Principal) => void,
   ): Promise<void> {
+    const appRoutes = options.appRoutes ?? [];
+    for (const route of appRoutes) {
+      const pathname = requestUrl.pathname;
+      if (!pathname.startsWith(route.pathPrefix)) continue;
+      if (route.method && request.method !== route.method) continue;
+      let claimed: boolean;
+      try {
+        claimed = await route.handle(request, response);
+      } catch (err) {
+        logger.error("frick.app_route.handle_failed", {
+          event: "frick.app_route.handle_failed",
+          pathPrefix: route.pathPrefix,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        if (!response.headersSent) {
+          response.writeHead(500, { "content-type": "application/json; charset=utf-8" });
+          response.end(JSON.stringify({ error: "internal_error", message: "App route handler threw an error" }));
+        }
+        return;
+      }
+      if (claimed) return;
+    }
+
     const requestOrigin = headerValue(request, "origin");
     const originAllowed = isOriginAllowed(requestOrigin, config.allowedOrigins);
     setCors(response, requestOrigin, config.allowedOrigins, originAllowed);
@@ -1870,6 +1972,7 @@ export function createFrickServer(options: ServerOptions = {}) {
   function close(): Promise<void> {
     if (closePromise) return closePromise;
     closing = true;
+    recurringScheduler.stop();
     // Stop the job worker first so any in-flight handlers finish (or time
     // out) before we tear down the HTTP listener and database. Worker
     // handlers depend on `store`, which is closed below.
@@ -1966,6 +2069,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     telemetry,
     apps: appRegistry,
     gateway,
+    recurring: recurringRegistry,
     /** Derived `http://host:port` origin. Resolved after `listen()` binds. */
     get httpUrl(): string {
       const address = server.address();
@@ -2333,6 +2437,11 @@ function sendError(response: http.ServerResponse, error: unknown, requestId: str
     requestId: envelope.requestId,
     retryable: envelope.retryable,
   });
+}
+
+function sendPushCredentialError(response: http.ServerResponse, error: PushCredentialError): void {
+  const status = error.code === "push.credentials.disabled" ? 400 : 400;
+  sendJson(response, status, { error: error.code, message: error.message });
 }
 
 function httpLimitStatus(error: FrickLimitError): number {
@@ -3638,6 +3747,101 @@ async function handleAdminRoute(
     const result = store.adminAudit.verifyChain();
     const status = result.valid ? 200 : 409;
     sendJson(response, status, result);
+    return;
+  }
+
+  const pushApnsMatch = /^tenants\/([^/]+)\/push\/apns$/.exec(sub);
+  if (request.method === "PUT" && pushApnsMatch) {
+    const tenantId = decodeURIComponent(pushApnsMatch[1]!);
+    try {
+      const body = await readJsonBody(request, maxBodyBytes);
+      const creds: ApnsCredentials = {
+        keyId: requireString(body.keyId, "keyId"),
+        teamId: requireString(body.teamId, "teamId"),
+        bundleId: requireString(body.bundleId, "bundleId"),
+        privateKeyPem: requireString(body.privateKeyPem, "privateKeyPem"),
+        ...(typeof body.useSandbox === "boolean" ? { useSandbox: body.useSandbox } : {}),
+      };
+      const result = saveApnsCredentials(store.tenantSettings, tenantId, creds);
+      if (!result.ok) {
+        sendPushCredentialError(response, result.error);
+        return;
+      }
+      audit({ action: "push.apns.credentials.set", target: tenantId, outcome: "allow" });
+      response.writeHead(204);
+      response.end();
+    } catch (error) {
+      audit({
+        action: "push.apns.credentials.set",
+        target: tenantId,
+        outcome: "error",
+        detail: { error: error instanceof Error ? error.message : String(error) },
+      });
+      throw error;
+    }
+    return;
+  }
+
+  const pushFcmMatch = /^tenants\/([^/]+)\/push\/fcm$/.exec(sub);
+  if (request.method === "PUT" && pushFcmMatch) {
+    const tenantId = decodeURIComponent(pushFcmMatch[1]!);
+    try {
+      const body = await readJsonBody(request, maxBodyBytes);
+      const creds: FcmCredentials = {
+        projectId: requireString(body.projectId, "projectId"),
+        clientEmail: requireString(body.clientEmail, "clientEmail"),
+        privateKey: requireString(body.privateKey, "privateKey"),
+        ...(typeof body.tokenUri === "string" && body.tokenUri.length > 0
+          ? { tokenUri: body.tokenUri }
+          : {}),
+      };
+      const result = saveFcmCredentials(store.tenantSettings, tenantId, creds);
+      if (!result.ok) {
+        sendPushCredentialError(response, result.error);
+        return;
+      }
+      audit({ action: "push.fcm.credentials.set", target: tenantId, outcome: "allow" });
+      response.writeHead(204);
+      response.end();
+    } catch (error) {
+      audit({
+        action: "push.fcm.credentials.set",
+        target: tenantId,
+        outcome: "error",
+        detail: { error: error instanceof Error ? error.message : String(error) },
+      });
+      throw error;
+    }
+    return;
+  }
+
+  const pushWebPushMatch = /^tenants\/([^/]+)\/push\/webpush$/.exec(sub);
+  if (request.method === "PUT" && pushWebPushMatch) {
+    const tenantId = decodeURIComponent(pushWebPushMatch[1]!);
+    try {
+      const body = await readJsonBody(request, maxBodyBytes);
+      const creds: WebPushCredentials = {
+        subject: requireString(body.subject, "subject"),
+        publicKey: requireString(body.publicKey, "publicKey"),
+        privateKey: requireString(body.privateKey, "privateKey"),
+      };
+      const result = saveWebPushCredentials(store.tenantSettings, tenantId, creds);
+      if (!result.ok) {
+        sendPushCredentialError(response, result.error);
+        return;
+      }
+      audit({ action: "push.webPush.credentials.set", target: tenantId, outcome: "allow" });
+      response.writeHead(204);
+      response.end();
+    } catch (error) {
+      audit({
+        action: "push.webPush.credentials.set",
+        target: tenantId,
+        outcome: "error",
+        detail: { error: error instanceof Error ? error.message : String(error) },
+      });
+      throw error;
+    }
     return;
   }
 
