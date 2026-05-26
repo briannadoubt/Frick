@@ -25,7 +25,7 @@ import Foundation
 /// previews render without crashing.
 @MainActor
 @propertyWrapper
-public struct FrickStream: @MainActor DynamicProperty {
+public struct FrickStream: DynamicProperty {
     @Environment(\.frickSyncSocket) private var socket
     @StateObject private var store: StreamStore
     private let streamName: String
@@ -39,8 +39,14 @@ public struct FrickStream: @MainActor DynamicProperty {
 
     public var wrappedValue: [FrickStreamEvent] { store.events }
 
-    public func update() {
-        store.attach(socket: socket, stream: streamName, key: key)
+    // DynamicProperty's `update()` requirement is `nonisolated`; SwiftUI
+    // guarantees it runs during the view-update phase on the main thread,
+    // so `MainActor.assumeIsolated` bridges into our @MainActor store
+    // without an async hop.
+    nonisolated public func update() {
+        MainActor.assumeIsolated {
+            store.attach(socket: socket, stream: streamName, key: key)
+        }
     }
 }
 
@@ -86,7 +92,7 @@ private final class StreamStore: ObservableObject {
 /// SwiftUI property wrapper for a presence row.
 @MainActor
 @propertyWrapper
-public struct FrickPresence: @MainActor DynamicProperty {
+public struct FrickPresence: DynamicProperty {
     @Environment(\.frickSyncSocket) private var socket
     @StateObject private var store: PresenceStore
     private let presenceName: String
@@ -100,8 +106,11 @@ public struct FrickPresence: @MainActor DynamicProperty {
 
     public var wrappedValue: [FrickPresenceRecord] { store.records }
 
-    public func update() {
-        store.attach(socket: socket, name: presenceName, key: key)
+    // See FrickStream.update() above — same DynamicProperty/@MainActor bridge.
+    nonisolated public func update() {
+        MainActor.assumeIsolated {
+            store.attach(socket: socket, name: presenceName, key: key)
+        }
     }
 }
 

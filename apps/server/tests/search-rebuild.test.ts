@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { productTestSchema } from "@frick/protocol";
 import { createFrickServer } from "../src/server.js";
 import type {
   FrickSearchAdapter,
   FrickSearchIndexDefinition,
   FrickSearchProjectInput,
 } from "../src/search/types.js";
+import type { FrickPolicyHook } from "../src/authz.js";
 
 const ADMIN_TOKEN = "test-admin-token-1234567890ABCDEF1234567890ABCDEF";
 
@@ -29,9 +31,29 @@ describe("admin search rebuild route", () => {
         return { docId: id, text: title, fields: { conversationId: id } };
       },
     };
-    app = await startServer({ indexes: [conversationsIndex] });
+    // Custom app-source indexes require an explicit allow policy hook.
+    app = await startServer({
+      indexes: [conversationsIndex],
+      schema: productTestSchema,
+      policyHooks: [
+        (input) =>
+          input.action === "search.query" &&
+          input.resource.kind === "search" &&
+          input.resource.name === "conversations-fts"
+            ? { allow: true, reason: "allow" }
+            : null,
+      ],
+    });
     const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
-    const convId = await createConversation(app.httpUrl, ada.sessionToken, "Penguin Plotters");
+    // Conversation lives in the test fixture schema; write it directly
+    // through the store API since the framework no longer ships the
+    // chat-specific POST /conversations route.
+    const convId = "conv-rebuild-1";
+    app.store.upsertObject("_default", "Conversation", convId, {
+      kind: "group",
+      title: "Penguin Plotters",
+      createdBy: ada.userId ?? "user-ada",
+    });
 
     // Index populated via the on-write hook — search should find it.
     const initial = await postSearch(app.httpUrl, ada.sessionToken, {
@@ -178,7 +200,16 @@ describe("admin search rebuild route", () => {
 });
 
 async function startServer(
-  overrides: { indexes?: FrickSearchIndexDefinition[]; adapter?: FrickSearchAdapter } = {},
+  overrides: {
+    indexes?: FrickSearchIndexDefinition[];
+    adapter?: FrickSearchAdapter;
+    schema?: Parameters<typeof createFrickServer>[0] extends infer T
+      ? T extends { schema?: infer S }
+        ? S
+        : never
+      : never;
+    policyHooks?: readonly FrickPolicyHook[];
+  } = {},
 ): Promise<{
   httpUrl: string;
   close: () => Promise<void>;
@@ -189,6 +220,8 @@ async function startServer(
     port: 0,
     dbPath: ":memory:",
     config: { adminToken: ADMIN_TOKEN },
+    ...(overrides.schema !== undefined ? { schema: overrides.schema } : {}),
+    ...(overrides.policyHooks !== undefined ? { policyHooks: overrides.policyHooks } : {}),
     ...(overrides.indexes !== undefined || overrides.adapter !== undefined
       ? {
           search: {
@@ -214,32 +247,14 @@ async function startServer(
 async function devLogin(
   httpUrl: string,
   body: { userId: string; tenantId?: string },
-): Promise<{ sessionToken: string; tenantId: string }> {
+): Promise<{ sessionToken: string; tenantId: string; userId?: string }> {
   const response = await fetch(`${httpUrl}/auth/dev-login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
   expect(response.status).toBe(200);
-  return (await response.json()) as { sessionToken: string; tenantId: string };
-}
-
-async function createConversation(
-  httpUrl: string,
-  sessionToken: string,
-  title: string,
-): Promise<string> {
-  const response = await fetch(`${httpUrl}/conversations`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${sessionToken}`,
-    },
-    body: JSON.stringify({ kind: "group", title, participantUserIds: [] }),
-  });
-  expect(response.status).toBe(201);
-  const body = (await response.json()) as { conversation: { id: string } };
-  return body.conversation.id;
+  return (await response.json()) as { sessionToken: string; tenantId: string; userId?: string };
 }
 
 async function postSearch(

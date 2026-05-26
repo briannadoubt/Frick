@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { productTestSchema } from "@frick/protocol";
 import { FrickStore } from "../src/store.js";
 
 let store: FrickStore | undefined;
@@ -10,7 +11,7 @@ afterEach(() => {
 
 describe("FrickStore foundation storage", () => {
   it("backwards-paginates events via readEventsBefore for scrollback", () => {
-    store = new FrickStore({ path: ":memory:", seed: true });
+    store = new FrickStore({ path: ":memory:", seed: true , schema: productTestSchema });
     const DEFAULT_TENANT_ID = "_default";
 
     // Seed 8 message events on the same conversation.
@@ -64,7 +65,11 @@ describe("FrickStore foundation storage", () => {
   });
 
   it("stores objects and appends ordered stream events", () => {
-    store = new FrickStore({ path: ":memory:", seed: true });
+    store = new FrickStore({ path: ":memory:", seed: true, schema: productTestSchema });
+    // Default seeding no longer populates the foundation; explicitly upsert
+    // a User so the readObject assertion below still exercises the round-
+    // trip path it cares about.
+    store.upsertObject("User", "user-ada", { displayName: "Ada Lovelace" });
 
     const user = store.readObject("User", "user-ada");
     expect(user?.displayName).toBe("Ada Lovelace");
@@ -89,7 +94,7 @@ describe("FrickStore foundation storage", () => {
   });
 
   it("bounds forward event reads when a limit is provided", () => {
-    store = new FrickStore({ path: ":memory:", seed: true });
+    store = new FrickStore({ path: ":memory:", seed: true , schema: productTestSchema });
 
     for (let i = 1; i <= 5; i++) {
       store.appendEvent({
@@ -121,7 +126,7 @@ describe("FrickStore foundation storage", () => {
   });
 
   it("deduplicates appends by replica and request id", () => {
-    store = new FrickStore({ path: ":memory:", seed: true });
+    store = new FrickStore({ path: ":memory:", seed: true , schema: productTestSchema });
 
     const input = {
       requestId: "request-1",
@@ -150,7 +155,7 @@ describe("FrickStore foundation storage", () => {
     // Capacity of 1 forces the original request's cache entry to be evicted
     // by the second distinct request. The repeated append of request-1 must
     // still resolve to the same eventId by falling through to SQLite.
-    store = new FrickStore({ path: ":memory:", seed: true, idempotencyCacheCapacity: 1 });
+    store = new FrickStore({ path: ":memory:", seed: true, idempotencyCacheCapacity: 1 , schema: productTestSchema });
 
     const first = store.appendEvent({
       requestId: "request-1",
@@ -203,7 +208,7 @@ describe("FrickStore foundation storage", () => {
   });
 
   it("stores presence leases, signal envelopes, blob metadata, and jobs", () => {
-    store = new FrickStore({ path: ":memory:", seed: true });
+    store = new FrickStore({ path: ":memory:", seed: true , schema: productTestSchema });
 
     store.setPresence("TypingState", "conversation-general:user-ada:device-1", { isTyping: true }, 5000);
     store.enqueueSignal("WebRTCSignal", "call-1", {

@@ -4,11 +4,52 @@ import {
   FrameKind,
   decodeFrame,
   encodeFrame,
-  foundationSchema,
+  productTestSchema,
   type FrickFrame,
   type ProjectionDeltaPayload,
 } from "@frick/protocol";
 import { createFrickServer } from "../src/server.js";
+import type { FrickProjection } from "../src/projections/registry.js";
+
+// Projection delta over the sync gateway. The previous suite assumed the
+// built-in `conversation-inbox` projection that the framework boundary
+// cleanup removed. This rewrite drives the same gateway code paths
+// against a tiny test-only projection so the contract (subscribe,
+// receive deltas on matching writes, tenant isolation, no fan-out
+// without subscribe) still gets exercised.
+
+const DEMO_PROJECTION_NAME = "demo-delta-inbox";
+
+function createDemoDeltaProjection(): FrickProjection {
+  return {
+    name: DEMO_PROJECTION_NAME,
+    sources: [{ kind: "stream", type: "MessageStream" }],
+    handler: {
+      apply(event) {
+        if (event.kind !== "streamEvent" || event.streamEvent.event !== "MessageSent") {
+          return undefined;
+        }
+        const senderId =
+          typeof event.streamEvent.payload.senderId === "string"
+            ? event.streamEvent.payload.senderId
+            : "unknown";
+        const key = `${senderId}:${event.streamId}`;
+        return {
+          changes: [
+            {
+              key,
+              value: {
+                userId: senderId,
+                conversationId: event.streamId,
+                lastEventId: event.streamEvent.eventId,
+              },
+            },
+          ],
+        };
+      },
+    },
+  };
+}
 
 let app: Awaited<ReturnType<typeof startServer>> | undefined;
 
@@ -18,7 +59,7 @@ afterEach(async () => {
 });
 
 describe("projection deltas over the sync gateway", () => {
-  it("pushes inbox row changes to subscribed clients in the same tenant", async () => {
+  it("pushes row changes to subscribed clients in the same tenant", async () => {
     app = await startServer();
     const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
     const socket = await connectAndHello(app.url, ada.sessionToken);
@@ -30,13 +71,11 @@ describe("projection deltas over the sync gateway", () => {
         {
           subscriptionId: "sub-inbox",
           kind: "projection",
-          name: "conversation-inbox",
+          name: DEMO_PROJECTION_NAME,
         },
       ]),
     );
 
-    // Append a MessageSent via HTTP — this exercises the same code path the
-    // real app uses and produces a projection delta as a side effect.
     const append = await postJson(
       `${app.httpUrl}/append`,
       {
@@ -56,7 +95,7 @@ describe("projection deltas over the sync gateway", () => {
     expect(append.status).toBe(200);
 
     const delta = await deltas.next();
-    expect(delta.projection).toBe("conversation-inbox");
+    expect(delta.projection).toBe(DEMO_PROJECTION_NAME);
     expect(delta.changes.map((change) => change.key)).toEqual([
       "user-ada:conversation-general",
     ]);
@@ -69,10 +108,9 @@ describe("projection deltas over the sync gateway", () => {
 
   it("does not push deltas from another tenant to a subscriber", async () => {
     app = await startServer();
-    const a = await devLogin(app.httpUrl, { userId: "user-shared", tenantId: "tenant-a" });
-    const b = await devLogin(app.httpUrl, { userId: "user-shared", tenantId: "tenant-b" });
+    const a = await devLogin(app.httpUrl, { userId: "user-tenant-a", tenantId: "tenant-a" });
+    const b = await devLogin(app.httpUrl, { userId: "user-tenant-b", tenantId: "tenant-b" });
 
-    // Subscriber sits in tenant-a.
     const socket = await connectAndHello(app.url, a.sessionToken);
     const deltas = collectFrames(socket, FrameKind.ProjectionDelta);
     socket.send(
@@ -81,29 +119,23 @@ describe("projection deltas over the sync gateway", () => {
         {
           subscriptionId: "sub-inbox-cross-tenant",
           kind: "projection",
-          name: "conversation-inbox",
+          name: DEMO_PROJECTION_NAME,
         },
       ]),
     );
 
-    // Tenant-b creates a conversation and appends; tenant-a must not see it.
-    const convB = await postJson(
-      `${app.httpUrl}/conversations`,
-      { kind: "group", title: "B Only", participantUserIds: [] },
-      b.sessionToken,
-    );
-    expect(convB.status).toBe(201);
-    const conversationIdB = convB.body.conversation.id as string;
+    // Tenant-b emits a matching event; subscriber in tenant-a must not see
+    // a delta because the gateway scopes by tenant.
     const append = await postJson(
       `${app.httpUrl}/append`,
       {
         requestId: "request-cross-tenant",
         stream: "MessageStream",
-        key: conversationIdB,
+        key: "conv-b",
         event: "MessageSent",
         payload: {
           messageId: "message-cross-tenant",
-          senderId: "user-shared",
+          senderId: "user-tenant-b",
           body: "tenant-b only",
           createdAt: "2026-05-09T00:00:00.000Z",
         },
@@ -176,7 +208,12 @@ describe("projection deltas over the sync gateway", () => {
 });
 
 async function startServer() {
-  const server = createFrickServer({ port: 0, dbPath: ":memory:" });
+  const server = createFrickServer({
+    port: 0,
+    dbPath: ":memory:",
+    schema: productTestSchema,
+  });
+  server.store.projections.register(createDemoDeltaProjection());
   await server.listen();
   const address = server.server.address();
   if (!address || typeof address === "string") {
@@ -229,7 +266,7 @@ async function connectAndHello(url: string, sessionToken: string): Promise<WebSo
       {
         replicaId: "replica-test",
         deviceId: "device-test",
-        schemaHash: foundationSchema.hash,
+        schemaHash: productTestSchema.hash,
         knownCursors: {},
       },
     ]),

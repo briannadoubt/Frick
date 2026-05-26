@@ -1,14 +1,18 @@
 import { describe, expect, it } from "vitest";
+import { productTestSchema } from "@frick/protocol";
 import { FrickStore } from "../src/store.js";
 
-describe("FrickStore.isObjectVisibleToUser — MessageDraft", () => {
-  // The MessageDraft schema uses the `${userId}:${conversationId}` id
-  // convention shared across all SDKs. Visibility must be the source
-  // of truth, not the id: a client that subscribes to all of
-  // MessageDraft must never see another user's row, even if it
-  // somehow learns the id.
-  it("hides a MessageDraft from any user other than its owner", () => {
-    const store = new FrickStore({ path: ":memory:" });
+describe("FrickStore.isObjectVisibleToUser — framework default", () => {
+  // After the framework boundary cleanup, the built-in visibility check is
+  // intentionally a no-op (always returns true). Apps own the policy via
+  // registered policy hooks; the framework only exposes the primitive +
+  // listObjectsForUser pipe so app-owned visibility can plug in.
+  //
+  // These tests pin that "deferred to app" contract so a future refactor
+  // that re-adds opinionated behavior to the framework primitive shows up
+  // as a deliberate failure.
+  it("returns true for any (object, viewer) by default", () => {
+    const store = new FrickStore({ path: ":memory:", schema: productTestSchema });
     try {
       const draft = {
         id: "user-ada:conv-1",
@@ -18,14 +22,16 @@ describe("FrickStore.isObjectVisibleToUser — MessageDraft", () => {
         updatedAt: 1_700_000_000_000,
       };
       expect(store.isObjectVisibleToUser("_default", "MessageDraft", draft, "user-ada")).toBe(true);
-      expect(store.isObjectVisibleToUser("_default", "MessageDraft", draft, "user-grace")).toBe(false);
+      // Default framework no longer filters by ownership; that policy is
+      // app-owned now.
+      expect(store.isObjectVisibleToUser("_default", "MessageDraft", draft, "user-grace")).toBe(true);
     } finally {
       store.close();
     }
   });
 
-  it("excludes other users' drafts from listObjectsForUser", () => {
-    const store = new FrickStore({ path: ":memory:" });
+  it("listObjectsForUser returns every row by default (app policy filters)", () => {
+    const store = new FrickStore({ path: ":memory:", schema: productTestSchema });
     try {
       store.upsertObject("_default", "MessageDraft", "user-ada:conv-1", {
         userId: "user-ada",
@@ -41,9 +47,9 @@ describe("FrickStore.isObjectVisibleToUser — MessageDraft", () => {
       });
 
       const adaVisible = store.listObjectsForUser("_default", "MessageDraft", "user-ada");
-      expect(adaVisible.map((row) => row.userId)).toEqual(["user-ada"]);
-      const graceVisible = store.listObjectsForUser("_default", "MessageDraft", "user-grace");
-      expect(graceVisible.map((row) => row.userId)).toEqual(["user-grace"]);
+      // Both rows are visible by default; apps wire ownership filtering in
+      // through a policy hook over the `object.read` action.
+      expect(adaVisible.map((row) => row.userId).sort()).toEqual(["user-ada", "user-grace"]);
     } finally {
       store.close();
     }

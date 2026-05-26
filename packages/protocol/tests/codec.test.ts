@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  foundationSchema,
   packObjectRecord,
   packPresenceRecord,
   packSignalEnvelope,
   packStreamEvent,
+  productTestSchema,
   unpackObjectRecord,
   unpackPresenceRecord,
   unpackSignalEnvelope,
@@ -13,7 +13,7 @@ import {
 
 describe("foundation codecs", () => {
   it("packs and unpacks object records by stable field id", () => {
-    const packed = packObjectRecord(foundationSchema, "User", "user-1", {
+    const packed = packObjectRecord(productTestSchema, "User", "user-1", {
       displayName: "Ada",
       avatarBlobId: "blob-1",
     });
@@ -26,7 +26,7 @@ describe("foundation codecs", () => {
         [2, "blob-1"],
       ],
     ]);
-    expect(unpackObjectRecord(foundationSchema, packed)).toEqual({
+    expect(unpackObjectRecord(productTestSchema, packed)).toEqual({
       type: "User",
       id: "user-1",
       value: { id: "user-1", displayName: "Ada", avatarBlobId: "blob-1" },
@@ -34,7 +34,7 @@ describe("foundation codecs", () => {
   });
 
   it("packs stream events with stream key and event payload", () => {
-    const packed = packStreamEvent(foundationSchema, {
+    const packed = packStreamEvent(productTestSchema, {
       stream: "MessageStream",
       streamId: "conversation-1",
       sequence: 7,
@@ -50,20 +50,20 @@ describe("foundation codecs", () => {
 
     expect(packed[0]).toBe(1);
     expect(packed[2]).toBe(7);
-    expect(unpackStreamEvent(foundationSchema, packed).event).toBe("MessageSent");
+    expect(unpackStreamEvent(productTestSchema, packed).event).toBe("MessageSent");
   });
 
   it("packs presence and signal records", () => {
-    const presence = packPresenceRecord(foundationSchema, "TypingState", "conversation-1:user-1:device-1", {
+    const presence = packPresenceRecord(productTestSchema, "TypingState", "conversation-1:user-1:device-1", {
       isTyping: true,
     });
-    const signal = packSignalEnvelope(foundationSchema, "WebRTCSignal", "call-1", {
+    const signal = packSignalEnvelope(productTestSchema, "WebRTCSignal", "call-1", {
       senderDeviceId: "device-1",
       kind: "offer",
       payload: new Uint8Array([1, 2, 3]),
     });
 
-    expect(unpackPresenceRecord(foundationSchema, presence).value.isTyping).toBe(true);
-    expect(unpackSignalEnvelope(foundationSchema, signal).value.kind).toBe("offer");
+    expect(unpackPresenceRecord(productTestSchema, presence).value.isTyping).toBe(true);
+    expect(unpackSignalEnvelope(productTestSchema, signal).value.kind).toBe("offer");
   });
 });

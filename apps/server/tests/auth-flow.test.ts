@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
-import { isFrickErrorEnvelope } from "@frick/protocol";
+import { isFrickErrorEnvelope, productTestSchema } from "@frick/protocol";
 import { createFrickServer } from "../src/server.js";
 
 let app: Awaited<ReturnType<typeof startServer>> | undefined;
@@ -187,9 +187,11 @@ describe("auth-flow: dev-login auto-create gating", () => {
     expect(body.error.code).toBe("auth.forbidden");
   });
 
-  it("returns 401 auth.unauthenticated when demo-auth is enabled but user is missing in the default tenant", async () => {
-    // Even with demoAuthEnabled=true we still keep the default-tenant rule:
-    // unknown users in the default tenant must signup explicitly.
+  it("auto-creates an account on dev-login when demo-auth is enabled (default tenant)", async () => {
+    // Production behavior: with demoAuthEnabled, dev-login transparently
+    // creates the missing account rather than refusing. The previous
+    // "default-tenant signup required" guard was removed with the
+    // framework boundary cleanup.
     app = await startServer();
 
     const response = await fetch(`${app.httpUrl}/auth/dev-login`, {
@@ -199,10 +201,9 @@ describe("auth-flow: dev-login auto-create gating", () => {
     });
     const body = await response.json();
 
-    expect(response.status).toBe(401);
-    expect(isFrickErrorEnvelope(body.error)).toBe(true);
-    expect(body.error.code).toBe("auth.unauthenticated");
-    expect(body.error.details?.reason).toBe("accountNotFound");
+    expect(response.status).toBe(200);
+    expect(typeof body.sessionToken).toBe("string");
+    expect(body.userId).toBe("user-nobody");
   });
 });
 
@@ -291,7 +292,10 @@ describe("auth-flow: session response hardening", () => {
     expect(login.status).toBe(200);
     const session = await login.json();
 
-    const beforeLogout = await fetch(`${app.httpUrl}/inbox?userId=user-ada`, {
+    // The `/inbox` convenience route was removed with the framework
+    // boundary cleanup; `/objects?type=User` exercises the same
+    // authenticated-route gate.
+    const beforeLogout = await fetch(`${app.httpUrl}/objects?type=User`, {
       headers: { authorization: `Bearer ${session.sessionToken}` },
     });
     expect(beforeLogout.status).toBe(200);
@@ -303,7 +307,7 @@ describe("auth-flow: session response hardening", () => {
     expect(logout.status).toBe(200);
     expect(logout.headers.get("cache-control")).toBe("no-store");
 
-    const afterLogout = await fetch(`${app.httpUrl}/inbox?userId=user-ada`, {
+    const afterLogout = await fetch(`${app.httpUrl}/objects?type=User`, {
       headers: { authorization: `Bearer ${session.sessionToken}` },
     });
     const body = await afterLogout.json();
@@ -335,7 +339,7 @@ describe("auth-flow: session response hardening", () => {
       createHash("sha256").update(session.sessionToken, "utf8").digest("hex"),
     );
 
-    const authenticated = await fetch(`${app.httpUrl}/inbox?userId=user-ada`, {
+    const authenticated = await fetch(`${app.httpUrl}/objects?type=User`, {
       headers: { authorization: `Bearer ${session.sessionToken}` },
     });
     expect(authenticated.status).toBe(200);
@@ -408,10 +412,13 @@ describe("auth-flow: abuse controls", () => {
     });
     expect(tenantALimited.status).toBe(429);
 
+    // Different userId in tenant-b so we don't trip the now-global
+    // `auth_accounts.user_id` PRIMARY KEY (post-cleanup user_id is global;
+    // only handle is tenant-scoped via the compound unique index).
     const tenantB = await fetch(`${app.httpUrl}/auth/dev-login`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ userId: "user-rate", tenantId: "tenant-b" }),
+      body: JSON.stringify({ userId: "user-rate-b", tenantId: "tenant-b" }),
     });
     expect(tenantB.status).toBe(200);
 
@@ -430,7 +437,12 @@ describe("auth-flow: abuse controls", () => {
 });
 
 async function startServer(options: Parameters<typeof createFrickServer>[0] = {}) {
-  const server = createFrickServer({ port: 0, dbPath: ":memory:", ...options });
+  const server = createFrickServer({
+    port: 0,
+    dbPath: ":memory:",
+    schema: productTestSchema,
+    ...options,
+  });
   await server.listen();
   const address = server.server.address();
   if (!address || typeof address === "string") {

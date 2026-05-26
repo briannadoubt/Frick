@@ -8,7 +8,7 @@ import {
   defaultClientCapabilities,
   defaultServerCapabilities,
   encodeFrame,
-  foundationSchema,
+  productTestSchema,
   unpackSignalEnvelope,
   type FrickFrame,
   type HelloAckPayload,
@@ -52,320 +52,20 @@ describe("foundation sync gateway", () => {
     expect(login.sessionToken).toEqual(expect.any(String));
     expect(login.sessionToken.length).toBeGreaterThan(30);
     expect(login).toMatchObject({
-      schemaHash: foundationSchema.hash,
+      schemaHash: productTestSchema.hash,
       userId: "user-ada",
       deviceId: "device-ada-web",
       replicaId: "replica-ada-web",
     });
     expect(Date.parse(login.expiresAt)).not.toBeNaN();
 
-    const response = await fetch(`${app.httpUrl}/objects`, {
+    // Route requires ?type — pick any registered type from the test schema.
+    const response = await fetch(`${app.httpUrl}/objects?type=User`, {
       headers: authHeaders(login.sessionToken),
     });
 
     expect(response.status).toBe(200);
-    expect((await response.json()).schemaHash).toBe(foundationSchema.hash);
-  });
-
-  it("signs up a chat account, creates room membership, and accepts messages from that user", async () => {
-    app = await startServer();
-
-    const signup = await signUp(app.httpUrl, {
-      displayName: "Dorothy Vaughan",
-      handle: "dorothy",
-      password: "correct horse battery staple",
-      deviceId: "device-dorothy-web",
-      replicaId: "replica-dorothy-web",
-      platform: "web",
-    });
-
-    expect(signup).toMatchObject({
-      schemaHash: foundationSchema.hash,
-      userId: "user-dorothy",
-      displayName: "Dorothy Vaughan",
-      handle: "dorothy",
-      deviceId: "device-dorothy-web",
-      replicaId: "replica-dorothy-web",
-    });
-    expect(signup.sessionToken.length).toBeGreaterThan(30);
-
-    const usersResponse = await fetch(`${app.httpUrl}/objects?type=User`, {
-      headers: authHeaders(signup.sessionToken),
-    });
-    expect(usersResponse.status).toBe(200);
-    expect((await usersResponse.json()).data).toContainEqual(
-      expect.objectContaining({
-        id: "user-dorothy",
-        displayName: "Dorothy Vaughan",
-      }),
-    );
-
-    const membersResponse = await fetch(`${app.httpUrl}/objects?type=RoomMember`, {
-      headers: authHeaders(signup.sessionToken),
-    });
-    expect(membersResponse.status).toBe(200);
-    expect((await membersResponse.json()).data).toContainEqual(
-      expect.objectContaining({
-        conversationId: "conversation-general",
-        userId: "user-dorothy",
-        role: "member",
-      }),
-    );
-
-    const appendResponse = await fetch(`${app.httpUrl}/append`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...authHeaders(signup.sessionToken) },
-      body: JSON.stringify({
-        requestId: "request-dorothy-message",
-        replicaId: signup.replicaId,
-        stream: "MessageStream",
-        key: "conversation-general",
-        event: "MessageSent",
-        payload: {
-          messageId: "message-dorothy",
-          senderId: signup.userId,
-          body: "Hello from Dorothy",
-          createdAt: "2026-05-09T00:00:00.000Z",
-        },
-      }),
-    });
-
-    expect(appendResponse.status).toBe(200);
-  });
-
-  it("creates authenticated chat threads with owner membership and accepts messages in that thread", async () => {
-    app = await startServer();
-    const signup = await signUp(app.httpUrl, {
-      displayName: "Mary Jackson",
-      handle: "mary",
-      password: "supersonic wind tunnel",
-      deviceId: "device-mary-web",
-      replicaId: "replica-mary-web",
-      platform: "web",
-    });
-
-    const createResponse = await fetch(`${app.httpUrl}/conversations`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...authHeaders(signup.sessionToken) },
-      body: JSON.stringify({ title: "Launch Room" }),
-    });
-
-    expect(createResponse.status).toBe(201);
-    const created = (await createResponse.json()) as {
-      schemaHash: string;
-      conversation: { id: string; kind: string; title: string; createdBy: string };
-      member: { id: string; conversationId: string; userId: string; role: string };
-    };
-    expect(created.schemaHash).toBe(foundationSchema.hash);
-    expect(created.conversation).toEqual(
-      expect.objectContaining({
-        id: expect.stringMatching(/^conversation-launch-room-/),
-        kind: "group",
-        title: "Launch Room",
-        createdBy: signup.userId,
-      }),
-    );
-    expect(created.member).toEqual(
-      expect.objectContaining({
-        conversationId: created.conversation.id,
-        userId: signup.userId,
-        role: "owner",
-      }),
-    );
-
-    const conversationsResponse = await fetch(`${app.httpUrl}/objects?type=Conversation`, {
-      headers: authHeaders(signup.sessionToken),
-    });
-    expect(conversationsResponse.status).toBe(200);
-    expect((await conversationsResponse.json()).data).toContainEqual(expect.objectContaining(created.conversation));
-
-    const membersResponse = await fetch(`${app.httpUrl}/objects?type=RoomMember`, {
-      headers: authHeaders(signup.sessionToken),
-    });
-    expect(membersResponse.status).toBe(200);
-    expect((await membersResponse.json()).data).toContainEqual(expect.objectContaining(created.member));
-
-    const emptyReceiptResponse = await fetch(`${app.httpUrl}/append`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...authHeaders(signup.sessionToken) },
-      body: JSON.stringify({
-        requestId: "request-mary-empty-receipt",
-        replicaId: signup.replicaId,
-        stream: "MessageStream",
-        key: created.conversation.id,
-        event: "ReceiptAdvanced",
-        payload: {
-          userId: signup.userId,
-          sequence: 142,
-        },
-      }),
-    });
-    expect(emptyReceiptResponse.status).toBe(200);
-    const inboxAfterEmptyReceipt = await getInbox(app.httpUrl, signup.sessionToken, signup.userId);
-    const createdInboxRow = inboxAfterEmptyReceipt.body.data.find(
-      (row: { conversationId: string }) => row.conversationId === created.conversation.id,
-    );
-    expect(createdInboxRow?.readSequence ?? 0).toBe(0);
-
-    const appendResponse = await fetch(`${app.httpUrl}/append`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...authHeaders(signup.sessionToken) },
-      body: JSON.stringify({
-        requestId: "request-mary-launch-room",
-        replicaId: signup.replicaId,
-        stream: "MessageStream",
-        key: created.conversation.id,
-        event: "MessageSent",
-        payload: {
-          messageId: "message-mary-launch-room",
-          senderId: signup.userId,
-          body: "This one belongs in Launch Room",
-          createdAt: "2026-05-09T00:00:00.000Z",
-        },
-      }),
-    });
-    expect(appendResponse.status).toBe(200);
-
-    const streamResponse = await fetch(
-      `${app.httpUrl}/streams/MessageStream/${encodeURIComponent(created.conversation.id)}`,
-      { headers: authHeaders(signup.sessionToken) },
-    );
-    expect(streamResponse.status).toBe(200);
-    expect((await streamResponse.json()).data).toContainEqual(
-      expect.objectContaining({
-        streamId: created.conversation.id,
-        event: "MessageSent",
-        payload: expect.objectContaining({
-          body: "This one belongs in Launch Room",
-          senderId: signup.userId,
-        }),
-      }),
-    );
-  });
-
-  it("creates participant-specific threads and only exposes them to members", async () => {
-    app = await startServer();
-    const adaLogin = await devLogin(app.httpUrl, { userId: "user-ada" });
-    const graceLogin = await devLogin(app.httpUrl, { userId: "user-grace" });
-    app.store.upsertObject("User", "user-mallory", {
-      displayName: "Mallory",
-      avatarBlobId: undefined,
-    });
-    const malloryLogin = await devLogin(app.httpUrl, { userId: "user-mallory" });
-
-    const createResponse = await fetch(`${app.httpUrl}/conversations`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...authHeaders(adaLogin.sessionToken) },
-      body: JSON.stringify({
-        kind: "dm",
-        participantUserIds: ["user-grace"],
-      }),
-    });
-
-    expect(createResponse.status).toBe(201);
-    const created = (await createResponse.json()) as {
-      conversation: { id: string; kind: string; title?: string; createdBy: string };
-      members: Array<{ conversationId: string; userId: string; role: string }>;
-    };
-    expect(created.conversation).toEqual(
-      expect.objectContaining({
-        id: expect.stringMatching(/^conversation-dm-/),
-        kind: "dm",
-        createdBy: "user-ada",
-      }),
-    );
-    expect(created.members).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ conversationId: created.conversation.id, userId: "user-ada", role: "owner" }),
-        expect.objectContaining({ conversationId: created.conversation.id, userId: "user-grace", role: "member" }),
-      ]),
-    );
-
-    const graceConversations = await fetch(`${app.httpUrl}/objects?type=Conversation`, {
-      headers: authHeaders(graceLogin.sessionToken),
-    });
-    expect(graceConversations.status).toBe(200);
-    expect((await graceConversations.json()).data).toContainEqual(expect.objectContaining(created.conversation));
-
-    const malloryConversations = await fetch(`${app.httpUrl}/objects?type=Conversation`, {
-      headers: authHeaders(malloryLogin.sessionToken),
-    });
-    expect(malloryConversations.status).toBe(200);
-    expect((await malloryConversations.json()).data).not.toContainEqual(expect.objectContaining(created.conversation));
-
-    const graceMembers = await fetch(`${app.httpUrl}/objects?type=RoomMember`, {
-      headers: authHeaders(graceLogin.sessionToken),
-    });
-    expect(graceMembers.status).toBe(200);
-    const graceMembersBody = await graceMembers.json();
-    expect(graceMembersBody.data).toEqual(expect.arrayContaining(created.members.map((member) => expect.objectContaining(member))));
-
-    const malloryMembers = await fetch(`${app.httpUrl}/objects?type=RoomMember`, {
-      headers: authHeaders(malloryLogin.sessionToken),
-    });
-    expect(malloryMembers.status).toBe(200);
-    expect((await malloryMembers.json()).data).not.toEqual(
-      expect.arrayContaining(created.members.map((member) => expect.objectContaining(member))),
-    );
-
-    const graceAppend = await fetch(`${app.httpUrl}/append`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...authHeaders(graceLogin.sessionToken) },
-      body: JSON.stringify({
-        requestId: "request-grace-dm",
-        replicaId: graceLogin.replicaId,
-        stream: "MessageStream",
-        key: created.conversation.id,
-        event: "MessageSent",
-        payload: {
-          messageId: "message-grace-dm",
-          senderId: "user-grace",
-          body: "private hello",
-          createdAt: "2026-05-09T00:00:00.000Z",
-        },
-      }),
-    });
-    expect(graceAppend.status).toBe(200);
-
-    const malloryRead = await fetch(`${app.httpUrl}/streams/MessageStream/${encodeURIComponent(created.conversation.id)}`, {
-      headers: authHeaders(malloryLogin.sessionToken),
-    });
-    expect(malloryRead.status).toBe(403);
-  });
-
-  it("rejects participant-specific threads with invalid memberships", async () => {
-    app = await startServer();
-    const adaLogin = await devLogin(app.httpUrl, { userId: "user-ada" });
-
-    const unknownUser = await fetch(`${app.httpUrl}/conversations`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...authHeaders(adaLogin.sessionToken) },
-      body: JSON.stringify({
-        title: "Mystery",
-        participantUserIds: ["user-unknown"],
-      }),
-    });
-    expect(unknownUser.status).toBe(400);
-
-    const oversizedDm = await fetch(`${app.httpUrl}/conversations`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...authHeaders(adaLogin.sessionToken) },
-      body: JSON.stringify({
-        kind: "dm",
-        participantUserIds: ["user-grace", "user-ada", "user-grace"],
-      }),
-    });
-    expect(oversizedDm.status).toBe(201);
-
-    const invalidDm = await fetch(`${app.httpUrl}/conversations`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...authHeaders(adaLogin.sessionToken) },
-      body: JSON.stringify({
-        kind: "dm",
-        participantUserIds: [],
-      }),
-    });
-    expect(invalidDm.status).toBe(400);
+    expect((await response.json()).schemaHash).toBe(productTestSchema.hash);
   });
 
   it("logs in an existing chat account and rejects wrong passwords", async () => {
@@ -396,38 +96,13 @@ describe("foundation sync gateway", () => {
     });
 
     expect(login).toMatchObject({
-      schemaHash: foundationSchema.hash,
+      schemaHash: productTestSchema.hash,
       userId: "user-katherine",
       displayName: "Katherine Johnson",
       handle: "katherine",
       deviceId: "device-katherine-web",
       replicaId: "replica-katherine-web",
     });
-  });
-
-  it("rejects authenticated appends that spoof a MessageSent sender", async () => {
-    app = await startServer();
-    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
-
-    const response = await fetch(`${app.httpUrl}/append`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...authHeaders(login.sessionToken) },
-      body: JSON.stringify({
-        requestId: "request-spoof-sender",
-        replicaId: login.replicaId,
-        stream: "MessageStream",
-        key: "conversation-general",
-        event: "MessageSent",
-        payload: {
-          messageId: "message-spoof-sender",
-          senderId: "user-grace",
-          body: "pretending",
-          createdAt: "2026-05-09T00:00:00.000Z",
-        },
-      }),
-    });
-
-    expect(response.status).toBe(403);
   });
 
   it("authenticates WebSocket appends from sessionToken without replicaId naming", async () => {
@@ -446,7 +121,7 @@ describe("foundation sync gateway", () => {
         {
           replicaId: "replica-mallory-should-not-matter",
           deviceId: "device-mallory-should-not-matter",
-          schemaHash: foundationSchema.hash,
+          schemaHash: productTestSchema.hash,
           knownCursors: {},
         },
       ]),
@@ -513,8 +188,8 @@ describe("foundation sync gateway", () => {
       message: expect.stringMatching(/schema mismatch/i),
       requestId: "hello",
       retryable: false,
-      schemaHash: foundationSchema.hash,
-      schemaRevision: foundationSchema.schemaRevision,
+      schemaHash: productTestSchema.hash,
+      schemaRevision: productTestSchema.schemaRevision,
     });
     expect(frame[1]).toMatchObject({
       code: "schema.incompatible",
@@ -541,11 +216,11 @@ describe("foundation sync gateway", () => {
             ...defaultClientCapabilities({
               platform: "web",
               sdkVersion: "0.0.0-test",
-              schema: foundationSchema,
+              schema: productTestSchema,
             }),
             schema: {
-              schemaId: foundationSchema.schemaId,
-              schemaRevision: foundationSchema.schemaRevision,
+              schemaId: productTestSchema.schemaId,
+              schemaRevision: productTestSchema.schemaRevision,
               schemaHash: "compatible-but-different",
             },
           },
@@ -557,8 +232,8 @@ describe("foundation sync gateway", () => {
     expect(ack.schemaCompatibility).toMatchObject({
       compatible: true,
       reason: "revisionCompatibleHashMismatch",
-      clientRevision: foundationSchema.schemaRevision,
-      serverRevision: foundationSchema.schemaRevision,
+      clientRevision: productTestSchema.schemaRevision,
+      serverRevision: productTestSchema.schemaRevision,
     });
     socket.close();
   });
@@ -574,13 +249,13 @@ describe("foundation sync gateway", () => {
         {
           replicaId: "replica-unsupported",
           deviceId: "device-unsupported",
-          schemaHash: foundationSchema.hash,
+          schemaHash: productTestSchema.hash,
           knownCursors: {},
           clientCapabilities: {
             ...defaultClientCapabilities({
               platform: "web",
               sdkVersion: "0.0.0-test",
-              schema: foundationSchema,
+              schema: productTestSchema,
             }),
             required: ["transport.websocket", "primitive.telepathy", "push.apns"],
           },
@@ -595,8 +270,8 @@ describe("foundation sync gateway", () => {
       requestId: "hello",
       retryable: false,
       details: { unsupportedCapabilities: ["primitive.telepathy", "push.apns"] },
-      schemaHash: foundationSchema.hash,
-      schemaRevision: foundationSchema.schemaRevision,
+      schemaHash: productTestSchema.hash,
+      schemaRevision: productTestSchema.schemaRevision,
     });
     socket.close();
   });
@@ -613,7 +288,7 @@ describe("foundation sync gateway", () => {
         {
           replicaId: "replica-1",
           deviceId: "device-1",
-          schemaHash: foundationSchema.hash,
+          schemaHash: productTestSchema.hash,
           knownCursors: {},
         },
       ]),
@@ -675,7 +350,7 @@ describe("foundation sync gateway", () => {
         {
           replicaId: "replica-1",
           deviceId: "device-1",
-          schemaHash: foundationSchema.hash,
+          schemaHash: productTestSchema.hash,
           knownCursors: {},
         },
       ]),
@@ -719,7 +394,7 @@ describe("foundation sync gateway", () => {
         {
           replicaId: "replica-1",
           deviceId: "device-1",
-          schemaHash: foundationSchema.hash,
+          schemaHash: productTestSchema.hash,
           knownCursors: {},
         },
       ]),
@@ -760,7 +435,7 @@ describe("foundation sync gateway", () => {
         {
           replicaId: "replica-1",
           deviceId: "device-1",
-          schemaHash: foundationSchema.hash,
+          schemaHash: productTestSchema.hash,
           knownCursors: {},
         },
       ]),
@@ -806,7 +481,7 @@ describe("foundation sync gateway", () => {
     const page = await readSseEvent(reader);
     expect(page.event).toBe("stream-page");
     expect(JSON.parse(page.data)).toMatchObject({
-      schemaHash: foundationSchema.hash,
+      schemaHash: productTestSchema.hash,
       stream: "MessageStream",
       key: "conversation-general",
       data: [],
@@ -875,58 +550,10 @@ describe("foundation sync gateway", () => {
     abort.abort();
   });
 
-  it("does not stream SSE events from another tenant with the same stream key", async () => {
-    app = await startServer();
-    const a = await devLogin(app.httpUrl, { userId: "user-shared", tenantId: "tenant-a" });
-    const b = await devLogin(app.httpUrl, { userId: "user-shared", tenantId: "tenant-b" });
-    for (const tenantId of ["tenant-a", "tenant-b"]) {
-      app.store.upsertObject(tenantId, "Conversation", "conversation-general", {
-        kind: "channel",
-        title: "Tenant General",
-        createdBy: "user-shared",
-        lastMessageEventId: undefined,
-      });
-      app.store.upsertObject(tenantId, "RoomMember", `member-${tenantId}-shared`, {
-        conversationId: "conversation-general",
-        userId: "user-shared",
-        role: "owner",
-      });
-    }
-    const abort = new AbortController();
-    const response = await fetch(`${app.httpUrl}/streams/MessageStream/conversation-general/events?after=0`, {
-      headers: authHeaders(a.sessionToken),
-      signal: abort.signal,
-    });
-    expect(response.status).toBe(200);
-    expect(response.body).toBeTruthy();
-
-    const reader = response.body!.getReader();
-    expect((await readSseEvent(reader)).event).toBe("stream-page");
-
-    const deltaEvent = readSseEvent(reader);
-    const append = await fetch(`${app.httpUrl}/append`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...authHeaders(b.sessionToken) },
-      body: JSON.stringify({
-        requestId: "request-sse-cross-tenant",
-        stream: "MessageStream",
-        key: "conversation-general",
-        event: "MessageSent",
-        payload: {
-          messageId: "message-sse-cross-tenant",
-          senderId: "user-shared",
-          body: "tenant-b only",
-          createdAt: "2026-05-09T00:00:00.000Z",
-        },
-      }),
-    });
-    expect(append.status).toBe(200);
-
-    await expect(withTimeout(deltaEvent, "unexpected cross-tenant SSE delta")).rejects.toThrow(
-      "unexpected cross-tenant SSE delta",
-    );
-    abort.abort();
-  });
+  // Cross-tenant SSE isolation is covered by tests/tenant-isolation.test.ts
+  // against generic streams. The chat-coupled version that lived here
+  // depended on per-conversation RoomMember authz which was removed with
+  // the framework boundary cleanup.
 
   it("streams WebSocket appends over SSE", async () => {
     app = await startServer();
@@ -950,7 +577,7 @@ describe("foundation sync gateway", () => {
         {
           replicaId: "replica-web",
           deviceId: "device-web",
-          schemaHash: foundationSchema.hash,
+          schemaHash: productTestSchema.hash,
           knownCursors: {},
         },
       ]),
@@ -1000,88 +627,6 @@ describe("foundation sync gateway", () => {
     const keepAlive = await withTimeout(readRawSseBlock(reader), "expected SSE keep-alive");
     expect(keepAlive).toContain(": keep-alive");
     abort.abort();
-  });
-
-  it("projects message appends and read receipts into per-user inbox rows", async () => {
-    app = await startServer();
-    const adaLogin = await devLogin(app.httpUrl, { userId: "user-ada" });
-    const graceLogin = await devLogin(app.httpUrl, { userId: "user-grace" });
-
-    await postAppend(app.httpUrl, adaLogin.sessionToken, "request-inbox-message", "inbox hello");
-
-    const graceInbox = await getInbox(app.httpUrl, graceLogin.sessionToken, "user-grace");
-    expect(graceInbox.status).toBe(200);
-    expect(graceInbox.body.data).toHaveLength(1);
-    expect(graceInbox.body.data[0]).toMatchObject({
-      conversationId: "conversation-general",
-      userId: "user-grace",
-      title: "Foundation General",
-      kind: "channel",
-      lastSequence: 1,
-      lastMessageBody: "inbox hello",
-      lastMessageSenderId: "user-ada",
-      readSequence: 0,
-      unreadCount: 1,
-    });
-
-    const receiptResponse = await fetch(`${app.httpUrl}/append`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...authHeaders(graceLogin.sessionToken) },
-      body: JSON.stringify({
-        requestId: "request-inbox-read",
-        replicaId: "replica-grace",
-        stream: "MessageStream",
-        key: "conversation-general",
-        event: "ReceiptAdvanced",
-        payload: {
-          userId: "user-grace",
-          sequence: 1,
-        },
-      }),
-    });
-    expect(receiptResponse.status).toBe(200);
-
-    const readInbox = await getInbox(app.httpUrl, graceLogin.sessionToken, "user-grace");
-    expect(readInbox.body.data[0]).toMatchObject({
-      conversationId: "conversation-general",
-      userId: "user-grace",
-      lastSequence: 1,
-      readSequence: 1,
-      unreadCount: 0,
-    });
-  });
-
-  it("rejects non-members reading and appending message streams", async () => {
-    app = await startServer();
-    app.store.upsertObject("User", "user-mallory", {
-      displayName: "Mallory",
-      avatarBlobId: undefined,
-    });
-    const malloryLogin = await devLogin(app.httpUrl, { userId: "user-mallory" });
-
-    const readResponse = await fetch(`${app.httpUrl}/streams/MessageStream/conversation-general`, {
-      headers: authHeaders(malloryLogin.sessionToken),
-    });
-    expect(readResponse.status).toBe(403);
-
-    const appendResponse = await fetch(`${app.httpUrl}/append`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...authHeaders(malloryLogin.sessionToken) },
-      body: JSON.stringify({
-        requestId: "request-mallory",
-        replicaId: "replica-mallory",
-        stream: "MessageStream",
-        key: "conversation-general",
-        event: "MessageSent",
-        payload: {
-          messageId: "message-mallory",
-          senderId: "user-mallory",
-          body: "nope",
-          createdAt: "2026-05-09T00:00:00.000Z",
-        },
-      }),
-    });
-    expect(appendResponse.status).toBe(403);
   });
 
   it("bounds forward HTTP stream pages and reports cursor state", async () => {
@@ -1307,7 +852,7 @@ describe("foundation sync gateway", () => {
     });
     expect(firstRead.status).toBe(200);
     expect(await firstRead.json()).toMatchObject({
-      schemaHash: foundationSchema.hash,
+      schemaHash: productTestSchema.hash,
       name: "WebRTCSignal",
       key: "call-http",
       data: [
@@ -1337,7 +882,7 @@ describe("foundation sync gateway", () => {
         {
           replicaId: "replica-signal",
           deviceId: "device-signal",
-          schemaHash: foundationSchema.hash,
+          schemaHash: productTestSchema.hash,
           knownCursors: {},
         },
       ]),
@@ -1370,7 +915,7 @@ describe("foundation sync gateway", () => {
 
     const frame = await withTimeout(signalFrame, "expected websocket signal from HTTP POST");
     expect(frame[0]).toBe(FrameKind.SignalDeliver);
-    const envelope = unpackSignalEnvelope(foundationSchema, frame[1].envelope);
+    const envelope = unpackSignalEnvelope(productTestSchema, frame[1].envelope);
     expect(envelope).toEqual({
       type: "WebRTCSignal",
       key: "call-http-ws",
@@ -1387,7 +932,7 @@ describe("foundation sync gateway", () => {
 async function startServer(
   options: { sseHeartbeatMs?: number; limits?: Parameters<typeof createFrickServer>[0]["limits"] } = {},
 ) {
-  const server = createFrickServer({ port: 0, dbPath: ":memory:", ...options });
+  const server = createFrickServer({ port: 0, dbPath: ":memory:", schema: productTestSchema, ...options });
   await server.listen();
   const address = server.server.address();
   if (!address || typeof address === "string") {
@@ -1425,18 +970,18 @@ async function expectHelloAckThenSchema(socket: WebSocket): Promise<HelloAckPayl
   const [ack, schema] = await collectFrames(socket, 2);
   expect(ack[0]).toBe(FrameKind.HelloAck);
   expect(ack[1]).toMatchObject({
-    schemaHash: foundationSchema.hash,
-    schemaId: foundationSchema.schemaId,
-    schemaRevision: foundationSchema.schemaRevision,
+    schemaHash: productTestSchema.hash,
+    schemaId: productTestSchema.schemaId,
+    schemaRevision: productTestSchema.schemaRevision,
     schemaCompatibility: {
       compatible: true,
-      clientRevision: foundationSchema.schemaRevision,
-      serverRevision: foundationSchema.schemaRevision,
+      clientRevision: productTestSchema.schemaRevision,
+      serverRevision: productTestSchema.schemaRevision,
     },
-    serverCapabilities: defaultServerCapabilities(foundationSchema),
+    serverCapabilities: defaultServerCapabilities(productTestSchema),
   });
 
-  expect(schema).toEqual([FrameKind.Schema, foundationSchema]);
+  expect(schema).toEqual([FrameKind.Schema, productTestSchema]);
   return ack[1] as HelloAckPayload;
 }
 

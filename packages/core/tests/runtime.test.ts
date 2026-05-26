@@ -5,7 +5,7 @@ import {
   defaultClientCapabilities,
   defaultServerCapabilities,
   encodeFrame,
-  foundationSchema,
+  productTestSchema,
   packStreamEvent,
 } from "@frick/protocol";
 import {
@@ -22,7 +22,7 @@ import {
 
 const HELLO_ACK_FRAME_KIND = (FrameKind as typeof FrameKind & { HelloAck?: number }).HelloAck ?? 18;
 const tenantAdaSession = {
-  schemaHash: foundationSchema.hash,
+  schemaHash: productTestSchema.hash,
   sessionToken: "session-token-a",
   tenantId: "tenant-a",
   userId: "user-ada",
@@ -35,8 +35,8 @@ const tenantAdaScope = { tenantId: "tenant-a", userId: "user-ada" };
 describe("foundation runtime", () => {
   it("hydrates objects and stream events from local cache", () => {
     const cache = new MemoryFrickCache();
-    cache.saveObject(foundationSchema, "User", "user-ada", { displayName: "Ada Lovelace" }, 1, tenantAdaScope);
-    cache.saveStreamEvent(foundationSchema, {
+    cache.saveObject(productTestSchema, "User", "user-ada", { displayName: "Ada Lovelace" }, 1, tenantAdaScope);
+    cache.saveStreamEvent(productTestSchema, {
       stream: "MessageStream",
       streamId: "conversation-general",
       sequence: 1,
@@ -52,7 +52,7 @@ describe("foundation runtime", () => {
 
     const client = new FrickClient({
       endpoint: "ws://unused",
-      schema: foundationSchema,
+      schema: productTestSchema,
       cache,
       session: tenantAdaSession,
     });
@@ -63,8 +63,8 @@ describe("foundation runtime", () => {
 
   it("clears cached and pending user state when the session scope changes", async () => {
     const cache = new MemoryFrickCache();
-    cache.saveObject(foundationSchema, "User", "user-ada", { displayName: "Ada Lovelace" }, 1, tenantAdaScope);
-    cache.saveStreamEvent(foundationSchema, {
+    cache.saveObject(productTestSchema, "User", "user-ada", { displayName: "Ada Lovelace" }, 1, tenantAdaScope);
+    cache.saveStreamEvent(productTestSchema, {
       stream: "MessageStream",
       streamId: "conversation-general",
       sequence: 1,
@@ -77,7 +77,7 @@ describe("foundation runtime", () => {
         createdAt: "2026-05-09T00:00:00.000Z",
       },
     }, tenantAdaScope);
-    cache.savePendingAppend(foundationSchema, {
+    cache.savePendingAppend(productTestSchema, {
       requestId: "pending-1",
       stream: "MessageStream",
       key: "conversation-general",
@@ -86,7 +86,7 @@ describe("foundation runtime", () => {
     }, tenantAdaScope);
     const client = new FrickClient({
       endpoint: "ws://unused",
-      schema: foundationSchema,
+      schema: productTestSchema,
       cache,
       session: tenantAdaSession,
     });
@@ -116,7 +116,7 @@ describe("foundation runtime", () => {
     expect(client.syncStatus.value.pendingMutations).toBeGreaterThan(0);
 
     client.setSession({
-      schemaHash: foundationSchema.hash,
+      schemaHash: productTestSchema.hash,
       sessionToken: "session-token-b",
       tenantId: "tenant-b",
       userId: "user-grace",
@@ -130,7 +130,7 @@ describe("foundation runtime", () => {
     expect(client.object("User", "user-ada")).toBeUndefined();
     expect(client.syncStatus.value.pendingMutations).toBe(0);
     expect(client.syncStatus.value.cursors).toEqual({});
-    expect(cache.load(foundationSchema)).toEqual({
+    expect(cache.load(productTestSchema)).toEqual({
       objects: [],
       streamEvents: [],
       cursors: {},
@@ -142,7 +142,7 @@ describe("foundation runtime", () => {
 
   it("queues appends while disconnected and tracks pending count", async () => {
     const cache = new MemoryFrickCache();
-    const client = new FrickClient({ endpoint: "ws://unused", schema: foundationSchema, cache });
+    const client = new FrickClient({ endpoint: "ws://unused", schema: productTestSchema, cache });
 
     await client.append("MessageStream", "conversation-general", "MessageSent", {
       messageId: "message-1",
@@ -152,14 +152,14 @@ describe("foundation runtime", () => {
     });
 
     expect(client.syncStatus.value.pendingMutations).toBe(1);
-    expect(cache.load(foundationSchema).pendingAppends).toHaveLength(1);
+    expect(cache.load(productTestSchema).pendingAppends).toHaveLength(1);
   });
 
   it("advances stream cursors when live deltas arrive", () => {
     const socket = TestWebSocket.prepare();
     const client = new FrickClient({
       endpoint: "ws://test",
-      schema: foundationSchema,
+      schema: productTestSchema,
       WebSocketImpl: TestWebSocket as never,
     });
 
@@ -172,7 +172,7 @@ describe("foundation runtime", () => {
         {
           objects: [],
           events: [
-            packStreamEvent(foundationSchema, {
+            packStreamEvent(productTestSchema, {
               stream: "MessageStream",
               streamId: "conversation-general",
               sequence: 42,
@@ -199,7 +199,7 @@ describe("foundation runtime", () => {
     const socket = TestWebSocket.prepare();
     const client = new FrickClient({
       endpoint: "ws://test",
-      schema: foundationSchema,
+      schema: productTestSchema,
       WebSocketImpl: TestWebSocket as never,
     });
 
@@ -242,9 +242,9 @@ describe("foundation runtime", () => {
     const socket = TestWebSocket.prepare();
     const client = new FrickClient({
       endpoint: "ws://test/_frick/sync?sessionToken=secret&transport=websocket",
-      schema: foundationSchema,
+      schema: productTestSchema,
       session: {
-        schemaHash: foundationSchema.hash,
+        schemaHash: productTestSchema.hash,
         sessionToken: "session-token-123",
         userId: "user-ada",
         deviceId: "device-web",
@@ -266,7 +266,7 @@ describe("foundation runtime", () => {
     expect(frame[1]).toMatchObject({
       replicaId: "replica-web",
       deviceId: "device-web",
-      schemaHash: foundationSchema.hash,
+      schemaHash: productTestSchema.hash,
       knownCursors: {},
       sessionToken: "session-token-123",
     });
@@ -286,7 +286,7 @@ describe("foundation runtime", () => {
     const client = new FrickClient({
       endpoint: "ws://socket.example.test/_frick/sync",
       httpEndpoint: "https://api.example.test/frick",
-      schema: foundationSchema,
+      schema: productTestSchema,
     });
 
     try {
@@ -304,7 +304,7 @@ describe("foundation runtime", () => {
     const socket = TestWebSocket.prepare();
     const client = new FrickClient({
       endpoint: "ws://test",
-      schema: foundationSchema,
+      schema: productTestSchema,
       replicaId: "replica-web",
       deviceId: "device-web",
       WebSocketImpl: TestWebSocket as never,
@@ -318,12 +318,12 @@ describe("foundation runtime", () => {
       {
         replicaId: "replica-web",
         deviceId: "device-web",
-        schemaHash: foundationSchema.hash,
+        schemaHash: productTestSchema.hash,
         knownCursors: {},
         clientCapabilities: defaultClientCapabilities({
           platform: "web",
           sdkVersion: "0.0.0-runtime",
-          schema: foundationSchema,
+          schema: productTestSchema,
         }),
       },
     ]);
@@ -333,16 +333,16 @@ describe("foundation runtime", () => {
     const socket = TestWebSocket.prepare();
     const client = new FrickClient({
       endpoint: "ws://test",
-      schema: foundationSchema,
+      schema: productTestSchema,
       WebSocketImpl: TestWebSocket as never,
     });
     const schemaCompatibility = {
       compatible: true,
       reason: "exact",
-      clientRevision: foundationSchema.schemaRevision,
-      serverRevision: foundationSchema.schemaRevision,
+      clientRevision: productTestSchema.schemaRevision,
+      serverRevision: productTestSchema.schemaRevision,
     } as const;
-    const serverCapabilities = defaultServerCapabilities(foundationSchema);
+    const serverCapabilities = defaultServerCapabilities(productTestSchema);
 
     client.connect();
     socket.emit("open", {});
@@ -350,9 +350,9 @@ describe("foundation runtime", () => {
       data: encodeFrame([
         HELLO_ACK_FRAME_KIND,
         {
-          schemaHash: foundationSchema.hash,
-          schemaId: foundationSchema.schemaId,
-          schemaRevision: foundationSchema.schemaRevision,
+          schemaHash: productTestSchema.hash,
+          schemaId: productTestSchema.schemaId,
+          schemaRevision: productTestSchema.schemaRevision,
           schemaCompatibility,
           serverCapabilities,
         },
@@ -368,7 +368,7 @@ describe("foundation runtime", () => {
     const socket = TestWebSocket.prepare();
     const client = new FrickClient({
       endpoint: "ws://test/_frick/sync",
-      schema: foundationSchema,
+      schema: productTestSchema,
       WebSocketImpl: TestWebSocket as never,
       telemetry,
     });
@@ -394,7 +394,7 @@ describe("foundation runtime", () => {
           attributes: expect.objectContaining({
             "network.protocol.name": "websocket",
             "url.path": "/_frick/sync",
-            "frick.schema_id": foundationSchema.schemaId,
+            "frick.schema_id": productTestSchema.schemaId,
           }),
         }),
         result: expect.objectContaining({
@@ -435,7 +435,7 @@ describe("foundation runtime", () => {
     const socket = TestWebSocket.prepare();
     const client = new FrickClient({
       endpoint: "ws://test/_frick/sync",
-      schema: foundationSchema,
+      schema: productTestSchema,
       WebSocketImpl: TestWebSocket as never,
       telemetry,
     });
@@ -470,7 +470,7 @@ describe("foundation runtime", () => {
     };
     const client = new FrickClient({
       endpoint: "ws://test/_frick/sync",
-      schema: foundationSchema,
+      schema: productTestSchema,
       WebSocketImpl: Impl,
       telemetry,
       session: tenantAdaSession,
@@ -505,7 +505,7 @@ describe("foundation runtime", () => {
     const socket = TestWebSocket.prepare();
     const client = new FrickClient({
       endpoint: "ws://test/_frick/sync",
-      schema: foundationSchema,
+      schema: productTestSchema,
       WebSocketImpl: TestWebSocket as never,
       telemetry: new ThrowingClientTelemetryRuntime(),
     });
@@ -521,7 +521,7 @@ describe("foundation runtime", () => {
     const cache = new MemoryFrickCache();
     const client = new FrickClient({
       endpoint: "ws://test",
-      schema: foundationSchema,
+      schema: productTestSchema,
       cache,
       WebSocketImpl: TestWebSocket as never,
     });
@@ -556,7 +556,7 @@ describe("foundation runtime", () => {
     });
 
     expect(client.syncStatus.value.pendingMutations).toBe(0);
-    expect(cache.load(foundationSchema).pendingAppends).toHaveLength(0);
+    expect(cache.load(productTestSchema).pendingAppends).toHaveLength(0);
     expect(client.syncStatus.value.lastError).toEqual(error);
   });
 
@@ -564,7 +564,7 @@ describe("foundation runtime", () => {
     const cache = new MemoryFrickCache();
     const client = new FrickClient({
       endpoint: "ws://unused",
-      schema: foundationSchema,
+      schema: productTestSchema,
       cache,
       maxPendingAppends: 2,
     });
@@ -602,7 +602,7 @@ describe("foundation runtime", () => {
     const socket = TestWebSocket.prepare();
     const client = new FrickClient({
       endpoint: "ws://test",
-      schema: foundationSchema,
+      schema: productTestSchema,
       WebSocketImpl: TestWebSocket as never,
     });
 
@@ -635,7 +635,7 @@ describe("foundation runtime", () => {
     const socket = TestWebSocket.prepare();
     const client = new FrickClient({
       endpoint: "ws://test",
-      schema: foundationSchema,
+      schema: productTestSchema,
       WebSocketImpl: TestWebSocket as never,
     });
 
@@ -685,7 +685,7 @@ describe("foundation runtime", () => {
     const socket = TestWebSocket.prepare();
     const client = new FrickClient({
       endpoint: "ws://test",
-      schema: foundationSchema,
+      schema: productTestSchema,
       WebSocketImpl: TestWebSocket as never,
     });
 
@@ -727,7 +727,7 @@ describe("foundation runtime", () => {
     try {
       const client = new FrickClient({
         endpoint: "ws://test",
-        schema: foundationSchema,
+        schema: productTestSchema,
         reconnectDelayMs: 100,
         maxReconnectDelayMs: 5_000,
         WebSocketImpl: Impl,
@@ -755,7 +755,7 @@ describe("foundation runtime", () => {
     const socket = TestWebSocket.prepare();
     const client = new FrickClient({
       endpoint: "ws://test",
-      schema: foundationSchema,
+      schema: productTestSchema,
       WebSocketImpl: TestWebSocket as never,
     });
 
@@ -799,15 +799,15 @@ describe("foundation runtime", () => {
 describe("memory cache schema compatibility", () => {
   it("records schema identity metadata after the first save and exposes it on load", () => {
     const cache = new MemoryFrickCache();
-    cache.saveObject(foundationSchema, "User", "user-ada", { displayName: "Ada" }, 1);
+    cache.saveObject(productTestSchema, "User", "user-ada", { displayName: "Ada" }, 1);
 
-    const state = cache.load(foundationSchema);
+    const state = cache.load(productTestSchema);
 
     expect(state.metadata).toEqual({
-      schemaId: foundationSchema.schemaId,
-      schemaVersion: foundationSchema.schemaVersion,
-      schemaRevision: foundationSchema.schemaRevision,
-      schemaHash: foundationSchema.hash,
+      schemaId: productTestSchema.schemaId,
+      schemaVersion: productTestSchema.schemaVersion,
+      schemaRevision: productTestSchema.schemaRevision,
+      schemaHash: productTestSchema.hash,
     });
   });
 
@@ -821,23 +821,23 @@ describe("memory cache schema compatibility", () => {
       },
     });
 
-    expect(() => cache.load(foundationSchema)).toThrowError(FrickCacheIncompatibleError);
+    expect(() => cache.load(productTestSchema)).toThrowError(FrickCacheIncompatibleError);
     try {
-      cache.load(foundationSchema);
+      cache.load(productTestSchema);
     } catch (error) {
       if (!(error instanceof FrickCacheIncompatibleError)) {
         throw error;
       }
       expect(error.reason).toBe("schemaIdMismatch");
       expect(error.cachedMetadata.schemaId).toBe("legacy-app");
-      expect(error.currentMetadata.schemaId).toBe(foundationSchema.schemaId);
+      expect(error.currentMetadata.schemaId).toBe(productTestSchema.schemaId);
     }
   });
 
   it("throws FrickCacheIncompatibleError when cache revision falls below the minimum", () => {
     const cache = new MemoryFrickCache({
       metadata: {
-        schemaId: foundationSchema.schemaId,
+        schemaId: productTestSchema.schemaId,
         schemaVersion: "0.0.9",
         schemaRevision: 1,
         schemaHash: "obsolete-hash",
@@ -852,7 +852,7 @@ describe("memory cache schema compatibility", () => {
         },
       ],
     });
-    const upgradedSchema = { ...foundationSchema, schemaRevision: 5, minimumClientRevision: 5 };
+    const upgradedSchema = { ...productTestSchema, schemaRevision: 5, minimumClientRevision: 5 };
 
     try {
       cache.load(upgradedSchema);
@@ -870,9 +870,9 @@ describe("memory cache schema compatibility", () => {
   it("allows load when cached hash differs but revision is still compatible", () => {
     const cache = new MemoryFrickCache({
       metadata: {
-        schemaId: foundationSchema.schemaId,
-        schemaVersion: foundationSchema.schemaVersion,
-        schemaRevision: foundationSchema.schemaRevision,
+        schemaId: productTestSchema.schemaId,
+        schemaVersion: productTestSchema.schemaVersion,
+        schemaRevision: productTestSchema.schemaRevision,
         schemaHash: "old-but-compatible-hash",
       },
       objects: [
@@ -880,7 +880,7 @@ describe("memory cache schema compatibility", () => {
       ],
     });
 
-    const state = cache.load(foundationSchema);
+    const state = cache.load(productTestSchema);
 
     expect(state.metadata?.schemaHash).toBe("old-but-compatible-hash");
     expect(state.objects).toHaveLength(1);
@@ -888,13 +888,13 @@ describe("memory cache schema compatibility", () => {
 
   it("throws FrickCacheIncompatibleError when cached session scope differs", () => {
     const cache = new MemoryFrickCache();
-    cache.saveObject(foundationSchema, "User", "user-ada", { displayName: "Ada" }, 1, tenantAdaScope);
+    cache.saveObject(productTestSchema, "User", "user-ada", { displayName: "Ada" }, 1, tenantAdaScope);
 
     expect(() =>
-      cache.load(foundationSchema, { tenantId: "tenant-b", userId: "user-grace" }),
+      cache.load(productTestSchema, { tenantId: "tenant-b", userId: "user-grace" }),
     ).toThrowError(FrickCacheIncompatibleError);
     try {
-      cache.load(foundationSchema, { tenantId: "tenant-b", userId: "user-grace" });
+      cache.load(productTestSchema, { tenantId: "tenant-b", userId: "user-grace" });
     } catch (error) {
       if (!(error instanceof FrickCacheIncompatibleError)) {
         throw error;
@@ -906,12 +906,12 @@ describe("memory cache schema compatibility", () => {
 
   it("clears all state including metadata", () => {
     const cache = new MemoryFrickCache();
-    cache.saveObject(foundationSchema, "User", "user-ada", { displayName: "Ada" }, 1);
-    expect(cache.load(foundationSchema).metadata).toBeDefined();
+    cache.saveObject(productTestSchema, "User", "user-ada", { displayName: "Ada" }, 1);
+    expect(cache.load(productTestSchema).metadata).toBeDefined();
 
     cache.clear();
 
-    expect(cache.load(foundationSchema)).toEqual({
+    expect(cache.load(productTestSchema)).toEqual({
       objects: [],
       streamEvents: [],
       cursors: {},

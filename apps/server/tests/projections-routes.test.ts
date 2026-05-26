@@ -1,7 +1,17 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { productTestSchema } from "@frick/protocol";
 import { createFrickServer } from "../src/server.js";
 import { deny, type FrickPolicyHook } from "../src/authz.js";
 import type { FrickProjection } from "../src/projections/registry.js";
+
+// The conversation-inbox projection that the previous version of this
+// suite exercised was removed with the framework boundary cleanup
+// (CHANGELOG: "Removed framework-owned chat routes, projections, search
+// indexes, scheduled-message sweep logic, and conversation inbox storage
+// from the server runtime"). The routes themselves (/projections,
+// /projections/:name, /_frick/admin/projections/:name/rebuild,
+// /_frick/inspect/projections) still exist, so this suite drives them
+// against a test-registered "demo-inbox" projection.
 
 const ADMIN_TOKEN = "test-admin-token-1234567890ABCDEF1234567890ABCDEF";
 
@@ -12,9 +22,50 @@ afterEach(async () => {
   app = undefined;
 });
 
+interface DemoInboxRow {
+  userId: string;
+  conversationId: string;
+  unreadCount: number;
+}
+
+function createDemoInboxProjection(): FrickProjection {
+  const rows = new Map<string, DemoInboxRow>();
+  return {
+    name: "demo-inbox",
+    sources: [
+      { kind: "stream", type: "MessageStream" },
+      { kind: "object", type: "RoomMember" },
+    ],
+    handler: {
+      apply() {
+        // Trivial: never grows from events — we manually upsert below to
+        // exercise the read path.
+      },
+      read(_ctx, query) {
+        const userId = typeof query.userId === "string" ? query.userId : undefined;
+        const out: DemoInboxRow[] = [];
+        for (const row of rows.values()) {
+          if (userId === undefined || row.userId === userId) out.push(row);
+        }
+        return out;
+      },
+      rebuild() {
+        rows.clear();
+      },
+      // Test hook: lets the test seed rows without an event firing.
+      __setRows(input: DemoInboxRow[]) {
+        rows.clear();
+        for (const row of input) {
+          rows.set(`${row.userId}:${row.conversationId}`, row);
+        }
+      },
+    } as FrickProjection["handler"] & { __setRows(rows: DemoInboxRow[]): void },
+  };
+}
+
 describe("/projections HTTP routes", () => {
-  it("lists registered projections including conversation-inbox", async () => {
-    app = await startServer();
+  it("lists registered projections", async () => {
+    app = await startServer({ extraProjections: [createDemoInboxProjection()] });
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
 
     const response = await fetch(`${app.httpUrl}/projections`, {
@@ -25,8 +76,8 @@ describe("/projections HTTP routes", () => {
       projections: Array<{ name: string; sources: unknown[] }>;
     };
     const names = body.projections.map((p) => p.name);
-    expect(names).toContain("conversation-inbox");
-    const inbox = body.projections.find((p) => p.name === "conversation-inbox");
+    expect(names).toContain("demo-inbox");
+    const inbox = body.projections.find((p) => p.name === "demo-inbox");
     expect(inbox?.sources).toEqual(
       expect.arrayContaining([
         { kind: "stream", type: "MessageStream" },
@@ -35,50 +86,41 @@ describe("/projections HTTP routes", () => {
     );
   });
 
-  it("serves conversation-inbox read with the same data as /inbox", async () => {
-    app = await startServer();
+  it("serves the projection read endpoint scoped to the principal's userId", async () => {
+    const projection = createDemoInboxProjection();
+    app = await startServer({ extraProjections: [projection] });
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
-
-    const inboxResp = await fetch(`${app.httpUrl}/inbox?userId=user-ada`, {
-      headers: authHeaders(login.sessionToken),
-    });
-    const projectionResp = await fetch(
-      `${app.httpUrl}/projections/conversation-inbox?userId=user-ada`,
-      { headers: authHeaders(login.sessionToken) },
-    );
-
-    expect(inboxResp.status).toBe(200);
-    expect(projectionResp.status).toBe(200);
-    const inboxBody = (await inboxResp.json()) as { data: unknown };
-    const projectionBody = (await projectionResp.json()) as {
-      projection: string;
-      data: unknown;
-    };
-    expect(projectionBody.projection).toBe("conversation-inbox");
-    expect(projectionBody.data).toEqual(inboxBody.data);
-  });
-
-  it("rejects conversation-inbox reads for another userId", async () => {
-    app = await startServer();
-    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+    (projection.handler as { __setRows: (rows: DemoInboxRow[]) => void }).__setRows([
+      { userId: login.userId, conversationId: "c1", unreadCount: 2 },
+      { userId: "user-grace", conversationId: "c1", unreadCount: 5 },
+    ]);
 
     const response = await fetch(
-      `${app.httpUrl}/projections/conversation-inbox?userId=user-grace`,
+      `${app.httpUrl}/projections/demo-inbox?userId=${login.userId}`,
       { headers: authHeaders(login.sessionToken) },
     );
-
-    expect(response.status).toBe(403);
-    const body = await response.json();
-    expect(body.error.details.reason).toBe("notAuthorizedForResource");
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { projection: string; data: DemoInboxRow[] };
+    expect(body.projection).toBe("demo-inbox");
+    expect(body.data.map((row) => row.userId)).toEqual([login.userId]);
   });
+
+  // The previous "rejects another userId" test was removed: the framework
+  // no longer inspects `userId` query params on projection reads (apps own
+  // that filter inside `handler.read(...)` or via a policy hook keyed on
+  // the resource `key`). The framework contract checked here — that
+  // `assertCanSubscribe` runs and that policy hooks compose — is covered
+  // by the next case.
 
   it("applies custom projection policy hooks before HTTP reads", async () => {
     const denyPrivateProjection: FrickPolicyHook = (input) =>
       input.action === "projection.read" && input.resource.name === "private-projection"
         ? deny("notAuthorizedForResource", "Projection is private")
         : null;
-    app = await startServer({ policyHooks: [denyPrivateProjection] });
-    app.store.projections.register(privateProjection);
+    app = await startServer({
+      policyHooks: [denyPrivateProjection],
+      extraProjections: [privateProjection],
+    });
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
 
     const response = await fetch(`${app.httpUrl}/projections/private-projection`, {
@@ -113,9 +155,12 @@ describe("/projections HTTP routes", () => {
   });
 
   it("rebuilds a projection via admin route and returns the timestamp", async () => {
-    app = await startServer({ adminToken: ADMIN_TOKEN });
+    app = await startServer({
+      adminToken: ADMIN_TOKEN,
+      extraProjections: [createDemoInboxProjection()],
+    });
     const response = await fetch(
-      `${app.httpUrl}/_frick/admin/projections/conversation-inbox/rebuild`,
+      `${app.httpUrl}/_frick/admin/projections/demo-inbox/rebuild`,
       {
         method: "POST",
         headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
@@ -127,17 +172,19 @@ describe("/projections HTTP routes", () => {
       tenantId: string;
       rebuiltAt: string;
     };
-    expect(body.projection).toBe("conversation-inbox");
+    expect(body.projection).toBe("demo-inbox");
     expect(body.tenantId).toBe("_default");
     expect(typeof body.rebuiltAt).toBe("string");
   });
 
   it("admin rebuild fails closed before running the handler when audit recording fails", async () => {
-    app = await startServer({ adminToken: ADMIN_TOKEN });
-    const projection = app.store.projections.get("conversation-inbox");
-    expect(projection).toBeDefined();
+    const projection = createDemoInboxProjection();
+    app = await startServer({
+      adminToken: ADMIN_TOKEN,
+      extraProjections: [projection],
+    });
     let rebuildCalls = 0;
-    (projection!.handler as unknown as { rebuild: () => void }).rebuild = () => {
+    (projection.handler as unknown as { rebuild: () => void }).rebuild = () => {
       rebuildCalls += 1;
     };
     (app.store.adminAudit as unknown as { record: () => never }).record = () => {
@@ -145,7 +192,7 @@ describe("/projections HTTP routes", () => {
     };
 
     const response = await fetch(
-      `${app.httpUrl}/_frick/admin/projections/conversation-inbox/rebuild`,
+      `${app.httpUrl}/_frick/admin/projections/demo-inbox/rebuild`,
       {
         method: "POST",
         headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
@@ -157,10 +204,13 @@ describe("/projections HTTP routes", () => {
   });
 
   it("admin rebuild rejects non-admin sessions with 403", async () => {
-    app = await startServer({ adminToken: ADMIN_TOKEN });
+    app = await startServer({
+      adminToken: ADMIN_TOKEN,
+      extraProjections: [createDemoInboxProjection()],
+    });
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
     const response = await fetch(
-      `${app.httpUrl}/_frick/admin/projections/conversation-inbox/rebuild`,
+      `${app.httpUrl}/_frick/admin/projections/demo-inbox/rebuild`,
       {
         method: "POST",
         headers: authHeaders(login.sessionToken),
@@ -186,7 +236,10 @@ describe("/projections HTTP routes", () => {
   });
 
   it("exposes /_frick/inspect/projections when inspection is enabled", async () => {
-    app = await startServer({ inspectionEnabled: true });
+    app = await startServer({
+      inspectionEnabled: true,
+      extraProjections: [createDemoInboxProjection()],
+    });
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
     const response = await fetch(`${app.httpUrl}/_frick/inspect/projections`, {
       headers: authHeaders(login.sessionToken),
@@ -200,9 +253,9 @@ describe("/projections HTTP routes", () => {
         supportsRead: boolean;
       }>;
     };
-    const inbox = body.projections.find((p) => p.name === "conversation-inbox");
+    const inbox = body.projections.find((p) => p.name === "demo-inbox");
     expect(inbox).toMatchObject({
-      name: "conversation-inbox",
+      name: "demo-inbox",
       supportsRebuild: true,
       supportsRead: true,
     });
@@ -214,18 +267,26 @@ async function startServer(
     adminToken?: string;
     inspectionEnabled?: boolean;
     policyHooks?: readonly FrickPolicyHook[];
+    extraProjections?: readonly FrickProjection[];
   } = {},
 ) {
   const config: Record<string, unknown> = {};
   if (overrides.adminToken !== undefined) config.adminToken = overrides.adminToken;
   if (overrides.inspectionEnabled !== undefined)
     config.inspectionEnabled = overrides.inspectionEnabled;
+
   const server = createFrickServer({
     port: 0,
     dbPath: ":memory:",
+    schema: productTestSchema,
     config,
     ...(overrides.policyHooks !== undefined ? { policyHooks: overrides.policyHooks } : {}),
   });
+  // No `projections` option on createFrickServer; register on the store
+  // before listening so the HTTP routes pick them up via the shared registry.
+  for (const p of overrides.extraProjections ?? []) {
+    server.store.projections.register(p);
+  }
   await server.listen();
   const address = server.server.address();
   if (!address || typeof address === "string") {

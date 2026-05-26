@@ -16,15 +16,6 @@ final class FrickEventStreamParserTests: XCTestCase {
         XCTAssertEqual(events[0].data, "{\"data\":[{\"id\":\"message-1\",\"body\":\"Streamed\"}]}")
     }
 
-    func testClientExposesMessageSSEStream() throws {
-        let client = FrickClient(
-            baseURL: URL(string: "http://127.0.0.1:4099")!,
-            storage: try FrickSQLiteStorage(path: ":memory:")
-        )
-
-        _ = client.streamMessages(conversationId: "conversation-general")
-    }
-
     func testDevLoginPostsExpectedJsonAndStoresReturnedSession() async throws {
         FrickStreamingURLProtocol.reset()
         FrickStreamingURLProtocol.enqueue(
@@ -128,68 +119,6 @@ final class FrickEventStreamParserTests: XCTestCase {
         XCTAssertEqual(body["deviceId"] as? String, "ios-device")
         XCTAssertEqual(body["replicaId"] as? String, "ios-replica")
         XCTAssertEqual(body["platform"] as? String, "ios")
-    }
-
-    func testCreateConversationPostsParticipantsWithSessionAuth() async throws {
-        FrickStreamingURLProtocol.reset()
-        FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-ada", token: "token-ada"), for: "/auth/dev-login")
-        FrickStreamingURLProtocol.enqueue(
-            """
-            {
-              "schemaHash": "\(FrickSchema.schemaHash)",
-              "conversation": {
-                "id": "conversation-launch-room-a1b2c3",
-                "kind": "group",
-                "title": "Launch Room",
-                "createdBy": "user-ada",
-                "lastMessageEventId": null
-              },
-              "member": {
-                "id": "member-launch-room-a1b2c3-ada",
-                "conversationId": "conversation-launch-room-a1b2c3",
-                "userId": "user-ada",
-                "role": "owner"
-              },
-              "members": [
-                {
-                  "id": "member-launch-room-a1b2c3-ada",
-                  "conversationId": "conversation-launch-room-a1b2c3",
-                  "userId": "user-ada",
-                  "role": "owner"
-                },
-                {
-                  "id": "member-launch-room-a1b2c3-grace",
-                  "conversationId": "conversation-launch-room-a1b2c3",
-                  "userId": "user-grace",
-                  "role": "member"
-                }
-              ]
-            }
-            """,
-            for: "/conversations"
-        )
-        let client = try makeTestClient()
-
-        _ = try await client.devLogin(userId: "user-ada")
-        let created = try await client.createConversation(
-            title: "Launch Room",
-            kind: "group",
-            participantUserIds: ["user-grace"]
-        )
-
-        XCTAssertEqual(created.conversation.id, "conversation-launch-room-a1b2c3")
-        XCTAssertEqual(created.conversation.title, "Launch Room")
-        XCTAssertEqual(created.member.conversationId, created.conversation.id)
-        XCTAssertEqual(created.member.userId, "user-ada")
-        XCTAssertEqual(created.members.map(\.userId), ["user-ada", "user-grace"])
-        let requests = FrickStreamingURLProtocol.recordedRequests
-        XCTAssertEqual(requests.map(\.path), ["/auth/dev-login", "/conversations"])
-        XCTAssertEqual(requests.last?.method, "POST")
-        XCTAssertEqual(requests.last?.headerValue("authorization"), "Bearer token-ada")
-        let body = try XCTUnwrap(requests.last?.jsonBody)
-        XCTAssertEqual(body["title"] as? String, "Launch Room")
-        XCTAssertEqual(body["kind"] as? String, "group")
-        XCTAssertEqual(body["participantUserIds"] as? [String], ["user-grace"])
     }
 
     func testTrackPostsProductAnalyticsWithSessionAuth() async throws {
@@ -461,91 +390,6 @@ final class FrickEventStreamParserTests: XCTestCase {
         XCTAssertNil(client.currentSession)
     }
 
-    func testAuthenticatedFetchUsersIncludesAuthorizationHeader() async throws {
-        FrickStreamingURLProtocol.reset()
-        FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-ada", token: "token-ada"), for: "/auth/dev-login")
-        FrickStreamingURLProtocol.enqueue(
-            """
-            {
-              "schemaHash": "\(FrickSchema.schemaHash)",
-              "type": "User",
-              "data": [
-                { "id": "user-ada", "displayName": "Ada Lovelace" }
-              ]
-            }
-            """,
-            for: "/objects?type=User"
-        )
-        let client = try makeTestClient()
-
-        _ = try await client.devLogin(userId: "user-ada")
-        _ = try await client.fetchUsers()
-
-        let requests = FrickStreamingURLProtocol.recordedRequests
-        XCTAssertEqual(requests.map(\.path), ["/auth/dev-login", "/objects?type=User"])
-        XCTAssertNil(requests.first?.headerValue("authorization"))
-        XCTAssertEqual(requests.last?.headerValue("authorization"), "Bearer token-ada")
-    }
-
-    func testStreamMessagesRequestCarriesSessionAuth() async throws {
-        FrickStreamingURLProtocol.reset()
-        FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-ada", token: "token-ada"), for: "/auth/dev-login")
-        FrickStreamingURLProtocol.enqueue(
-            try ssePayload(for: "stream-page", events: [streamEvent(sequence: 1, eventId: "event-1", body: "authed")]),
-            for: "/streams/MessageStream/conversation-general/events?after=0"
-        )
-        let client = try makeTestClient()
-
-        _ = try await client.devLogin(userId: "user-ada")
-        let snapshots = try await withTimeout {
-            for try await snapshot in client.streamMessages(conversationId: "conversation-general") {
-                return snapshot
-            }
-            return []
-        }
-
-        XCTAssertEqual(snapshots.first?.payload["body"], "authed")
-        let streamRequest = try XCTUnwrap(FrickStreamingURLProtocol.recordedRequests.last)
-        XCTAssertEqual(streamRequest.path, "/streams/MessageStream/conversation-general/events?after=0")
-        XCTAssertEqual(streamRequest.headerValue("authorization"), "Bearer token-ada")
-    }
-
-    func testSendMessageDefaultsSenderIdToAuthenticatedUser() async throws {
-        FrickStreamingURLProtocol.reset()
-        FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-grace", token: "token-grace"), for: "/auth/dev-login")
-        let client = try makeTestClient(requestIdFactory: { "request-1" })
-
-        _ = try await client.devLogin(userId: "user-grace")
-        try await client.sendMessage(body: "hello from session")
-
-        let body = try XCTUnwrap(FrickStreamingURLProtocol.postedBodies.last)
-        let payload = try XCTUnwrap(body["payload"] as? [String: Any])
-        XCTAssertEqual(payload["senderId"] as? String, "user-grace")
-        XCTAssertEqual(payload["body"] as? String, "hello from session")
-    }
-
-    func testFetchInboxDefaultsToAuthenticatedUser() async throws {
-        FrickStreamingURLProtocol.reset()
-        FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-grace", token: "token-grace"), for: "/auth/dev-login")
-        FrickStreamingURLProtocol.enqueue(
-            """
-            {
-              "schemaHash": "\(FrickSchema.schemaHash)",
-              "data": []
-            }
-            """,
-            for: "/inbox?userId=user-grace"
-        )
-        let client = try makeTestClient()
-
-        _ = try await client.devLogin(userId: "user-grace")
-        let inbox = try await client.fetchInbox()
-
-        XCTAssertEqual(inbox, [])
-        XCTAssertEqual(FrickStreamingURLProtocol.recordedRequests.last?.path, "/inbox?userId=user-grace")
-        XCTAssertEqual(FrickStreamingURLProtocol.recordedRequests.last?.headerValue("authorization"), "Bearer token-grace")
-    }
-
     func testSignOutClearsSessionAndPendingAppends() async throws {
         FrickStreamingURLProtocol.reset()
         FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-ada", token: "token-ada"), for: "/auth/dev-login")
@@ -593,84 +437,6 @@ final class FrickEventStreamParserTests: XCTestCase {
         XCTAssertEqual(try storage.loadPendingAppends().map(\.requestId), ["request-1"])
     }
 
-    func testFetchInboxWithoutSessionOrExplicitUserIdRequiresAuthBeforeRequest() async throws {
-        FrickStreamingURLProtocol.reset()
-        let client = try makeTestClient()
-
-        do {
-            _ = try await client.fetchInbox()
-            XCTFail("expected auth requirement before defaulting inbox user")
-        } catch is FrickAuthenticationRequiredError {
-            // expected
-        }
-
-        XCTAssertEqual(FrickStreamingURLProtocol.recordedRequests, [])
-    }
-
-    func testSendMessageWithoutSessionOrExplicitSenderRequiresAuthBeforeAppend() async throws {
-        FrickStreamingURLProtocol.reset()
-        let storage = try FrickSQLiteStorage(path: ":memory:")
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [FrickStreamingURLProtocol.self]
-        let session = URLSession(configuration: configuration)
-        let client = FrickClient(
-            baseURL: URL(string: "http://frick.test")!,
-            session: session,
-            streamingSession: session,
-            storage: storage
-        )
-
-        do {
-            try await client.sendMessage(body: "no fallback")
-            XCTFail("expected auth requirement before defaulting sender id")
-        } catch is FrickAuthenticationRequiredError {
-            // expected
-        }
-
-        XCTAssertEqual(FrickStreamingURLProtocol.recordedRequests, [])
-        XCTAssertEqual(try storage.loadPendingAppends(), [])
-    }
-
-    func testMessageStreamReconnectsAfterSseResponseEnds() async throws {
-        FrickStreamingURLProtocol.reset()
-        FrickStreamingURLProtocol.enqueue(
-            try ssePayload(for: "stream-page", events: [streamEvent(sequence: 1, eventId: "event-1", body: "first")]),
-            for: "/streams/MessageStream/conversation-general/events?after=0"
-        )
-        FrickStreamingURLProtocol.enqueue(
-            try ssePayload(for: "delta", events: [streamEvent(sequence: 2, eventId: "event-2", body: "second")]),
-            for: "/streams/MessageStream/conversation-general/events?after=1"
-        )
-
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [FrickStreamingURLProtocol.self]
-        let session = URLSession(configuration: configuration)
-        let client = FrickClient(
-            baseURL: URL(string: "http://frick.test")!,
-            session: session,
-            streamingSession: session,
-            storage: try FrickSQLiteStorage(path: ":memory:")
-        )
-
-        let snapshots = try await withTimeout {
-            var snapshots: [[FrickStreamEvent]] = []
-            for try await snapshot in client.streamMessages(conversationId: "conversation-general") {
-                snapshots.append(snapshot)
-                if snapshots.count == 2 {
-                    return snapshots
-                }
-            }
-            return snapshots
-        }
-
-        XCTAssertEqual(snapshots.map(\.count), [1, 2])
-        XCTAssertEqual(snapshots.last?.map { $0.payload["body"] }, ["first", "second"])
-        XCTAssertEqual(FrickStreamingURLProtocol.requestedPaths, [
-            "/streams/MessageStream/conversation-general/events?after=0",
-            "/streams/MessageStream/conversation-general/events?after=1",
-        ])
-    }
-
     func testDecodesJsonPayloadFieldsWithoutDroppingMessageEvents() throws {
         let response = """
         {
@@ -698,118 +464,6 @@ final class FrickEventStreamParserTests: XCTestCase {
 
         XCTAssertEqual(decoded.data.first?.payload["body"], "Attachment")
         XCTAssertEqual(decoded.data.first?.payload["attachmentBlobIds"], #"["blob-1"]"#)
-    }
-
-    func testOnlyMessageSentEventsWithBodyAreVisibleChatMessages() {
-        let message = streamEvent(sequence: 1, eventId: "event-message", body: "Hello")
-        let emptyMessage = streamEvent(sequence: 2, eventId: "event-empty", body: "")
-        let receipt = FrickStreamEvent(
-            stream: "MessageStream",
-            streamId: "conversation-general",
-            sequence: 3,
-            eventId: "event-receipt",
-            event: "ReceiptAdvanced",
-            payload: [
-                "userId": "user-ada",
-                "sequence": "2",
-            ]
-        )
-
-        XCTAssertTrue(message.isVisibleChatMessage)
-        XCTAssertFalse(emptyMessage.isVisibleChatMessage)
-        XCTAssertFalse(receipt.isVisibleChatMessage)
-    }
-
-    func testGeneratedFoundationDTOsCarrySchemaContract() throws {
-        XCTAssertEqual(FrickSchema.schemaHash, "frick-foundation-0.2.0")
-
-        let user = UserDTO(id: "user-ada", displayName: "Ada Lovelace", avatarBlobId: nil)
-        let device = UserDeviceDTO(
-            id: "device-web",
-            userId: "user-ada",
-            platform: "web"
-        )
-        let message = MessageSentDTO(
-            messageId: "message-1",
-            senderId: "user-ada",
-            body: "Hello",
-            createdAt: "2026-05-09T00:00:00.000Z"
-        )
-
-        XCTAssertEqual(user.displayName, "Ada Lovelace")
-        XCTAssertEqual(device.userId, "user-ada")
-        XCTAssertEqual(message.body, "Hello")
-    }
-
-    func testParsesInboxAndBlobMetadataResponses() async throws {
-        FrickStreamingURLProtocol.reset()
-        FrickStreamingURLProtocol.enqueue(
-            """
-            {
-              "schemaHash": "\(FrickSchema.schemaHash)",
-              "data": [
-                {
-                  "conversationId": "conversation-general",
-                  "userId": "user-ada",
-                  "title": "Foundation General",
-                  "kind": "channel",
-                  "lastSequence": 7,
-                  "lastMessageBody": "Inbox preview",
-                  "lastMessageSenderId": "user-grace",
-                  "readSequence": 4,
-                  "unreadCount": 3
-                }
-              ]
-            }
-            """,
-            for: "/inbox?userId=user-ada"
-        )
-        FrickStreamingURLProtocol.enqueue(
-            """
-            {
-              "blobId": "blob-1",
-              "ownerId": "user-ada",
-              "contentHash": "sha256-1",
-              "byteLength": 42,
-              "mimeType": "text/plain",
-              "createdAt": "2026-05-09T00:00:00.000Z"
-            }
-            """,
-            for: "/blobs/blob-1"
-        )
-
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [FrickStreamingURLProtocol.self]
-        let session = URLSession(configuration: configuration)
-        let client = FrickClient(
-            baseURL: URL(string: "http://frick.test")!,
-            session: session,
-            streamingSession: session,
-            storage: try FrickSQLiteStorage(path: ":memory:")
-        )
-
-        let inbox = try await client.fetchInbox(userId: "user-ada")
-        let blob = try await client.fetchBlobMetadata(blobId: "blob-1")
-
-        XCTAssertEqual(inbox, [
-            FrickInboxItem(
-                conversationId: "conversation-general",
-                userId: "user-ada",
-                title: "Foundation General",
-                kind: "channel",
-                lastSequence: 7,
-                lastMessageBody: "Inbox preview",
-                lastMessageSenderId: "user-grace",
-                readSequence: 4,
-                unreadCount: 3
-            ),
-        ])
-        XCTAssertEqual(blob?.blobId, "blob-1")
-        XCTAssertEqual(blob?.byteLength, 42)
-        XCTAssertEqual(FrickStreamingURLProtocol.requestedPaths, [
-            "/inbox?userId=user-ada",
-            "/blobs/blob-1",
-        ])
     }
 
     func testUploadsAndDownloadsBlobContentAsRawBytes() async throws {
@@ -930,53 +584,6 @@ final class FrickEventStreamParserTests: XCTestCase {
         ])
     }
 
-    func testAdvancesReadReceiptOncePerLoadedSequence() async throws {
-        FrickStreamingURLProtocol.reset()
-        FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-ada", token: "token-ada"), for: "/auth/dev-login")
-        FrickStreamingURLProtocol.enqueue(
-            try streamEventsResponse(events: [
-                streamEvent(sequence: 1, eventId: "event-1", body: "first"),
-                streamEvent(sequence: 2, eventId: "event-2", body: "second"),
-            ]),
-            for: "/streams/MessageStream/conversation-general"
-        )
-        FrickStreamingURLProtocol.enqueue(
-            try streamEventsResponse(events: [
-                streamEvent(sequence: 1, eventId: "event-1", body: "first"),
-                streamEvent(sequence: 2, eventId: "event-2", body: "second"),
-            ]),
-            for: "/streams/MessageStream/conversation-general"
-        )
-
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [FrickStreamingURLProtocol.self]
-        let session = URLSession(configuration: configuration)
-        let client = FrickClient(
-            baseURL: URL(string: "http://frick.test")!,
-            session: session,
-            streamingSession: session,
-            replicaId: "ios-test",
-            storage: try FrickSQLiteStorage(path: ":memory:"),
-            requestIdFactory: { "request-\(FrickStreamingURLProtocol.postedBodies.count + 1)" }
-        )
-
-        _ = try await client.devLogin(userId: "user-ada")
-        _ = try await client.fetchMessages(conversationId: "conversation-general", readUserId: "user-ada")
-        _ = try await client.fetchMessages(conversationId: "conversation-general", readUserId: "user-ada")
-
-        let appendPosts = FrickStreamingURLProtocol.postedBodies.filter { body in
-            body["event"] as? String == "ReceiptAdvanced"
-        }
-        XCTAssertEqual(appendPosts.count, 1)
-        let body = try XCTUnwrap(appendPosts.first)
-        XCTAssertEqual(body["stream"] as? String, "MessageStream")
-        XCTAssertEqual(body["key"] as? String, "conversation-general")
-        XCTAssertEqual(body["event"] as? String, "ReceiptAdvanced")
-        let payload = try XCTUnwrap(body["payload"] as? [String: Any])
-        XCTAssertEqual(payload["userId"] as? String, "user-ada")
-        XCTAssertEqual(payload["sequence"] as? Int, 2)
-    }
-
     func testSQLiteStoragePersistsFoundationStateAcrossInstances() throws {
         let directory = FileManager.default.temporaryDirectory
             .appending(path: "frick-swift-tests-\(UUID().uuidString)")
@@ -985,7 +592,7 @@ final class FrickEventStreamParserTests: XCTestCase {
 
         let path = directory.appending(path: "frick.sqlite").path
         let userData = try JSONEncoder().encode(
-            UserDTO(id: "user-ada", displayName: "Ada Lovelace", avatarBlobId: nil)
+            TestUserFixture(id: "user-ada", displayName: "Ada Lovelace", avatarBlobId: nil)
         )
         let event = FrickStreamEvent(
             stream: "MessageStream",
@@ -1057,104 +664,6 @@ final class FrickEventStreamParserTests: XCTestCase {
         }
     }
 
-    func testFetchInboxPropagatesFrickServerErrorInsteadOfReturningEmpty() async throws {
-        FrickStreamingURLProtocol.reset()
-        FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-ada", token: "token-ada"), for: "/auth/dev-login")
-        FrickStreamingURLProtocol.enqueue(
-            """
-            {
-              "error": {
-                "code": "auth.forbidden",
-                "message": "Inbox not visible",
-                "requestId": "inbox_rejected",
-                "retryable": false
-              },
-              "code": "auth.forbidden",
-              "message": "Inbox not visible",
-              "requestId": "inbox_rejected",
-              "retryable": false
-            }
-            """,
-            status: 403,
-            for: "/inbox?userId=user-ada"
-        )
-        let client = try makeTestClient()
-        _ = try await client.devLogin(userId: "user-ada")
-
-        do {
-            _ = try await client.fetchInbox()
-            XCTFail("fetchInbox should have thrown")
-        } catch let error as FrickServerError {
-            XCTAssertEqual(error.httpStatusCode, 403)
-            XCTAssertEqual(error.code, .authForbidden)
-            XCTAssertEqual(error.message, "Inbox not visible")
-            XCTAssertEqual(error.requestId, "inbox_rejected")
-        }
-    }
-
-    func testFrickServerErrorWithoutBodyExposesStatusCodeButNoEnvelope() async throws {
-        FrickStreamingURLProtocol.reset()
-        FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-ada", token: "token-ada"), for: "/auth/dev-login")
-        FrickStreamingURLProtocol.enqueue("", status: 500, for: "/inbox?userId=user-ada")
-        let client = try makeTestClient()
-        _ = try await client.devLogin(userId: "user-ada")
-
-        do {
-            _ = try await client.fetchInbox()
-            XCTFail("fetchInbox should have thrown")
-        } catch let error as FrickServerError {
-            XCTAssertEqual(error.httpStatusCode, 500)
-            XCTAssertNil(error.envelope)
-            XCTAssertNil(error.code)
-            XCTAssertFalse(error.retryable)
-        }
-    }
-
-    func testSendAppendQueuesNetworkErrorsButPropagatesServerEnvelopes() async throws {
-        FrickStreamingURLProtocol.reset()
-        FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-ada", token: "token-ada"), for: "/auth/dev-login")
-        FrickStreamingURLProtocol.enqueue(
-            """
-            {
-              "error": {
-                "code": "stream.appendRejected",
-                "message": "Append rejected",
-                "requestId": "append_rejected",
-                "retryable": false
-              },
-              "code": "stream.appendRejected",
-              "message": "Append rejected",
-              "requestId": "append_rejected",
-              "retryable": false
-            }
-            """,
-            status: 400,
-            for: "/append"
-        )
-        let storage = try FrickSQLiteStorage(path: ":memory:")
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [FrickStreamingURLProtocol.self]
-        let session = URLSession(configuration: configuration)
-        let client = FrickClient(
-            baseURL: URL(string: "http://frick.test")!,
-            session: session,
-            streamingSession: session,
-            storage: storage
-        )
-
-        _ = try await client.devLogin(userId: "user-ada")
-
-        do {
-            try await client.sendMessage(body: "ignored")
-            XCTFail("sendMessage should have thrown when server returns an envelope")
-        } catch let error as FrickServerError {
-            XCTAssertEqual(error.code, .streamAppendRejected)
-        }
-
-        // Server-error responses must NOT silently queue the append for replay.
-        XCTAssertEqual(try storage.loadPendingAppends(), [])
-    }
-
     func testStorageRoundTripsCacheMetadata() throws {
         let storage = try FrickSQLiteStorage(path: ":memory:")
         XCTAssertNil(try storage.loadCacheMetadata())
@@ -1216,7 +725,7 @@ final class FrickEventStreamParserTests: XCTestCase {
         try storage.saveObjectData(
             type: "User",
             id: "user-ada",
-            data: try JSONEncoder().encode(UserDTO(id: "user-ada", displayName: "Ada", avatarBlobId: nil)),
+            data: try JSONEncoder().encode(TestUserFixture(id: "user-ada", displayName: "Ada", avatarBlobId: nil)),
             version: 1
         )
         try storage.saveStreamEvent(streamEvent(sequence: 1, eventId: "event-1", body: "kept"))
@@ -1308,27 +817,6 @@ final class FrickEventStreamParserTests: XCTestCase {
             XCTAssertEqual(error.currentMetadata.tenantId, "tenant-b")
             XCTAssertEqual(error.currentMetadata.userId, "user-grace")
             XCTAssertEqual(error.pendingAppendCount, 1)
-        }
-    }
-
-    func testFetchMessagesRejectsCachedEventsWhenSessionScopeDiffers() async throws {
-        FrickStreamingURLProtocol.reset()
-        FrickStreamingURLProtocol.enqueue(
-            devLoginResponse(userId: "user-grace", token: "token-grace", tenantId: "tenant-b"),
-            for: "/auth/dev-login"
-        )
-        FrickStreamingURLProtocol.enqueue("", status: 500, for: "/streams/MessageStream/conversation-general")
-        let storage = try FrickSQLiteStorage(path: ":memory:")
-        try storage.saveCacheMetadata(.currentSchema(tenantId: "tenant-a", userId: "user-ada"))
-        try storage.saveStreamEvent(streamEvent(sequence: 1, eventId: "event-1", body: "cached for ada"))
-        let client = try makeTestClient(storage: storage)
-        _ = try await client.devLogin(userId: "user-grace")
-
-        do {
-            _ = try await client.fetchMessages()
-            XCTFail("expected FrickCacheIncompatibleError")
-        } catch let error as FrickCacheIncompatibleError {
-            XCTAssertEqual(error.reason, .sessionScopeMismatch)
         }
     }
 
@@ -1553,18 +1041,6 @@ private extension Optional where Wrapped == String {
     }
 }
 
-private func ssePayload(for event: String, events: [FrickStreamEvent]) throws -> String {
-    let data = try JSONEncoder().encode(
-        StreamEventsResponsePayload(
-            schemaHash: FrickSchema.schemaHash,
-            stream: "MessageStream",
-            key: "conversation-general",
-            data: events
-        )
-    )
-    return "event: \(event)\ndata: \(String(data: data, encoding: .utf8)!)\n\n"
-}
-
 private func streamEvent(sequence: Int, eventId: String, body: String) -> FrickStreamEvent {
     FrickStreamEvent(
         stream: "MessageStream",
@@ -1581,11 +1057,13 @@ private func streamEvent(sequence: Int, eventId: String, body: String) -> FrickS
     )
 }
 
-private struct StreamEventsResponsePayload: Encodable {
-    let schemaHash: String
-    let stream: String
-    let key: String
-    let data: [FrickStreamEvent]
+/// Stand-in for the removed generated `UserDTO`. Used by the SQLite storage
+/// tests to confirm that arbitrary app-owned object payloads round-trip
+/// through the framework cache. Apps now define their own `User` shape.
+private struct TestUserFixture: Codable, Equatable {
+    let id: String
+    let displayName: String
+    let avatarBlobId: String?
 }
 
 private func makeTestClient(
@@ -1749,37 +1227,6 @@ private func authResponse(userId: String, token: String, displayName: String, ha
       "expiresAt": "2026-05-09T12:00:00.000Z"
     }
     """
-}
-
-private func streamEventsResponse(events: [FrickStreamEvent]) throws -> String {
-    let data = try JSONEncoder().encode(
-        StreamEventsResponsePayload(
-            schemaHash: FrickSchema.schemaHash,
-            stream: "MessageStream",
-            key: "conversation-general",
-            data: events
-        )
-    )
-    return String(data: data, encoding: .utf8)!
-}
-
-private func withTimeout<T: Sendable>(
-    seconds: TimeInterval = 2,
-    _ operation: @escaping @Sendable () async throws -> T
-) async throws -> T {
-    try await withThrowingTaskGroup(of: T.self) { group in
-        group.addTask {
-            try await operation()
-        }
-        group.addTask {
-            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            throw XCTestError(.timeoutWhileWaiting)
-        }
-
-        let result = try await group.next()!
-        group.cancelAll()
-        return result
-    }
 }
 
 // MARK: - Cross-platform fixture decoding

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   blobByName,
   eventByName,
-  foundationSchema,
+  productTestSchema,
   jobByName,
   objectByName,
   presenceByName,
@@ -15,7 +15,7 @@ import {
 
 describe("foundation schema", () => {
   it("defines all realtime foundation primitives", () => {
-    const schema = validateSchema(foundationSchema);
+    const schema = validateSchema(productTestSchema);
 
     expect(objectByName(schema, "User").id).toBe(1);
     expect(objectByName(schema, "Conversation").id).toBe(2);
@@ -41,43 +41,43 @@ describe("foundation schema", () => {
   });
 
   it("has stable schema identity metadata", () => {
-    const schema = validateSchema(foundationSchema);
+    const schema = validateSchema(productTestSchema);
 
-    expect(schema.name).toBe("frick-foundation");
-    expect(schema.schemaId).toBe("frick-foundation");
+    expect(schema.name).toBe("frick-product-test");
+    expect(schema.schemaId).toBe("frick-product-test");
     expect(schema.schemaVersion).toBe("0.1.0");
     expect(schema.schemaRevision).toBe(1);
     expect(schema.minimumClientRevision).toBe(1);
     expect(schema.minimumServerRevision).toBe(1);
-    expect(schema.hash).toMatch(/^frick-foundation-/);
+    expect(schema.hash).toMatch(/^frick-product-test-/);
     expect(schema.protocol).toBe("frick.realtime");
     expect(schema.compatibility).toBe("greenfield-cutover");
   });
 
   it("rejects missing or invalid schema identity metadata", () => {
-    const missingSchemaId = structuredClone(foundationSchema);
-    delete (missingSchemaId as Partial<typeof foundationSchema>).schemaId;
+    const missingSchemaId = structuredClone(productTestSchema);
+    delete (missingSchemaId as Partial<typeof productTestSchema>).schemaId;
 
     expect(() => validateSchema(missingSchemaId)).toThrow(/schemaId/i);
 
-    const blankSchemaId = structuredClone(foundationSchema);
+    const blankSchemaId = structuredClone(productTestSchema);
     blankSchemaId.schemaId = "   ";
 
     expect(() => validateSchema(blankSchemaId)).toThrow(/schemaId/i);
 
-    const blankSchemaVersion = structuredClone(foundationSchema);
+    const blankSchemaVersion = structuredClone(productTestSchema);
     blankSchemaVersion.schemaVersion = "\t\n";
 
     expect(() => validateSchema(blankSchemaVersion)).toThrow(/schemaVersion/i);
 
-    const invalidSchemaRevision = structuredClone(foundationSchema);
+    const invalidSchemaRevision = structuredClone(productTestSchema);
     invalidSchemaRevision.schemaRevision = 0;
 
     expect(() => validateSchema(invalidSchemaRevision)).toThrow(/schemaRevision/i);
   });
 
   it("allows messages to reference attachment blob metadata", () => {
-    const schema = validateSchema(foundationSchema);
+    const schema = validateSchema(productTestSchema);
     const messageSent = eventByName(schema, "MessageSent");
 
     expect(messageSent.fields).toContainEqual({
@@ -89,7 +89,7 @@ describe("foundation schema", () => {
   });
 
   it("treats objects without an explicit mergePolicy as lastWriteWins", () => {
-    const schema = validateSchema(foundationSchema);
+    const schema = validateSchema(productTestSchema);
     expect(objectByName(schema, "User").mergePolicy).toBeUndefined();
     expect(resolveObjectMergePolicy(schema, "User")).toBe("lastWriteWins");
     // Unknown types fall back to the default rather than throwing.
@@ -97,7 +97,7 @@ describe("foundation schema", () => {
   });
 
   it("accepts schemas that declare a versionPrecondition mergePolicy", () => {
-    const customised = structuredClone(foundationSchema);
+    const customised = structuredClone(productTestSchema);
     customised.objects[0]!.mergePolicy = "versionPrecondition";
 
     const schema = validateSchema(customised);
@@ -108,7 +108,7 @@ describe("foundation schema", () => {
   });
 
   it("rejects duplicate field ids within a type", () => {
-    const invalid = structuredClone(foundationSchema);
+    const invalid = structuredClone(productTestSchema);
     invalid.objects[0]!.fields.push({
       id: 1,
       name: "duplicateDisplayName",

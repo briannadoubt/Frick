@@ -8,6 +8,9 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
 - Shared structured error envelopes across HTTP, WebSocket nacks, and SDK error types.
 - MessagePack WebSocket frames for Hello/HelloAck, subscribe, append, signal, presence, object upsert, snapshot, delta, projection delta, ack, and nack.
 - SQLite-backed server persistence, migrations, health/ready/inspect/admin routes, backup/restore, metrics, request logging, CORS enforcement, and admin bearer auth.
+- Documented server extension points for app-owned HTTP routes, durable job
+  handlers, recurring job schedules, search indexes, blob processors, push
+  adapters, policy hooks, multi-app URL/schema routing, and cluster-bus fan-out.
 - Optional identity-provider server routes through
   `createFrickServer({ identityProviders })`: Apple JWT verification and
   server-to-server notifications, Google ID-token verification, email/password
@@ -58,7 +61,9 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
   map for the baseline server, telemetry, project, migration/reset, cluster
   bus, and production push-adapter surfaces. Deep route/storage imports remain
   internal.
-- Multi-app servers route by URL prefix and WebSocket Hello schema id, but storage is still shared at the server level.
+- Multi-app servers route by URL prefix and WebSocket Hello schema id, but
+  storage, configured handlers, projection registries, job workers, and
+  processors are still shared at the server level.
 - Identity-provider sessions use a fixed 30-day lifetime today and the
   provider routes do not yet share the built-in auth attempt limiter. Generic
   OIDC, SAML, and arbitrary OAuth provider routing remain unimplemented.

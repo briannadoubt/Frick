@@ -3,6 +3,6 @@ description: Use for Frick schema, server, projections, jobs, blobs, auth, tenan
 alwaysApply: false
 ---
 
-Use Frick public docs and package entry points. Do not import app code from demos or deep server internals into real apps.
+Use Frick public docs and package entry points. Do not import app code from demos or deep server internals into real apps. For product-specific backend behavior, prefer documented `@frick/server` options such as `appRoutes`, `jobs.handlers`, `recurring.jobs`, `policyHooks`, projections, search, blobs, and push adapters.
 
 Preserve tenant isolation, schema compatibility checks, structured error envelopes, and cross-SDK parity. Update public docs and `CHANGELOG.md` for user-visible behavior changes.

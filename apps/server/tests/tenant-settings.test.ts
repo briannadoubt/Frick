@@ -4,7 +4,7 @@ import {
   FrameKind,
   decodeFrame,
   encodeFrame,
-  foundationSchema,
+  productTestSchema,
   type FrickFrame,
 } from "@frick/protocol";
 import { createFrickServer } from "../src/server.js";
@@ -54,6 +54,7 @@ describe("per-tenant retention in FrickStore.prune", () => {
     const store = new FrickStore({
       path: ":memory:",
       seed: true,
+      schema: productTestSchema,
       idempotencyKeyRetentionMs: 24 * 60 * 60 * 1000, // 24h global
       idempotencyKeyPruneIntervalMs: 0,
     });
@@ -302,7 +303,7 @@ describe("per-tenant maxSubscriptionsPerConnection (WS)", () => {
         {
           replicaId: login.replicaId,
           deviceId: login.deviceId,
-          schemaHash: foundationSchema.hash,
+          schemaHash: productTestSchema.hash,
           knownCursors: {},
         },
       ]),
@@ -351,6 +352,7 @@ async function startServer(overrides: { adminToken?: string } = {}) {
   const server = createFrickServer({
     port: 0,
     dbPath: ":memory:",
+    schema: productTestSchema,
     config: {
       ...(overrides.adminToken !== undefined ? { adminToken: overrides.adminToken } : {}),
       implicitTenantCreation: true,

@@ -9,7 +9,7 @@
  * restart.
  *
  * Exercises gaps the unit tests don't cover:
- *   - 12 migrations applying cleanly to a fresh on-disk SQLite file
+ *   - All framework migrations applying cleanly to a fresh on-disk SQLite file
  *   - Server lifecycle on a real port (not in-process binding only)
  *   - Auth flow producing a session that survives across requests
  *   - HTTP append + stream read + inbox projection
@@ -31,10 +31,13 @@ import {
   decodeFrame,
   defaultClientCapabilities,
   encodeFrame,
-  foundationSchema,
+  productTestSchema,
   type FrickFrame,
 } from "../packages/protocol/src/index.js";
 import { createFrickServer } from "../apps/server/src/server.js";
+import { FRAMEWORK_MIGRATIONS } from "../apps/server/src/storage/migrations.js";
+
+const EXPECTED_MIGRATION_COUNT = FRAMEWORK_MIGRATIONS.length;
 
 type StepResult =
   | { step: string; status: "ok"; detail?: Record<string, unknown> }
@@ -84,6 +87,7 @@ async function bootServer(dbPath: string): Promise<ServerHandle> {
     port: 0,
     dbPath,
     config: { env: "development" as const },
+    schema: productTestSchema,
   });
   await server.listen();
   const address = server.server.address();
@@ -178,7 +182,7 @@ async function main(): Promise<void> {
       const r = await fetchJson(`${server!.baseUrl}/ready`);
       if (r.status !== 200) throw new Error(`/ready returned ${r.status}: ${JSON.stringify(r.body)}`);
       const body = r.body as { appliedMigrations: number; schemaRevision: number };
-      if (body.appliedMigrations !== 12) throw new Error(`expected 12 migrations, got ${body.appliedMigrations}`);
+      if (body.appliedMigrations !== EXPECTED_MIGRATION_COUNT) throw new Error(`expected ${EXPECTED_MIGRATION_COUNT} migrations, got ${body.appliedMigrations}`);
       return { appliedMigrations: body.appliedMigrations, schemaRevision: body.schemaRevision };
     });
 
@@ -229,21 +233,10 @@ async function main(): Promise<void> {
       return { eventCount: body.data.length, found };
     });
 
-    await record("phase1.inbox_projection", async () => {
-      // The /inbox route only returns the requesting principal's own rows
-      // (correct tenant + principal isolation). user-ada appended the
-      // message above, so she should see her own inbox row for the
-      // conversation she belongs to.
-      const r = await fetchJson(
-        `${server!.baseUrl}/inbox?userId=user-ada`,
-        { headers: { authorization: `Bearer ${sessionToken}` } },
-      );
-      if (r.status !== 200) throw new Error(`inbox returned ${r.status}: ${JSON.stringify(r.body)}`);
-      const body = r.body as { data: Array<{ conversationId: string; lastSequence: number }> };
-      const general = body.data.find((row) => row.conversationId === "conversation-general");
-      if (!general) throw new Error("no inbox row for conversation-general");
-      return { rowCount: body.data.length, generalLastSequence: general.lastSequence };
-    });
+    // Removed inbox-projection check — the inbox projection was a
+    // chat-specific framework feature that was deleted during the
+    // boundary cleanup. Apps that want an inbox projection now register
+    // it themselves via FrickProjectionRegistry.
 
     await record("phase1.inspect_db", async () => {
       const r = await fetchJson(`${server!.baseUrl}/_frick/inspect/db`, {
@@ -252,7 +245,7 @@ async function main(): Promise<void> {
       if (r.status !== 200) throw new Error(`/_frick/inspect/db returned ${r.status}`);
       const body = r.body as { ready: boolean; applied: number; idempotencyCache: { size: number } };
       if (!body.ready) throw new Error("/_frick/inspect/db reports not ready");
-      if (body.applied !== 12) throw new Error(`expected 12 applied, got ${body.applied}`);
+      if (body.applied !== EXPECTED_MIGRATION_COUNT) throw new Error(`expected ${EXPECTED_MIGRATION_COUNT} applied, got ${body.applied}`);
       return { applied: body.applied, idempotencyCacheSize: body.idempotencyCache.size };
     });
 
@@ -278,12 +271,12 @@ async function main(): Promise<void> {
             replicaId: "e2e-replica",
             deviceId: "e2e-device",
             sessionToken,
-            schemaHash: foundationSchema.hash,
+            schemaHash: productTestSchema.hash,
             knownCursors: {},
             clientCapabilities: defaultClientCapabilities({
               platform: "test",
               sdkVersion: "0.0.0-e2e",
-              schema: foundationSchema,
+              schema: productTestSchema,
             }),
           },
         ]),
@@ -367,7 +360,7 @@ async function main(): Promise<void> {
       const r = await fetchJson(`${server!.baseUrl}/ready`);
       if (r.status !== 200) throw new Error(`/ready returned ${r.status}: ${JSON.stringify(r.body)}`);
       const body = r.body as { appliedMigrations: number };
-      if (body.appliedMigrations !== 12) throw new Error(`expected 12 migrations after reboot, got ${body.appliedMigrations}`);
+      if (body.appliedMigrations !== EXPECTED_MIGRATION_COUNT) throw new Error(`expected ${EXPECTED_MIGRATION_COUNT} migrations after reboot, got ${body.appliedMigrations}`);
       return { appliedMigrations: body.appliedMigrations };
     });
 
@@ -399,17 +392,7 @@ async function main(): Promise<void> {
       return { eventCount: body.data.length, phase1Found, wsAppendFound };
     });
 
-    await record("phase2.inbox_persisted", async () => {
-      const r = await fetchJson(
-        `${server!.baseUrl}/inbox?userId=user-ada`,
-        { headers: { authorization: `Bearer ${sessionToken}` } },
-      );
-      if (r.status !== 200) throw new Error(`inbox returned ${r.status}: ${JSON.stringify(r.body)}`);
-      const body = r.body as { data: Array<{ conversationId: string; lastSequence: number }> };
-      const general = body.data.find((row) => row.conversationId === "conversation-general");
-      if (!general) throw new Error("inbox row missing after reboot");
-      return { rowCount: body.data.length, generalLastSequence: general.lastSequence };
-    });
+    // Inbox persistence check removed — see phase1.inbox_projection note.
 
     await record("phase2.shutdown", async () => {
       await server!.close();

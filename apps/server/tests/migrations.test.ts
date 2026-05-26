@@ -21,7 +21,10 @@ const FOUNDATION_TABLES = [
   "signal_outbox",
   "blob_metadata",
   "blob_content",
-  "conversation_inbox",
+  // conversation_inbox table was removed with the framework boundary
+  // cleanup (CHANGELOG: "Removed framework-owned chat routes, projections,
+  // search indexes, scheduled-message sweep logic, and conversation inbox
+  // storage from the server runtime").
   "jobs",
   "auth_sessions",
   "auth_accounts",
