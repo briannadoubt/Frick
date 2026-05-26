@@ -103,19 +103,23 @@ public extension FrickCacheMetadata {
         currentSchema()
     }
 
-    static func currentSchema(tenantId: String? = nil, userId: String? = nil) -> FrickCacheMetadata {
+    static func currentSchema(
+        tenantId: String? = nil,
+        userId: String? = nil,
+        schemaHash: String = FrickSchema.schemaHash
+    ) -> FrickCacheMetadata {
         FrickCacheMetadata(
             schemaId: FrickSchema.schemaId,
             schemaVersion: FrickSchema.schemaVersion,
             schemaRevision: FrickSchema.schemaRevision,
-            schemaHash: FrickSchema.schemaHash,
+            schemaHash: schemaHash,
             tenantId: tenantId,
             userId: userId
         )
     }
 
-    static func currentSchema(session: FrickSession?) -> FrickCacheMetadata {
-        currentSchema(tenantId: session?.tenantId, userId: session?.userId)
+    static func currentSchema(session: FrickSession?, schemaHash: String = FrickSchema.schemaHash) -> FrickCacheMetadata {
+        currentSchema(tenantId: session?.tenantId, userId: session?.userId, schemaHash: schemaHash)
     }
 }
 

@@ -11,10 +11,10 @@ public struct ObjectsResponse<Object: Decodable>: Decodable {
     public let type: String?
     public let data: [Object]
 
-    public func requireCompatibleSchema() throws {
-        guard schemaHash == nil || schemaHash == FrickSchema.schemaHash else {
+    public func requireCompatibleSchema(expected: String = FrickSchema.schemaHash) throws {
+        guard schemaHash == nil || schemaHash == expected else {
             throw FrickSchemaMismatchError(
-                expectedSchemaHash: FrickSchema.schemaHash,
+                expectedSchemaHash: expected,
                 actualSchemaHash: schemaHash
             )
         }
@@ -47,10 +47,10 @@ public struct StreamEventsResponse: Decodable {
     public let key: String?
     public let data: [FrickStreamEvent]
 
-    public func requireCompatibleSchema() throws {
-        guard schemaHash == nil || schemaHash == FrickSchema.schemaHash else {
+    public func requireCompatibleSchema(expected: String = FrickSchema.schemaHash) throws {
+        guard schemaHash == nil || schemaHash == expected else {
             throw FrickSchemaMismatchError(
-                expectedSchemaHash: FrickSchema.schemaHash,
+                expectedSchemaHash: expected,
                 actualSchemaHash: schemaHash
             )
         }
@@ -90,10 +90,10 @@ public struct FrickSession: Codable, Equatable, Sendable {
         self.expiresAt = expiresAt
     }
 
-    public func requireCompatibleSchema() throws {
-        guard schemaHash == nil || schemaHash == FrickSchema.schemaHash else {
+    public func requireCompatibleSchema(expected: String = FrickSchema.schemaHash) throws {
+        guard schemaHash == nil || schemaHash == expected else {
             throw FrickSchemaMismatchError(
-                expectedSchemaHash: FrickSchema.schemaHash,
+                expectedSchemaHash: expected,
                 actualSchemaHash: schemaHash
             )
         }
@@ -124,10 +124,10 @@ public struct SignalsResponse: Decodable {
         }
     }
 
-    public func requireCompatibleSchema() throws {
-        guard schemaHash == nil || schemaHash == FrickSchema.schemaHash else {
+    public func requireCompatibleSchema(expected: String = FrickSchema.schemaHash) throws {
+        guard schemaHash == nil || schemaHash == expected else {
             throw FrickSchemaMismatchError(
-                expectedSchemaHash: FrickSchema.schemaHash,
+                expectedSchemaHash: expected,
                 actualSchemaHash: schemaHash
             )
         }
@@ -905,6 +905,12 @@ public final class FrickClient: Sendable {
     private let storage: FrickStorage
     private let telemetry: any FrickClientTelemetryRuntime
     private let requestIdFactory: @Sendable () -> String
+    /// The schema hash this client expects from the server. Defaults to the
+    /// generated foundation hash (`FrickSchema.schemaHash`). Apps with a
+    /// custom protocol schema pass their own hash here so wire-level guards
+    /// (response envelopes, sync Hello frame, `X-Frick-Schema-Hash` header)
+    /// compare against the app's schema rather than the foundation default.
+    public let schemaHash: String
     private let sessionStore = FrickSessionStore()
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -918,7 +924,8 @@ public final class FrickClient: Sendable {
         storage: FrickStorage = FrickSQLiteStorage.appStorage,
         allowInsecureLocalTransport: Bool = FrickClient.defaultAllowsInsecureLocalTransport,
         telemetry: any FrickClientTelemetryRuntime = FrickNoopClientTelemetryRuntime(),
-        requestIdFactory: @escaping @Sendable () -> String = { UUID().uuidString }
+        requestIdFactory: @escaping @Sendable () -> String = { UUID().uuidString },
+        schemaHash: String = FrickSchema.schemaHash
     ) {
         Self.validateBaseURL(baseURL, allowInsecureLocalTransport: allowInsecureLocalTransport)
         self.baseURL = baseURL
@@ -929,6 +936,7 @@ public final class FrickClient: Sendable {
         self.storage = storage
         self.telemetry = telemetry
         self.requestIdFactory = requestIdFactory
+        self.schemaHash = schemaHash
     }
 
     public var currentSession: FrickSession? {
@@ -940,7 +948,7 @@ public final class FrickClient: Sendable {
         currentMetadata: FrickCacheMetadata? = nil,
         minimumClientRevision: Int = FrickSchema.minimumClientRevision
     ) throws -> FrickCacheMetadata {
-        let resolvedMetadata = currentMetadata ?? FrickCacheMetadata.currentSchema(session: currentSession)
+        let resolvedMetadata = currentMetadata ?? FrickCacheMetadata.currentSchema(session: currentSession, schemaHash: schemaHash)
         if let cached = try storage.loadCacheMetadata() {
             if let reason = FrickCacheCompatibility.reason(
                 cached: cached,
@@ -978,9 +986,10 @@ public final class FrickClient: Sendable {
         let socket = FrickSyncSocket(
             baseURL: baseURL ?? self.baseURL,
             sessionToken: session.sessionToken,
-            clientCapabilities: .defaultIOS(),
+            clientCapabilities: .defaultIOS(schemaHash: schemaHash),
             replicaId: replicaId,
-            deviceId: session.deviceId
+            deviceId: session.deviceId,
+            schemaHash: schemaHash
         )
         Task { await socket.connect() }
         return socket
@@ -1047,7 +1056,7 @@ public final class FrickClient: Sendable {
         let (data, response) = try await session.data(for: request)
         try validate(response, data: data)
         let frickSession = try decoder.decode(FrickSession.self, from: data)
-        try frickSession.requireCompatibleSchema()
+        try frickSession.requireCompatibleSchema(expected: schemaHash)
         sessionStore.session = frickSession
         return frickSession
     }
@@ -1088,7 +1097,7 @@ public final class FrickClient: Sendable {
         let (data, response) = try await session.data(for: request)
         try validate(response, data: data)
         let envelope = try decoder.decode(SignInWithAppleEnvelope.self, from: data)
-        try envelope.session.requireCompatibleSchema()
+        try envelope.session.requireCompatibleSchema(expected: schemaHash)
         sessionStore.session = envelope.session
         return SignInWithAppleResult(
             session: envelope.session,
@@ -1119,7 +1128,7 @@ public final class FrickClient: Sendable {
         let (data, response) = try await session.data(for: request)
         try validate(response, data: data)
         let envelope = try decoder.decode(SignInWithEmailEnvelope.self, from: data)
-        try envelope.session.requireCompatibleSchema()
+        try envelope.session.requireCompatibleSchema(expected: schemaHash)
         sessionStore.session = envelope.session
         return SignInWithEmailResult(
             session: envelope.session,
@@ -1147,7 +1156,7 @@ public final class FrickClient: Sendable {
         let (data, response) = try await session.data(for: request)
         try validate(response, data: data)
         let envelope = try decoder.decode(SignInWithEmailEnvelope.self, from: data)
-        try envelope.session.requireCompatibleSchema()
+        try envelope.session.requireCompatibleSchema(expected: schemaHash)
         sessionStore.session = envelope.session
         return SignInWithEmailResult(
             session: envelope.session,
@@ -1178,7 +1187,7 @@ public final class FrickClient: Sendable {
         let (data, response) = try await session.data(for: request)
         try validate(response, data: data)
         let envelope = try decoder.decode(SignInWithGoogleEnvelope.self, from: data)
-        try envelope.session.requireCompatibleSchema()
+        try envelope.session.requireCompatibleSchema(expected: schemaHash)
         sessionStore.session = envelope.session
         return SignInWithGoogleResult(
             session: envelope.session,
@@ -1422,7 +1431,7 @@ public final class FrickClient: Sendable {
             let (data, response) = try await session.data(for: authenticatedRequest(url: signalURL(name: name, key: key)))
             try validate(response, data: data)
             let decoded = try decoder.decode(SignalsResponse.self, from: data)
-            try decoded.requireCompatibleSchema()
+            try decoded.requireCompatibleSchema(expected: schemaHash)
             return decoded.data
         } catch {
             if shouldReturnEmptyRead(error) {
@@ -1438,7 +1447,7 @@ public final class FrickClient: Sendable {
         let (data, response) = try await session.data(for: authenticatedRequest(url: url))
         try validate(response, data: data)
         let decoded = try decoder.decode(ObjectsResponse<Object>.self, from: data)
-        try decoded.requireCompatibleSchema()
+        try decoded.requireCompatibleSchema(expected: schemaHash)
         _ = try verifyCacheCompatibility()
         for object in decoded.data {
             if let id = extractId(from: object) {
@@ -1717,7 +1726,7 @@ public final class FrickClient: Sendable {
         let (data, response) = try await session.data(for: request)
         try validate(response, data: data)
         let frickSession = try decoder.decode(FrickSession.self, from: data)
-        try frickSession.requireCompatibleSchema()
+        try frickSession.requireCompatibleSchema(expected: schemaHash)
         sessionStore.session = frickSession
         return frickSession
     }
@@ -1755,9 +1764,9 @@ public final class FrickClient: Sendable {
             )
         }
         let hashHeader = httpResponse.value(forHTTPHeaderField: "X-Frick-Schema-Hash")
-        guard hashHeader == nil || hashHeader == FrickSchema.schemaHash else {
+        guard hashHeader == nil || hashHeader == schemaHash else {
             throw FrickSchemaMismatchError(
-                expectedSchemaHash: FrickSchema.schemaHash,
+                expectedSchemaHash: schemaHash,
                 actualSchemaHash: hashHeader
             )
         }

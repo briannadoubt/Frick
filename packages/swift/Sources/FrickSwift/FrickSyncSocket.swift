@@ -484,13 +484,16 @@ public struct FrickClientCapabilities: Sendable, Equatable {
     public let experimental: [String]
     public let required: [String]
 
-    public static func defaultIOS(sdkVersion: String = "0.1.0") -> FrickClientCapabilities {
+    public static func defaultIOS(
+        sdkVersion: String = "0.1.0",
+        schemaHash: String = FrickSchema.schemaHash
+    ) -> FrickClientCapabilities {
         FrickClientCapabilities(
             platform: "ios",
             sdkVersion: sdkVersion,
             schemaId: FrickSchema.schemaId,
             schemaRevision: FrickSchema.schemaRevision,
-            schemaHash: FrickSchema.schemaHash,
+            schemaHash: schemaHash,
             transports: ["websocket"],
             encodings: ["msgpack"],
             primitives: ["objects", "streams", "presence", "signals"],
@@ -729,6 +732,10 @@ public actor FrickSyncSocket {
     public let clientCapabilities: FrickClientCapabilities
     public let replicaId: String
     public let deviceId: String
+    /// Schema hash sent in the Hello frame. Defaults to the generated
+    /// foundation hash; apps with a custom schema pass their own via
+    /// `FrickClient(schemaHash:)`, which threads it through here.
+    public let schemaHash: String
 
     private let factory: FrickWebSocketFactory
     private let sleepFor: @Sendable (UInt64) async throws -> Void
@@ -755,7 +762,8 @@ public actor FrickSyncSocket {
         factory: FrickWebSocketFactory = URLSessionWebSocketFactory(),
         sleepFor: @escaping @Sendable (UInt64) async throws -> Void = { ns in
             try await Task.sleep(nanoseconds: ns)
-        }
+        },
+        schemaHash: String = FrickSchema.schemaHash
     ) {
         self.baseURL = baseURL
         self.sessionToken = sessionToken
@@ -764,6 +772,7 @@ public actor FrickSyncSocket {
         self.deviceId = deviceId
         self.factory = factory
         self.sleepFor = sleepFor
+        self.schemaHash = schemaHash
 
         // Defer construction of the AsyncThrowingStream until after self init so
         // we can capture the continuation.
@@ -1004,7 +1013,7 @@ public actor FrickSyncSocket {
             (.string("replicaId"), .string(replicaId)),
             (.string("deviceId"), .string(deviceId)),
             (.string("sessionToken"), .string(sessionToken)),
-            (.string("schemaHash"), .string(FrickSchema.schemaHash)),
+            (.string("schemaHash"), .string(schemaHash)),
             (.string("knownCursors"), .map([])),
             (.string("clientCapabilities"), clientCapabilities.asMsgPack()),
         ]))

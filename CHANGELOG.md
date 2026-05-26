@@ -6,6 +6,10 @@ Each package version is independent — a release header documents which package
 
 ## Unreleased
 
+### Swift SDK — per-app schema hash override
+
+- `FrickClient.init(...)` now accepts a `schemaHash: String` parameter (default `FrickSchema.schemaHash`). Apps with a custom protocol schema can pass their own hash so wire-level guards — response envelopes (`requireCompatibleSchema(expected:)`), the `X-Frick-Schema-Hash` header, the sync Hello frame, and cache-metadata bootstrap — compare against the app's hash rather than the generated foundation default. `FrickSyncSocket.init(...)`, `FrickClientCapabilities.defaultIOS(...)`, and `FrickCacheMetadata.currentSchema(...)` gained matching defaulted `schemaHash:` parameters so the override threads end-to-end. Unblocks RangerCRM (and other consumers) from the previous workaround of aligning their server's `schema.hash` to the foundation hash.
+
 ### Framework Boundary Cleanup
 
 - Removed the public `@frick/core/chat` subpath and moved chat/demo helpers back under `apps/web/src/chat-foundation.ts`.
