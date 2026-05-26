@@ -25,7 +25,7 @@ import Foundation
 /// previews render without crashing.
 @MainActor
 @propertyWrapper
-public struct FrickStream: @MainActor DynamicProperty {
+public struct FrickStream: DynamicProperty {
     @Environment(\.frickSyncSocket) private var socket
     @StateObject private var store: StreamStore
     private let streamName: String
@@ -92,7 +92,7 @@ private final class StreamStore: ObservableObject {
 /// SwiftUI property wrapper for a presence row.
 @MainActor
 @propertyWrapper
-public struct FrickPresence: @MainActor DynamicProperty {
+public struct FrickPresence: DynamicProperty {
     @Environment(\.frickSyncSocket) private var socket
     @StateObject private var store: PresenceStore
     private let presenceName: String
