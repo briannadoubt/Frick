@@ -972,6 +972,31 @@ public final class FrickClient: Sendable {
         try storage.clearCache()
     }
 
+    /// Install a freshly-minted session into the local store, resetting the
+    /// on-disk cache first if the incoming session belongs to a different
+    /// user than whoever was signed in before.
+    ///
+    /// Frick's cache metadata is scoped to `userId`; reusing a cache row
+    /// minted under user A while signed in as user B trips the schema /
+    /// scope guard in `verifyCacheCompatibility`. Sign-in entry points
+    /// (Apple, Google, email, dev-login, generic login/signup) funnel
+    /// through here so callers no longer have to remember to call
+    /// `resetCache()` before swapping users.
+    ///
+    /// No-ops the reset when there is no prior session (cache is already
+    /// empty from the consumer's perspective) or when the new session is
+    /// for the same user (same-user reauth / token refresh — keep the
+    /// cache warm). Reset failures are swallowed: a stale cache row is
+    /// preferable to refusing to sign in, and the next
+    /// `verifyCacheCompatibility` call will surface the real error.
+    private func installSession(_ newSession: FrickSession) {
+        if let previous = sessionStore.session, previous.userId != newSession.userId {
+            try? storage.clearCache()
+            try? storage.clearPendingAppends()
+        }
+        sessionStore.session = newSession
+    }
+
     /// Open a sync WebSocket against `baseURL` (defaults to the client's
     /// configured `baseURL`). Callers must hold a session. The active
     /// session token is sent in the Authorization header and in the
@@ -1030,7 +1055,7 @@ public final class FrickClient: Sendable {
     /// `devLogin` / `signUp` / `login` — pass a previously-saved session
     /// to restore across app launches once you wire up persistence.
     public func restoreSession(_ session: FrickSession) {
-        sessionStore.session = session
+        installSession(session)
     }
 
     public func devLogin(
@@ -1057,7 +1082,7 @@ public final class FrickClient: Sendable {
         try validate(response, data: data)
         let frickSession = try decoder.decode(FrickSession.self, from: data)
         try frickSession.requireCompatibleSchema(expected: schemaHash)
-        sessionStore.session = frickSession
+        installSession(frickSession)
         return frickSession
     }
 
@@ -1098,7 +1123,7 @@ public final class FrickClient: Sendable {
         try validate(response, data: data)
         let envelope = try decoder.decode(SignInWithAppleEnvelope.self, from: data)
         try envelope.session.requireCompatibleSchema(expected: schemaHash)
-        sessionStore.session = envelope.session
+        installSession(envelope.session)
         return SignInWithAppleResult(
             session: envelope.session,
             user: envelope.user,
@@ -1129,7 +1154,7 @@ public final class FrickClient: Sendable {
         try validate(response, data: data)
         let envelope = try decoder.decode(SignInWithEmailEnvelope.self, from: data)
         try envelope.session.requireCompatibleSchema(expected: schemaHash)
-        sessionStore.session = envelope.session
+        installSession(envelope.session)
         return SignInWithEmailResult(
             session: envelope.session,
             user: envelope.user,
@@ -1157,7 +1182,7 @@ public final class FrickClient: Sendable {
         try validate(response, data: data)
         let envelope = try decoder.decode(SignInWithEmailEnvelope.self, from: data)
         try envelope.session.requireCompatibleSchema(expected: schemaHash)
-        sessionStore.session = envelope.session
+        installSession(envelope.session)
         return SignInWithEmailResult(
             session: envelope.session,
             user: envelope.user,
@@ -1188,7 +1213,7 @@ public final class FrickClient: Sendable {
         try validate(response, data: data)
         let envelope = try decoder.decode(SignInWithGoogleEnvelope.self, from: data)
         try envelope.session.requireCompatibleSchema(expected: schemaHash)
-        sessionStore.session = envelope.session
+        installSession(envelope.session)
         return SignInWithGoogleResult(
             session: envelope.session,
             user: envelope.user,
@@ -1727,7 +1752,7 @@ public final class FrickClient: Sendable {
         try validate(response, data: data)
         let frickSession = try decoder.decode(FrickSession.self, from: data)
         try frickSession.requireCompatibleSchema(expected: schemaHash)
-        sessionStore.session = frickSession
+        installSession(frickSession)
         return frickSession
     }
 
