@@ -1,3 +1,14 @@
+// NOTE: This file previously also tested the foundation chat surface
+// (`UserDto`, `MessageSentDto`, `fetchInbox`, `sendMessage`,
+// `createConversation`, `parseUsers`, `parseConversations`,
+// `isVisibleChatMessage`, `streamMessages`, `fetchMessages`,
+// `FrickInboxItem`, ...). Those nouns moved out of the SDK in the
+// "Framework Boundary Cleanup" (see CHANGELOG.md) — apps now build them
+// in their own schema and client layer — so the matching tests were
+// removed. What remains exercises the framework primitives that still
+// ship: chunked SSE parsing, auth/session, generic append/queue,
+// signals, blobs, analytics, schema/cache compatibility, and the Ktor
+// transport's authorization + error-envelope behavior.
 package dev.frick.client
 
 import com.sun.net.httpserver.HttpExchange
@@ -7,13 +18,12 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asFlow
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.int
-import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
@@ -38,95 +48,14 @@ class FrickEventStreamParserTest {
         assertEquals(emptyList<FrickEvent>(), parser.push(": connected\n\n"))
         assertEquals(
             emptyList<FrickEvent>(),
-            parser.push("event: delta\ndata: {\"stream\":\"MessageStream\","),
+            parser.push("event: delta\ndata: {\"stream\":\"AppStream\","),
         )
 
         val events = parser.push("\"sequence\":7}\n\n")
 
         assertEquals(1, events.size)
         assertEquals("delta", events[0].event)
-        assertEquals("{\"stream\":\"MessageStream\",\"sequence\":7}", events[0].data)
-    }
-
-    @Test
-    fun exposesGeneratedFoundationDtos() {
-        assertEquals("frick-foundation-0.2.0", FRICK_SCHEMA_HASH)
-        assertEquals(
-            UserDto(id = "user-ada", displayName = "Ada", avatarBlobId = null),
-            UserDto(id = "user-ada", displayName = "Ada", avatarBlobId = null),
-        )
-        assertEquals(
-            "user-ada",
-            UserDeviceDto(id = "device-web", userId = "user-ada", platform = "web").userId,
-        )
-        assertEquals(
-            "Hello from Android",
-            MessageSentDto(
-                messageId = "message-1",
-                senderId = "user-ada",
-                body = "Hello from Android",
-                createdAt = "2026-05-09T12:00:00.000Z",
-            ).body,
-        )
-    }
-
-    @Test
-    fun decodesFoundationObjectsAndStreamEvents() {
-        val users = parseUsers(
-            """
-            {
-              "schemaHash": "$FRICK_SCHEMA_HASH",
-              "type": "User",
-              "data": [
-                {"id": "user-ada", "displayName": "Ada Lovelace", "avatarBlobId": null}
-              ]
-            }
-            """.trimIndent(),
-        )
-        val conversations = parseConversations(
-            """
-            {
-              "schemaHash": "$FRICK_SCHEMA_HASH",
-              "type": "Conversation",
-              "data": [
-                {
-                  "id": "conversation-general",
-                  "kind": "group",
-                  "title": "General",
-                  "createdBy": "user-ada",
-                  "lastMessageEventId": "event-1"
-                }
-              ]
-            }
-            """.trimIndent(),
-        )
-        val events = parseStreamEvents(messageStreamResponse())
-
-        assertEquals(listOf("Ada Lovelace"), users.map { user -> user.displayName })
-        assertEquals(listOf("General"), conversations.map { conversation -> conversation.title })
-        assertEquals(listOf("Hello from Android"), events.map { event -> event.payload["body"] })
-        assertEquals(1, events.single().sequence)
-    }
-
-    @Test
-    fun onlyMessageSentEventsWithBodyAreVisibleChatMessages() {
-        val message = streamEvent(sequence = 1, eventId = "event-message", body = "Hello")
-        val emptyMessage = streamEvent(sequence = 2, eventId = "event-empty", body = "")
-        val receipt = FrickStreamEvent(
-            stream = "MessageStream",
-            streamId = "conversation-general",
-            sequence = 3,
-            eventId = "event-receipt",
-            event = "ReceiptAdvanced",
-            payload = mapOf(
-                "userId" to "user-ada",
-                "sequence" to "2",
-            ),
-        )
-
-        assertTrue(message.isVisibleChatMessage())
-        assertEquals(false, emptyMessage.isVisibleChatMessage())
-        assertEquals(false, receipt.isVisibleChatMessage())
+        assertEquals("{\"stream\":\"AppStream\",\"sequence\":7}", events[0].data)
     }
 
     @Test
@@ -262,74 +191,6 @@ class FrickEventStreamParserTest {
         assertEquals("android-device", body.getValue("deviceId").jsonPrimitive.content)
         assertEquals("android-replica", body.getValue("replicaId").jsonPrimitive.content)
         assertEquals("android", body.getValue("platform").jsonPrimitive.content)
-    }
-
-    @Test
-    fun createConversationPostsParticipantsWithStoredSession() = runBlocking {
-        val storage = MemoryFrickStorage(
-            session = FrickSession(
-                schemaHash = FRICK_SCHEMA_HASH,
-                sessionToken = "session-token-ada",
-                userId = "user-ada",
-                deviceId = "android-device",
-                replicaId = "android-replica",
-                expiresAt = "2026-05-09T22:00:00.000Z",
-            ),
-        )
-        val transport = FakeFrickTransport(
-            postResponses = mapOf(
-                "/conversations" to """
-                    {
-                      "schemaHash": "$FRICK_SCHEMA_HASH",
-                      "conversation": {
-                        "id": "conversation-launch-room-a1b2c3",
-                        "kind": "group",
-                        "title": "Launch Room",
-                        "createdBy": "user-ada",
-                        "lastMessageEventId": null
-                      },
-                      "member": {
-                        "id": "member-launch-room-a1b2c3-ada",
-                        "conversationId": "conversation-launch-room-a1b2c3",
-                        "userId": "user-ada",
-                        "role": "owner"
-                      },
-                      "members": [
-                        {
-                          "id": "member-launch-room-a1b2c3-ada",
-                          "conversationId": "conversation-launch-room-a1b2c3",
-                          "userId": "user-ada",
-                          "role": "owner"
-                        },
-                        {
-                          "id": "member-launch-room-a1b2c3-grace",
-                          "conversationId": "conversation-launch-room-a1b2c3",
-                          "userId": "user-grace",
-                          "role": "member"
-                        }
-                      ]
-                    }
-                """.trimIndent(),
-            ),
-        )
-        val client = FrickClient(transport = transport, storage = storage)
-
-        val created = client.createConversation(
-            title = "Launch Room",
-            kind = "group",
-            participantUserIds = listOf("user-grace"),
-        )
-
-        assertEquals("conversation-launch-room-a1b2c3", created.conversation.id)
-        assertEquals("Launch Room", created.conversation.title)
-        assertEquals(created.conversation.id, created.member.conversationId)
-        assertEquals("user-ada", created.member.userId)
-        assertEquals(listOf("user-ada", "user-grace"), created.members.map { member -> member.userId })
-        assertEquals("/conversations", transport.posts.single().path)
-        val body = Json.parseToJsonElement(transport.posts.single().body).jsonObject
-        assertEquals("Launch Room", body.getValue("title").jsonPrimitive.content)
-        assertEquals("group", body.getValue("kind").jsonPrimitive.content)
-        assertEquals("user-grace", body.getValue("participantUserIds").jsonArray.first().jsonPrimitive.content)
     }
 
     @Test
@@ -675,38 +536,6 @@ class FrickEventStreamParserTest {
     }
 
     @Test
-    fun fetchInboxWithoutSessionOrExplicitUserIdRequiresAuthBeforeRequest() = runBlocking {
-        val transport = FakeFrickTransport()
-        val client = FrickClient(transport = transport, storage = MemoryFrickStorage())
-
-        try {
-            client.fetchInbox()
-            fail("expected auth requirement before defaulting inbox user")
-        } catch (_: FrickAuthenticationRequiredException) {
-            // expected
-        }
-
-        assertEquals(emptyList<String>(), transport.requestedPaths)
-    }
-
-    @Test
-    fun sendMessageWithoutSessionOrExplicitSenderRequiresAuthBeforeAppend() = runBlocking {
-        val transport = FakeFrickTransport()
-        val storage = MemoryFrickStorage()
-        val client = FrickClient(transport = transport, storage = storage)
-
-        try {
-            client.sendMessage(body = "no fallback")
-            fail("expected auth requirement before defaulting sender id")
-        } catch (_: FrickAuthenticationRequiredException) {
-            // expected
-        }
-
-        assertEquals(emptyList<FakeFrickTransport.Post>(), transport.postAttempts)
-        assertEquals(emptyList<PendingAppend>(), storage.pendingAppends)
-    }
-
-    @Test
     fun ktorTransportAddsAuthorizationHeaderToAuthenticatedRequests() = runBlocking {
         val observed = mutableListOf<Pair<String, String?>>()
         val server = startHeaderCaptureServer(observed)
@@ -720,7 +549,7 @@ class FrickEventStreamParserTest {
             transport.get("/objects?type=User")
             transport.post("/append", """{"ok":true}""")
             transport.putBytes("/blobs/blob-1/content", "text/plain", "hello".encodeToByteArray())
-            transport.stream("/streams/MessageStream/conversation-general/events?after=0").take(1).toList()
+            transport.stream("/streams/AppStream/key-1/events?after=0").take(1).toList()
         } finally {
             transport.close()
         }
@@ -730,45 +559,10 @@ class FrickEventStreamParserTest {
                 "GET /objects?type=User" to "Bearer session-token-ada",
                 "POST /append" to "Bearer session-token-ada",
                 "PUT /blobs/blob-1/content" to "Bearer session-token-ada",
-                "GET /streams/MessageStream/conversation-general/events?after=0" to "Bearer session-token-ada",
+                "GET /streams/AppStream/key-1/events?after=0" to "Bearer session-token-ada",
             ),
             observed,
         )
-    }
-
-    @Test
-    fun authenticatedSessionProvidesDefaultInboxUserAndMessageSender() = runBlocking {
-        val session = FrickSession(
-            schemaHash = FRICK_SCHEMA_HASH,
-            sessionToken = "session-token-grace",
-            userId = "user-grace",
-            deviceId = "android-device",
-            replicaId = "android-replica",
-            expiresAt = "2026-05-09T22:00:00.000Z",
-        )
-        val transport = FakeFrickTransport(
-            responses = mapOf(
-                "/inbox?userId=user-grace" to """
-                    {
-                      "schemaHash": "$FRICK_SCHEMA_HASH",
-                      "data": []
-                    }
-                """.trimIndent(),
-            ),
-        )
-        val client = FrickClient(
-            transport = transport,
-            storage = MemoryFrickStorage(session = session),
-            requestIdFactory = { "request-1" },
-        )
-
-        client.fetchInbox()
-        client.sendMessage(body = "Authenticated hello")
-
-        assertEquals(listOf("/inbox?userId=user-grace"), transport.requestedPaths)
-        val append = Json.parseToJsonElement(transport.posts.single().body).jsonObject
-        val payload = append.getValue("payload").jsonObject
-        assertEquals("user-grace", payload.getValue("senderId").jsonPrimitive.content)
     }
 
     @Test
@@ -791,27 +585,9 @@ class FrickEventStreamParserTest {
     }
 
     @Test
-    fun decodesInboxItemsAndBlobMetadata() = runBlocking {
+    fun fetchesBlobMetadataThroughFoundationContentEndpoint() = runBlocking {
         val transport = FakeFrickTransport(
             responses = mapOf(
-                "/inbox?userId=user-ada" to """
-                    {
-                      "schemaHash": "$FRICK_SCHEMA_HASH",
-                      "data": [
-                        {
-                          "conversationId": "conversation-general",
-                          "userId": "user-ada",
-                          "title": "Foundation General",
-                          "kind": "channel",
-                          "lastSequence": 7,
-                          "lastMessageBody": "Inbox preview",
-                          "lastMessageSenderId": "user-grace",
-                          "readSequence": 4,
-                          "unreadCount": 3
-                        }
-                      ]
-                    }
-                """.trimIndent(),
                 "/blobs/blob-1" to """
                     {
                       "blobId": "blob-1",
@@ -826,28 +602,11 @@ class FrickEventStreamParserTest {
         )
         val client = FrickClient(transport = transport)
 
-        val inbox = client.fetchInbox(userId = "user-ada")
         val blob = client.fetchBlobMetadata(blobId = "blob-1")
 
-        assertEquals(
-            listOf(
-                FrickInboxItem(
-                    conversationId = "conversation-general",
-                    userId = "user-ada",
-                    title = "Foundation General",
-                    kind = "channel",
-                    lastSequence = 7,
-                    lastMessageBody = "Inbox preview",
-                    lastMessageSenderId = "user-grace",
-                    readSequence = 4,
-                    unreadCount = 3,
-                ),
-            ),
-            inbox,
-        )
         assertEquals("blob-1", blob?.blobId)
         assertEquals(42, blob?.byteLength)
-        assertEquals(listOf("/inbox?userId=user-ada", "/blobs/blob-1"), transport.requestedPaths)
+        assertEquals(listOf("/blobs/blob-1"), transport.requestedPaths)
     }
 
     @Test
@@ -963,32 +722,9 @@ class FrickEventStreamParserTest {
     }
 
     @Test
-    fun advancesReadReceiptOncePerLoadedSequence() = runBlocking {
-        val transport = FakeFrickTransport()
-        val client = FrickClient(
-            transport = transport,
-            storage = MemoryFrickStorage(session = testSession()),
-            replicaId = "android-test",
-            requestIdFactory = { "request-${transport.posts.size + 1}" },
-        )
-
-        client.fetchMessages(readUserId = "user-ada")
-        client.fetchMessages(readUserId = "user-ada")
-
-        assertEquals(1, transport.posts.size)
-        val post = transport.posts.single()
-        assertEquals("/append", post.path)
-        val append = Json.parseToJsonElement(post.body).jsonObject
-        val payload = append.getValue("payload").jsonObject
-        assertEquals("ReceiptAdvanced", append.getValue("event").jsonPrimitive.content)
-        assertEquals("user-ada", payload.getValue("userId").jsonPrimitive.content)
-        assertEquals(1, payload.getValue("sequence").jsonPrimitive.int)
-    }
-
-    @Test
     fun rejectsResponsesWithMismatchedSchemaHash() {
         try {
-            parseUsers("""{"schemaHash":"wrong-hash","data":[]}""")
+            parseStreamEvents("""{"schemaHash":"wrong-hash","data":[]}""")
             fail("Expected schema mismatch")
         } catch (error: FrickSchemaMismatchException) {
             assertEquals(FRICK_SCHEMA_HASH, error.expectedSchemaHash)
@@ -1007,9 +743,9 @@ class FrickEventStreamParserTest {
         )
 
         client.append(
-            stream = "MessageStream",
-            key = "conversation-general",
-            event = "MessageSent",
+            stream = "AppStream",
+            key = "app-key-1",
+            event = "AppEvent",
             payload = mapOf(
                 "messageId" to "message-1",
                 "senderId" to "user-ada",
@@ -1021,34 +757,18 @@ class FrickEventStreamParserTest {
         assertEquals(1, transport.posts.size)
         assertEquals("/append", transport.posts.single().path)
         assertTrue(transport.posts.single().body.contains("\"requestId\":\"request-1\""))
-        assertTrue(transport.posts.single().body.contains("\"stream\":\"MessageStream\""))
-        assertTrue(transport.posts.single().body.contains("\"key\":\"conversation-general\""))
+        assertTrue(transport.posts.single().body.contains("\"stream\":\"AppStream\""))
+        assertTrue(transport.posts.single().body.contains("\"key\":\"app-key-1\""))
         assertTrue(transport.posts.single().body.contains("\"body\":\"Hello from Android\""))
     }
 
     @Test
-    fun fetchMessagesFallsBackToCachedStreamEventsWhenOffline() = runBlocking {
-        val cached = FrickStreamEvent(
-            stream = "MessageStream",
-            streamId = "conversation-general",
-            sequence = 7,
-            eventId = "event-cached",
-            event = "MessageSent",
-            payload = mapOf("body" to "Cached"),
-        )
-        val storage = MemoryFrickStorage(streamEvents = listOf(cached))
-        val client = FrickClient(
-            transport = FakeFrickTransport(failGets = true),
-            storage = storage,
-        )
-
-        val events = client.fetchMessages()
-
-        assertEquals(listOf(cached), events)
-    }
-
-    @Test
-    fun queuesAppendWhenOfflineAndFlushesBeforeFetch() = runBlocking {
+    fun appendQueuesWhenOfflineAndFlushPendingAppendsDrainsTheQueue() = runBlocking {
+        // Generic primitive: offline append goes onto the pending queue,
+        // and flushPendingAppends() drains it on the next call to a
+        // working transport. Previously this was tested indirectly via
+        // fetchMessages()'s implicit flush; that helper is gone so we
+        // exercise the queue + drain primitives directly.
         val transport = FakeFrickTransport(failingPosts = 1)
         val storage = MemoryFrickStorage(session = testSession())
         val client = FrickClient(
@@ -1059,14 +779,14 @@ class FrickEventStreamParserTest {
         )
 
         client.append(
-            stream = "MessageStream",
-            key = "conversation-general",
-            event = "MessageSent",
+            stream = "AppStream",
+            key = "app-key-1",
+            event = "AppEvent",
             payload = mapOf("body" to "Queued"),
         )
         assertEquals(listOf("request-1"), storage.pendingAppends.map { append -> append.requestId })
 
-        client.fetchMessages()
+        client.flushPendingAppends()
 
         assertEquals(emptyList<PendingAppend>(), storage.pendingAppends)
         assertEquals(2, transport.postAttempts.size)
@@ -1087,9 +807,9 @@ class FrickEventStreamParserTest {
         )
 
         client.append(
-            stream = "MessageStream",
-            key = "conversation-general",
-            event = "MessageSent",
+            stream = "AppStream",
+            key = "app-key-1",
+            event = "AppEvent",
             payload = mapOf("body" to "Queued"),
         )
 
@@ -1101,25 +821,6 @@ class FrickEventStreamParserTest {
             storage.loadCacheMetadata(),
         )
         assertEquals(listOf("request-1"), storage.pendingAppends.map { append -> append.requestId })
-    }
-
-    @Test
-    fun streamsMessageSnapshotsAndDeltasFromSseTransport() = runBlocking {
-        val transport = FakeFrickTransport(
-            streamChunks = listOf(
-                "event: stream-page\n" +
-                    "data: {\"schemaHash\":\"$FRICK_SCHEMA_HASH\",\"stream\":\"MessageStream\",\"key\":\"conversation-general\",\"data\":[]}\n\n",
-                "event: delta\n" +
-                    "data: {\"schemaHash\":\"$FRICK_SCHEMA_HASH\",\"stream\":\"MessageStream\",\"key\":\"conversation-general\",\"data\":[{\"stream\":\"MessageStream\",\"streamId\":\"conversation-general\",\"sequence\":2,\"eventId\":\"event-2\",\"event\":\"MessageSent\",\"payload\":{\"body\":\"Live\"}}]}\n\n",
-            ),
-        )
-        val client = FrickClient(transport = transport)
-
-        val snapshots = client.streamMessages().take(2).toList()
-
-        assertEquals(listOf(0, 1), snapshots.map { events -> events.size })
-        assertEquals("Live", snapshots.last().single().payload["body"])
-        assertEquals(listOf("/streams/MessageStream/conversation-general/events?after=0"), transport.streamedPaths)
     }
 
     @Test
@@ -1299,32 +1000,6 @@ class FrickEventStreamParserTest {
     }
 
     @Test
-    fun fetchMessagesRejectsCachedEventsForMismatchedSessionScope() = runBlocking {
-        val storage = MemoryFrickStorage(
-            session = testSession(tenantId = "tenant-beta", userId = "user-grace"),
-        ).apply {
-            saveCacheMetadata(
-                FrickCacheMetadata.currentSchema.copy(
-                    tenantId = "tenant-alpha",
-                    userId = "user-ada",
-                ),
-            )
-            saveStreamEvent(streamEvent(sequence = 1, eventId = "event-tenant-alpha", body = "private"))
-        }
-        val client = FrickClient(
-            transport = FakeFrickTransport(failGets = true),
-            storage = storage,
-        )
-
-        try {
-            client.fetchMessages()
-            fail("expected FrickCacheIncompatibleException")
-        } catch (error: FrickCacheIncompatibleException) {
-            assertEquals(FrickCacheIncompatibilityReason.SESSION_SCOPE_MISMATCH, error.reason)
-        }
-    }
-
-    @Test
     fun resetCacheClearsObjectsStreamsPendingAppendsAndMetadata() {
         val storage = MemoryFrickStorage().apply {
             saveObjectJson(type = "User", id = "user-ada", json = """{"id":"user-ada"}""", version = 1)
@@ -1337,7 +1012,7 @@ class FrickEventStreamParserTest {
         client.resetCache()
 
         assertEquals(null, storage.loadObjectJson(type = "User", id = "user-ada"))
-        assertEquals(emptyList<FrickStreamEvent>(), storage.loadStreamEvents(stream = "MessageStream", key = "conversation-general"))
+        assertEquals(emptyList<FrickStreamEvent>(), storage.loadStreamEvents(stream = "AppStream", key = "app-key-1"))
         assertEquals(emptyList<PendingAppend>(), storage.loadPendingAppends())
         assertEquals(null, storage.loadCacheMetadata())
     }
@@ -1366,7 +1041,7 @@ class FrickEventStreamParserTest {
 }
 
 private class FakeFrickTransport(
-    private val responseBody: String = messageStreamResponse(),
+    private val responseBody: String = """{"schemaHash":"$FRICK_SCHEMA_HASH","data":[]}""",
     private val responses: Map<String, String> = emptyMap(),
     private val postResponses: Map<String, String> = emptyMap(),
     private val byteResponses: Map<String, ByteArray> = emptyMap(),
@@ -1653,11 +1328,11 @@ private fun HttpExchange.sendText(body: String) {
 
 private fun streamEvent(sequence: Int, eventId: String, body: String): FrickStreamEvent =
     FrickStreamEvent(
-        stream = "MessageStream",
-        streamId = "conversation-general",
+        stream = "AppStream",
+        streamId = "app-key-1",
         sequence = sequence,
         eventId = eventId,
-        event = "MessageSent",
+        event = "AppEvent",
         payload = mapOf(
             "messageId" to "message-$sequence",
             "senderId" to "user-ada",
@@ -1665,27 +1340,3 @@ private fun streamEvent(sequence: Int, eventId: String, body: String): FrickStre
             "createdAt" to "2026-05-09T12:00:00.000Z",
         ),
     )
-
-private fun messageStreamResponse(): String =
-    """
-    {
-      "schemaHash": "$FRICK_SCHEMA_HASH",
-      "stream": "MessageStream",
-      "key": "conversation-general",
-      "data": [
-        {
-          "stream": "MessageStream",
-          "streamId": "conversation-general",
-          "sequence": 1,
-          "eventId": "event-1",
-          "event": "MessageSent",
-          "payload": {
-            "messageId": "message-1",
-            "senderId": "user-ada",
-            "body": "Hello from Android",
-            "createdAt": "2026-05-09T12:00:00.000Z"
-          }
-        }
-      ]
-    }
-    """.trimIndent()

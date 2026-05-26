@@ -6,7 +6,7 @@
  * relies on.
  */
 import { describe, expect, it } from "vitest";
-import { foundationSchema } from "../src/foundation.js";
+import { productTestSchema } from "../src/fixtures/product-test-schema.js";
 import {
   generateKotlinErrorEnum,
   generateSwiftErrorEnum,
@@ -42,7 +42,7 @@ describe("error-enum generators", () => {
 });
 
 describe("typescript bindings generator", () => {
-  const ts = generateTypeScriptBindings(foundationSchema);
+  const ts = generateTypeScriptBindings(productTestSchema);
 
   it("emits one Dto interface per object, event, presence, signal", () => {
     expect(ts).toContain("export interface UserDto");

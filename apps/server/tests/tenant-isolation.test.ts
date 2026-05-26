@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { productTestSchema } from "@frick/protocol";
 import { createFrickServer } from "../src/server.js";
+
+// Tenant isolation tests. The previous version exercised the framework's
+// `/conversations` and `/inbox` routes, both of which were removed in the
+// framework boundary cleanup (CHANGELOG: "Removed framework-owned chat
+// routes..."). The cases here keep the underlying tenant isolation
+// invariants but exercise them through the generic `/objects`, `/append`,
+// `/streams`, `/blobs`, and `/signals` routes that production still ships.
 
 let app: Awaited<ReturnType<typeof startServer>> | undefined;
 
@@ -11,16 +19,19 @@ afterEach(async () => {
 describe("tenant isolation", () => {
   it("scopes object lookups to the principal's tenant", async () => {
     app = await startServer();
-    const a = await devLogin(app.httpUrl, { userId: "user-shared", tenantId: "tenant-a" });
-    const b = await devLogin(app.httpUrl, { userId: "user-shared", tenantId: "tenant-b" });
+    // user_id is globally unique in auth_accounts (only `handle` is
+    // tenant-scoped post-cleanup); use distinct user ids per tenant.
+    const a = await devLogin(app.httpUrl, { userId: "user-a-shared", tenantId: "tenant-a" });
+    const b = await devLogin(app.httpUrl, { userId: "user-b-shared", tenantId: "tenant-b" });
 
-    // Tenant-a creates a Conversation; tenant-b must not see it.
-    const created = await postJson(
-      `${app.httpUrl}/conversations`,
-      { kind: "group", title: "Tenant A Group", participantUserIds: [] },
-      a.sessionToken,
-    );
-    expect(created.status).toBe(201);
+    // Tenant-a writes a Conversation directly via the store (the
+    // `/conversations` convenience route is gone). Tenant-b reading the
+    // same object type must see nothing.
+    app.store.upsertObject("tenant-a", "Conversation", "conv-a-1", {
+      kind: "group",
+      title: "Tenant A Group",
+      createdBy: "user-a-shared",
+    });
 
     const listedA = await getJson(`${app.httpUrl}/objects?type=Conversation`, a.sessionToken);
     expect(listedA.body.data.length).toBeGreaterThan(0);
@@ -31,29 +42,23 @@ describe("tenant isolation", () => {
 
   it("isolates message streams across tenants", async () => {
     app = await startServer();
-    const a = await devLogin(app.httpUrl, { userId: "user-shared", tenantId: "tenant-a" });
-    const b = await devLogin(app.httpUrl, { userId: "user-shared", tenantId: "tenant-b" });
+    // user_id is globally unique in auth_accounts (only `handle` is
+    // tenant-scoped post-cleanup); use distinct user ids per tenant.
+    const a = await devLogin(app.httpUrl, { userId: "user-a-shared", tenantId: "tenant-a" });
+    const b = await devLogin(app.httpUrl, { userId: "user-b-shared", tenantId: "tenant-b" });
 
-    // Each tenant creates its own conversation with the same slug seed; the
-    // generated ids will differ but the streams are tenant-scoped regardless.
-    const convA = await postJson(
-      `${app.httpUrl}/conversations`,
-      { kind: "group", title: "Tenant A Chat", participantUserIds: [] },
-      a.sessionToken,
-    );
-    expect(convA.status).toBe(201);
-    const conversationIdA = convA.body.conversation.id as string;
+    const conversationId = "conversation-shared";
 
     const appendA = await postJson(
       `${app.httpUrl}/append`,
       {
         requestId: "request-a",
         stream: "MessageStream",
-        key: conversationIdA,
+        key: conversationId,
         event: "MessageSent",
         payload: {
           messageId: "message-a",
-          senderId: "user-shared",
+          senderId: "user-a-shared",
           body: "tenant-a only",
           createdAt: "2026-05-09T00:00:00.000Z",
         },
@@ -62,57 +67,32 @@ describe("tenant isolation", () => {
     );
     expect(appendA.status).toBe(200);
 
-    // Tenant-b reading the SAME stream key sees no events.
+    // Tenant-b reading the SAME stream key sees no events: the storage row
+    // is partitioned by tenant_id even though the stream key matches.
     const readB = await getJson(
-      `${app.httpUrl}/streams/MessageStream/${conversationIdA}`,
+      `${app.httpUrl}/streams/MessageStream/${conversationId}`,
       b.sessionToken,
     );
-    // Either notMember (the conversation doesn't exist in tenant-b) or empty.
-    expect(readB.status === 403 || (readB.status === 200 && readB.body.data.length === 0)).toBe(true);
-  });
+    expect(readB.status).toBe(200);
+    expect(readB.body.data).toEqual([]);
 
-  it("isolates inbox rows across tenants with same userId", async () => {
-    app = await startServer();
-    const a = await devLogin(app.httpUrl, { userId: "user-shared", tenantId: "tenant-a" });
-    const b = await devLogin(app.httpUrl, { userId: "user-shared", tenantId: "tenant-b" });
-
-    const convA = await postJson(
-      `${app.httpUrl}/conversations`,
-      { kind: "group", title: "Tenant A Inbox", participantUserIds: [] },
+    const readA = await getJson(
+      `${app.httpUrl}/streams/MessageStream/${conversationId}`,
       a.sessionToken,
     );
-    expect(convA.status).toBe(201);
-    await postJson(
-      `${app.httpUrl}/append`,
-      {
-        requestId: "request-inbox-a",
-        stream: "MessageStream",
-        key: convA.body.conversation.id,
-        event: "MessageSent",
-        payload: {
-          messageId: "message-inbox-a",
-          senderId: "user-shared",
-          body: "inbox tenant a",
-          createdAt: "2026-05-09T00:00:00.000Z",
-        },
-      },
-      a.sessionToken,
-    );
-
-    const inboxA = await getJson(`${app.httpUrl}/inbox`, a.sessionToken);
-    expect(inboxA.body.data.length).toBeGreaterThan(0);
-
-    const inboxB = await getJson(`${app.httpUrl}/inbox`, b.sessionToken);
-    expect(inboxB.body.data).toEqual([]);
+    expect(readA.status).toBe(200);
+    expect(readA.body.data.length).toBeGreaterThan(0);
   });
 
   it("isolates blob ownership across tenants", async () => {
     app = await startServer();
-    const a = await devLogin(app.httpUrl, { userId: "user-shared", tenantId: "tenant-a" });
-    const b = await devLogin(app.httpUrl, { userId: "user-shared", tenantId: "tenant-b" });
+    // user_id is globally unique in auth_accounts (only `handle` is
+    // tenant-scoped post-cleanup); use distinct user ids per tenant.
+    const a = await devLogin(app.httpUrl, { userId: "user-a-shared", tenantId: "tenant-a" });
+    const b = await devLogin(app.httpUrl, { userId: "user-b-shared", tenantId: "tenant-b" });
 
     const blobId = "blob-tenant-test";
-    const put = await fetch(`${app.httpUrl}/blobs/${blobId}/content?ownerId=user-shared`, {
+    const put = await fetch(`${app.httpUrl}/blobs/${blobId}/content?ownerId=user-a-shared`, {
       method: "PUT",
       headers: {
         "content-type": "text/plain",
@@ -143,8 +123,10 @@ describe("tenant isolation", () => {
 
   it("isolates signals across tenants on the same key", async () => {
     app = await startServer();
-    const a = await devLogin(app.httpUrl, { userId: "user-shared", tenantId: "tenant-a" });
-    const b = await devLogin(app.httpUrl, { userId: "user-shared", tenantId: "tenant-b" });
+    // user_id is globally unique in auth_accounts (only `handle` is
+    // tenant-scoped post-cleanup); use distinct user ids per tenant.
+    const a = await devLogin(app.httpUrl, { userId: "user-a-shared", tenantId: "tenant-a" });
+    const b = await devLogin(app.httpUrl, { userId: "user-b-shared", tenantId: "tenant-b" });
 
     const post = await postJson(
       `${app.httpUrl}/signals/WebRTCSignal/room-1`,
@@ -208,12 +190,11 @@ describe("tenant isolation", () => {
 
     // Requests with this token are scoped to tenant-pinned — tenant-a's
     // objects are invisible from this session.
-    const a = await devLogin(app.httpUrl, { userId: "user-shared", tenantId: "tenant-a" });
-    await postJson(
-      `${app.httpUrl}/conversations`,
-      { kind: "group", title: "A Only", participantUserIds: [] },
-      a.sessionToken,
-    );
+    app.store.upsertObject("tenant-a", "Conversation", "conv-a-only", {
+      kind: "group",
+      title: "A Only",
+      createdBy: "user-other",
+    });
 
     const listed = await getJson(
       `${app.httpUrl}/objects?type=Conversation`,
@@ -224,7 +205,7 @@ describe("tenant isolation", () => {
 });
 
 async function startServer() {
-  const server = createFrickServer({ port: 0, dbPath: ":memory:" });
+  const server = createFrickServer({ port: 0, dbPath: ":memory:", schema: productTestSchema });
   await server.listen();
   const address = server.server.address();
   if (!address || typeof address === "string") {

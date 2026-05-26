@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { foundationSchema, generateKotlinArtifact, generateSwiftArtifact } from "../src/index.js";
+import { productTestSchema, generateKotlinArtifact, generateSwiftArtifact } from "../src/index.js";
 
 describe("native artifacts", () => {
   it("generates Swift DTO names for objects, events, presence, and signals", () => {
-    const swift = generateSwiftArtifact(foundationSchema);
+    const swift = generateSwiftArtifact(productTestSchema);
 
-    expect(swift).toContain('public static let schemaId = "frick-foundation"');
+    expect(swift).toContain('public static let schemaId = "frick-product-test"');
     expect(swift).toContain('public static let schemaVersion = "0.1.0"');
     expect(swift).toContain("public static let schemaRevision = 1");
     expect(swift).toContain("public static let minimumClientRevision = 1");
@@ -17,9 +17,9 @@ describe("native artifacts", () => {
   });
 
   it("generates Kotlin DTO names for objects, events, presence, and signals", () => {
-    const kotlin = generateKotlinArtifact(foundationSchema);
+    const kotlin = generateKotlinArtifact(productTestSchema);
 
-    expect(kotlin).toContain('const val FRICK_SCHEMA_ID: String = "frick-foundation"');
+    expect(kotlin).toContain('const val FRICK_SCHEMA_ID: String = "frick-product-test"');
     expect(kotlin).toContain('const val FRICK_SCHEMA_VERSION: String = "0.1.0"');
     expect(kotlin).toContain("const val FRICK_SCHEMA_REVISION: Int = 1");
     expect(kotlin).toContain("const val FRICK_MINIMUM_CLIENT_REVISION: Int = 1");
@@ -31,8 +31,8 @@ describe("native artifacts", () => {
   });
 
   it("defaults optional native DTO constructor fields to nil or null", () => {
-    const swift = generateSwiftArtifact(foundationSchema);
-    const kotlin = generateKotlinArtifact(foundationSchema);
+    const swift = generateSwiftArtifact(productTestSchema);
+    const kotlin = generateKotlinArtifact(productTestSchema);
 
     expect(swift).toContain("avatarBlobId: String? = nil");
     expect(swift).toContain("attachmentBlobIds: FrickJSONValue? = nil");
@@ -41,7 +41,7 @@ describe("native artifacts", () => {
   });
 
   it("emits Swift schema descriptor tables for objects, streams, and events", () => {
-    const swift = generateSwiftArtifact(foundationSchema);
+    const swift = generateSwiftArtifact(productTestSchema);
 
     expect(swift).toContain("public enum FrickSchemaDescriptor");
     expect(swift).toContain("public static let objectNames: [Int: String]");
@@ -54,7 +54,7 @@ describe("native artifacts", () => {
   });
 
   it("emits Kotlin schema descriptor tables for objects, streams, and events", () => {
-    const kotlin = generateKotlinArtifact(foundationSchema);
+    const kotlin = generateKotlinArtifact(productTestSchema);
 
     expect(kotlin).toContain("internal val FRICK_OBJECT_NAMES: Map<Int, String>");
     expect(kotlin).toContain("internal val FRICK_STREAM_NAMES: Map<Int, String>");
@@ -66,8 +66,8 @@ describe("native artifacts", () => {
   });
 
   it("emits native JSON value support when schema fields use json", () => {
-    const swift = generateSwiftArtifact(foundationSchema);
-    const kotlin = generateKotlinArtifact(foundationSchema);
+    const swift = generateSwiftArtifact(productTestSchema);
+    const kotlin = generateKotlinArtifact(productTestSchema);
 
     expect(swift).toContain("public indirect enum FrickJSONValue");
     expect(swift).toContain("case array([FrickJSONValue])");

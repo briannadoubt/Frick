@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { productTestSchema } from "@frick/protocol";
 import { dumpFrickDatabase, type FrickDumpHeader } from "../src/backup/dump.js";
 import { FrickStore } from "../src/store.js";
 
@@ -10,8 +11,11 @@ async function collect(iter: AsyncIterable<string>): Promise<string[]> {
 
 describe("dumpFrickDatabase", () => {
   it("emits a valid header line followed by row lines", async () => {
-    const store = new FrickStore({ path: ":memory:" });
+    const store = new FrickStore({ path: ":memory:", schema: productTestSchema });
     try {
+      // Default seeding no longer populates the foundation; explicitly insert
+      // an object so the dump contains an "objects" row.
+      store.upsertObject("_default", "User", "user-seed", { displayName: "Seed" });
       const lines = await collect(dumpFrickDatabase(store, { tenantId: "_default" }));
       expect(lines.length).toBeGreaterThan(1);
       const header = JSON.parse(lines[0]!) as { type: string; row: FrickDumpHeader };
@@ -36,7 +40,7 @@ describe("dumpFrickDatabase", () => {
   });
 
   it("per-tenant dump only includes rows for the chosen tenant", async () => {
-    const store = new FrickStore({ path: ":memory:" });
+    const store = new FrickStore({ path: ":memory:", schema: productTestSchema });
     try {
       store.tenants.create("tenant-alpha");
       store.tenants.create("tenant-beta");
@@ -59,7 +63,7 @@ describe("dumpFrickDatabase", () => {
   });
 
   it("includes blob_content with base64-encoded bytes inline", async () => {
-    const store = new FrickStore({ path: ":memory:" });
+    const store = new FrickStore({ path: ":memory:", schema: productTestSchema });
     try {
       store.createBlobMetadata({
         blobId: "blob-1",
@@ -85,7 +89,7 @@ describe("dumpFrickDatabase", () => {
   });
 
   it("per-tenant dump includes security-relevant framework tables for the chosen tenant", async () => {
-    const store = new FrickStore({ path: ":memory:", seed: false });
+    const store = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
     try {
       store.tenants.create("tenant-alpha");
       store.tenants.create("tenant-beta");
@@ -155,7 +159,7 @@ describe("dumpFrickDatabase", () => {
   });
 
   it("per-tenant dump includes platform events and only matching delivery state", async () => {
-    const store = new FrickStore({ path: ":memory:", seed: false });
+    const store = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
     try {
       store.tenants.create("tenant-alpha");
       store.tenants.create("tenant-beta");
@@ -200,7 +204,7 @@ describe("dumpFrickDatabase", () => {
   });
 
   it("whole-database dump includes admin_audit_log and frick_migrations", async () => {
-    const store = new FrickStore({ path: ":memory:" });
+    const store = new FrickStore({ path: ":memory:", schema: productTestSchema });
     try {
       store.adminAudit.record({
         adminTokenFingerprint: "abc123def456",

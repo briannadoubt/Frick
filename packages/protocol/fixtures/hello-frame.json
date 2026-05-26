@@ -3,7 +3,7 @@
   {
     "replicaId": "fixture-replica",
     "deviceId": "fixture-device",
-    "schemaHash": "frick-foundation-0.2.0",
+    "schemaHash": "frick-foundation-empty-0.1.0",
     "knownCursors": {},
     "clientCapabilities": {
       "platform": "test",
@@ -11,7 +11,7 @@
       "schema": {
         "schemaId": "frick-foundation",
         "schemaRevision": 1,
-        "schemaHash": "frick-foundation-0.2.0"
+        "schemaHash": "frick-foundation-empty-0.1.0"
       },
       "transports": [
         "websocket"

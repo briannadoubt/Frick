@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { productTestSchema } from "@frick/protocol";
 import { createFrickServer } from "../src/server.js";
 
 let app: Awaited<ReturnType<typeof startServer>> | undefined;
@@ -205,7 +206,12 @@ describe("operational HTTP endpoints", () => {
 });
 
 async function startServer(options: Parameters<typeof createFrickServer>[0] = {}) {
-  const merged = { port: 0, dbPath: ":memory:", ...options } as Parameters<typeof createFrickServer>[0];
+  const merged = {
+    port: 0,
+    dbPath: ":memory:",
+    schema: productTestSchema,
+    ...options,
+  } as Parameters<typeof createFrickServer>[0];
   const server = createFrickServer(merged);
   await server.listen();
   const address = server.server.address();

@@ -55,6 +55,13 @@ const INTENTIONAL_EXCEPTIONS: Record<string, Record<string, string>> = {
     "fixtures/error-envelope.json": "cross-platform conformance fixture",
     "fixtures/foundation-schema.json": "cross-platform conformance fixture",
     "fixtures/hello-frame.json": "cross-platform conformance fixture",
+    // Product-test-schema is the pre-cleanup chat-shaped schema we keep as
+    // a non-trivial fixture so framework primitives (codecs, projections,
+    // sync gateway, etc.) have something to exercise against. Apps that
+    // depend on @frick/protocol can also import it for their own
+    // integration tests. Source lives under src/fixtures/.
+    "dist/fixtures/product-test-schema.d.ts": "shipped test-fixture schema",
+    "dist/fixtures/product-test-schema.js": "shipped test-fixture schema",
   },
 };
 

@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { productTestSchema } from "@frick/protocol";
 import { FrickStore } from "../src/store.js";
 import {
   createFrickProjectionRegistry,
   type FrickProjection,
   type FrickProjectionWriteEvent,
 } from "../src/projections/registry.js";
-import { createConversationInboxProjection } from "../src/projections/conversation-inbox.js";
 
 let store: FrickStore | undefined;
 
@@ -28,7 +28,7 @@ describe("projection registry", () => {
     };
     const projections = createFrickProjectionRegistry();
     projections.register(projection);
-    store = new FrickStore({ path: ":memory:", seed: true, projections });
+    store = new FrickStore({ path: ":memory:", seed: true, projections , schema: productTestSchema });
 
     // Drain seed-time notifications so we only assert on what we trigger.
     events.length = 0;
@@ -64,7 +64,7 @@ describe("projection registry", () => {
       sources: [{ kind: "stream", type: "MessageStream" }],
       handler: { apply: (event) => secondApplied.push(String(event.streamId)) },
     });
-    store = new FrickStore({ path: ":memory:", seed: true, projections });
+    store = new FrickStore({ path: ":memory:", seed: true, projections , schema: productTestSchema });
 
     store.appendEvent({
       requestId: "request-shared-1",
@@ -98,7 +98,7 @@ describe("projection registry", () => {
         },
       },
     });
-    store = new FrickStore({ path: ":memory:", seed: true, projections });
+    store = new FrickStore({ path: ":memory:", seed: true, projections , schema: productTestSchema });
 
     for (let i = 1; i <= 3; i += 1) {
       store.appendEvent({
@@ -126,43 +126,12 @@ describe("projection registry", () => {
     expect(counter).toBe(3);
   });
 
-  it("conversation-inbox projection produces correct per-user counts", () => {
-    const projections = createFrickProjectionRegistry();
-    projections.register(createConversationInboxProjection());
-    store = new FrickStore({ path: ":memory:", seed: true, projections });
-
-    // Two messages from ada — grace's row should show two unread.
-    for (let i = 1; i <= 2; i += 1) {
-      store.appendEvent({
-        requestId: `request-inbox-${i}`,
-        replicaId: "replica-1",
-        stream: "MessageStream",
-        streamId: "conversation-general",
-        event: "MessageSent",
-        payload: {
-          senderId: "user-ada",
-          body: `hello-${i}`,
-          createdAt: "2026-05-09T00:00:00.000Z",
-        },
-      });
-    }
-    const inbox = store.listInbox("user-grace");
-    expect(inbox).toHaveLength(1);
-    expect(inbox[0]).toMatchObject({
-      conversationId: "conversation-general",
-      unreadCount: 2,
-      lastMessageSenderId: "user-ada",
-    });
-
-    // Rebuild from raw events — same answer.
-    projections.rebuildAll({
-      tenantId: "_default",
-      store,
-      logger: noopLogger(),
-    });
-    const rebuilt = store.listInbox("user-grace");
-    expect(rebuilt[0]?.unreadCount).toBe(2);
-  });
+  // The previous "conversation-inbox projection produces correct per-user
+  // counts" test was deleted: the framework no longer ships
+  // `createConversationInboxProjection` or `store.listInbox` — those moved
+  // out of the framework with the boundary cleanup (see CHANGELOG). The
+  // projection registry primitives exercised by the other cases here cover
+  // the framework contract that remains.
 
   it("registry rejects duplicate registrations", () => {
     const projections = createFrickProjectionRegistry();

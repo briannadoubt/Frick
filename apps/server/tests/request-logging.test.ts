@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { productTestSchema } from "@frick/protocol";
 import { createFrickServer } from "../src/server.js";
 import { createConsoleLogger, type FrickLogger } from "../src/logger.js";
 
@@ -38,6 +39,7 @@ async function start(): Promise<Started> {
   const server = createFrickServer({
     port: 0,
     dbPath: ":memory:",
+    schema: productTestSchema,
     logger,
     config: { env: "test", demoAuthEnabled: true },
   });
@@ -99,7 +101,7 @@ describe("per-request logging", () => {
 
     s.entries.length = 0;
 
-    const inbox = await fetch(`${s.httpUrl}/inbox`, {
+    const inbox = await fetch(`${s.httpUrl}/objects?type=User`, {
       headers: { authorization: `Bearer ${session.sessionToken}` },
     });
     expect(inbox.status).toBe(200);
@@ -109,7 +111,7 @@ describe("per-request logging", () => {
     expect(logs).toHaveLength(1);
     expect(logs[0].fields).toMatchObject({
       method: "GET",
-      path: "/inbox",
+      path: "/objects",
       status: 200,
       tenantId: "_default",
       userId: "user-ada",
@@ -133,7 +135,7 @@ describe("per-request logging", () => {
     const s = await start();
     cleanup.push(s.close);
 
-    const response = await fetch(`${s.httpUrl}/inbox`);
+    const response = await fetch(`${s.httpUrl}/objects?type=User`);
     expect(response.status).toBe(401);
     await response.json();
 

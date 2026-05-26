@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { productTestSchema } from "@frick/protocol";
 import { dumpFrickDatabase } from "../src/backup/dump.js";
 import { FrickRestoreRefusedError, restoreFrickDatabase } from "../src/backup/restore.js";
 import { FrickStore } from "../src/store.js";
@@ -15,7 +16,7 @@ async function* fromLines(lines: string[]): AsyncIterable<string> {
 
 describe("restoreFrickDatabase", () => {
   it("round-trips object and stream rows through dump/restore", async () => {
-    const source = new FrickStore({ path: ":memory:", seed: false });
+    const source = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
     try {
       source.tenants.create("tenant-alpha");
       source.upsertObject("tenant-alpha", "User", "user-ada", { displayName: "Ada" });
@@ -30,7 +31,7 @@ describe("restoreFrickDatabase", () => {
       });
 
       const lines = await dumpToLines(source, "tenant-alpha");
-      const target = new FrickStore({ path: ":memory:", seed: false });
+      const target = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
       try {
         const report = await restoreFrickDatabase({
           target,
@@ -55,7 +56,7 @@ describe("restoreFrickDatabase", () => {
   });
 
   it("round-trips blob derivatives, search indexes, and tenant settings", async () => {
-    const source = new FrickStore({ path: ":memory:", seed: false });
+    const source = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
     try {
       source.tenants.create("tenant-alpha");
       source.blobDerivatives.record({
@@ -78,7 +79,7 @@ describe("restoreFrickDatabase", () => {
       source.tenantSettings.set("tenant-alpha", "retentionMs", 1234);
 
       const lines = await dumpToLines(source, "tenant-alpha");
-      const target = new FrickStore({ path: ":memory:", seed: false });
+      const target = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
       try {
         const report = await restoreFrickDatabase({
           target,
@@ -113,7 +114,7 @@ describe("restoreFrickDatabase", () => {
   });
 
   it("round-trips platform events and delivery state", async () => {
-    const source = new FrickStore({ path: ":memory:", seed: false });
+    const source = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
     try {
       source.tenants.create("tenant-alpha");
       const receipt = await source.platformEvents.publish({
@@ -126,7 +127,7 @@ describe("restoreFrickDatabase", () => {
       await source.platformEvents.claim("analytics-worker");
 
       const lines = await dumpToLines(source, "tenant-alpha");
-      const target = new FrickStore({ path: ":memory:", seed: false });
+      const target = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
       try {
         const report = await restoreFrickDatabase({
           target,
@@ -156,9 +157,12 @@ describe("restoreFrickDatabase", () => {
   });
 
   it("refuses to restore over a non-empty target without overwrite", async () => {
-    const source = new FrickStore({ path: ":memory:", seed: false });
-    const target = new FrickStore({ path: ":memory:" });
+    const source = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
+    const target = new FrickStore({ path: ":memory:", schema: productTestSchema });
     try {
+      // Default seeding no longer populates the foundation, so explicitly
+      // make the target non-empty before attempting a no-overwrite restore.
+      target.upsertObject("_default", "User", "user-existing", { displayName: "Existing" });
       const lines = await dumpToLines(source, "_default");
       await expect(
         restoreFrickDatabase({
@@ -174,8 +178,8 @@ describe("restoreFrickDatabase", () => {
   });
 
   it("overwrite truncates matching tenant scope first", async () => {
-    const source = new FrickStore({ path: ":memory:", seed: false });
-    const target = new FrickStore({ path: ":memory:", seed: false });
+    const source = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
+    const target = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
     try {
       source.upsertObject("_default", "User", "user-source", { displayName: "Source" });
       target.upsertObject("_default", "User", "user-stale", { displayName: "Stale" });
@@ -196,7 +200,7 @@ describe("restoreFrickDatabase", () => {
   });
 
   it("refuses on schema hash mismatch unless forceSchemaDrift", async () => {
-    const source = new FrickStore({ path: ":memory:", seed: false });
+    const source = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
     try {
       const lines = await dumpToLines(source, "_default");
       // Mutate the header schemaHash to simulate drift.
@@ -204,7 +208,7 @@ describe("restoreFrickDatabase", () => {
       header.row.schemaHash = "00000000000000000000000000000000000000000000000000000000";
       const mutated = [JSON.stringify(header), ...lines.slice(1)];
 
-      const target = new FrickStore({ path: ":memory:", seed: false });
+      const target = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
       try {
         await expect(
           restoreFrickDatabase({
@@ -214,7 +218,7 @@ describe("restoreFrickDatabase", () => {
           }),
         ).rejects.toMatchObject({ reason: "schemaHashMismatch" });
 
-        const target2 = new FrickStore({ path: ":memory:", seed: false });
+        const target2 = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
         try {
           const report = await restoreFrickDatabase({
             target: target2,
@@ -235,7 +239,7 @@ describe("restoreFrickDatabase", () => {
   });
 
   it("reports malformed rows in skipped without aborting", async () => {
-    const source = new FrickStore({ path: ":memory:", seed: false });
+    const source = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
     try {
       source.upsertObject("_default", "User", "user-ok", { displayName: "OK" });
       const lines = await dumpToLines(source, "_default");
@@ -246,7 +250,7 @@ describe("restoreFrickDatabase", () => {
         JSON.stringify({ type: "no_such_table", row: { tenant_id: "_default" } }),
         ...lines.slice(1),
       ];
-      const target = new FrickStore({ path: ":memory:", seed: false });
+      const target = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
       try {
         const report = await restoreFrickDatabase({
           target,
@@ -266,7 +270,7 @@ describe("restoreFrickDatabase", () => {
   });
 
   it("refuses a tenant-scoped restore row whose tenant_id does not match the header", async () => {
-    const source = new FrickStore({ path: ":memory:", seed: false });
+    const source = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
     try {
       source.tenants.create("tenant-alpha");
       source.upsertObject("tenant-alpha", "User", "user-alpha", { displayName: "Alpha" });
@@ -282,7 +286,7 @@ describe("restoreFrickDatabase", () => {
           updated_at: "2026-01-01T00:00:00.000Z",
         },
       });
-      const target = new FrickStore({ path: ":memory:", seed: false });
+      const target = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
       try {
         await expect(
           restoreFrickDatabase({
@@ -301,7 +305,7 @@ describe("restoreFrickDatabase", () => {
   });
 
   it("skips rows with columns outside the target table schema before insert SQL is built", async () => {
-    const source = new FrickStore({ path: ":memory:", seed: false });
+    const source = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
     try {
       source.tenants.create("tenant-alpha");
       const lines = await dumpToLines(source, "tenant-alpha");
@@ -317,7 +321,7 @@ describe("restoreFrickDatabase", () => {
           "object_id\") VALUES ('x'); DROP TABLE objects; --": "ignored",
         },
       });
-      const target = new FrickStore({ path: ":memory:", seed: false });
+      const target = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
       try {
         const report = await restoreFrickDatabase({
           target,
@@ -343,7 +347,7 @@ describe("restoreFrickDatabase", () => {
   });
 
   it("refuses without confirm:'yes'", async () => {
-    const target = new FrickStore({ path: ":memory:", seed: false });
+    const target = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
     try {
       await expect(
         restoreFrickDatabase({

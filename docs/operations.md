@@ -189,6 +189,42 @@ rather than allowed to accumulate unbounded queued data. Auth attempts over
 `maxAuthAttemptsPerWindow` in the current fixed window also return
 `429 rateLimit.exceeded`.
 
+## App-owned HTTP routes
+
+Apps can mount product-owned HTTP handlers with
+`createFrickServer({ appRoutes })`. Each route declares a `pathPrefix`, an
+optional `method`, and a `handle(req, res)` function. Routes run before
+Frick's built-in routes, in declaration order. Returning `true` means the app
+handled the request; returning `false` lets the next app route or the
+framework's built-in router continue.
+
+Use app routes for narrow product endpoints such as OAuth callbacks, payment
+webhooks, or REST reads that do not belong in the sync protocol. Do not use
+them to replace documented Frick operational routes or bypass tenant/session
+policy. App routes that need CORS on their own prefixes must handle `OPTIONS`
+and headers themselves; Frick's built-in CORS shortcut only runs after app
+routes fall through.
+
+## Job workers and recurring schedules
+
+`createFrickServer({ jobs })` registers durable background-job handlers at
+boot. The worker is enabled outside test runners by default, claims ready rows
+from the framework job store, calls the matching handler by `jobType`, retries
+retryable failures, dead-letters exhausted jobs, and emits
+`jobs.lifecycle` platform events for terminal and retryable outcomes. Disable
+the polling loop in embedded tests with
+`createFrickServer({ jobs: { workerEnabled: false } })`.
+
+`createFrickServer({ recurring })` adds an in-process scheduler for jobs that
+should be enqueued on a time-window cadence without an external cron service.
+Each recurring spec has a stable `name`, a registered `jobType`, an
+`intervalMs` of at least 60 seconds, and a `resolveTargets({ store, logger })`
+function that returns `(tenantId, payload)` targets. Frick derives the
+idempotency key as `recurring:<name>:<tenantId>:<windowStart>`, so repeated
+ticks in the same window are no-ops. The scheduler timer is stopped by
+`close()` and is `unref()`'d so it does not keep the process alive after
+shutdown.
+
 ## Identity provider routes
 
 `createFrickServer({ identityProviders })` mounts provider-owned auth routes

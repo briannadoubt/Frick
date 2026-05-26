@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { productTestSchema } from "@frick/protocol";
 import { FrickStore } from "../src/store.js";
 
 let store: FrickStore | undefined;
@@ -32,6 +33,7 @@ describe("FrickStore idempotency_keys retention", () => {
     store = new FrickStore({
       path: ":memory:",
       seed: true,
+      schema: productTestSchema,
       idempotencyKeyRetentionMs: 0,
       idempotencyKeyPruneIntervalMs: 0, // disable timer; we drive prune manually
     });
@@ -59,6 +61,7 @@ describe("FrickStore idempotency_keys retention", () => {
     store = new FrickStore({
       path: ":memory:",
       seed: true,
+      schema: productTestSchema,
       idempotencyKeyRetentionMs: 60 * 60 * 1000, // 1h — well above test runtime
       idempotencyKeyMaxRows: 5,
       idempotencyKeyPruneIntervalMs: 0,
@@ -76,7 +79,7 @@ describe("FrickStore idempotency_keys retention", () => {
   });
 
   it("preserves idempotency for replays within the default retention window", () => {
-    store = new FrickStore({ path: ":memory:", seed: true, idempotencyKeyPruneIntervalMs: 0 });
+    store = new FrickStore({ path: ":memory:", seed: true, idempotencyKeyPruneIntervalMs: 0 , schema: productTestSchema });
 
     const input = makeAppend("request-stable", "once");
     const first = store.appendEvent(input);
@@ -93,6 +96,7 @@ describe("FrickStore idempotency_keys retention", () => {
       store = new FrickStore({
         path: ":memory:",
         seed: true,
+        schema: productTestSchema,
         idempotencyKeyRetentionMs: 10,
         idempotencyKeyPruneIntervalMs: 50,
       });

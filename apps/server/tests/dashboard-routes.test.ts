@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { foundationSchema, type FrickSchema } from "@frick/protocol";
+import { foundationSchema, productTestSchema, type FrickSchema } from "@frick/protocol";
 import { createFrickServer } from "../src/server.js";
 import { createFrickProjectModule } from "../src/platform/project.js";
 
@@ -185,7 +185,7 @@ describe("mounted dashboard", () => {
 
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body.project.schemaId).toBe("frick-foundation");
+    expect(body.project.schemaId).toBe(productTestSchema.schemaId);
     expect(body.resources).toContainEqual({
       kind: "object",
       name: "User",
@@ -215,6 +215,10 @@ describe("mounted dashboard", () => {
 
   it("serves schema object rows through the mounted dashboard data API", async () => {
     app = await startServer();
+    // No default seeding anymore — explicitly insert the User row the
+    // assertion needs. A second row makes truncated=true meaningful.
+    app.store.upsertObject("_default", "User", "user-ada", { displayName: "Ada Lovelace" });
+    app.store.upsertObject("_default", "User", "user-grace", { displayName: "Grace Hopper" });
     const response = await fetch(`${app.httpUrl}/_frick/dashboard/api/data/objects/User?limit=1`, {
       headers: await inspectHeaders(app.httpUrl),
     });
@@ -222,7 +226,7 @@ describe("mounted dashboard", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body).toMatchObject({
-      schemaHash: foundationSchema.hash,
+      schemaHash: productTestSchema.hash,
       type: "User",
       tenantId: "_default",
       scope: "tenant",
@@ -237,7 +241,11 @@ describe("mounted dashboard", () => {
     });
   });
 
-  it("applies user visibility when dashboard object data is tenant scoped", async () => {
+  it("exposes every tenant row through the dashboard object data API by default", async () => {
+    // Framework-level row visibility (MessageDraft-owner-only) is no longer
+    // built-in — `FrickStore.isObjectVisibleToUser` always returns true.
+    // Apps that want ownership filters must register a `object.read`
+    // policy hook. This test pins the new "no built-in filter" contract.
     app = await startServer();
     app.store.upsertObject("_default", "MessageDraft", "user-ada:conversation-general", {
       userId: "user-ada",
@@ -258,7 +266,10 @@ describe("mounted dashboard", () => {
 
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body.rows.map((row: { userId?: string }) => row.userId)).toEqual(["user-ada"]);
+    expect(body.rows.map((row: { userId?: string }) => row.userId).sort()).toEqual([
+      "user-ada",
+      "user-grace",
+    ]);
   });
 
   it("lets admin bearer inspect a requested tenant's dashboard object data", async () => {
@@ -326,7 +337,7 @@ describe("mounted dashboard", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body).toMatchObject({
-      schemaHash: foundationSchema.hash,
+      schemaHash: productTestSchema.hash,
       tenantId: "_default",
       scope: "tenant",
       count: 1,
@@ -411,7 +422,7 @@ describe("mounted dashboard", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body).toMatchObject({
-      schemaHash: foundationSchema.hash,
+      schemaHash: productTestSchema.hash,
       scope: "tenant",
       includeArchived: true,
       count: 1,
@@ -439,7 +450,7 @@ describe("mounted dashboard", () => {
     expect(activeResponse.status).toBe(200);
     const activeBody = await activeResponse.json();
     expect(activeBody).toMatchObject({
-      schemaHash: foundationSchema.hash,
+      schemaHash: productTestSchema.hash,
       scope: "admin",
       includeArchived: false,
       count: 2,
@@ -458,7 +469,7 @@ describe("mounted dashboard", () => {
     expect(archivedResponse.status).toBe(200);
     const archivedBody = await archivedResponse.json();
     expect(archivedBody).toMatchObject({
-      schemaHash: foundationSchema.hash,
+      schemaHash: productTestSchema.hash,
       scope: "admin",
       includeArchived: true,
       count: 2,
@@ -505,7 +516,7 @@ describe("mounted dashboard", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body).toMatchObject({
-      schemaHash: foundationSchema.hash,
+      schemaHash: productTestSchema.hash,
       tenantId: "tenant-session",
       scope: "tenant",
       settings: {
@@ -547,7 +558,7 @@ describe("mounted dashboard", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body).toMatchObject({
-      schemaHash: foundationSchema.hash,
+      schemaHash: productTestSchema.hash,
       tenantId: "tenant-settings",
       scope: "admin",
       settings: {
@@ -610,7 +621,7 @@ describe("mounted dashboard", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body).toMatchObject({
-      schemaHash: foundationSchema.hash,
+      schemaHash: productTestSchema.hash,
       tenantId: "_default",
       ownerId: "user-ada",
       scope: "tenant",
@@ -681,7 +692,7 @@ describe("mounted dashboard", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body).toMatchObject({
-      schemaHash: foundationSchema.hash,
+      schemaHash: productTestSchema.hash,
       tenantId: "tenant-x",
       ownerId: "user-x",
       scope: "admin",
@@ -834,7 +845,7 @@ describe("mounted dashboard", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body).toMatchObject({
-      schemaHash: foundationSchema.hash,
+      schemaHash: productTestSchema.hash,
       tenantId: "tenant-session",
       scope: "tenant",
       count: 1,
@@ -898,7 +909,7 @@ describe("mounted dashboard", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body).toMatchObject({
-      schemaHash: foundationSchema.hash,
+      schemaHash: productTestSchema.hash,
       tenantId: "tenant-jobs",
       scope: "admin",
       status: "ready",
@@ -979,11 +990,17 @@ describe("mounted dashboard", () => {
 });
 
 async function startServer(options: Parameters<typeof createFrickServer>[0] = {}) {
-  const server = createFrickServer({
+  const baseDefaults: Parameters<typeof createFrickServer>[0] = {
     port: 0,
     dbPath: ":memory:",
-    ...options,
-  });
+  };
+  // Default to productTestSchema only when the caller hasn't supplied their
+  // own schema/project/apps, so the platform-project tests below keep
+  // exercising the explicit-schema path.
+  if (options.schema === undefined && options.project === undefined && options.apps === undefined) {
+    baseDefaults.schema = productTestSchema;
+  }
+  const server = createFrickServer({ ...baseDefaults, ...options });
   await server.listen();
   const address = server.server.address();
   if (!address || typeof address === "string") {

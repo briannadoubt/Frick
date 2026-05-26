@@ -4,7 +4,7 @@ import {
   FrameKind,
   decodeFrame,
   encodeFrame,
-  foundationSchema,
+  productTestSchema,
   type FrickFrame,
 } from "@frick/protocol";
 import { createFrickServer } from "../src/server.js";
@@ -111,7 +111,7 @@ describe("websocket subscription cap", () => {
         {
           replicaId: login.replicaId,
           deviceId: login.deviceId,
-          schemaHash: foundationSchema.hash,
+          schemaHash: productTestSchema.hash,
           knownCursors: {},
         },
       ]),
@@ -164,7 +164,7 @@ describe("pending append queue cap (server)", () => {
         {
           replicaId: login.replicaId,
           deviceId: login.deviceId,
-          schemaHash: foundationSchema.hash,
+          schemaHash: productTestSchema.hash,
           knownCursors: {},
         },
       ]),
@@ -233,7 +233,7 @@ describe("presence TTL clamping", () => {
         {
           replicaId: login.replicaId,
           deviceId: login.deviceId,
-          schemaHash: foundationSchema.hash,
+          schemaHash: productTestSchema.hash,
           knownCursors: {},
         },
       ]),
@@ -279,7 +279,7 @@ describe("presence TTL clamping", () => {
         {
           replicaId: login.replicaId,
           deviceId: login.deviceId,
-          schemaHash: foundationSchema.hash,
+          schemaHash: productTestSchema.hash,
           knownCursors: {},
         },
       ]),
@@ -307,7 +307,12 @@ describe("presence TTL clamping", () => {
 });
 
 async function startServer(options: { limits?: Parameters<typeof createFrickServer>[0]["limits"] } = {}) {
-  const server = createFrickServer({ port: 0, dbPath: ":memory:", ...options });
+  const server = createFrickServer({
+    port: 0,
+    dbPath: ":memory:",
+    schema: productTestSchema,
+    ...options,
+  });
   await server.listen();
   const address = server.server.address();
   if (!address || typeof address === "string") {

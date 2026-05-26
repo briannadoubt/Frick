@@ -97,6 +97,65 @@ streams (and optionally a projection or two), and the framework wires the rest.
 Read the boundaries doc at [framework-boundaries.md](./framework-boundaries.md)
 for the full ownership map.
 
+Apps can still add narrow server behavior through documented
+`createFrickServer` options instead of deep-importing route or storage
+internals:
+
+- `appRoutes` mounts app-owned HTTP handlers before Frick's built-in routes.
+  Use it for REST endpoints, OAuth callbacks, and webhooks that belong to the
+  product rather than the sync framework. Routes run in declaration order and
+  return `true` when they handled a request or `false` to fall through.
+- `jobs.handlers` registers durable background job handlers by job type. The
+  worker claims rows from the framework job store, retries retryable failures,
+  and emits lifecycle telemetry.
+- `recurring.jobs` re-enqueues registered job types on a time-window schedule
+  without a separate cron process. Each recurring spec resolves one or more
+  `(tenantId, payload)` targets and Frick applies an idempotency key per tenant
+  and window.
+
+```ts
+import { createFrickServer } from "@frick/server";
+import { schema } from "./schema.js";
+
+export const server = createFrickServer({
+  schema,
+  appRoutes: [
+    {
+      pathPrefix: "/webhooks/payments",
+      method: "POST",
+      async handle(req, res) {
+        // Verify the webhook signature before enqueueing app work.
+        res.writeHead(202, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+        return true;
+      },
+    },
+  ],
+  jobs: {
+    handlers: {
+      "reports.recompute": async ({ payload }) => {
+        const input = payload as { reportId?: string };
+        return { status: "completed", result: { reportId: input.reportId } };
+      },
+    },
+  },
+  recurring: {
+    jobs: [
+      {
+        name: "reports.hourly-recompute",
+        jobType: "reports.recompute",
+        intervalMs: 60 * 60 * 1000,
+        resolveTargets: () => [{ tenantId: "_default", payload: {} }],
+      },
+    ],
+  },
+});
+```
+
+Keep these handlers small and framework-facing. If a handler needs product
+tables, service credentials, or third-party SDK clients, initialize those in
+app code and pass only the documented Frick primitives into the framework.
+
 ## Next steps
 
 Once you have an app skeleton, grow it with the `scaffold` family:
@@ -195,6 +254,23 @@ the event `name`, optional `properties`, optional `context`, optional primitive
 `attributes`, optional `traceId`, optional `idempotencyKey`, and optional
 canonical ISO `occurredAt`. Use idempotency keys for events that may be retried
 after navigation or network loss.
+
+## Background jobs
+
+Job payloads belong in the schema's `jobs[]` array so generated contracts and
+compatibility checks know about them. Server code registers handlers with
+`createFrickServer({ jobs: { handlers } })`; the framework owns storage,
+claiming, retries, dead-lettering, and lifecycle events.
+
+Recurring work is configured separately from handlers. Use
+`createFrickServer({ recurring: { jobs } })` when a task should be enqueued
+once per time window, per tenant target, without external cron. The minimum
+interval is 60 seconds. `resolveTargets` should be deterministic and cheap:
+look up tenants or integration rows, return payloads, and let the job handler
+do slow network or compute work.
+
+Inspect local job state with `frick inspect jobs`, the mounted dashboard Jobs
+view, or `/_frick/inspect/jobs` when inspection is enabled.
 
 ## Identity providers
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { isFrickErrorEnvelope } from "@frick/protocol";
+import { isFrickErrorEnvelope, productTestSchema } from "@frick/protocol";
 import { createFrickServer } from "../src/server.js";
 
 const ADMIN_TOKEN = "test-admin-token-1234567890ABCDEF1234567890ABCDEF";
@@ -15,6 +15,7 @@ async function startServer(overrides: { env?: "development" | "test" | "producti
   const server = createFrickServer({
     port: 0,
     dbPath: ":memory:",
+    schema: productTestSchema,
     config: { adminToken: ADMIN_TOKEN, ...(overrides.env ? { env: overrides.env } : {}) },
   });
   await server.listen();

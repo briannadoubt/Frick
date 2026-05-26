@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { foundationSchema } from "@frick/protocol";
+import { productTestSchema } from "@frick/protocol";
 import { createFrickAppRegistry } from "../src/apps/registry.js";
 import { buildDashboardMetadata } from "../src/dashboard/metadata.js";
 import { createFrickProjectModule } from "../src/platform/project.js";
@@ -8,10 +8,10 @@ describe("dashboard metadata", () => {
   it("summarizes project identity and schema resources", () => {
     const project = createFrickProjectModule({
       manifest: { id: "foundation", name: "foundation", displayName: "Foundation" },
-      schema: foundationSchema,
+      schema: productTestSchema,
     });
     const appRegistry = createFrickAppRegistry([
-      { id: "foundation", basePath: "", schema: foundationSchema },
+      { id: "foundation", basePath: "", schema: productTestSchema },
     ]);
 
     const metadata = buildDashboardMetadata({ project, appRegistry });
@@ -20,10 +20,10 @@ describe("dashboard metadata", () => {
       id: "foundation",
       name: "foundation",
       displayName: "Foundation",
-      schemaId: foundationSchema.schemaId,
-      schemaVersion: foundationSchema.schemaVersion,
-      schemaRevision: foundationSchema.schemaRevision,
-      schemaHash: foundationSchema.hash,
+      schemaId: productTestSchema.schemaId,
+      schemaVersion: productTestSchema.schemaVersion,
+      schemaRevision: productTestSchema.schemaRevision,
+      schemaHash: productTestSchema.hash,
     });
     expect(metadata.resources).toContainEqual({
       kind: "object",
@@ -40,8 +40,8 @@ describe("dashboard metadata", () => {
       {
         id: "foundation",
         basePath: "",
-        schemaId: foundationSchema.schemaId,
-        schemaRevision: foundationSchema.schemaRevision,
+        schemaId: productTestSchema.schemaId,
+        schemaRevision: productTestSchema.schemaRevision,
       },
     ]);
   });
