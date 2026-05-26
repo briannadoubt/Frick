@@ -1495,6 +1495,64 @@ public final class FrickClient: Sendable {
         )
     }
 
+    /// Kick off the email password-reset flow. The server always returns
+    /// 200 (privacy: no email-enumeration leak) — present the success UI
+    /// regardless of whether the address is on file. The actual email is
+    /// dispatched by the app's `onPasswordResetRequested` hook on the
+    /// server; if no hook is wired in production, the user won't get an
+    /// email and you should surface that as a known limitation.
+    public func requestPasswordReset(email: String) async throws {
+        struct Body: Encodable { let email: String }
+        var request = URLRequest(url: baseURL.appending(path: "auth").appending(path: "email").appending(path: "forgot-password"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try encoder.encode(Body(email: email))
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+    }
+
+    /// Complete the email password-reset flow. The user enters a new
+    /// password + the one-time token from the email link; server-side
+    /// the token is single-use, expiring within ~60 minutes of issue.
+    /// Sessions for the user are invalidated on success.
+    public func resetPassword(token: String, newPassword: String) async throws {
+        struct Body: Encodable { let token: String; let password: String }
+        var request = URLRequest(url: baseURL.appending(path: "auth").appending(path: "email").appending(path: "reset-password"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try encoder.encode(Body(token: token, password: newPassword))
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+    }
+
+    /// Remove an object on the server via `DELETE /objects/:type/:id`.
+    /// Idempotent — calling twice with the same id returns `existed:
+    /// false` on the second call rather than throwing.
+    ///
+    /// `Object` payload is not required (the route ignores the body); the
+    /// `existed` flag distinguishes a real deletion (`true`) from a no-op
+    /// against an already-absent row (`false`). Useful for the UI that
+    /// wants to confirm "yes, the server saw this delete."
+    @discardableResult
+    public func deleteObject(type: String, id: String) async throws -> Bool {
+        _ = try requireAuthenticatedSession()
+        let encodedType = type.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? type
+        let encodedId = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        let url = baseURL.appending(path: "objects").appending(path: encodedType).appending(path: encodedId)
+        var request = authenticatedRequest(url: url)
+        request.httpMethod = "DELETE"
+
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+        // Best-effort decode of `{existed: Bool}`; if the server response
+        // is empty or shaped differently we just assume the delete landed.
+        struct DeleteResult: Decodable { let existed: Bool? }
+        if let parsed = try? decoder.decode(DeleteResult.self, from: data) {
+            return parsed.existed ?? true
+        }
+        return true
+    }
+
     private func loadCompatibleStreamEvents(stream: String, key: String) throws -> [FrickStreamEvent] {
         let hadMetadata = try storage.loadCacheMetadata() != nil
         _ = try verifyCacheCompatibility()

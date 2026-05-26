@@ -84,6 +84,24 @@ export class AccountStore {
     return row ? fromRow(row) : undefined;
   }
 
+  /**
+   * Replace the password for an existing account. Used by the password-
+   * reset flow once a token has validated. Returns true when a row was
+   * updated (the account exists), false when no row matched.
+   */
+  setPassword(tenantId: string, userId: string, newPassword: string): boolean {
+    const passwordSalt = randomBytes(16).toString("base64url");
+    const passwordHash = hashPassword(newPassword, passwordSalt);
+    const result = this.db
+      .prepare(
+        `UPDATE auth_accounts
+           SET password_salt = ?, password_hash = ?
+           WHERE tenant_id = ? AND user_id = ?`,
+      )
+      .run(passwordSalt, passwordHash, tenantId, userId);
+    return result.changes > 0;
+  }
+
   verifyPassword(tenantId: string, identity: string, password: string): StoredAccount | undefined {
     const row = this.readRowByIdentity(tenantId, identity);
     if (!row) {

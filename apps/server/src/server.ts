@@ -768,7 +768,7 @@ export function createFrickServer(options: ServerOptions = {}) {
 
     const requestOrigin = headerValue(request, "origin");
     const originAllowed = isOriginAllowed(requestOrigin, config.allowedOrigins);
-    setCors(response, requestOrigin, config.allowedOrigins, originAllowed);
+    setCors(response, requestOrigin, config.allowedOrigins, originAllowed, store.schema.hash);
 
     if (request.method === "OPTIONS") {
       if (!originAllowed) {
@@ -1290,6 +1290,35 @@ export function createFrickServer(options: ServerOptions = {}) {
     }
 
     const objectWriteRoute = parseObjectWritePath(url);
+    if (objectWriteRoute && request.method === "DELETE") {
+      try {
+        // Delete reuses the write authz decision — a principal that can
+        // upsert this object can also remove it. Per-app policy hooks may
+        // gate further (e.g. require admin role).
+        assertCanWriteObject(
+          principal,
+          objectWriteRoute.type,
+          objectWriteRoute.id,
+          tenantMembershipReader(store, principal.tenantId),
+          policyHooks,
+        );
+        const removed = store.deleteObject(
+          principal.tenantId,
+          objectWriteRoute.type,
+          objectWriteRoute.id,
+        );
+        // 204 either way — idempotent semantics keep retries safe. The
+        // optional `existed` field tells the caller whether the row was
+        // present when DELETE arrived.
+        sendJson(response, removed ? 200 : 200, {
+          schemaHash: store.schema.hash,
+          existed: removed,
+        });
+      } catch (error) {
+        sendErrorWithMetrics(response, error, "object_delete_rejected");
+      }
+      return;
+    }
     if (objectWriteRoute && (request.method === "POST" || request.method === "PUT")) {
       try {
         const value = await readJsonBody(request, tenantLimits.maxHttpBodyBytes);
@@ -2307,8 +2336,9 @@ function setCors(
   requestOrigin: string | undefined,
   allowedOrigins: readonly string[],
   originAllowed: boolean,
+  schemaHash: string,
 ): void {
-  response.setHeader("X-Frick-Schema-Hash", foundationSchema.hash);
+  response.setHeader("X-Frick-Schema-Hash", schemaHash);
   if (!originAllowed) {
     // Browsers will block the response from reaching JS; the server still
     // serves the body, matching typical Express/Node CORS-middleware

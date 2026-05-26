@@ -98,6 +98,27 @@ export interface AppleProviderConfig {
 export interface EmailProviderConfig {
   /** Minimum password length. Defaults to 8. */
   minPasswordLength?: number;
+  /**
+   * Called after `/auth/email/forgot-password` mints a token. The app is
+   * responsible for composing the reset URL (it knows the host name and
+   * the path of the in-app reset screen) and dispatching the email via
+   * `FrickEmailRouter.sendPasswordResetEmail`. Always called when a real
+   * user matched the request; never called when the email is unknown
+   * (so the email-existence probe stays plugged).
+   */
+  onPasswordResetRequested?: (event: PasswordResetRequest) => Promise<void> | void;
+}
+
+export interface PasswordResetRequest {
+  /** Email the user typed. Already lower-cased + trimmed. */
+  email: string;
+  /** Resolved user id and tenant. */
+  userId: string;
+  tenantId: string;
+  /** Raw token to put in the email link (single-use, hashed at rest). */
+  token: string;
+  /** ISO 8601 expiry timestamp. Default TTL is 60 minutes. */
+  expiresAt: string;
 }
 
 export interface GoogleProviderConfig {
@@ -818,6 +839,139 @@ export function createIdentityRouter(
     }
   }
 
+  async function handleEmailForgotPassword(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    // Privacy: we always return 200 here, even when the email isn't on
+    // file, so a probe can't enumerate known accounts. Whether the email
+    // was actually sent is logged but never returned to the caller.
+    if (!options.config.email) {
+      sendJson(res, 404, { error: "email_provider_not_configured" });
+      return;
+    }
+    let body: { email?: unknown };
+    try {
+      body = (await readJsonBody(req)) as typeof body;
+    } catch {
+      sendJson(res, 400, { error: "invalid_json" });
+      return;
+    }
+    const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+    if (!email) {
+      sendJson(res, 400, { error: "invalid_email" });
+      return;
+    }
+    const user = findUserBySubject(
+      options.store,
+      userObject,
+      userObject.emailField,
+      email,
+    );
+    if (user) {
+      const userId = user.id as string;
+      const tenantId =
+        (user[userObject.primaryTenantField] as string | undefined) ??
+        findPrimaryTenantForUser(options.store, userId);
+      const issued = options.store.passwordResetTokens.issue({
+        tenantId,
+        userId,
+      });
+      log.info("auth.email.password_reset_issued", {
+        event: "auth.email.password_reset_issued",
+        userId,
+        tenantId,
+        expiresAt: issued.expiresAt,
+      });
+      // The actual email send is an out-of-band concern wired by the
+      // app (it composes the reset URL + adapter). The framework just
+      // emits a hook here; absent a hook, the token is logged in DEBUG
+      // builds so a developer can copy it manually during local testing.
+      const hook = options.config.email.onPasswordResetRequested;
+      if (hook) {
+        try {
+          await hook({
+            email,
+            userId,
+            tenantId,
+            token: issued.token,
+            expiresAt: issued.expiresAt,
+          });
+        } catch (err) {
+          log.error("auth.email.password_reset_hook_failed", {
+            event: "auth.email.password_reset_hook_failed",
+            userId,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      } else if (process.env.NODE_ENV !== "production") {
+        log.info("auth.email.password_reset_token_dev_only", {
+          event: "auth.email.password_reset_token_dev_only",
+          email,
+          // Logged in dev so the developer can copy it; never logged in
+          // production builds (guarded by NODE_ENV).
+          token: issued.token,
+        });
+      }
+    }
+    sendJson(res, 200, { ok: true });
+  }
+
+  async function handleEmailResetPassword(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    if (!options.config.email) {
+      sendJson(res, 404, { error: "email_provider_not_configured" });
+      return;
+    }
+    let body: { token?: unknown; password?: unknown };
+    try {
+      body = (await readJsonBody(req)) as typeof body;
+    } catch {
+      sendJson(res, 400, { error: "invalid_json" });
+      return;
+    }
+    const token = typeof body.token === "string" ? body.token : "";
+    const password = typeof body.password === "string" ? body.password : "";
+    const minLen = options.config.email.minPasswordLength ?? 8;
+    if (!token) {
+      sendJson(res, 400, { error: "missing_token" });
+      return;
+    }
+    if (password.length < minLen) {
+      sendJson(res, 400, {
+        error: "password_too_short",
+        message: `Password must be at least ${minLen} characters.`,
+      });
+      return;
+    }
+    const consumed = options.store.passwordResetTokens.consume(token);
+    if (!consumed) {
+      sendJson(res, 400, { error: "invalid_or_expired_token" });
+      return;
+    }
+    const ok = options.store.accounts.setPassword(
+      consumed.tenantId,
+      consumed.userId,
+      password,
+    );
+    if (!ok) {
+      // Token validated but the account vanished — race with deletion.
+      sendJson(res, 410, { error: "account_no_longer_exists" });
+      return;
+    }
+    // Kill outstanding sessions on a successful reset — common pattern
+    // to invalidate cookies/JWTs an attacker might have squirreled away.
+    options.store.deleteSessionsForUser(consumed.userId);
+    log.info("auth.email.password_reset_completed", {
+      event: "auth.email.password_reset_completed",
+      userId: consumed.userId,
+      tenantId: consumed.tenantId,
+    });
+    sendJson(res, 200, { ok: true });
+  }
+
   return {
     async handle(req, res) {
       const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "127.0.0.1"}`);
@@ -835,6 +989,14 @@ export function createIdentityRouter(
       }
       if (req.method === "POST" && url.pathname === "/auth/email/login") {
         await handleEmailLogin(req, res);
+        return true;
+      }
+      if (req.method === "POST" && url.pathname === "/auth/email/forgot-password") {
+        await handleEmailForgotPassword(req, res);
+        return true;
+      }
+      if (req.method === "POST" && url.pathname === "/auth/email/reset-password") {
+        await handleEmailResetPassword(req, res);
         return true;
       }
       if (req.method === "POST" && url.pathname === "/auth/google/verify") {

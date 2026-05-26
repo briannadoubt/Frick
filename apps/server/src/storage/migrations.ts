@@ -752,6 +752,23 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
         ON analytics_recent_events (name, occurred_at DESC);
     `,
   },
+  {
+    id: "0016_password_reset_tokens",
+    schemaRevision: 1,
+    description: "Single-use email password-reset tokens (hashed) with expiry.",
+    sql: `
+      CREATE TABLE IF NOT EXISTS auth_password_reset_tokens (
+        token_hash TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        consumed_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_by_user
+        ON auth_password_reset_tokens (tenant_id, user_id, expires_at DESC);
+    `,
+  },
 ];
 
 /** Names of all framework tables (and indexes) the runner manages. Used by the
@@ -782,6 +799,7 @@ export const FRAMEWORK_TABLES: readonly string[] = [
   "platform_event_deliveries",
   "analytics_aggregate_buckets",
   "analytics_recent_events",
+  "auth_password_reset_tokens",
 ];
 
 export interface MigrationRunResult {

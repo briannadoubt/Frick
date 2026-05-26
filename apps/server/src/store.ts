@@ -11,6 +11,7 @@ import {
   type PlainObject,
 } from "@frick/protocol";
 import { AccountStore, type StoredAccount } from "./storage/account-store.js";
+import { PasswordResetTokenStore } from "./storage/password-reset-store.js";
 import { AdminAuditStore } from "./storage/admin-audit-store.js";
 import { BlobStore, type BlobMetadata, type BlobMetadataInput } from "./storage/blob-store.js";
 import { BlobDerivativeStore } from "./storage/blob-derivative-store.js";
@@ -191,6 +192,7 @@ export class FrickStore {
   readonly jobs: JobStore;
   readonly sessions: SessionStore;
   readonly accounts: AccountStore;
+  readonly passwordResetTokens: PasswordResetTokenStore;
   readonly tenants: TenantStore;
   readonly tenantSettings: TenantSettingsStore;
   readonly adminAudit: AdminAuditStore;
@@ -254,6 +256,7 @@ export class FrickStore {
     this.jobs = new JobStore(this.#db);
     this.sessions = new SessionStore(this.#db);
     this.accounts = new AccountStore(this.#db);
+    this.passwordResetTokens = new PasswordResetTokenStore(this.#db);
     this.tenants = new TenantStore(this.#db);
     this.tenantSettings = new TenantSettingsStore(this.#db);
     this.adminAudit = new AdminAuditStore(this.#db);
@@ -631,6 +634,20 @@ export class FrickStore {
   /** Effective merge policy for an object type, resolved from the schema. */
   objectMergePolicy(type: string): FrickObjectMergePolicy {
     return resolveObjectMergePolicy(this.schema, type);
+  }
+
+  /**
+   * Remove an object row. Returns true when a row was actually deleted,
+   * false when the (type, id) tuple was already absent — idempotent.
+   * Mirrors the positional/tenant-aware overload set of {@link readObject}.
+   */
+  deleteObject(type: string, id: string): boolean;
+  deleteObject(tenantId: string, type: string, id: string): boolean;
+  deleteObject(a: string, b: string, c?: string): boolean {
+    if (c !== undefined) {
+      return this.objects.delete(a, b, c);
+    }
+    return this.objects.delete(DEFAULT_TENANT_ID, a, b);
   }
 
   readObject(type: string, id: string): PlainObject | undefined;

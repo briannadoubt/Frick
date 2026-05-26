@@ -159,6 +159,21 @@ export class ObjectStore {
     return row ? Number(row.version) : 0;
   }
 
+  /**
+   * Remove a single object row. Returns true when a row was deleted, false
+   * when the (tenant, type, id) tuple was already absent. The framework
+   * does not soft-delete — once removed, the row is gone, and a follow-up
+   * upsert with the same id starts at version 1 again.
+   */
+  delete(tenantId: string, type: string, id: string): boolean {
+    const result = this.db
+      .prepare(
+        "DELETE FROM objects WHERE tenant_id = ? AND object_type = ? AND object_id = ?",
+      )
+      .run(tenantId, type, id);
+    return result.changes > 0;
+  }
+
   list(tenantId: string, type: string): PlainObject[] {
     const rows = this.db
       .prepare(
