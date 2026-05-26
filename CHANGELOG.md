@@ -6,6 +6,18 @@ Each package version is independent — a release header documents which package
 
 ## Unreleased
 
+### Swift SDK
+
+- `FrickClient` now auto-resets the on-disk cache when an auth call installs a
+  session for a *different* `userId` than the one currently in the store
+  (RCRM-45). All sign-in / sign-up entry points
+  (`signInWithApple`, `signInWithEmail`, `signUpWithEmail`, `signInWithGoogle`,
+  `signUp`, `login`, `devLogin`) and `restoreSession` funnel through a private
+  `installSession` helper that compares incoming-vs-current `userId` and only
+  clears storage on a real swap. Consumers no longer have to call
+  `resetCache()` before swapping users to avoid the session-scope-mismatch
+  guard; same-user reauth and first-sign-in are unaffected.
+
 ### Framework Boundary Cleanup
 
 - Removed the public `@frick/core/chat` subpath and moved chat/demo helpers back under `apps/web/src/chat-foundation.ts`.
