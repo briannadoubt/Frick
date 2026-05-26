@@ -269,6 +269,38 @@ final class FrickSyncSocketTests: XCTestCase {
         await socket.close()
     }
 
+    func testHelloFrameUsesCustomSchemaHashWhenOverridden() async throws {
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+        let customHash = "my-app-schema-2.0.0"
+        let socket = FrickSyncSocket(
+            baseURL: URL(string: "http://127.0.0.1:4099")!,
+            sessionToken: "token-1",
+            clientCapabilities: .defaultIOS(sdkVersion: "0.1.0-test", schemaHash: customHash),
+            replicaId: "test-replica",
+            deviceId: "test-device",
+            factory: factory,
+            sleepFor: { _ in },
+            schemaHash: customHash
+        )
+
+        await socket.connect()
+        let ok = await waitForCondition { task.sentFrameCount >= 1 }
+        XCTAssertTrue(ok, "Hello frame should be sent on connect")
+
+        let frame = try FrickMsgPackCodec.decodeFrame(task.sentFrame(at: 0))
+        XCTAssertEqual(frame.kind, .hello)
+        let map = try XCTUnwrap(frame.payload.mapValue)
+        XCTAssertEqual(map["schemaHash"]?.stringValue, customHash)
+        XCTAssertNotEqual(map["schemaHash"]?.stringValue, FrickSchema.schemaHash)
+        let caps = try XCTUnwrap(map["clientCapabilities"]?.mapValue)
+        let capsSchema = try XCTUnwrap(caps["schema"]?.mapValue)
+        XCTAssertEqual(capsSchema["schemaHash"]?.stringValue, customHash)
+
+        await socket.close()
+    }
+
     func testHelloAckUpdatesStatusWithServerCapabilities() async throws {
         let factory = MockWebSocketFactory()
         let task = MockWebSocketTask()
