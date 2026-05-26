@@ -965,10 +965,24 @@ public actor FrickSyncSocket {
     }
 
     private func sendFrame(_ frame: FrickFrame) async throws {
-        guard let task else {
-            throw FrickSyncSocketError.notConnected
+        let encoded = FrickMsgPackCodec.encodeFrame(frame)
+        // Buffer if the socket isn't fully open yet. `connect()` schedules
+        // `openSocket()` on a detached Task, so callers that issue
+        // subscribe/upsert immediately after `connect()` would otherwise race
+        // the WS upgrade and hit `notConnected`. `flushPending()` drains the
+        // buffer right after the hello lands, preserving FIFO order.
+        guard statusValue.state == .connected, let task else {
+            pending.append(PendingSocketAppend(requestId: "", frame: encoded))
+            updateStatus { $0.pendingAppendCount = pending.count }
+            return
         }
-        try await task.send(.data(FrickMsgPackCodec.encodeFrame(frame)))
+        do {
+            try await task.send(.data(encoded))
+        } catch {
+            pending.append(PendingSocketAppend(requestId: "", frame: encoded))
+            updateStatus { $0.pendingAppendCount = pending.count }
+            throw error
+        }
     }
 
     private func flushPending() async {

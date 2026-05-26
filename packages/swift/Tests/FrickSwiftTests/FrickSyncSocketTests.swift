@@ -439,6 +439,45 @@ final class FrickSyncSocketTests: XCTestCase {
         await socket.close()
     }
 
+    // MARK: Pre-connect buffering
+
+    /// Regression test for the RangerCRM cold-start race: callers that issue
+    /// `subscribeObject` immediately after `FrickClient.connectSync()`
+    /// (which schedules `openSocket()` on a detached Task) used to throw
+    /// `FrickSyncSocketError.notConnected` if the WS upgrade hadn't completed
+    /// yet. The fix routes pre-connect frames through the same `pending`
+    /// buffer that append uses, so they flush in FIFO order after Hello.
+    func testSubscribeObjectBeforeConnectIsBufferedAndFlushed() async throws {
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+        let socket = makeSocket(factory: factory)
+
+        // Issue the subscribe BEFORE connect — must not throw `notConnected`.
+        try await socket.subscribeObject(type: "Account")
+        let pendingBefore = await socket.pendingAppendCount
+        XCTAssertEqual(pendingBefore, 1, "subscribe issued pre-connect should buffer")
+
+        await socket.connect()
+
+        // Wait for Hello + flushed subscribe.
+        let ok = await waitForCondition { task.sentFrameCount >= 2 }
+        XCTAssertTrue(ok, "buffered subscribe should flush after hello (sent \(task.sentFrameCount))")
+
+        let helloFrame = try FrickMsgPackCodec.decodeFrame(task.sentFrame(at: 0))
+        XCTAssertEqual(helloFrame.kind, .hello)
+        let subFrame = try FrickMsgPackCodec.decodeFrame(task.sentFrame(at: 1))
+        XCTAssertEqual(subFrame.kind, .subscribe)
+        let subMap = try XCTUnwrap(subFrame.payload.mapValue)
+        XCTAssertEqual(subMap["kind"]?.stringValue, "object")
+        XCTAssertEqual(subMap["name"]?.stringValue, "Account")
+
+        let pendingAfter = await socket.pendingAppendCount
+        XCTAssertEqual(pendingAfter, 0)
+
+        await socket.close()
+    }
+
     // MARK: Inbound delta handling
 
     func testDeltaFrameIsSurfacedAsInboundEvent() async throws {
