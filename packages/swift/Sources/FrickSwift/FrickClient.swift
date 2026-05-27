@@ -1568,6 +1568,107 @@ public final class FrickClient: Sendable {
     /// against an already-absent row (`false`). Useful for the UI that
     /// wants to confirm "yes, the server saw this delete."
     @discardableResult
+    /// Create a single-use invitation for another user to access the given
+    /// record. The returned `FrickInvitation.token` is the opaque string
+    /// the owner ships to the recipient out-of-band (push, link, email,
+    /// QR code — Frick doesn't dictate the channel). Recipients call
+    /// `acceptInvitation(token:)` to redeem.
+    ///
+    /// - Parameter expiresIn: Lifetime in seconds. `nil` uses the server
+    ///   default (14 days). The server clamps to a 90-day ceiling.
+    public func createInvitation(
+        recordType: String,
+        recordId: String,
+        permission: FrickSharingPermission,
+        expiresIn: TimeInterval? = nil
+    ) async throws -> FrickInvitation {
+        _ = try requireAuthenticatedSession()
+        let body = CreateInvitationBody(
+            recordType: recordType,
+            recordId: recordId,
+            permission: permission,
+            expiresInSeconds: expiresIn.map { Int($0) }
+        )
+        var request = URLRequest(url: baseURL.appending(path: "share").appending(path: "invite"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try encoder.encode(body)
+        authenticate(&request)
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+        return try decoder.decode(CreateInvitationEnvelope.self, from: data).invitation
+    }
+
+
+    /// Redeem an invitation token. Single-use; the server rejects replays
+    /// after the first successful accept. Returns the durable grant that
+    /// now authorises the principal to read/write the underlying record.
+    public func acceptInvitation(token: String) async throws -> FrickGrant {
+        _ = try requireAuthenticatedSession()
+        let body = AcceptInvitationBody(token: token)
+        var request = URLRequest(url: baseURL.appending(path: "share").appending(path: "accept"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try encoder.encode(body)
+        authenticate(&request)
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+        return try decoder.decode(AcceptInvitationEnvelope.self, from: data).grant
+    }
+
+
+    /// List active grants the principal is either the owner or grantee of.
+    /// Pass `recordType` / `recordId` to filter to a specific record.
+    /// Revoked grants are excluded unless `includeRevoked` is `true`.
+    public func listGrants(
+        recordType: String? = nil,
+        recordId: String? = nil,
+        includeRevoked: Bool = false
+    ) async throws -> [FrickGrant] {
+        _ = try requireAuthenticatedSession()
+        var components = URLComponents(
+            url: baseURL.appending(path: "share").appending(path: "grants"),
+            resolvingAgainstBaseURL: false
+        )!
+        var queryItems: [URLQueryItem] = []
+        if let recordType {
+            queryItems.append(URLQueryItem(name: "recordType", value: recordType))
+        }
+        if let recordId {
+            queryItems.append(URLQueryItem(name: "recordId", value: recordId))
+        }
+        if includeRevoked {
+            queryItems.append(URLQueryItem(name: "includeRevoked", value: "true"))
+        }
+        if !queryItems.isEmpty {
+            components.queryItems = queryItems
+        }
+        let request = authenticatedRequest(url: components.url!)
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+        return try decoder.decode(ListGrantsEnvelope.self, from: data).grants
+    }
+
+
+    /// Revoke a grant by id. Only the owner who issued the underlying
+    /// invitation can revoke. Idempotent: revoking an already-revoked
+    /// grant is a no-op and returns the same row.
+    @discardableResult
+    public func revokeGrant(grantId: String) async throws -> FrickGrant {
+        _ = try requireAuthenticatedSession()
+        let encoded = grantId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? grantId
+        let url = baseURL
+            .appending(path: "share")
+            .appending(path: "grants")
+            .appending(path: encoded)
+        var request = authenticatedRequest(url: url)
+        request.httpMethod = "DELETE"
+        let (data, response) = try await session.data(for: request)
+        try validate(response, data: data)
+        return try decoder.decode(RevokeGrantEnvelope.self, from: data).grant
+    }
+
+
     public func deleteObject(type: String, id: String) async throws -> Bool {
         _ = try requireAuthenticatedSession()
         let encodedType = type.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? type
