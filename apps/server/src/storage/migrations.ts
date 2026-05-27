@@ -769,6 +769,57 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
         ON auth_password_reset_tokens (tenant_id, user_id, expires_at DESC);
     `,
   },
+  {
+    // Cross-user sharing primitives. `invitations` holds single-use opaque
+    // tokens an owner ships to a recipient out-of-band; `redeemed_at` is the
+    // single-use marker (set on accept). `grants` is the durable "user has
+    // permission on record" table consulted by the authz decision flow when
+    // the default ownership check denies an object.read / object.write.
+    //
+    // Both tables are tenant-scoped — cross-tenant accept rejects, and the
+    // authz check matches grants only within the principal's tenant.
+    id: "0017_sharing",
+    schemaRevision: 1,
+    description: "Create invitations and grants tables for cross-user sharing.",
+    sql: `
+      CREATE TABLE IF NOT EXISTS invitations (
+        id TEXT PRIMARY KEY NOT NULL,
+        tenant_id TEXT NOT NULL,
+        owner_user_id TEXT NOT NULL,
+        record_type TEXT NOT NULL,
+        record_id TEXT NOT NULL,
+        permission TEXT NOT NULL,
+        token TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        redeemed_at TEXT,
+        redeemed_by_user_id TEXT
+      );
+      CREATE UNIQUE INDEX idx_invitations_token ON invitations (token);
+      CREATE INDEX idx_invitations_owner
+        ON invitations (tenant_id, owner_user_id, created_at DESC);
+      CREATE INDEX idx_invitations_record
+        ON invitations (tenant_id, record_type, record_id);
+
+      CREATE TABLE IF NOT EXISTS grants (
+        id TEXT PRIMARY KEY NOT NULL,
+        tenant_id TEXT NOT NULL,
+        owner_user_id TEXT NOT NULL,
+        record_type TEXT NOT NULL,
+        record_id TEXT NOT NULL,
+        grantee_user_id TEXT NOT NULL,
+        permission TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        revoked_at TEXT
+      );
+      CREATE INDEX idx_grants_owner
+        ON grants (tenant_id, owner_user_id, created_at DESC);
+      CREATE INDEX idx_grants_grantee
+        ON grants (tenant_id, grantee_user_id, created_at DESC);
+      CREATE INDEX idx_grants_record
+        ON grants (tenant_id, record_type, record_id, grantee_user_id);
+    `,
+  },
 ];
 
 /** Names of all framework tables (and indexes) the runner manages. Used by the
@@ -800,6 +851,8 @@ export const FRAMEWORK_TABLES: readonly string[] = [
   "analytics_aggregate_buckets",
   "analytics_recent_events",
   "auth_password_reset_tokens",
+  "invitations",
+  "grants",
 ];
 
 export interface MigrationRunResult {
