@@ -1,5 +1,28 @@
+import type { FrickSharingPermission } from "@frick/protocol";
 import { DEFAULT_TENANT_ID } from "./tenant.js";
 import type { FrickSearchIndexDefinition } from "./search/types.js";
+
+/**
+ * Hook the framework's authorization flow uses to consult cross-user
+ * sharing grants. Returns `true` iff `granteeUserId` holds a non-revoked
+ * grant on `(recordType, recordId)` within `tenantId` whose permission
+ * satisfies `required`. The implementation is supplied by the server's
+ * {@link GrantStore}; passed as a plain function so authz stays decoupled
+ * from storage.
+ *
+ * The framework calls this only after the baseline decision (and any
+ * registered policy hooks) have produced a deny on `object.read` /
+ * `object.write` with reason `notAuthorizedForResource` or `ownerMismatch`.
+ * A grant lookup that returns true flips the decision back to allow; any
+ * other deny reason (e.g. tenantMismatch) is left untouched.
+ */
+export type FrickGrantLookup = (args: {
+  tenantId: string;
+  granteeUserId: string;
+  recordType: string;
+  recordId: string;
+  required: FrickSharingPermission;
+}) => boolean;
 
 export interface Principal {
   userId: string;
@@ -312,8 +335,62 @@ function decideWithHooks(
   input: FrickPolicyInput,
   memberships: MembershipReader,
   hooks: readonly FrickPolicyHook[] | undefined,
+  grantLookup?: FrickGrantLookup,
 ): FrickDecision {
-  return applyPolicyHooks(decide(input, memberships), input, hooks);
+  const afterHooks = applyPolicyHooks(decide(input, memberships), input, hooks);
+  return relaxWithGrants(afterHooks, input, grantLookup);
+}
+
+/**
+ * Cross-user sharing relaxation. Runs after the baseline policy + app
+ * hooks. Only flips a deny to allow; never the other direction.
+ *
+ * Eligibility: the action is `object.read` or `object.write`, the resource
+ * identifies a specific object (kind=object, name + key both present), the
+ * deny reason is `notAuthorizedForResource` or `ownerMismatch`, and a
+ * registered grant lookup confirms the principal holds a grant whose
+ * permission satisfies the action.
+ *
+ * Skipped when: `tenantMismatch`/`unauthenticated`/`notMember`/`schema*`
+ * (out of scope for sharing), when the lookup is not provided (tests, or
+ * a host that doesn't ship the sharing tables), or when there's no
+ * principal to attribute the grant to.
+ */
+function relaxWithGrants(
+  decision: FrickDecision,
+  input: FrickPolicyInput,
+  grantLookup: FrickGrantLookup | undefined,
+): FrickDecision {
+  if (decision.allow || !grantLookup) {
+    return decision;
+  }
+  if (input.action !== "object.read" && input.action !== "object.write") {
+    return decision;
+  }
+  if (
+    decision.reason !== "notAuthorizedForResource" &&
+    decision.reason !== "ownerMismatch"
+  ) {
+    return decision;
+  }
+  const principal = input.principal;
+  if (!principal) {
+    return decision;
+  }
+  const { kind, name, key } = input.resource;
+  if (kind !== "object" || !name || !key) {
+    return decision;
+  }
+  const required: FrickSharingPermission =
+    input.action === "object.write" ? "write" : "read";
+  const allowed = grantLookup({
+    tenantId: principal.tenantId,
+    granteeUserId: principal.userId,
+    recordType: name,
+    recordId: key,
+    required,
+  });
+  return allowed ? ALLOW : decision;
 }
 
 export function principalFromHello(
@@ -438,6 +515,7 @@ export function assertCanWriteObject(
   memberships: MembershipReader,
   hooks?: readonly FrickPolicyHook[],
   value?: Record<string, unknown>,
+  grantLookup?: FrickGrantLookup,
 ): void {
   const decision = decideWithHooks(
     {
@@ -448,6 +526,41 @@ export function assertCanWriteObject(
     },
     memberships,
     hooks,
+    grantLookup,
+  );
+  if (!decision.allow) {
+    throw new AuthorizationError(decision);
+  }
+}
+
+/**
+ * Object read assertion. Mirrors {@link assertCanWriteObject} but for
+ * `object.read`. The framework's default decision for `object.read` is
+ * deny (the verb isn't in the `decide()` switch), so callers rely on this
+ * helper exclusively when they need to gate an object-by-id read. App
+ * policy hooks can flip to allow; grants registered via `grantLookup`
+ * relax remaining denies for ownership reasons.
+ *
+ * Storage-side reads (e.g. tenant-scoped list endpoints) don't go through
+ * here — they already inherit tenant isolation at the SQL layer.
+ */
+export function assertCanReadObject(
+  principal: Principal,
+  objectType: string,
+  objectId: string,
+  memberships: MembershipReader,
+  hooks?: readonly FrickPolicyHook[],
+  grantLookup?: FrickGrantLookup,
+): void {
+  const decision = decideWithHooks(
+    {
+      principal,
+      action: "object.read",
+      resource: { kind: "object", name: objectType, key: objectId, tenantId: principal.tenantId },
+    },
+    memberships,
+    hooks,
+    grantLookup,
   );
   if (!decision.allow) {
     throw new AuthorizationError(decision);

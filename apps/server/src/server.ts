@@ -29,6 +29,7 @@ import {
   assertCanSubscribe,
   assertCanWriteObject,
   tenantMembershipReader,
+  type FrickGrantLookup,
   type FrickPolicyHook,
   type Principal,
 } from "./authz.js";
@@ -469,6 +470,12 @@ export function createFrickServer(options: ServerOptions = {}) {
   const policyHooks: readonly FrickPolicyHook[] = [
     ...(options.policyHooks ?? []),
   ];
+  // Wired into assertCanWriteObject / assertCanReadObject so the framework's
+  // built-in decision flow can relax a deny when an active cross-user
+  // sharing grant exists for the principal. See `relaxWithGrants` in
+  // authz.ts.
+  const grantLookup: FrickGrantLookup = (args) =>
+    store.grants.hasActiveGrantFor(args);
   let inFlight = 0;
   let closing = false;
 
@@ -1304,6 +1311,8 @@ export function createFrickServer(options: ServerOptions = {}) {
           objectWriteRoute.id,
           tenantMembershipReader(store, principal.tenantId),
           policyHooks,
+          undefined,
+          grantLookup,
         );
         const removed = store.deleteObject(
           principal.tenantId,
@@ -1332,6 +1341,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           tenantMembershipReader(store, principal.tenantId),
           policyHooks,
           value,
+          grantLookup,
         );
         const mergePolicy = store.objectMergePolicy(objectWriteRoute.type);
         const expectedVersion = parseIfMatchHeader(request);
