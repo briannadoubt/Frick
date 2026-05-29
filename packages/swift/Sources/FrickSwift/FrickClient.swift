@@ -397,6 +397,11 @@ public struct PendingAppend: Codable, Equatable, Sendable {
 public protocol FrickStorage: AnyObject, Sendable {
     func loadObjectData(type: String, id: String) throws -> Data?
     func saveObjectData(type: String, id: String, data: Data, version: Int) throws
+    /// FR-2. Read back the locally-cached server version for an object,
+    /// used by `FrickClient.writeObject` to auto-resolve `expectedVersion`
+    /// when the caller doesn't pass one. Returns `nil` if the object has
+    /// never been written through this client (no cache row yet).
+    func loadObjectVersion(type: String, id: String) throws -> Int?
     func loadStreamEvents(stream: String, key: String) throws -> [FrickStreamEvent]
     func saveStreamEvent(_ event: FrickStreamEvent) throws
     func loadPendingAppends() throws -> [PendingAppend]
@@ -413,6 +418,14 @@ public extension FrickStorage {
         for append in try loadPendingAppends() {
             try removePendingAppend(requestId: append.requestId)
         }
+    }
+
+    /// FR-2. Default implementation for storages that haven't adopted
+    /// version reads yet — returning `nil` is safe and preserves the
+    /// pre-FR-2 behavior (writes go out without an `if-match` header).
+    /// Concrete storages SHOULD override to enable auto-versioning.
+    func loadObjectVersion(type: String, id: String) throws -> Int? {
+        nil
     }
 }
 
@@ -502,6 +515,20 @@ public final class FrickSQLiteStorage: FrickStorage, @unchecked Sendable {
             """,
             bindings: [.text(type), .text(id), .data(data), .int(version)]
         )
+    }
+
+    /// FR-2. Single indexed lookup against the PK `(object_type, object_id)`.
+    /// Returns `nil` if we've never written this object locally — caller
+    /// (`FrickClient.writeObject`) treats that as "send no if-match," which
+    /// is correct for a first-time create.
+    public func loadObjectVersion(type: String, id: String) throws -> Int? {
+        lock.lock()
+        defer { lock.unlock() }
+        let rows = try query(
+            "SELECT version FROM local_objects WHERE object_type = ? AND object_id = ? LIMIT 1",
+            bindings: [.text(type), .text(id)]
+        )
+        return rows.first?.first?.intValue
     }
 
     public func loadStreamEvents(stream: String, key: String) throws -> [FrickStreamEvent] {
@@ -973,24 +1000,36 @@ public final class FrickClient: Sendable {
     }
 
     /// Install a freshly-minted session into the local store, resetting the
-    /// on-disk cache first if the incoming session belongs to a different
-    /// user than whoever was signed in before.
+    /// on-disk cache first if the persisted cache metadata is scoped to a
+    /// different user or a different schema hash than the incoming session
+    /// expects.
     ///
-    /// Frick's cache metadata is scoped to `userId`; reusing a cache row
-    /// minted under user A while signed in as user B trips the schema /
-    /// scope guard in `verifyCacheCompatibility`. Sign-in entry points
-    /// (Apple, Google, email, dev-login, generic login/signup) funnel
-    /// through here so callers no longer have to remember to call
-    /// `resetCache()` before swapping users.
+    /// Frick's cache metadata is scoped to `(userId, schemaHash)`; reusing a
+    /// cache row minted under user A while signed in as user B (or under a
+    /// different schema revision than this client compiled against) trips
+    /// the scope guard in `verifyCacheCompatibility` and silently breaks
+    /// every subsequent `fetchObjects` call. Sign-in entry points (Apple,
+    /// Google, email, dev-login, generic login/signup) funnel through here
+    /// so callers no longer have to remember to call `resetCache()` before
+    /// swapping users or upgrading clients.
     ///
-    /// No-ops the reset when there is no prior session (cache is already
-    /// empty from the consumer's perspective) or when the new session is
-    /// for the same user (same-user reauth / token refresh — keep the
-    /// cache warm). Reset failures are swallowed: a stale cache row is
-    /// preferable to refusing to sign in, and the next
-    /// `verifyCacheCompatibility` call will surface the real error.
+    /// FR-3. The earlier implementation only compared against the in-memory
+    /// `sessionStore.session` — which is nil after `signOut()` or a fresh
+    /// process launch — and missed two real flows: sign-out → sign-in as
+    /// a different user (very common in shared simulators / family devices)
+    /// and schema-hash drift across client upgrades. Comparing against the
+    /// persisted metadata makes "sign in" the canonical cache-validity
+    /// checkpoint; the `verifyCacheCompatibility` calls in `fetchObjects` /
+    /// `connectSync` are now defense in depth rather than the only line.
+    ///
+    /// Reset failures are swallowed: a stale cache row is preferable to
+    /// refusing to sign in, and the next `verifyCacheCompatibility` call
+    /// will surface the real error.
     private func installSession(_ newSession: FrickSession) {
-        if let previous = sessionStore.session, previous.userId != newSession.userId {
+        let cached = try? storage.loadCacheMetadata()
+        let userChanged = (cached?.userId).map { $0 != newSession.userId } ?? false
+        let schemaChanged = (cached?.schemaHash).map { $0 != schemaHash } ?? false
+        if userChanged || schemaChanged {
             try? storage.clearCache()
             try? storage.clearPendingAppends()
         }
@@ -1509,8 +1548,23 @@ public final class FrickClient: Sendable {
         var request = authenticatedRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
-        if let expectedVersion {
-            request.setValue("\(expectedVersion)", forHTTPHeaderField: "if-match")
+        /// FR-2. Auto-resolve `expectedVersion` from local storage when the
+        /// caller didn't pass one. Before this, `writeObject(... expectedVersion: nil)`
+        /// always omitted the `if-match` header, which the server treats as
+        /// "create only" for types whose schema uses `versionPrecondition`
+        /// merge policy — so every UPDATE silently 409'd. The version is
+        /// already tracked locally (we wrote it in the previous
+        /// `saveObjectData(... version:)` call below); reading it back here
+        /// closes the loop. An explicit `expectedVersion` from the caller
+        /// still wins. A storage that hasn't adopted `loadObjectVersion`
+        /// returns nil via the protocol default, preserving pre-FR-2
+        /// behavior. True conflicts (cached version stale vs. server) still
+        /// surface as 409 — apps that want clobber semantics can refetch
+        /// and retry on top.
+        let effectiveExpectedVersion: Int? = expectedVersion
+            ?? (try? storage.loadObjectVersion(type: type, id: id))
+        if let effectiveExpectedVersion {
+            request.setValue("\(effectiveExpectedVersion)", forHTTPHeaderField: "if-match")
         }
         request.httpBody = try encoder.encode(value)
 
