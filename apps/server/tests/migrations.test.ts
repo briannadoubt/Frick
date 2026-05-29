@@ -69,6 +69,8 @@ describe("framework migration runner", () => {
       "0013_auth_session_token_digests",
       "0014_platform_events",
       "0015_analytics_aggregates",
+      "0016_password_reset_tokens",
+      "0017_sharing",
     ]);
     expect(result.applied[0]?.schemaRevision).toBe(1);
     expect(result.applied[0]?.checksum).toMatch(/^sha256-[0-9a-f]{64}$/);
@@ -91,6 +93,8 @@ describe("framework migration runner", () => {
       "0013_auth_session_token_digests",
       "0014_platform_events",
       "0015_analytics_aggregates",
+      "0016_password_reset_tokens",
+      "0017_sharing",
     ]);
 
     const tables = listTables(db);
@@ -112,10 +116,10 @@ describe("framework migration runner", () => {
       supportedSchemaRevision: foundationSchema.schemaRevision,
     });
 
-    expect(first.applied).toHaveLength(15);
+    expect(first.applied).toHaveLength(17);
     expect(second.applied).toHaveLength(0);
-    expect(second.alreadyApplied).toHaveLength(15);
-    expect(listAppliedMigrations(db)).toHaveLength(15);
+    expect(second.alreadyApplied).toHaveLength(17);
+    expect(listAppliedMigrations(db)).toHaveLength(17);
 
     db.close();
   });
@@ -252,6 +256,8 @@ describe("framework migration runner", () => {
       "0013_auth_session_token_digests",
       "0014_platform_events",
       "0015_analytics_aggregates",
+      "0016_password_reset_tokens",
+      "0017_sharing",
       "9000_test_extra",
     ]);
     expect(listTables(db)).toContain("test_extra");

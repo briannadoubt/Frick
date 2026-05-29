@@ -1,0 +1,172 @@
+import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import {
+  frickSharingPermissionSatisfies,
+  type FrickGrant,
+  type FrickSharingPermission,
+} from "@frick/protocol";
+
+interface GrantSqlRow {
+  id: string;
+  tenant_id: string;
+  owner_user_id: string;
+  record_type: string;
+  record_id: string;
+  grantee_user_id: string;
+  permission: string;
+  created_at: string;
+  revoked_at: string | null;
+}
+
+export interface CreateGrantArgs {
+  id: string;
+  tenantId: string;
+  ownerUserId: string;
+  recordType: string;
+  recordId: string;
+  granteeUserId: string;
+  permission: FrickSharingPermission;
+  createdAt: string;
+}
+
+export interface ListGrantsArgs {
+  tenantId: string;
+  /** Limits the result to grants where the principal is either owner or
+   * grantee. Mandatory — there is no "list every grant in the tenant" call. */
+  principalUserId: string;
+  recordType?: string;
+  recordId?: string;
+  includeRevoked?: boolean;
+}
+
+export class GrantStore {
+  constructor(private readonly db: DatabaseSync) {}
+
+  create(args: CreateGrantArgs): FrickGrant {
+    this.db
+      .prepare(
+        `INSERT INTO grants (
+            id, tenant_id, owner_user_id, record_type, record_id,
+            grantee_user_id, permission, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        args.id,
+        args.tenantId,
+        args.ownerUserId,
+        args.recordType,
+        args.recordId,
+        args.granteeUserId,
+        args.permission,
+        args.createdAt,
+      );
+    return {
+      id: args.id,
+      tenantId: args.tenantId,
+      ownerUserId: args.ownerUserId,
+      recordType: args.recordType,
+      recordId: args.recordId,
+      granteeUserId: args.granteeUserId,
+      permission: args.permission,
+      createdAt: args.createdAt,
+    };
+  }
+
+  getById(tenantId: string, id: string): FrickGrant | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM grants WHERE tenant_id = ? AND id = ?")
+      .get(tenantId, id) as unknown as GrantSqlRow | undefined;
+    return row ? toGrant(row) : undefined;
+  }
+
+  list(args: ListGrantsArgs): FrickGrant[] {
+    const filters: string[] = [
+      "tenant_id = ?",
+      "(owner_user_id = ? OR grantee_user_id = ?)",
+    ];
+    const params: SQLInputValue[] = [args.tenantId, args.principalUserId, args.principalUserId];
+
+    if (args.recordType !== undefined) {
+      filters.push("record_type = ?");
+      params.push(args.recordType);
+    }
+    if (args.recordId !== undefined) {
+      filters.push("record_id = ?");
+      params.push(args.recordId);
+    }
+    if (!args.includeRevoked) {
+      filters.push("revoked_at IS NULL");
+    }
+
+    const sql =
+      `SELECT * FROM grants WHERE ${filters.join(" AND ")} ` +
+      "ORDER BY created_at DESC, id ASC";
+    const rows = this.db.prepare(sql).all(...params) as unknown as GrantSqlRow[];
+    return rows.map(toGrant);
+  }
+
+  /** Idempotent. Returns the updated row (or undefined if the id is unknown). */
+  revoke(args: { tenantId: string; id: string; now: string }): FrickGrant | undefined {
+    const existing = this.getById(args.tenantId, args.id);
+    if (!existing) {
+      return undefined;
+    }
+    if (existing.revokedAt) {
+      return existing;
+    }
+    this.db
+      .prepare(
+        `UPDATE grants SET revoked_at = ?
+          WHERE tenant_id = ? AND id = ? AND revoked_at IS NULL`,
+      )
+      .run(args.now, args.tenantId, args.id);
+    return { ...existing, revokedAt: args.now };
+  }
+
+  /**
+   * Used by the authz decision flow. Returns true iff an active (non-revoked)
+   * grant exists for `granteeUserId` on `(recordType, recordId)` within
+   * `tenantId` whose permission satisfies `required`. Returning a boolean
+   * (rather than the row) keeps the hot-path interface minimal.
+   */
+  hasActiveGrantFor(args: {
+    tenantId: string;
+    granteeUserId: string;
+    recordType: string;
+    recordId: string;
+    required: FrickSharingPermission;
+  }): boolean {
+    const rows = this.db
+      .prepare(
+        `SELECT permission FROM grants
+          WHERE tenant_id = ? AND grantee_user_id = ?
+            AND record_type = ? AND record_id = ?
+            AND revoked_at IS NULL`,
+      )
+      .all(
+        args.tenantId,
+        args.granteeUserId,
+        args.recordType,
+        args.recordId,
+      ) as unknown as Array<{ permission: string }>;
+    for (const row of rows) {
+      if (frickSharingPermissionSatisfies(row.permission as FrickSharingPermission, args.required)) {
+        return true;
+      }
+    }
+    return false;
+  }
+}
+
+function toGrant(row: GrantSqlRow): FrickGrant {
+  return {
+    id: row.id,
+    tenantId: row.tenant_id,
+    ownerUserId: row.owner_user_id,
+    recordType: row.record_type,
+    recordId: row.record_id,
+    granteeUserId: row.grantee_user_id,
+    permission: row.permission as FrickSharingPermission,
+    createdAt: row.created_at,
+    ...(row.revoked_at !== null ? { revokedAt: row.revoked_at } : {}),
+  };
+}

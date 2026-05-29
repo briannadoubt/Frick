@@ -26,6 +26,8 @@ import { PushRegistrationStore } from "./storage/push-registration-store.js";
 import { initializeStorage } from "./storage/schema.js";
 import { SessionStore, type StoredSession } from "./storage/session-store.js";
 import { TenantStore } from "./storage/tenant-store.js";
+import { InvitationStore } from "./storage/invitation-store.js";
+import { GrantStore } from "./storage/grant-store.js";
 import { TenantSettingsStore } from "./storage/tenant-settings-store.js";
 import { SignalStore } from "./storage/signal-store.js";
 import { StreamStore, type AppendInput, type AppendResult, type StoredEvent } from "./storage/stream-store.js";
@@ -194,6 +196,8 @@ export class FrickStore {
   readonly accounts: AccountStore;
   readonly passwordResetTokens: PasswordResetTokenStore;
   readonly tenants: TenantStore;
+  readonly invitations: InvitationStore;
+  readonly grants: GrantStore;
   readonly tenantSettings: TenantSettingsStore;
   readonly adminAudit: AdminAuditStore;
   readonly pushRegistrations: PushRegistrationStore;
@@ -258,6 +262,8 @@ export class FrickStore {
     this.accounts = new AccountStore(this.#db);
     this.passwordResetTokens = new PasswordResetTokenStore(this.#db);
     this.tenants = new TenantStore(this.#db);
+    this.invitations = new InvitationStore(this.#db);
+    this.grants = new GrantStore(this.#db);
     this.tenantSettings = new TenantSettingsStore(this.#db);
     this.adminAudit = new AdminAuditStore(this.#db);
     this.pushRegistrations = new PushRegistrationStore(this.#db);

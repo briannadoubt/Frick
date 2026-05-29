@@ -10,8 +10,11 @@ import {
   foundationSchema,
   lintSchema,
   lintSchemaChange,
+  DEFAULT_FRICK_INVITATION_TTL_SECONDS,
+  MAX_FRICK_INVITATION_TTL_SECONDS,
   type FrickErrorCode,
   type FrickSchema,
+  type FrickSharingPermission,
 } from "@frick/protocol";
 import {
   AuthenticationError,
@@ -26,6 +29,7 @@ import {
   assertCanSubscribe,
   assertCanWriteObject,
   tenantMembershipReader,
+  type FrickGrantLookup,
   type FrickPolicyHook,
   type Principal,
 } from "./authz.js";
@@ -466,6 +470,12 @@ export function createFrickServer(options: ServerOptions = {}) {
   const policyHooks: readonly FrickPolicyHook[] = [
     ...(options.policyHooks ?? []),
   ];
+  // Wired into assertCanWriteObject / assertCanReadObject so the framework's
+  // built-in decision flow can relax a deny when an active cross-user
+  // sharing grant exists for the principal. See `relaxWithGrants` in
+  // authz.ts.
+  const grantLookup: FrickGrantLookup = (args) =>
+    store.grants.hasActiveGrantFor(args);
   let inFlight = 0;
   let closing = false;
 
@@ -1301,6 +1311,8 @@ export function createFrickServer(options: ServerOptions = {}) {
           objectWriteRoute.id,
           tenantMembershipReader(store, principal.tenantId),
           policyHooks,
+          undefined,
+          grantLookup,
         );
         const removed = store.deleteObject(
           principal.tenantId,
@@ -1329,6 +1341,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           tenantMembershipReader(store, principal.tenantId),
           policyHooks,
           value,
+          grantLookup,
         );
         const mergePolicy = store.objectMergePolicy(objectWriteRoute.type);
         const expectedVersion = parseIfMatchHeader(request);
@@ -1441,6 +1454,173 @@ export function createFrickServer(options: ServerOptions = {}) {
         response.end();
       } catch (error) {
         sendErrorWithMetrics(response, error, "push_registration_rejected");
+      }
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/share/invite") {
+      try {
+        const body = await readJsonBody(request, tenantLimits.maxHttpBodyBytes);
+        const recordType = requireString(body.recordType, "recordType");
+        const recordId = requireString(body.recordId, "recordId");
+        const permission = parseSharingPermission(body.permission);
+        const ttlSeconds = resolveInvitationTtlSeconds(body.expiresInSeconds);
+        const now = new Date();
+        const expiresAt = new Date(now.getTime() + ttlSeconds * 1000).toISOString();
+        const invitation = store.invitations.create({
+          id: `inv-${randomToken(12)}`,
+          tenantId: principal.tenantId,
+          ownerUserId: principal.userId,
+          recordType,
+          recordId,
+          permission,
+          token: randomToken(32),
+          createdAt: now.toISOString(),
+          expiresAt,
+        });
+        sendJson(response, 201, { invitation });
+      } catch (error) {
+        sendErrorWithMetrics(response, error, "share_invite_rejected");
+      }
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/share/accept") {
+      try {
+        const body = await readJsonBody(request, tenantLimits.maxHttpBodyBytes);
+        const token = requireString(body.token, "token");
+        const now = new Date().toISOString();
+        const outcome = store.invitations.redeem({
+          token,
+          tenantId: principal.tenantId,
+          redeemerUserId: principal.userId,
+          now,
+        });
+        if (outcome.kind === "notFound") {
+          sendErrorWithMetrics(
+            response,
+            new AuthorizationError({
+              allow: false,
+              reason: "notAuthorizedForResource",
+              publicMessage: "Invitation token is invalid",
+            }),
+            "share_invite_invalid",
+          );
+          return;
+        }
+        if (outcome.kind === "tenantMismatch") {
+          sendErrorWithMetrics(
+            response,
+            new AuthorizationError({
+              allow: false,
+              reason: "tenantMismatch",
+              publicMessage: "Invitation belongs to a different tenant",
+            }),
+            "share_invite_tenant_mismatch",
+          );
+          return;
+        }
+        if (outcome.kind === "expired") {
+          sendErrorWithMetrics(
+            response,
+            new AuthorizationError({
+              allow: false,
+              reason: "notAuthorizedForResource",
+              publicMessage: "Invitation has expired",
+            }),
+            "share_invite_expired",
+          );
+          return;
+        }
+        if (outcome.kind === "alreadyRedeemed") {
+          sendErrorWithMetrics(
+            response,
+            new AuthorizationError({
+              allow: false,
+              reason: "notAuthorizedForResource",
+              publicMessage: "Invitation has already been redeemed",
+            }),
+            "share_invite_already_redeemed",
+          );
+          return;
+        }
+        const invitation = outcome.invitation;
+        // Owner accepting their own invitation is rejected — it's a no-op
+        // that would only ever happen by mistake and pollutes the grants
+        // table with self-grants.
+        if (invitation.ownerUserId === principal.userId) {
+          sendErrorWithMetrics(
+            response,
+            new AuthorizationError({
+              allow: false,
+              reason: "notAuthorizedForResource",
+              publicMessage: "Owners cannot accept their own invitations",
+            }),
+            "share_invite_self_accept",
+          );
+          return;
+        }
+        const grant = store.grants.create({
+          id: `grant-${randomToken(12)}`,
+          tenantId: invitation.tenantId,
+          ownerUserId: invitation.ownerUserId,
+          recordType: invitation.recordType,
+          recordId: invitation.recordId,
+          granteeUserId: principal.userId,
+          permission: invitation.permission,
+          createdAt: now,
+        });
+        sendJson(response, 201, { grant });
+      } catch (error) {
+        sendErrorWithMetrics(response, error, "share_accept_rejected");
+      }
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/share/grants") {
+      try {
+        const recordType = url.searchParams.get("recordType") ?? undefined;
+        const recordId = url.searchParams.get("recordId") ?? undefined;
+        const includeRevoked = url.searchParams.get("includeRevoked") === "true";
+        const grants = store.grants.list({
+          tenantId: principal.tenantId,
+          principalUserId: principal.userId,
+          ...(recordType !== undefined ? { recordType } : {}),
+          ...(recordId !== undefined ? { recordId } : {}),
+          includeRevoked,
+        });
+        sendJson(response, 200, { grants });
+      } catch (error) {
+        sendErrorWithMetrics(response, error, "share_grants_list_rejected");
+      }
+      return;
+    }
+
+    if (request.method === "DELETE" && url.pathname.startsWith("/share/grants/")) {
+      try {
+        const grantId = decodeURIComponent(url.pathname.slice("/share/grants/".length));
+        if (!grantId) {
+          sendJson(response, 404, { error: "grant_not_found" });
+          return;
+        }
+        const existing = store.grants.getById(principal.tenantId, grantId);
+        // Only the owner that issued the invitation can revoke. Grantees
+        // who want to drop access call DELETE /share/grants/:id too, but
+        // we only honour it for the owner here — letting a grantee revoke
+        // is a separate "leave" flow that RangerCRM can layer on top.
+        if (!existing || existing.ownerUserId !== principal.userId) {
+          sendJson(response, 404, { error: "grant_not_found" });
+          return;
+        }
+        const now = new Date().toISOString();
+        const grant = store.grants.revoke({
+          tenantId: principal.tenantId,
+          id: grantId,
+          now,
+        });
+        sendJson(response, 200, { grant });
+      } catch (error) {
+        sendErrorWithMetrics(response, error, "share_grant_revoke_rejected");
       }
       return;
     }
@@ -2567,6 +2747,24 @@ function requireRecord(value: unknown, name: string): Record<string, unknown> {
     throw new Error(`${name} must be an object`);
   }
   return value as Record<string, unknown>;
+}
+
+function parseSharingPermission(value: unknown): FrickSharingPermission {
+  if (value === "read" || value === "write") {
+    return value;
+  }
+  throw new Error('permission must be "read" or "write"');
+}
+
+function resolveInvitationTtlSeconds(value: unknown): number {
+  if (value === undefined || value === null) {
+    return DEFAULT_FRICK_INVITATION_TTL_SECONDS;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    throw new Error("expiresInSeconds must be a positive finite number");
+  }
+  const seconds = Math.floor(value);
+  return Math.min(seconds, MAX_FRICK_INVITATION_TTL_SECONDS);
 }
 
 function requireString(value: unknown, name: string): string {
@@ -3934,7 +4132,11 @@ function isProtectedPath(pathname: string): boolean {
     pathname === "/append" ||
     pathname === "/push/registrations" ||
     pathname.startsWith("/push/registrations/") ||
-    pathname === "/search"
+    pathname === "/search" ||
+    pathname === "/share/invite" ||
+    pathname === "/share/accept" ||
+    pathname === "/share/grants" ||
+    pathname.startsWith("/share/grants/")
   );
 }
 

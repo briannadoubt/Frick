@@ -36,6 +36,7 @@ import {
   AuthorizationError,
   SessionExpiredError,
   tenantMembershipReader,
+  type FrickGrantLookup,
   type FrickPolicyHook,
   type Principal,
 } from "../authz.js";
@@ -79,6 +80,7 @@ export class SyncGateway {
   readonly #subscriptions = new SubscriptionRegistry();
   readonly #limits: FrickLimits;
   readonly #policyHooks: readonly FrickPolicyHook[];
+  readonly #grantLookup: FrickGrantLookup;
   readonly #pendingAppendCounts = new WeakMap<SyncClient, number>();
   readonly #lastSeenAt = new WeakMap<SyncClient, number>();
   readonly #completedHandshakes = new WeakSet<SyncClient>();
@@ -135,6 +137,7 @@ export class SyncGateway {
   ) {
     this.#limits = options.limits ?? DEFAULT_FRICK_LIMITS;
     this.#policyHooks = options.policyHooks ?? [];
+    this.#grantLookup = (args) => this.store.grants.hasActiveGrantFor(args);
     this.#metrics = options.metrics;
     this.#connectionsGauge = this.#metrics?.gauge("frick.ws.connections.current");
     this.#telemetry = options.telemetry;
@@ -1014,6 +1017,7 @@ export class SyncGateway {
           tenantMembershipReader(this.store, principal.tenantId),
           this.#policyHooks,
           payload.value,
+          this.#grantLookup,
         );
       } catch (error) {
         if (this.#sendAuthNack(client, payload.requestId, error)) {
