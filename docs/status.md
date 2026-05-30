@@ -81,9 +81,13 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
 - Web Push registration validation and adapter code exist, but the documented
   public push-adapter exports and CLI credential provisioning currently cover
   APNs and FCM only.
-- Outbound email router/adapters, including the Resend reference adapter, are
-  present under server internals for tests/framework work but are not exported
-  as a documented `@frick/server` app surface.
+- Outbound email is a documented `@frick/server` surface (the
+  `FrickEmailAdapter` interface, `createFrickEmailRouter`, the Resend reference
+  adapter at `@frick/server/email/resend-adapter`, and the in-memory test
+  adapter), wired into the password-reset and first-sign-in welcome flows via
+  `identityProviders.email.outbound`. Only the Resend reference adapter ships
+  in-tree; SES/Postmark/SMTP providers are implemented out-of-tree against the
+  same interface.
 - Swift and Android package publication is configured in source, but local verification still depends on the host having Xcode or Android SDK/JDK paths installed.
 - Internal specs and plans are historical. They explain why slices happened, not necessarily what is true now.
 

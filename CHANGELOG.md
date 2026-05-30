@@ -6,6 +6,11 @@ Each package version is independent — a release header documents which package
 
 ## Unreleased
 
+### Server — outbound email adapter surface
+
+- `@frick/server` now exports a documented outbound email surface, mirroring the push-adapter convention. New exports from the main entrypoint: the `FrickEmailAdapter` / `FrickEmailMessage` / `FrickEmailDelivery` / `FrickEmailContext` interfaces, `createFrickEmailRouter` (+ `FrickEmailRouter` and its option/helper types), `createFrickResendEmailAdapter` (the Resend reference adapter, reading `RESEND_API_KEY`), and `createFrickTestEmailAdapter` (the in-memory test sink). The Resend adapter is also reachable via the `@frick/server/email/resend-adapter` subpath, matching `@frick/server/push/apns-adapter`.
+- `identityProviders.email` gained an opt-in `outbound` config (`EmailOutboundConfig`): supply an adapter + `defaultFrom`, and the framework dispatches the password-reset email (`/auth/email/forgot-password`, when a `resetUrl` builder is provided) and a first-sign-in welcome email (`/auth/email/signup`, when `welcome` is set) through it. URL composition stays in app code. Sends are best-effort — a failed delivery is logged and audited in the DevTools event feed but never fails the originating auth request. The existing `onPasswordResetRequested` hook still fires and coexists with framework-managed dispatch, so apps that want full control keep their seam.
+
 ### Bug Fixes
 
 - **Swift SDK:** `FrickSyncSocket.sendFrame` now buffers frames into the existing pending queue when the WebSocket task isn't open yet, instead of throwing `notConnected`. This fixes a race where consumers issuing `subscribeObject` / `subscribePresence` / `setPresence` / `clearPresence` / `subscribeProjection` immediately after `FrickClient.connectSync()` (which schedules `openSocket()` on a detached Task) would intermittently fail. Buffered frames flush in FIFO order right after the hello handshake lands.

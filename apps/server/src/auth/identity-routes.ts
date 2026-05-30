@@ -8,6 +8,8 @@ import {
   verifyAppleNotificationPayload,
 } from "./apple.js";
 import { verifyGoogleIdToken } from "./google.js";
+import { createFrickEmailRouter, type FrickEmailRouter } from "../email/router.js";
+import type { FrickEmailAdapter } from "../email/types.js";
 
 /**
  * Third-party identity provider routes.
@@ -105,8 +107,65 @@ export interface EmailProviderConfig {
    * `FrickEmailRouter.sendPasswordResetEmail`. Always called when a real
    * user matched the request; never called when the email is unknown
    * (so the email-existence probe stays plugged).
+   *
+   * This hook coexists with {@link EmailProviderConfig.outbound}: when both
+   * are set the framework dispatches the templated reset email through the
+   * configured adapter *and* invokes this hook, so an app can layer extra
+   * behavior (analytics, custom providers) on top of the built-in send.
    */
   onPasswordResetRequested?: (event: PasswordResetRequest) => Promise<void> | void;
+  /**
+   * Opt-in framework-managed outbound email. Supply a {@link FrickEmailAdapter}
+   * (e.g. the exported Resend reference adapter, or the in-memory test
+   * adapter) and the framework will dispatch the password-reset and
+   * first-sign-in welcome emails through it — apps no longer have to wire
+   * those sends by hand. Reset-link composition stays in app code via the
+   * `resetUrl` builder, because only the app knows its host name and in-app
+   * screen paths; welcome content is supplied via `welcome.body`.
+   *
+   * Sends are best-effort: a failed delivery is logged + audited in the
+   * DevTools event feed but never fails the originating auth request.
+   */
+  outbound?: EmailOutboundConfig;
+}
+
+export interface EmailOutboundConfig {
+  /**
+   * Adapter the framework dispatches through. Use
+   * `createFrickResendEmailAdapter()` (from `@frick/server` or
+   * `@frick/server/email/resend-adapter`) in production, or
+   * `createFrickTestEmailAdapter()` in tests.
+   */
+  adapter: FrickEmailAdapter;
+  /** Default `from:` address for framework-composed mail. Required. */
+  defaultFrom: string;
+  /** App name woven into the default subject lines. Defaults to "Your app". */
+  appName?: string;
+  /**
+   * Builds the password-reset link the user clicks. Receives the issued
+   * single-use token and the recipient email. When omitted, the framework
+   * does not send a reset email (the `onPasswordResetRequested` hook, if
+   * any, still fires).
+   */
+  resetUrl?: (event: { token: string; email: string }) => string;
+  /** First-sign-in / welcome email, dispatched after a successful signup. */
+  welcome?: EmailWelcomeConfig;
+}
+
+export interface EmailWelcomeConfig {
+  /** `from:` override for the welcome mail; defaults to `defaultFrom`. */
+  from?: string;
+  /** Subject line. Defaults to `Welcome to <appName>`. */
+  subject?: string;
+  /**
+   * Builds the welcome body. Receives the new user's email + display name
+   * and returns `{ text, html? }`. When omitted, a minimal default body is
+   * sent.
+   */
+  body?: (event: { email: string; displayName: string }) => {
+    text: string;
+    html?: string;
+  };
 }
 
 export interface PasswordResetRequest {
@@ -217,6 +276,19 @@ export function createIdentityRouter(
 ): IdentityRouter {
   const userObject = { ...DEFAULT_USER_FIELDS, ...(options.config.userObject ?? {}) };
   const log = options.logger;
+
+  // Framework-managed outbound email. Built once when the app opts in via
+  // `email.outbound`. Reset + welcome sends go through this router so they
+  // share the same audit + redaction path as any other framework mail.
+  const outbound = options.config.email?.outbound;
+  const emailRouter: FrickEmailRouter | undefined = outbound
+    ? createFrickEmailRouter({
+        adapter: outbound.adapter,
+        store: options.store,
+        logger: options.logger,
+        defaultFrom: outbound.defaultFrom,
+      })
+    : undefined;
 
   async function handleAppleVerify(
     req: IncomingMessage,
@@ -623,6 +695,18 @@ export function createIdentityRouter(
       userId,
       tenantId: hook.tenantId,
     });
+    // First-sign-in welcome email. Framework-managed and best-effort: a
+    // failed delivery is logged + audited but the signup still succeeds.
+    if (emailRouter && outbound?.welcome) {
+      await sendWelcomeEmail({
+        emailRouter,
+        outbound,
+        tenantId: hook.tenantId,
+        email,
+        displayName,
+        log,
+      });
+    }
     sendJson(res, 200, {
       session: toFrickSessionShape(session, options.store.schema.hash),
       user: { id: userId, ...userRow },
@@ -883,10 +967,31 @@ export function createIdentityRouter(
         tenantId,
         expiresAt: issued.expiresAt,
       });
-      // The actual email send is an out-of-band concern wired by the
-      // app (it composes the reset URL + adapter). The framework just
-      // emits a hook here; absent a hook, the token is logged in DEBUG
-      // builds so a developer can copy it manually during local testing.
+      // Framework-managed send: when the app opted into `email.outbound`
+      // and supplied a `resetUrl` builder, dispatch the templated reset
+      // email through the configured adapter. Best-effort — a failure is
+      // logged + audited but never changes the 200 response.
+      if (emailRouter && outbound?.resetUrl) {
+        try {
+          await emailRouter.sendPasswordResetEmail({
+            tenantId,
+            to: email,
+            resetUrl: outbound.resetUrl({ token: issued.token, email }),
+            ...(outbound.appName ? { appName: outbound.appName } : {}),
+          });
+        } catch (err) {
+          log.error("auth.email.password_reset_send_failed", {
+            event: "auth.email.password_reset_send_failed",
+            userId,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      // The `onPasswordResetRequested` hook still fires so apps that want
+      // full control (custom provider, custom template, analytics) keep
+      // their seam; absent both an outbound adapter and a hook, the token
+      // is logged in DEBUG builds so a developer can copy it manually
+      // during local testing.
       const hook = options.config.email.onPasswordResetRequested;
       if (hook) {
         try {
@@ -904,12 +1009,16 @@ export function createIdentityRouter(
             message: err instanceof Error ? err.message : String(err),
           });
         }
-      } else if (process.env.NODE_ENV !== "production") {
+      } else if (
+        !(emailRouter && outbound?.resetUrl) &&
+        process.env.NODE_ENV !== "production"
+      ) {
+        // No hook and no framework send delivered the token — log it in
+        // dev so the developer can copy it manually; never logged in
+        // production builds (guarded by NODE_ENV).
         log.info("auth.email.password_reset_token_dev_only", {
           event: "auth.email.password_reset_token_dev_only",
           email,
-          // Logged in dev so the developer can copy it; never logged in
-          // production builds (guarded by NODE_ENV).
           token: issued.token,
         });
       }
@@ -1010,6 +1119,42 @@ export function createIdentityRouter(
 
 interface UserRow extends Record<string, unknown> {
   id: string;
+}
+
+async function sendWelcomeEmail(input: {
+  emailRouter: FrickEmailRouter;
+  outbound: EmailOutboundConfig;
+  tenantId: string;
+  email: string;
+  displayName: string;
+  log: FrickLogger;
+}): Promise<void> {
+  const { emailRouter, outbound, tenantId, email, displayName, log } = input;
+  const welcome = outbound.welcome;
+  if (!welcome) return;
+  const appName = outbound.appName ?? "Your app";
+  const subject = welcome.subject ?? `Welcome to ${appName}`;
+  const body = welcome.body
+    ? welcome.body({ email, displayName })
+    : { text: `Welcome to ${appName}, ${displayName}! Your account is ready.` };
+  try {
+    await emailRouter.send(
+      {
+        to: email,
+        from: welcome.from ?? outbound.defaultFrom,
+        subject,
+        text: body.text,
+        ...(body.html ? { html: body.html } : {}),
+        tags: { kind: "welcome", tenantId },
+      },
+      { tenantId },
+    );
+  } catch (err) {
+    log.error("auth.email.welcome_send_failed", {
+      event: "auth.email.welcome_send_failed",
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 function findUserBySubject(

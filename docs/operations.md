@@ -249,10 +249,13 @@ email/password accounts with single-use password reset tokens:
   `{ session, user, isNewUser: false }`. Unknown email and bad password share
   the same `401 invalid_credentials` response.
 - `POST /auth/email/forgot-password` accepts `{ email }`, normalizes the email,
-  always returns `200 { ok: true }`, and only calls
-  `email.onPasswordResetRequested` when the address maps to a real account.
-  The hook receives `{ email, userId, tenantId, token, expiresAt }`; compose
-  the reset URL in app code and send it through the app's email adapter.
+  always returns `200 { ok: true }`, and only dispatches when the address maps
+  to a real account. When `email.outbound` is configured with a `resetUrl`
+  builder, the framework composes and sends the reset email through the
+  configured adapter (see "Outbound email" below). The optional
+  `email.onPasswordResetRequested` hook also fires when set — it receives
+  `{ email, userId, tenantId, token, expiresAt }` and coexists with the
+  framework send, so apps can layer extra behavior or take full control.
 - `POST /auth/email/reset-password` accepts `{ token, password }`, enforces the
   email provider's `minPasswordLength`, consumes the single-use reset token,
   updates the password, deletes active sessions for that user, and returns
@@ -300,6 +303,71 @@ writes; a `"read"` grant satisfies reads only. Grants never cross tenant
 boundaries and do not cascade to child records, streams, blobs, jobs,
 projections, search indexes, or custom app routes unless the app builds those
 semantics on top.
+
+## Outbound email
+
+Frick ships a pluggable outbound email surface that mirrors the push-adapter
+convention: the framework defines the `FrickEmailAdapter` interface, apps
+register an implementation, and the framework's identity flows dispatch through
+it. Credential-bearing provider SDKs stay out of the core bundle.
+
+Public exports from `@frick/server`:
+
+- `FrickEmailAdapter`, `FrickEmailMessage`, `FrickEmailDelivery`, and
+  `FrickEmailContext` — the adapter interface and its message/result shapes. An
+  adapter implements `send(message, ctx)` and returns a `FrickEmailDelivery`
+  (`status: "delivered" | "failed"`, optional `receiptId`, structured `error`).
+- `createFrickResendEmailAdapter(options?)` — the Resend reference adapter. It
+  POSTs to the Resend v1 `/emails` endpoint with a bearer token; `apiKey`
+  defaults to `RESEND_API_KEY`. HTTP failures map to structured codes
+  (`email.unauthorized`, `email.rateLimited`, `email.serverError`,
+  `email.invalidRequest`, `email.networkError`) rather than throwing. Also
+  importable from the `@frick/server/email/resend-adapter` subpath, matching
+  `@frick/server/push/apns-adapter`.
+- `createFrickTestEmailAdapter()` — an in-memory adapter that records every
+  send and always succeeds. Use it in tests to assert what the framework
+  dispatched.
+- `createFrickEmailRouter(options)` — wraps an adapter with the framework's
+  common concerns: provider exceptions become `adapter.threw` failures, and
+  every attempt is logged and recorded in the DevTools event feed
+  (`frick.email.delivery`) with the recipient local-part redacted. Exposes
+  `send`, `sendVerificationEmail`, and `sendPasswordResetEmail` helpers.
+
+Wire it into the email/password identity flows via
+`identityProviders.email.outbound`:
+
+```ts
+import { createFrickServer } from "@frick/server";
+import { createFrickResendEmailAdapter } from "@frick/server/email/resend-adapter";
+
+createFrickServer({
+  identityProviders: {
+    email: {
+      outbound: {
+        adapter: createFrickResendEmailAdapter(), // reads RESEND_API_KEY
+        defaultFrom: "noreply@yourapp.com",
+        appName: "Your App",
+        // App composes the link — only the app knows its host + screen paths.
+        resetUrl: ({ token }) => `https://yourapp.com/reset?token=${token}`,
+        welcome: {}, // optional first-sign-in welcome email; supply body/subject to customize
+      },
+    },
+  },
+});
+```
+
+With `outbound` set, the framework dispatches the templated password-reset
+email on `/auth/email/forgot-password` (only when `resetUrl` is provided and the
+email maps to a real account) and a welcome email on `/auth/email/signup` (when
+`welcome` is set). Sends are best-effort: a failed delivery is logged and
+audited but never fails the originating auth request. Apps that want completely
+custom email content can build a `FrickEmailRouter` themselves and call its
+`send(...)` with their own `FrickEmailMessage`, or keep using the
+`onPasswordResetRequested` hook (which still fires alongside the framework send).
+
+Today the framework ships only the Resend reference adapter and the in-memory
+test adapter; other providers (SES, Postmark, SMTP) are implemented out-of-tree
+against the same `FrickEmailAdapter` interface.
 
 ## Health vs. ready
 
@@ -841,7 +909,7 @@ Content-Type: application/json
 - Blob content is stored in SQLite today. `FRICK_BLOB_STORAGE_PATH` is
   parsed and exposed for a future filesystem driver, but the current server
   does not write blob bytes there.
-- Outbound email router/adapters live under `apps/server/src/email/*` for
-  framework development and tests, including a Resend adapter that reads
-  `RESEND_API_KEY`; they are not exported from `@frick/server` or documented
-  as an app integration surface yet.
+- Outbound email ships the Resend reference adapter and an in-memory test
+  adapter only (see "Outbound email"). Other providers (SES, Postmark, SMTP)
+  are implemented out-of-tree against the exported `FrickEmailAdapter`
+  interface.
