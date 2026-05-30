@@ -2316,6 +2316,7 @@ function isFrickConfig(value: FrickConfig | FrickConfigOverrides): value is Fric
     typeof v.sessionTtlSeconds === "number" &&
     typeof v.host === "string" &&
     typeof v.port === "number" &&
+    typeof v.dbDriver === "string" &&
     typeof v.dbPath === "string" &&
     typeof v.logLevel === "string" &&
     typeof v.otelEnabled === "boolean" &&

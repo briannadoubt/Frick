@@ -55,7 +55,9 @@ All variables are optional. Defaults match the runtime mode.
 | `FRICK_PORT`                | `4099`                      | `4099`                                | Integer in `[0, 65535]`. `0` asks the kernel to allocate a port.     |
 | `FRICK_PUBLIC_URL`          | unset                       | unset                                 | Externally-reachable URL; surfaced in the startup log when set.      |
 | `FRICK_ALLOWED_ORIGINS`     | `["*"]`                     | `[]`                                  | Comma-separated allowlist. Enforced for HTTP preflight and WebSocket upgrades; same-origin/server-to-server requests omit `Origin`. |
-| `FRICK_DB_PATH`             | `./frick.sqlite`            | `./frick.sqlite`                      | SQLite path. `":memory:"` is rejected in production.                 |
+| `FRICK_DB_DRIVER`           | `sqlite`                    | `sqlite`                              | Durable-storage driver. One of `sqlite` or `postgres`. `sqlite` is the only implemented driver; selecting `postgres` fails fast at startup with a "not yet implemented (FR-22)" error. |
+| `FRICK_DB_PATH`             | `./frick.sqlite`            | `./frick.sqlite`                      | SQLite path (used by the `sqlite` driver). `":memory:"` is rejected in production. |
+| `FRICK_DATABASE_URL`        | unset                       | unset                                 | Connection string reserved for the future `postgres` driver (FR-22). Ignored by the `sqlite` driver. |
 | `FRICK_BLOB_STORAGE_PATH`   | `./frick-blobs/`            | `./frick-blobs/`                      | Parsed for future filesystem blob storage; current blob bytes are SQLite-backed. |
 | `FRICK_LOG_LEVEL`           | `info`                      | `info`                                | One of `debug`, `info`, `warn`, `error`.                             |
 | `FRICK_OTEL_ENABLED`        | `true` when an OTLP endpoint is set; otherwise `false` | same | Enables the built-in OpenTelemetry SDK runtime.                      |
