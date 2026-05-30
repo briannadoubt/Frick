@@ -30,7 +30,13 @@ import { InvitationStore } from "./storage/invitation-store.js";
 import { GrantStore } from "./storage/grant-store.js";
 import { TenantSettingsStore } from "./storage/tenant-settings-store.js";
 import { SignalStore } from "./storage/signal-store.js";
-import { StreamStore, type AppendInput, type AppendResult, type StoredEvent } from "./storage/stream-store.js";
+import {
+  StreamStore,
+  type AppendInput,
+  type AppendResult,
+  type CachedIdempotentEvent,
+  type StoredEvent,
+} from "./storage/stream-store.js";
 import { BoundedIdempotencyCache } from "./storage/idempotency-cache.js";
 import { listAppliedMigrations, type AppliedMigrationRow } from "./storage/migrations.js";
 import { createNoopLogger, type FrickLogger } from "./logger.js";
@@ -78,6 +84,13 @@ export const DEFAULT_IDEMPOTENCY_KEY_RETENTION_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_IDEMPOTENCY_KEY_MAX_ROWS = 100_000;
 /** Default interval between background prune passes: 15 minutes. */
 export const DEFAULT_IDEMPOTENCY_KEY_PRUNE_INTERVAL_MS = 15 * 60 * 1000;
+/**
+ * Default replay window for `requestId` idempotency: 24 hours. Enforced at
+ * lookup time so a requestId whose record is older than the window is no longer
+ * deduped, independent of when the durable retention prune actually removes the
+ * row.
+ */
+export const DEFAULT_IDEMPOTENCY_REPLAY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 export interface PruneResult {
   /** Rows removed because their `created_at` was older than `retentionMs`. */
@@ -114,6 +127,16 @@ export interface StoreOptions {
    * `0` to disable the timer (prune still runs once during construction).
    */
   idempotencyKeyPruneIntervalMs?: number;
+  /**
+   * Replay window (ms) for `requestId` idempotency, enforced on lookup. A
+   * record whose `created_at` is older than this window is treated as
+   * not-seen, so a retry beyond the window produces a fresh event. This is the
+   * lookup-time bound and is independent of {@link StoreOptions.idempotencyKeyRetentionMs}
+   * (which drives durable row pruning on a timer): the window holds even when
+   * pruning is disabled or has not yet run. Defaults to
+   * {@link DEFAULT_IDEMPOTENCY_REPLAY_WINDOW_MS} (24h).
+   */
+  idempotencyReplayWindowMs?: number;
   /**
    * Projection registry that receives notify(...) calls after every
    * object/stream write through this FrickStore facade. When omitted, the
@@ -185,7 +208,7 @@ export class FrickStore {
   // — must not satisfy a retry. Rebuilding both together swaps a fresh cache
   // into the StreamStore without violating the cache module's encapsulation.
   streams: StreamStore;
-  idempotencyCache: BoundedIdempotencyCache<StoredEvent>;
+  idempotencyCache: BoundedIdempotencyCache<CachedIdempotentEvent>;
   readonly presence: PresenceStore;
   readonly signals: SignalStore;
   readonly blobs: BlobStore;
@@ -225,6 +248,7 @@ export class FrickStore {
   readonly #idempotencyCacheCapacity: number;
   readonly #idempotencyKeyRetentionMs: number;
   readonly #idempotencyKeyMaxRows: number;
+  readonly #idempotencyReplayWindowMs: number;
   #pruneTimer: ReturnType<typeof setInterval> | undefined;
   #devtoolsPruneTimer: ReturnType<typeof setInterval> | undefined;
   #platformEventsPruneTimer: ReturnType<typeof setInterval> | undefined;
@@ -246,12 +270,16 @@ export class FrickStore {
       options.idempotencyKeyRetentionMs ?? DEFAULT_IDEMPOTENCY_KEY_RETENTION_MS;
     this.#idempotencyKeyMaxRows =
       options.idempotencyKeyMaxRows ?? DEFAULT_IDEMPOTENCY_KEY_MAX_ROWS;
+    this.#idempotencyReplayWindowMs =
+      options.idempotencyReplayWindowMs ?? DEFAULT_IDEMPOTENCY_REPLAY_WINDOW_MS;
 
-    this.idempotencyCache = new BoundedIdempotencyCache<StoredEvent>(
+    this.idempotencyCache = new BoundedIdempotencyCache<CachedIdempotentEvent>(
       this.#idempotencyCacheCapacity,
     );
     this.objects = new ObjectStore(this.#db, this.schema);
-    this.streams = new StreamStore(this.#db, this.schema, this.idempotencyCache);
+    this.streams = new StreamStore(this.#db, this.schema, this.idempotencyCache, {
+      replayWindowMs: this.#idempotencyReplayWindowMs,
+    });
     this.presence = new PresenceStore(this.#db, this.schema);
     this.signals = new SignalStore(this.#db, this.schema);
     this.blobs = new BlobStore(this.#db);
@@ -473,10 +501,12 @@ export class FrickStore {
 
     if (prunedByAge > 0 || prunedByCap > 0) {
       // Rebuild the front cache so stale entries can't survive retention.
-      this.idempotencyCache = new BoundedIdempotencyCache<StoredEvent>(
+      this.idempotencyCache = new BoundedIdempotencyCache<CachedIdempotentEvent>(
         this.#idempotencyCacheCapacity,
       );
-      this.streams = new StreamStore(this.#db, this.schema, this.idempotencyCache);
+      this.streams = new StreamStore(this.#db, this.schema, this.idempotencyCache, {
+        replayWindowMs: this.#idempotencyReplayWindowMs,
+      });
     }
 
     return { prunedByAge, prunedByCap };

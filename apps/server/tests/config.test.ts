@@ -32,6 +32,7 @@ describe("loadFrickConfig", () => {
       platformEventsKafkaBrokers: [],
       platformEventsRetentionMs: 7 * 24 * 60 * 60 * 1000,
       platformEventsMaxRows: 1_000_000,
+      idempotencyReplayWindowMs: 24 * 60 * 60 * 1000,
     });
   });
 
@@ -82,6 +83,7 @@ describe("loadFrickConfig", () => {
           FRICK_PLATFORM_EVENTS_KAFKA_BROKERS: "localhost:9092, localhost:19092",
           FRICK_PLATFORM_EVENTS_RETENTION_MS: "60000",
           FRICK_PLATFORM_EVENTS_MAX_ROWS: "5000",
+          FRICK_IDEMPOTENCY_REPLAY_WINDOW_MS: "120000",
         },
         warn: () => {},
       },
@@ -105,6 +107,25 @@ describe("loadFrickConfig", () => {
     expect(config.platformEventsKafkaBrokers).toEqual(["localhost:9092", "localhost:19092"]);
     expect(config.platformEventsRetentionMs).toBe(60000);
     expect(config.platformEventsMaxRows).toBe(5000);
+    expect(config.idempotencyReplayWindowMs).toBe(120000);
+  });
+
+  it("defaults the idempotency replay window to 24h and rejects non-positive values", () => {
+    const defaulted = loadFrickConfig({}, { env: {}, warn: () => {} });
+    expect(defaulted.idempotencyReplayWindowMs).toBe(24 * 60 * 60 * 1000);
+
+    expect(() =>
+      loadFrickConfig(
+        {},
+        { env: { FRICK_IDEMPOTENCY_REPLAY_WINDOW_MS: "0" }, warn: () => {} },
+      ),
+    ).toThrow(FrickConfigError);
+    expect(() =>
+      loadFrickConfig(
+        {},
+        { env: { FRICK_IDEMPOTENCY_REPLAY_WINDOW_MS: "-5" }, warn: () => {} },
+      ),
+    ).toThrow(FrickConfigError);
   });
 
   it("defaults platform events to kafka when brokers are configured", () => {

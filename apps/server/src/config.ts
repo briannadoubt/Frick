@@ -136,6 +136,15 @@ export interface FrickConfig {
   platformEventsRetentionMs: number;
   /** Hard row cap for local SQLite platform events. */
   platformEventsMaxRows: number;
+  /**
+   * Replay window (ms) for `requestId` idempotency. On lookup, an
+   * `(tenantId, replicaId, requestId)` record whose `created_at` is older than
+   * this window is no longer treated as idempotent — a retry beyond the window
+   * produces a fresh event. Enforced at lookup time, independent of durable
+   * retention/pruning, so beyond-window requestIds are not deduped even before
+   * a prune pass has removed the row. Defaults to 24h.
+   */
+  idempotencyReplayWindowMs: number;
 }
 
 export class FrickConfigError extends Error {
@@ -152,6 +161,7 @@ const DEFAULT_BLOB_STORAGE_PATH = "./frick-blobs/";
 const DEFAULT_PLATFORM_EVENTS_TOPIC = "frick.platform.events";
 const DEFAULT_PLATFORM_EVENTS_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_PLATFORM_EVENTS_MAX_ROWS = 1_000_000;
+const DEFAULT_IDEMPOTENCY_REPLAY_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h
 const DEFAULT_OTEL_SERVICE_NAME = "frick-server";
 const DEFAULT_OTEL_METRIC_EXPORT_INTERVAL_MS = 60_000;
 
@@ -293,6 +303,15 @@ export function loadFrickConfig(
       ),
     "platformEventsMaxRows",
   );
+  const idempotencyReplayWindowMs = validatePositiveInteger(
+    overrides.idempotencyReplayWindowMs ??
+      parsePositiveInteger(
+        env.FRICK_IDEMPOTENCY_REPLAY_WINDOW_MS,
+        DEFAULT_IDEMPOTENCY_REPLAY_WINDOW_MS,
+        "FRICK_IDEMPOTENCY_REPLAY_WINDOW_MS",
+      ),
+    "idempotencyReplayWindowMs",
+  );
 
   if (dbDriver === "postgres") {
     throw new FrickConfigError(
@@ -348,6 +367,7 @@ export function loadFrickConfig(
     platformEventsKafkaBrokers,
     platformEventsRetentionMs,
     platformEventsMaxRows,
+    idempotencyReplayWindowMs,
   };
 }
 
