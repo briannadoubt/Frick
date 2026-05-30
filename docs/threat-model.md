@@ -306,13 +306,19 @@ to exhaust server memory.
   MessagePack decode; oversized frames are closed by the WebSocket parser.
 - Forward stream backlogs for HTTP reads, SSE initial pages, and WebSocket
   subscriptions are page-limited and return `cursor` / `hasMore`.
-- No per-principal connection cap.
+- Concurrent WebSocket connections are capped per authenticated principal
+  (`maxConnectionsPerPrincipal`, keyed by `(tenantId, userId)`) in addition to
+  the global `maxWebSocketConnections` cap. The per-principal counter is
+  in-process (consistent with the single-node model) and resets on restart;
+  over-cap connections receive a `rateLimit.exceeded` Nack and a `1013` close
+  without affecting other principals.
 - Idempotency cache (see Replay above) and stream-store rows grow without
   pruning.
 
 **Known gap.** Operators should still enforce request-rate, connection-count,
-and bandwidth limits at a reverse proxy / WAF. Per-principal connection caps
-and durable retention policies remain production-hardening follow-ups.
+and bandwidth limits at a reverse proxy / WAF. The per-principal connection cap
+is in-process only — multi-node deployments do not share the counter — and
+durable retention policies remain production-hardening follow-ups.
 
 ---
 

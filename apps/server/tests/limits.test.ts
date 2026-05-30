@@ -3,8 +3,10 @@ import {
   DEFAULT_FRICK_LIMITS,
   FrickLimitError,
   clampTtlSeconds,
+  limitsFromEnv,
   mergeLimits,
 } from "../src/limits.js";
+import { FrickConfigError } from "../src/config.js";
 
 describe("FrickLimits", () => {
   it("returns a copy of defaults when no overrides are supplied", () => {
@@ -27,6 +29,7 @@ describe("FrickLimits", () => {
       "maxPendingAppendsPerClient",
       "maxWebSocketFrameBytes",
       "maxWebSocketConnections",
+      "maxConnectionsPerPrincipal",
       "maxWebSocketOutboundBufferedBytes",
       "maxSseConnections",
       "maxSseOutboundBufferedBytes",
@@ -69,6 +72,25 @@ describe("FrickLimits", () => {
       calls += 1;
     });
     expect(calls).toBe(1);
+  });
+
+  it("applies the default per-principal connection cap when unset", () => {
+    expect(DEFAULT_FRICK_LIMITS.maxConnectionsPerPrincipal).toBe(64);
+    expect(mergeLimits().maxConnectionsPerPrincipal).toBe(64);
+    expect(mergeLimits({ maxHttpBodyBytes: 1 }).maxConnectionsPerPrincipal).toBe(64);
+  });
+
+  it("reads the per-principal connection cap from the environment", () => {
+    expect(limitsFromEnv({})).toEqual({});
+    expect(limitsFromEnv({ FRICK_MAX_CONNECTIONS_PER_PRINCIPAL: "10" })).toEqual({
+      maxConnectionsPerPrincipal: 10,
+    });
+  });
+
+  it("rejects a non-positive-integer per-principal connection cap env value", () => {
+    expect(() => limitsFromEnv({ FRICK_MAX_CONNECTIONS_PER_PRINCIPAL: "0" })).toThrow(FrickConfigError);
+    expect(() => limitsFromEnv({ FRICK_MAX_CONNECTIONS_PER_PRINCIPAL: "-3" })).toThrow(FrickConfigError);
+    expect(() => limitsFromEnv({ FRICK_MAX_CONNECTIONS_PER_PRINCIPAL: "abc" })).toThrow(FrickConfigError);
   });
 
   it("carries limit metadata on FrickLimitError", () => {

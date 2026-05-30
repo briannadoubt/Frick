@@ -6,6 +6,10 @@ Each package version is independent — a release header documents which package
 
 ## Unreleased
 
+### Server — per-principal connection cap
+
+- `@frick/server` now enforces a per-principal concurrent WebSocket connection cap in addition to the existing global `maxWebSocketConnections` cap. The new `FrickLimits.maxConnectionsPerPrincipal` field (default `64`) is keyed by `(tenantId, userId)` and enforced at connect when a bearer token is present, otherwise at the `Hello` handshake. Over-cap connections receive a structured `rateLimit.exceeded` Nack (with `details.limit: "maxConnectionsPerPrincipal"`) and are closed with code `1013`, without affecting other principals. Configurable via `createFrickServer({ limits })` or the `FRICK_MAX_CONNECTIONS_PER_PRINCIPAL` env var (an explicit `limits` override wins over the env var). Counters are in-process and reset on restart, consistent with the single-node model.
+
 ### Bug Fixes
 
 - **Swift SDK:** `FrickSyncSocket.sendFrame` now buffers frames into the existing pending queue when the WebSocket task isn't open yet, instead of throwing `notConnected`. This fixes a race where consumers issuing `subscribeObject` / `subscribePresence` / `setPresence` / `clearPresence` / `subscribeProjection` immediately after `FrickClient.connectSync()` (which schedules `openSocket()` on a detached Task) would intermittently fail. Buffered frames flush in FIFO order right after the hello handshake lands.
