@@ -117,8 +117,12 @@ owner intended.
   `notAuthorizedForResource` or `ownerMismatch`; it does not override
   unauthenticated, not-member, tenant-mismatch, or schema compatibility
   failures.
-- Only the owner who issued the grant can revoke it today. Revoked grants stay
-  in storage for audit/listing but no longer participate in authorization.
+- The owner who issued the grant revokes it via `DELETE /share/grants/:id`,
+  and the grantee can self-revoke ("leave") their own grant via
+  `POST /share/grants/:id/leave`. Each verb is scoped to one role: the leave
+  route only honours the grantee, and DELETE only honours the owner; any other
+  caller gets a tenant-isolated `404`. Revoked grants stay in storage for
+  audit/listing but no longer participate in authorization.
 
 **Known gaps.**
 
@@ -127,7 +131,6 @@ owner intended.
   should gate the calling workflow with policy or product logic.
 - Grants are object-record scoped only. They do not cascade to related rows,
   streams, projections, blobs, jobs, search results, or custom app routes.
-- There is no separate grantee "leave share" endpoint yet.
 
 ---
 

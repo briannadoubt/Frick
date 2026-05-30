@@ -292,7 +292,12 @@ same tenant.
   where the principal is either the owner or the grantee. Revoked grants are
   excluded unless `includeRevoked=true`.
 - `DELETE /share/grants/:id` marks a grant revoked and returns `{ grant }`.
-  Only the owner who issued the underlying invitation can revoke it today.
+  Only the owner who issued the underlying invitation can revoke it.
+- `POST /share/grants/:id/leave` lets the grantee self-revoke ("leave") a
+  grant they hold and returns `{ grant }`. Only the grantee of the grant may
+  call it; any other caller (including the owner) receives `404`. Revocation
+  is idempotent, so leaving an already-revoked grant returns the existing
+  revoked row.
 
 Active grants participate in the framework authorization path for
 `object.read` and `object.write` only. A `"write"` grant satisfies reads and
