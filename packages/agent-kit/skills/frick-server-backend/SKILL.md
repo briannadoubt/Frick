@@ -18,5 +18,9 @@ Guidance:
 - Do not tell scaffolded apps to import `apps/server/src/email/*`; outbound email helpers exist internally but are not a documented `@frick/server` surface yet.
 - Keep demo app behavior thin. If real apps need to copy it, promote it to a framework package or document an extension point.
 - Preserve tenant isolation, structured error envelopes, schema compatibility checks, and session revalidation.
+- Sharing routes are framework-owned (`/share/invite`, `/share/accept`,
+  `/share/grants`, `/share/grants/:id`) and grant object-record access only.
+  Product-level sharing semantics such as cascading, collaborator lists, or
+  grantee leave flows belong in app code or a documented extension point.
 
 Verify backend work with focused tests, then `pnpm test` and `pnpm typecheck`.

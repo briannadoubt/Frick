@@ -1,6 +1,6 @@
 # Frick
 
-Frick is a fullstack realtime framework: one versioned schema drives a Node sync server, a TypeScript client runtime (with React bindings), and reusable Swift and Kotlin client SDKs. Objects, streams, presence, signals, projections, jobs, and blobs are all first-class primitives; the wire format is a compact MessagePack frame protocol; and DTOs for every supported client language are generated from the same canonical schema AST.
+Frick is a fullstack realtime framework: one versioned schema drives a Node sync server, a TypeScript client runtime (with React bindings), and reusable Swift and Kotlin client SDKs. Objects, streams, presence, signals, projections, jobs, blobs, and cross-user sharing grants are all first-class framework primitives; the wire format is a compact MessagePack frame protocol; and DTOs for every supported client language are generated from the same canonical schema AST.
 
 ## Quickstart
 

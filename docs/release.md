@@ -83,7 +83,7 @@ TypeScript packages publish from `.github/workflows/publish-npm.yml` when a `fra
 - runs the same TypeScript/generated-artifact/pack hygiene gates as CI, and
 - packs each missing package with `pnpm pack` so workspace dependencies are rewritten, then publishes that tarball with `npm publish --provenance`.
 
-Before the first automated npm release, configure npm trusted publishing for each public package (`@frick/protocol`, `@frick/core`, `@frick/design`, `@frick/react`, `@frick/design-web`, `@frick/devtools`) to trust this repository and workflow path:
+Before the first automated npm release, configure npm trusted publishing for each public package (`@frick/protocol`, `@frick/core`, `@frick/design`, `@frick/react`, `@frick/design-web`, `@frick/devtools`, `@frick/agent-kit`, `@frick/mcp`) to trust this repository and workflow path:
 
 ```text
 publish-npm.yml

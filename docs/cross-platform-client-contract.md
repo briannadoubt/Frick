@@ -17,7 +17,7 @@ Every generated artifact carries the same schema identity:
 | `minimumClientRevision` | Positive integer | Lowest generated client revision a server can accept |
 | `minimumServerRevision` | Positive integer | Lowest server revision a generated client can talk to |
 
-All four supported platforms expose these constants via generated code (`FrickSchema.schemaId` in TS, `FrickSchema.schemaId` in Swift, `FRICK_SCHEMA_ID` in Kotlin).
+All supported client platforms expose these constants via generated code (`FrickSchema.schemaId` in TS, `FrickSchema.schemaId` in Swift, `FRICK_SCHEMA_ID` in Kotlin). Apps that run a product schema instead of the foundation schema must pass that schema/hash through the client constructor: TypeScript uses `new FrickClient({ schema })`, Swift uses `FrickClient(schemaHash:)`, and Android currently uses the generated Kotlin constants.
 
 ## Shared Error Envelope
 
@@ -154,6 +154,10 @@ The typed error carries:
 
 Each cache exposes a destructive `clear()` / `clearCache()` / `resetCache()` operation that wipes all framework tables (objects, stream events, pending appends, metadata) but leaves caller-owned state untouched. Apps in development mode are expected to call this in response to an incompatible-cache error; production apps surface the error and ask the user.
 
+### Session Scope Changes
+
+Cache metadata is scoped by `tenantId` and `userId`, not just by schema identity. TypeScript `FrickClient.setSession(...)` clears framework state when the session scope changes, and Swift sign-in entry points clear the framework cache before installing a session for a different user. Android persists the new session and reports `sessionScopeMismatch` from `verifyCacheCompatibility()` until the app calls `resetCache()` or uses a separate cache partition.
+
 ### Pending Appends
 
 Pending appends are preserved across compatible reloads. When an incompatible-cache error is thrown, the typed error reports the queued count so apps can give the user an informed choice (drain by reset, or stay offline until a compatible build ships).
@@ -226,7 +230,23 @@ that want to forward `traceparent` can override `post(path, body, headers)`.
 
 ## Object Upserts Over the Sync Socket
 
-Object upserts flow over the sync WebSocket via `FrameKind.ObjectUpsert`. The server honors the schema's `mergePolicy`: `lastWriteWins` accepts any write and increments the version, `versionPrecondition` requires `expectedVersion` to match the on-disk row and Nacks with `storage.conflict` otherwise. Successful upserts reply with an `Ack` carrying the new version. TypeScript exposes `FrickClient.upsertObject`, Swift exposes `FrickSyncSocket.upsertObject`, and Android exposes `FrickSyncSocket.upsertObject`; each queues or buffers writes while disconnected and flushes on reconnect.
+Object upserts flow over the sync WebSocket via `FrameKind.ObjectUpsert`. The server honors the schema's `mergePolicy`: `lastWriteWins` accepts any write and increments the version, `versionPrecondition` requires `expectedVersion` to match the on-disk row and Nacks with `storage.conflict` otherwise. Successful upserts reply with an `Ack` carrying the new version. TypeScript exposes `FrickClient.upsertObject`, Swift exposes `FrickSyncSocket.upsertObject`, and Android exposes `FrickSyncSocket.upsertObject`; each queues or buffers writes while disconnected and flushes on reconnect. Swift also buffers subscribe, presence, signal, projection, and object-subscribe frames issued immediately after `connect()` until the underlying WebSocket is open, preserving FIFO order behind the Hello frame.
+
+## Object Sharing
+
+Framework sharing is HTTP-based and object-record scoped. The shared wire
+types are `FrickInvitation`, `FrickGrant`, and `FrickSharingPermission`
+(`"read"` or `"write"`). TypeScript exports these shapes from
+`@frick/protocol`; Swift exposes `FrickInvitation`, `FrickGrant`, and
+`FrickClient.createInvitation(...)`, `acceptInvitation(token:)`,
+`listGrants(...)`, and `revokeGrant(grantId:)`. Android/Kotlin DTO/runtime
+helpers for these routes have not landed yet.
+
+Semantics are shared across clients: invitations are single-use opaque tokens,
+default to 14 days, are clamped to 90 days, and must be accepted in the same
+tenant by a user other than the owner. Grants are durable until revoked by the
+owner. `"write"` grants satisfy both `object.write` and `object.read`; `"read"`
+grants satisfy only `object.read`.
 
 ## Presence Authorization
 

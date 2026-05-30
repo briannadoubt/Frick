@@ -14,4 +14,6 @@ Debugging path:
 4. Inspect cursors, pending mutations, and last structured error.
 5. Use dashboard and inspect routes for server-side state.
 
+For Swift sync issues, remember that frames sent immediately after `connect()` are intentionally buffered until the socket opens; inspect the queued count and flush order before treating early subscribe/upsert calls as dropped.
+
 Prefer reproductions that cover the original symptom and keep parity across TypeScript, Swift, and Kotlin when the behavior is shared.

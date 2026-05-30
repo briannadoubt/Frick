@@ -97,6 +97,40 @@ they are not permitted to read.
 
 ---
 
+## Cross-user object sharing
+
+**Threat.** A user gains access to another user's object record without an
+explicit share, or a valid share accidentally grants broader access than the
+owner intended.
+
+**Today.**
+
+- Sharing is represented by framework-managed invitation and grant tables,
+  scoped by tenant id. Invitation tokens are opaque, single-use, expire after a
+  bounded lifetime, and can only be accepted inside the issuing tenant by a
+  different user.
+- A redeemed invitation creates a durable grant for one `(recordType,
+  recordId)` with `"read"` or `"write"` permission. `"write"` satisfies both
+  `object.write` and `object.read`; `"read"` satisfies only `object.read`.
+- Grant lookup runs after baseline policy checks and app policy hooks. It only
+  relaxes denials for `object.read` / `object.write` with
+  `notAuthorizedForResource` or `ownerMismatch`; it does not override
+  unauthenticated, not-member, tenant-mismatch, or schema compatibility
+  failures.
+- Only the owner who issued the grant can revoke it today. Revoked grants stay
+  in storage for audit/listing but no longer participate in authorization.
+
+**Known gaps.**
+
+- Share creation currently trusts an authenticated tenant principal to issue an
+  invitation for the named record; apps that need stricter owner/admin checks
+  should gate the calling workflow with policy or product logic.
+- Grants are object-record scoped only. They do not cascade to related rows,
+  streams, projections, blobs, jobs, search results, or custom app routes.
+- There is no separate grantee "leave share" endpoint yet.
+
+---
+
 ## Search index exposure
 
 **Threat.** A tenant user queries a custom app-provided full-text index whose
@@ -331,16 +365,22 @@ The app owns the User schema object. Frick writes and reads that row through
 the configured field mapping, calls `onFirstSignIn` so the app can choose the
 tenant and optional user id, and mints a normal bearer session. Email/password
 signup stores password credentials through the server account store and
-normalizes email handles to lowercase. Apple `consent-revoked` and
-`account-delete` notifications set the mapped `revokedAt` field and delete
-active sessions for the user before calling the optional `onRevoke` hook.
+normalizes email handles to lowercase. Password reset requests always return a
+generic success response, call the app-owned `onPasswordResetRequested` hook
+only for known accounts, store reset tokens only as SHA-256 hashes, expire them
+after 60 minutes, and consume them on first successful use. A completed reset
+updates the stored password hash and deletes active sessions for that user.
+Apple `consent-revoked` and `account-delete` notifications set the mapped
+`revokedAt` field and delete active sessions for the user before calling the
+optional `onRevoke` hook.
 
 **Known gaps.**
 
 - Provider sessions currently use a fixed 30-day lifetime instead of the
   `FRICK_SESSION_TTL_SECONDS` knob used by built-in password/dev-login
   sessions.
-- The provider routes do not yet share the built-in auth attempt limiter.
+- The provider routes, including email password reset endpoints, do not yet
+  share the built-in auth attempt limiter.
 - Generic OIDC, SAML, and arbitrary OAuth provider routing are not implemented.
 
 ---

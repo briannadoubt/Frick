@@ -20,6 +20,7 @@ The primitives the schema defines are:
 - **Signals** — routed, fire-and-forget channels for things that don't deserve to be in a durable log (typing notifications, cursor pings).
 - **Projections** — server-computed derived views over objects and streams; clients subscribe to the projection and receive deltas.
 - **Jobs** and **Blobs** — durable background work and content-addressed binary storage, both with the same schema-driven shape.
+- **Sharing grants** — same-tenant read/write grants for individual object records, issued through single-use invitation tokens.
 
 Two properties tie it together. First, protocol artifacts (server tables, client cache, generated DTOs, fixtures) are derived from the same schema AST, and tracked design-token outputs are generated from the canonical design definition. `pnpm verify:generated` regenerates both families and fails CI if anything moved. Second, the schema carries an identity (`schemaId`, `schemaVersion`, `schemaRevision`, `schemaHash`) that clients send on every connection, so the server can reject incompatible clients before a single bad write hits storage.
 
@@ -95,7 +96,8 @@ Most day-to-day work is one of these. Each links to the canonical reference.
 
 ## Troubleshooting
 
-- **"Schema hash mismatch" on client connect.** Your client cache was built against a different schema. Either regenerate with `pnpm schema:generate` (development), or bump `schemaRevision` so the client knows to discard and re-snapshot.
+- **"Schema hash mismatch" on client connect.** The client and server are using different schema artifacts. Regenerate with `pnpm schema:generate` in development and make sure app clients pass their product schema or schema hash into the SDK constructor.
+- **`sessionScopeMismatch` from the local cache.** Cached framework rows belong to a different tenant/user than the active session. TypeScript and Swift clear framework cache state on user swaps; Android apps should call `resetCache()` or use a separate cache partition before reconnecting.
 - **`pnpm verify:generated` fails.** Generated artifacts have drifted. Run `pnpm schema:generate && pnpm fixtures:generate && pnpm design:generate` and commit the regenerated tracked files.
 - **`frick migrate status` shows pending migrations after a pull.** Run `pnpm cli migrate up`. In production this requires `--confirm-prod`; see [`docs/operations.md`](./operations.md).
 - **"Why can't I see this row I just wrote?"** Tenant boundary. The server scopes objects and streams by tenant id; a subscription with a different tenant context will never see the write. Check the connection's tenant header and verify the row's `tenantId` column.
@@ -112,12 +114,16 @@ Most day-to-day work is one of these. Each links to the canonical reference.
 │   ├── dev-dashboard/  # static local console for health, inspection, metrics, jobs, and events
 │   ├── web/         # browser demo app — conformance harness, not a chat product
 │   ├── ios/         # SwiftUI demo app (FrickDemo.xcodeproj)
-│   └── android/     # Android demo app (`app/`) and the reusable `frick/` SDK module
+│   ├── android/     # Android demo app, SDK, Compose helpers, and generated design module
+│   └── rangercrm-server/ # private product-schema harness used by downstream integration work
 ├── packages/
 │   ├── protocol/    # canonical schema AST, codec, frame format, lint, fixtures, native DTO generation
 │   ├── core/        # UI-agnostic TypeScript client runtime (cache, sync, commands)
 │   ├── react/       # React provider + hooks built on @frick/core
+│   ├── devtools/    # embeddable React DevTools panel for client runtime state
 │   ├── swift/       # reusable Swift package (generated DTOs + runtime)
+│   ├── mcp/         # read-only MCP server for inspecting scaffolded Frick apps
+│   ├── agent-kit/   # portable Codex / Claude Code / Cursor guidance pack
 │   ├── design/      # design tokens (shared)
 │   ├── design-web/  # web binding for design tokens
 │   └── design-swift/# Swift binding for design tokens
