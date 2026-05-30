@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { FrickConfigError, loadFrickConfig } from "../src/config.js";
+import {
+  FrickConfigError,
+  isOriginInAllowlist,
+  loadFrickConfig,
+  originMatchesAllowlistEntry,
+} from "../src/config.js";
 
 describe("loadFrickConfig", () => {
   it("defaults to development with demo auth enabled and sensible deployment defaults", () => {
@@ -228,5 +233,119 @@ describe("loadFrickConfig", () => {
     expect(() =>
       loadFrickConfig({}, { env: { FRICK_OTEL_METRIC_EXPORT_INTERVAL_MS: "0" }, warn: () => {} }),
     ).toThrow(FrickConfigError);
+  });
+
+  it("parses subdomain-wildcard and exact allowed origins together", () => {
+    const config = loadFrickConfig(
+      {},
+      {
+        env: {
+          FRICK_ALLOWED_ORIGINS:
+            "https://app.example.com, https://*.example.com, http://localhost:5173",
+        },
+        warn: () => {},
+      },
+    );
+    expect(config.allowedOrigins).toEqual([
+      "https://app.example.com",
+      "https://*.example.com",
+      "http://localhost:5173",
+    ]);
+  });
+
+  it("throws FrickConfigError on malformed allowed-origin patterns", () => {
+    // Bare host wildcard (no subdomain to match against).
+    expect(() =>
+      loadFrickConfig({}, { env: { FRICK_ALLOWED_ORIGINS: "https://*" }, warn: () => {} }),
+    ).toThrow(FrickConfigError);
+    // Mid-host wildcard.
+    expect(() =>
+      loadFrickConfig({}, { env: { FRICK_ALLOWED_ORIGINS: "https://a.*.com" }, warn: () => {} }),
+    ).toThrow(FrickConfigError);
+    // Multiple wildcards.
+    expect(() =>
+      loadFrickConfig(
+        {},
+        { env: { FRICK_ALLOWED_ORIGINS: "https://*.*.example.com" }, warn: () => {} },
+      ),
+    ).toThrow(FrickConfigError);
+    // Entry carrying a path is not a bare origin.
+    expect(() =>
+      loadFrickConfig(
+        {},
+        { env: { FRICK_ALLOWED_ORIGINS: "https://app.example.com/app" }, warn: () => {} },
+      ),
+    ).toThrow(FrickConfigError);
+    // Not a URL at all.
+    expect(() =>
+      loadFrickConfig({}, { env: { FRICK_ALLOWED_ORIGINS: "not a url" }, warn: () => {} }),
+    ).toThrow(FrickConfigError);
+  });
+
+  it("validates allowed-origin overrides as well as env values", () => {
+    expect(() =>
+      loadFrickConfig({ allowedOrigins: ["https://a.*.com"] }, { env: {}, warn: () => {} }),
+    ).toThrow(FrickConfigError);
+    expect(
+      loadFrickConfig(
+        { allowedOrigins: ["https://*.example.com"] },
+        { env: {}, warn: () => {} },
+      ).allowedOrigins,
+    ).toEqual(["https://*.example.com"]);
+  });
+});
+
+describe("originMatchesAllowlistEntry", () => {
+  it("matches exact origins", () => {
+    expect(originMatchesAllowlistEntry("https://app.example.com", "https://app.example.com")).toBe(
+      true,
+    );
+    expect(originMatchesAllowlistEntry("https://app.example.com", "https://other.example.com")).toBe(
+      false,
+    );
+  });
+
+  it("allow-all wildcard matches anything", () => {
+    expect(originMatchesAllowlistEntry("https://anything.example.org", "*")).toBe(true);
+  });
+
+  it("subdomain wildcard matches subdomains over the same scheme and port", () => {
+    expect(originMatchesAllowlistEntry("https://app.example.com", "https://*.example.com")).toBe(
+      true,
+    );
+    expect(originMatchesAllowlistEntry("https://a.b.example.com", "https://*.example.com")).toBe(
+      true,
+    );
+  });
+
+  it("subdomain wildcard does NOT match the apex host", () => {
+    expect(originMatchesAllowlistEntry("https://example.com", "https://*.example.com")).toBe(false);
+  });
+
+  it("subdomain wildcard rejects scheme, port, and lookalike mismatches", () => {
+    // Different scheme.
+    expect(originMatchesAllowlistEntry("http://app.example.com", "https://*.example.com")).toBe(
+      false,
+    );
+    // Different port.
+    expect(
+      originMatchesAllowlistEntry("https://app.example.com:8443", "https://*.example.com"),
+    ).toBe(false);
+    // Suffix-as-substring attack: notexample.com must not match *.example.com.
+    expect(originMatchesAllowlistEntry("https://app.notexample.com", "https://*.example.com")).toBe(
+      false,
+    );
+    // Trailing-suffix attack: evil host that merely ends with the apex string.
+    expect(
+      originMatchesAllowlistEntry("https://evilexample.com", "https://*.example.com"),
+    ).toBe(false);
+  });
+
+  it("isOriginInAllowlist returns true when any entry matches", () => {
+    const list = ["https://admin.example.com", "https://*.example.com"];
+    expect(isOriginInAllowlist("https://admin.example.com", list)).toBe(true);
+    expect(isOriginInAllowlist("https://tenant42.example.com", list)).toBe(true);
+    expect(isOriginInAllowlist("https://example.com", list)).toBe(false);
+    expect(isOriginInAllowlist("https://evil.com", list)).toBe(false);
   });
 });

@@ -90,6 +90,7 @@ import { eraseDataSubject } from "./compliance/data-subject-erase.js";
 import { FrickObjectVersionConflictError } from "./storage/object-errors.js";
 import {
   FrickConfigError,
+  isOriginInAllowlist,
   loadFrickConfig,
   type FrickConfig,
   type FrickConfigOverrides,
@@ -2343,13 +2344,13 @@ export function defaultDatabasePath(): string {
  * allowlist. Same-origin / server-to-server requests omit `Origin` entirely
  * and are always allowed — browsers, not the server, enforce CORS for those.
  *
- * Matching is exact-string only. Pattern matching (regex, suffix, subdomain
- * wildcards) is out of scope; see `docs/threat-model.md` for the rationale.
+ * Allowlist entries may be the allow-all wildcard `*`, an exact origin, or a
+ * `<scheme>://*.<host>` subdomain wildcard. See `isOriginInAllowlist` in
+ * `config.ts` and `docs/threat-model.md` for the matching rules.
  */
 function isOriginAllowed(origin: string | undefined, allowedOrigins: readonly string[]): boolean {
   if (!origin) return true;
-  if (allowedOrigins.includes("*")) return true;
-  return allowedOrigins.includes(origin);
+  return isOriginInAllowlist(origin, allowedOrigins);
 }
 
 class CorsOriginRejectedError extends Error {
@@ -2527,7 +2528,9 @@ function setCors(
   }
   if (allowedOrigins.includes("*") && (!requestOrigin || allowedOrigins.length === 1)) {
     response.setHeader("Access-Control-Allow-Origin", "*");
-  } else if (requestOrigin && allowedOrigins.includes(requestOrigin)) {
+  } else if (requestOrigin && isOriginInAllowlist(requestOrigin, allowedOrigins)) {
+    // Reflect the concrete request origin (never the wildcard pattern string)
+    // so subdomain-wildcard and exact entries both echo a usable value.
     response.setHeader("Access-Control-Allow-Origin", requestOrigin);
     response.setHeader("Vary", "Origin");
   } else if (allowedOrigins.includes("*")) {

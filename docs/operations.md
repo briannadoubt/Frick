@@ -54,7 +54,7 @@ All variables are optional. Defaults match the runtime mode.
 | `FRICK_HOST`                | `127.0.0.1`                 | `0.0.0.0`                             | Host the HTTP server binds to.                                       |
 | `FRICK_PORT`                | `4099`                      | `4099`                                | Integer in `[0, 65535]`. `0` asks the kernel to allocate a port.     |
 | `FRICK_PUBLIC_URL`          | unset                       | unset                                 | Externally-reachable URL; surfaced in the startup log when set.      |
-| `FRICK_ALLOWED_ORIGINS`     | `["*"]`                     | `[]`                                  | Comma-separated allowlist. Enforced for HTTP preflight and WebSocket upgrades; same-origin/server-to-server requests omit `Origin`. |
+| `FRICK_ALLOWED_ORIGINS`     | `["*"]`                     | `[]`                                  | Comma-separated allowlist. Entries may be `*` (allow all), an exact origin (`https://app.example.com`), or a subdomain wildcard (`https://*.example.com`, which matches any subdomain but not the apex `example.com`). Enforced for HTTP preflight and WebSocket upgrades; same-origin/server-to-server requests omit `Origin`. Malformed patterns are rejected at startup. |
 | `FRICK_DB_PATH`             | `./frick.sqlite`            | `./frick.sqlite`                      | SQLite path. `":memory:"` is rejected in production.                 |
 | `FRICK_BLOB_STORAGE_PATH`   | `./frick-blobs/`            | `./frick-blobs/`                      | Parsed for future filesystem blob storage; current blob bytes are SQLite-backed. |
 | `FRICK_LOG_LEVEL`           | `info`                      | `info`                                | One of `debug`, `info`, `warn`, `error`.                             |
@@ -833,8 +833,9 @@ Content-Type: application/json
 
 - CORS is enforced for HTTP preflight requests and WebSocket upgrades.
   Same-origin and server-to-server requests with no `Origin` header bypass
-  CORS by browser convention; exact-string origin matching is the only
-  supported mode.
+  CORS by browser convention. Allowlist entries support `*` (allow all),
+  exact origins, and single subdomain wildcards (`<scheme>://*.<host>`);
+  regex, path/port patterns, and multi-segment wildcards are not supported.
 - The CLI exists in the monorepo as `pnpm cli <command>` and can be built
   as `frick`, but it is still private and imports server internals directly.
   Publishing a standalone npm CLI remains a release-surface follow-up.

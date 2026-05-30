@@ -48,6 +48,18 @@ export interface FrickConfig {
    * preflight requests and WebSocket upgrades are rejected when the request's
    * `Origin` is not on this list. Requests without an `Origin` header are
    * treated as same-origin/server-to-server traffic.
+   *
+   * Entries may be:
+   * - `*` — allow any origin (the development default; never the production
+   *   default).
+   * - An exact origin such as `https://app.example.com`.
+   * - A subdomain wildcard such as `https://*.example.com`, which matches any
+   *   subdomain of `example.com` over the same scheme/port (e.g.
+   *   `https://app.example.com`, `https://a.b.example.com`) but NOT the apex
+   *   `https://example.com` unless that exact origin is also listed.
+   *
+   * Patterns are validated at config load; malformed entries raise
+   * {@link FrickConfigError}.
    */
   allowedOrigins: string[];
   /** SQLite database path. Tests pass `":memory:"`. */
@@ -141,6 +153,14 @@ const VALID_LOG_LEVELS: ReadonlySet<FrickLogLevel> = new Set<FrickLogLevel>([
 const VALID_PLATFORM_EVENTS_DRIVERS: ReadonlySet<FrickPlatformEventsDriver> =
   new Set<FrickPlatformEventsDriver>(["sqlite", "kafka"]);
 
+/**
+ * A single subdomain-wildcard allowlist entry: `<scheme>://*.<rest-of-host>`.
+ * Capture group 1 is the scheme, group 2 is the host suffix (and optional
+ * port) after the `*.`. Only one leading-label wildcard is recognized here;
+ * extra `*` characters in the remainder are rejected by the caller.
+ */
+const WILDCARD_ORIGIN_PATTERN = /^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/\*\.(.+)$/;
+
 export type FrickConfigOverrides = Partial<FrickConfig>;
 
 interface LoadConfigContext {
@@ -172,8 +192,9 @@ export function loadFrickConfig(
   const host = overrides.host ?? parseString(env.FRICK_HOST) ?? defaultHost(runtimeEnv);
   const port = overrides.port ?? parsePort(env.FRICK_PORT, DEFAULT_PORT);
   const publicUrl = overrides.publicUrl ?? parseString(env.FRICK_PUBLIC_URL);
-  const allowedOrigins =
-    overrides.allowedOrigins ?? parseAllowedOrigins(env.FRICK_ALLOWED_ORIGINS, runtimeEnv);
+  const allowedOrigins = overrides.allowedOrigins
+    ? validateAllowedOrigins(overrides.allowedOrigins)
+    : parseAllowedOrigins(env.FRICK_ALLOWED_ORIGINS, runtimeEnv);
   const dbPath = overrides.dbPath ?? parseString(env.FRICK_DB_PATH) ?? DEFAULT_DB_PATH;
   const blobStoragePath =
     overrides.blobStoragePath ?? parseString(env.FRICK_BLOB_STORAGE_PATH) ?? DEFAULT_BLOB_STORAGE_PATH;
@@ -433,10 +454,139 @@ function parseAllowedOrigins(value: string | undefined, env: FrickEnv): string[]
   if (value === undefined || value === "") {
     return env === "production" ? [] : ["*"];
   }
-  return value
+  const origins = value
     .split(",")
     .map((origin) => origin.trim())
     .filter((origin) => origin.length > 0);
+  return validateAllowedOrigins(origins);
+}
+
+function validateAllowedOrigins(origins: readonly string[]): string[] {
+  for (const origin of origins) {
+    validateAllowedOrigin(origin);
+  }
+  return [...origins];
+}
+
+/**
+ * Validate a single `FRICK_ALLOWED_ORIGINS` entry. Accepts the allow-all
+ * wildcard `*`, an exact origin (`https://app.example.com`), or a subdomain
+ * wildcard (`https://*.example.com`). Throws {@link FrickConfigError} on
+ * anything malformed so misconfiguration fails fast at startup.
+ */
+function validateAllowedOrigin(origin: string): void {
+  if (origin === "*") {
+    return;
+  }
+
+  if (origin.includes("*")) {
+    // Only a single leading-label host wildcard is supported:
+    // `<scheme>://*.<rest-of-host>` (optionally with a port). Reject bare
+    // host wildcards (`https://*`), mid-host wildcards (`https://a.*.com`),
+    // multiple wildcards, or wildcards outside the host.
+    const match = WILDCARD_ORIGIN_PATTERN.exec(origin);
+    const scheme = match?.[1];
+    const remainder = match?.[2];
+    if (scheme === undefined || remainder === undefined) {
+      throw new FrickConfigError(
+        `FRICK_ALLOWED_ORIGINS wildcard entries must look like "<scheme>://*.<host>" (got ${JSON.stringify(origin)})`,
+      );
+    }
+    if (remainder.includes("*")) {
+      throw new FrickConfigError(
+        `FRICK_ALLOWED_ORIGINS allows only a single "*." subdomain wildcard per entry (got ${JSON.stringify(origin)})`,
+      );
+    }
+    // The wildcard suffix must itself be a valid origin once the `*.` is
+    // dropped (so `https://*.example.com` reduces to `https://example.com`).
+    assertParsableOrigin(`${scheme}://${remainder}`, origin);
+    return;
+  }
+
+  assertParsableOrigin(origin, origin);
+}
+
+function assertParsableOrigin(candidate: string, original: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    throw new FrickConfigError(
+      `FRICK_ALLOWED_ORIGINS entry is not a valid origin (got ${JSON.stringify(original)})`,
+    );
+  }
+  // An origin is scheme + host (+ optional port); reject entries carrying a
+  // path, query, fragment, or credentials so the allowlist stays unambiguous.
+  if (
+    parsed.pathname !== "/" ||
+    parsed.search !== "" ||
+    parsed.hash !== "" ||
+    parsed.username !== "" ||
+    parsed.password !== "" ||
+    parsed.hostname === ""
+  ) {
+    throw new FrickConfigError(
+      `FRICK_ALLOWED_ORIGINS entry must be a bare origin without a path/query/credentials (got ${JSON.stringify(original)})`,
+    );
+  }
+}
+
+/**
+ * Decide whether a request `Origin` is permitted by an allowlist entry.
+ * Supports the allow-all wildcard, exact matches, and `<scheme>://*.<host>`
+ * subdomain wildcards. The wildcard matches any non-empty subdomain prefix
+ * over the same scheme and port but not the apex host itself.
+ */
+export function originMatchesAllowlistEntry(origin: string, entry: string): boolean {
+  if (entry === "*") {
+    return true;
+  }
+  if (origin === entry) {
+    return true;
+  }
+  const wildcard = WILDCARD_ORIGIN_PATTERN.exec(entry);
+  const scheme = wildcard?.[1];
+  const remainder = wildcard?.[2];
+  if (scheme === undefined || remainder === undefined) {
+    return false;
+  }
+
+  let parsedOrigin: URL;
+  try {
+    parsedOrigin = new URL(origin);
+  } catch {
+    return false;
+  }
+
+  let parsedSuffix: URL;
+  try {
+    parsedSuffix = new URL(`${scheme}://${remainder}`);
+  } catch {
+    return false;
+  }
+
+  // Scheme and port must match exactly; only the host subdomain is wild.
+  if (parsedOrigin.protocol !== parsedSuffix.protocol) {
+    return false;
+  }
+  if (parsedOrigin.port !== parsedSuffix.port) {
+    return false;
+  }
+
+  const originHost = parsedOrigin.hostname.toLowerCase();
+  const suffixHost = parsedSuffix.hostname.toLowerCase();
+  // Require a real subdomain label: `app.example.com` ends with
+  // `.example.com`, but the apex `example.com` does not.
+  return originHost.endsWith(`.${suffixHost}`) && originHost.length > suffixHost.length + 1;
+}
+
+/**
+ * True when `origin` matches any entry in the allowlist. Shared by the HTTP
+ * and WebSocket CORS paths so exact, allow-all, and subdomain-wildcard rules
+ * stay consistent.
+ */
+export function isOriginInAllowlist(origin: string, allowedOrigins: readonly string[]): boolean {
+  return allowedOrigins.some((entry) => originMatchesAllowlistEntry(origin, entry));
 }
 
 function defaultHost(env: FrickEnv): string {

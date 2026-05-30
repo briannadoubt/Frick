@@ -6,6 +6,10 @@ Each package version is independent — a release header documents which package
 
 ## Unreleased
 
+### Server — CORS subdomain/suffix wildcard origins
+
+- `FRICK_ALLOWED_ORIGINS` (and the `allowedOrigins` config override) now accept subdomain wildcard entries of the form `<scheme>://*.<host>` (e.g. `https://*.example.com`) alongside the existing allow-all `*` and exact-origin entries. A wildcard matches any non-empty subdomain prefix over the same scheme and port (`https://app.example.com`, `https://a.b.example.com`) but not the apex host (`https://example.com`) unless that exact origin is also listed. Large multi-tenant deployments no longer need to enumerate every per-tenant origin. Matching is shared by the HTTP preflight/response path and the WebSocket upgrade `verifyClient` check; wildcard-matched requests reflect the concrete request origin (with `Vary: Origin`), never the pattern string. Malformed entries (bare-host wildcards like `https://*`, mid-host wildcards, multiple wildcards, or non-origin strings) are rejected at config load with `FrickConfigError`. The production default remains the closed empty allowlist.
+
 ### Bug Fixes
 
 - **Swift SDK:** `FrickSyncSocket.sendFrame` now buffers frames into the existing pending queue when the WebSocket task isn't open yet, instead of throwing `notConnected`. This fixes a race where consumers issuing `subscribeObject` / `subscribePresence` / `setPresence` / `clearPresence` / `subscribeProjection` immediately after `FrickClient.connectSync()` (which schedules `openSocket()` on a detached Task) would intermittently fail. Buffered frames flush in FIFO order right after the hello handshake lands.
