@@ -74,6 +74,7 @@ All variables are optional. Defaults match the runtime mode.
 | `FRICK_PLATFORM_EVENTS_KAFKA_BROKERS` | unset             | unset                                 | Comma-separated Kafka/Redpanda brokers. When set and no driver is forced, the driver defaults to `kafka`. |
 | `FRICK_PLATFORM_EVENTS_RETENTION_MS` | `604800000` (7d)    | `604800000`                           | SQLite platform event retention window. Positive integer milliseconds. |
 | `FRICK_PLATFORM_EVENTS_MAX_ROWS` | `1000000`               | `1000000`                             | SQLite platform event row cap after retention pruning. Positive integer. |
+| `FRICK_IDEMPOTENCY_REPLAY_WINDOW_MS` | `86400000` (24h)    | `86400000`                            | Replay-window bound (ms) for `requestId` idempotency, enforced at lookup time independent of retention/pruning: a retry older than the window mints a fresh event. Positive integer. |
 
 Validation errors throw `FrickConfigError` at startup, before any port is
 opened. Unknown env values (e.g. `FRICK_ENV=staging`) are fatal — the

@@ -427,6 +427,7 @@ export function createFrickServer(options: ServerOptions = {}) {
       : {}),
     platformEventsRetentionMs: config.platformEventsRetentionMs,
     platformEventsMaxRows: config.platformEventsMaxRows,
+    idempotencyReplayWindowMs: config.idempotencyReplayWindowMs,
   });
   const platformEvents =
     options.platformEvents ??
@@ -2330,7 +2331,8 @@ function isFrickConfig(value: FrickConfig | FrickConfigOverrides): value is Fric
     typeof v.platformEventsTopic === "string" &&
     Array.isArray(v.platformEventsKafkaBrokers) &&
     typeof v.platformEventsRetentionMs === "number" &&
-    typeof v.platformEventsMaxRows === "number"
+    typeof v.platformEventsMaxRows === "number" &&
+    typeof v.idempotencyReplayWindowMs === "number"
   );
 }
 

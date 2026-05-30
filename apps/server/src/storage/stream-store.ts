@@ -30,8 +30,36 @@ export interface AppendResult {
   created: boolean;
 }
 
+/**
+ * Value stored in the in-process idempotency front-cache. The `createdAtMs`
+ * timestamp lets the replay-window bound be enforced against cached hits too,
+ * not just durable SQLite lookups — otherwise a long-lived cache entry could
+ * keep deduping a requestId past its window even after the durable row would
+ * be ignored.
+ */
+export interface CachedIdempotentEvent {
+  event: StoredEvent;
+  createdAtMs: number;
+}
+
+/**
+ * Options governing how the idempotency replay window is enforced on lookup.
+ */
+export interface IdempotencyWindowOptions {
+  /**
+   * Maximum age (ms) of an idempotency record for it to still be treated as
+   * idempotent. A record whose `created_at` is older than `now - replayWindowMs`
+   * is ignored (treated as not-seen). When undefined, no window is applied and
+   * a requestId is honoured for as long as its row exists (legacy behaviour).
+   */
+  replayWindowMs?: number;
+  /** Clock override, primarily for deterministic tests. */
+  now?: () => number;
+}
+
 interface IdempotencyRow {
   result_event_id: string;
+  created_at: string;
 }
 
 interface EventRow {
@@ -39,22 +67,50 @@ interface EventRow {
 }
 
 export class StreamStore {
+  readonly #replayWindowMs: number | undefined;
+  readonly #now: () => number;
+
   constructor(
     private readonly db: DatabaseSync,
     private readonly schema: FrickSchema,
-    private readonly idempotencyCache?: IdempotencyCache<StoredEvent>,
-  ) {}
+    private readonly idempotencyCache?: IdempotencyCache<CachedIdempotentEvent>,
+    windowOptions: IdempotencyWindowOptions = {},
+  ) {
+    this.#replayWindowMs =
+      windowOptions.replayWindowMs !== undefined && windowOptions.replayWindowMs > 0
+        ? windowOptions.replayWindowMs
+        : undefined;
+    this.#now = windowOptions.now ?? Date.now;
+  }
+
+  /**
+   * True when `createdAtMs` falls within the configured replay window relative
+   * to the current clock. Records outside the window are treated as not-seen,
+   * so a beyond-window requestId is no longer deduped. With no window
+   * configured, every record is in-window.
+   */
+  #withinReplayWindow(createdAtMs: number): boolean {
+    if (this.#replayWindowMs === undefined) {
+      return true;
+    }
+    if (!Number.isFinite(createdAtMs)) {
+      // An unparseable timestamp can't be proven to be within the window, so
+      // fail closed and treat it as expired rather than honour it forever.
+      return false;
+    }
+    return this.#now() - createdAtMs <= this.#replayWindowMs;
+  }
 
   append(input: AppendInput): AppendResult {
     const cacheKey = `${input.tenantId}|${input.replicaId}|${input.requestId}`;
     const cached = this.idempotencyCache?.get(cacheKey);
-    if (cached) {
-      return { event: cached, created: false };
+    if (cached && this.#withinReplayWindow(cached.createdAtMs)) {
+      return { event: cached.event, created: false };
     }
     const existing = this.readIdempotentEvent(input.tenantId, input.replicaId, input.requestId);
     if (existing) {
       this.idempotencyCache?.set(cacheKey, existing);
-      return { event: existing, created: false };
+      return { event: existing.event, created: false };
     }
 
     const sequence = this.nextSequence(input.tenantId, input.stream, input.streamId);
@@ -89,16 +145,25 @@ export class StreamStore {
         createdAt,
       );
 
+    // Upsert, not plain insert: when a replay lands BEYOND the replay window the
+    // lookup above treats it as not-seen and we mint a fresh event, but the old
+    // idempotency row may still exist (the window is enforced at lookup time,
+    // independent of retention/pruning). Rewrite the row to point at the new
+    // event with a fresh created_at so we don't trip the (tenant, replica,
+    // request) primary key and so subsequent in-window replays dedupe to the
+    // fresh event.
     this.db
       .prepare(
         `INSERT INTO idempotency_keys
           (tenant_id, replica_id, request_id, result_event_id, created_at)
-          VALUES (?, ?, ?, ?, ?)`,
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(tenant_id, replica_id, request_id)
+          DO UPDATE SET result_event_id = excluded.result_event_id, created_at = excluded.created_at`,
       )
       .run(input.tenantId, input.replicaId, input.requestId, eventId, createdAt);
 
     const event: StoredEvent = { ...wireEvent, tenantId: input.tenantId };
-    this.idempotencyCache?.set(cacheKey, event);
+    this.idempotencyCache?.set(cacheKey, { event, createdAtMs: Date.parse(createdAt) });
     return { event, created: true };
   }
 
@@ -205,13 +270,22 @@ export class StreamStore {
     tenantId: string,
     replicaId: string,
     requestId: string,
-  ): StoredEvent | undefined {
+  ): CachedIdempotentEvent | undefined {
     const row = this.db
       .prepare(
-        "SELECT result_event_id FROM idempotency_keys WHERE tenant_id = ? AND replica_id = ? AND request_id = ?",
+        "SELECT result_event_id, created_at FROM idempotency_keys WHERE tenant_id = ? AND replica_id = ? AND request_id = ?",
       )
       .get(tenantId, replicaId, requestId) as IdempotencyRow | undefined;
-    return row ? this.readByEventId(tenantId, row.result_event_id) : undefined;
+    if (!row) return undefined;
+    const createdAtMs = Date.parse(row.created_at);
+    // Enforce the replay-window bound at lookup time, independent of any
+    // durable retention/pruning: a record older than the window is treated as
+    // not-seen even if its row still exists.
+    if (!this.#withinReplayWindow(createdAtMs)) {
+      return undefined;
+    }
+    const event = this.readByEventId(tenantId, row.result_event_id);
+    return event ? { event, createdAtMs } : undefined;
   }
 
   private readByEventId(tenantId: string, eventId: string): StoredEvent | undefined {

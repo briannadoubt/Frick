@@ -89,6 +89,12 @@ A multi-commit rollout that lifts the client SDKs from "you can hand-write it" t
 
 ### Server (`@frick/server`)
 
+- Added a configurable replay-window bound for `requestId` idempotency
+  (`FRICK_IDEMPOTENCY_REPLAY_WINDOW_MS`, default 24h). A retry whose
+  idempotency record is older than the window is no longer deduplicated and
+  mints a fresh event. The bound is enforced at lookup time — independent of
+  durable retention/pruning — and the idempotency key is upserted so a
+  beyond-window replay rewrites it to the new event.
 - Added framework sharing primitives: `POST /share/invite` creates a
   single-use invitation token for an object record, `POST /share/accept`
   redeems a token into a durable grant, `GET /share/grants` lists active grants
