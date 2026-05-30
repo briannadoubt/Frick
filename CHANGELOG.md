@@ -6,6 +6,16 @@ Each package version is independent — a release header documents which package
 
 ## Unreleased
 
+### Design — token validation hardening
+
+- `@frick/design` validation (`pnpm design:check`, run as part of `pnpm design:generate` / `pnpm verify:generated`) now catches more classes of token mistakes and fails the build on any of them:
+  - **Off-scale spacing/radius:** literal `semantic.spacing` / `semantic.padding` / `semantic.corner` values (including density overrides) must be members of the declared `primitive.space` / `primitive.radius` scales, not merely on the 4-point grid.
+  - **Circular aliases:** alias cycles are now detected statically across every mode/density/brand layer combination, not just the single default resolve, so a cycle hidden in an override layer is reported up front with its full chain.
+  - **Missing icon mappings:** component `icon.*` aliases that point at a key absent from `icons` are flagged with the offending component path instead of silently emitting a dangling glyph name.
+  - **Color contrast:** the resolved semantic palette is checked for WCAG 2.1 contrast across all modes/brands — body-text pairs against AA (4.5:1) and the action-button label pair against AA-large (3:1).
+  - **Raw styling literals:** a new linter scans the handwritten `packages/design-web/src/components.css` and rejects raw color literals (hex / `rgb()` / `hsl()`) and fractional `opacity` values in component rules, steering them to `var(--frick-*)` tokens. Definitions in the `--frick-*` bridge layer and structural numerics (`0`/`1` opacity, grid/`minmax`/`%`/breakpoints) are exempt.
+- Tokenized the one pre-existing raw literal this surfaced: the disabled-state `opacity: 0.48` in `components.css` now references a new `--frick-opacity-disabled` bridge variable (mirroring `primitive.opacity.disabled`). No generated artifact or rendered value changed.
+
 ### Bug Fixes
 
 - **Swift SDK:** `FrickSyncSocket.sendFrame` now buffers frames into the existing pending queue when the WebSocket task isn't open yet, instead of throwing `notConnected`. This fixes a race where consumers issuing `subscribeObject` / `subscribePresence` / `setPresence` / `clearPresence` / `subscribeProjection` immediately after `FrickClient.connectSync()` (which schedules `openSocket()` on a detached Task) would intermittently fail. Buffered frames flush in FIFO order right after the hello handshake lands.

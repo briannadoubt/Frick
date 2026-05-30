@@ -37,6 +37,7 @@
   --frick-font-size-xl: var(--frick-typography-title-size);
   --frick-line-height-tight: 1.2;
   --frick-line-height-normal: 1.5;
+  --frick-opacity-disabled: 0.48;
   --frick-font-weight-regular: var(--frick-typography-body-weight);
   --frick-font-weight-medium: var(--frick-typography-label-weight);
   --frick-font-weight-semibold: var(--frick-typography-title-weight);
@@ -276,7 +277,7 @@
 
 .frick-workspace-shell__destination:disabled {
   cursor: default;
-  opacity: 0.48;
+  opacity: var(--frick-opacity-disabled);
 }
 
 .frick-workspace-shell__destination b {
