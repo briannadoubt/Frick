@@ -3,9 +3,12 @@
  *
  * Slice 6 expanded this beyond the original demo-auth/session knobs to cover
  * deployment-shaped settings: host, port, public URL, allowed origins, db and
- * blob storage paths, and log level. Storage drivers other than the existing
- * SQLite/local-filesystem pair, and CORS enforcement itself, still land in a
- * later slice — this module just parses, validates, and exposes the values.
+ * blob storage paths, and log level. A storage-driver selector (`dbDriver`)
+ * now lets a future Postgres driver be chosen; SQLite stays the default and the
+ * only implemented driver, with `postgres` rejected at validation time until
+ * FR-22 lands. The local-filesystem blob driver and CORS enforcement itself
+ * still land in a later slice — this module just parses, validates, and exposes
+ * the values.
  */
 
 export type FrickEnv = "development" | "test" | "production";
@@ -13,6 +16,15 @@ export type FrickEnv = "development" | "test" | "production";
 export type FrickLogLevel = "debug" | "info" | "warn" | "error";
 
 export type FrickPlatformEventsDriver = "sqlite" | "kafka";
+
+/**
+ * Durable-storage driver selector. SQLite is the default and, today, the only
+ * implemented driver — every `*Store` under `src/storage/` is backed by
+ * single-writer `node:sqlite`. `postgres` is reserved for a future driver
+ * (FR-22) and is rejected at config-validation time until that lands; see the
+ * gate in {@link loadFrickConfig}.
+ */
+export type FrickDbDriver = "sqlite" | "postgres";
 
 export interface FrickConfig {
   /** Runtime environment. Drives defaults for the rest of the config. */
@@ -50,8 +62,20 @@ export interface FrickConfig {
    * treated as same-origin/server-to-server traffic.
    */
   allowedOrigins: string[];
-  /** SQLite database path. Tests pass `":memory:"`. */
+  /**
+   * Durable-storage driver. Defaults to `sqlite`, which is the only driver
+   * implemented today. Selecting `postgres` fails fast at config validation
+   * until the Postgres driver lands (FR-22).
+   */
+  dbDriver: FrickDbDriver;
+  /** SQLite database path. Used by the `sqlite` driver. Tests pass `":memory:"`. */
   dbPath: string;
+  /**
+   * Connection string for the future `postgres` driver (FR-22), parsed from
+   * `FRICK_DATABASE_URL`. Unused by the `sqlite` driver and `undefined` when
+   * the env var is unset.
+   */
+  databaseUrl: string | undefined;
   /** Filesystem directory for blob storage (current driver is local fs). */
   blobStoragePath: string;
   /** Threshold for the structured logger. */
@@ -140,6 +164,10 @@ const VALID_LOG_LEVELS: ReadonlySet<FrickLogLevel> = new Set<FrickLogLevel>([
 ]);
 const VALID_PLATFORM_EVENTS_DRIVERS: ReadonlySet<FrickPlatformEventsDriver> =
   new Set<FrickPlatformEventsDriver>(["sqlite", "kafka"]);
+const VALID_DB_DRIVERS: ReadonlySet<FrickDbDriver> = new Set<FrickDbDriver>([
+  "sqlite",
+  "postgres",
+]);
 
 export type FrickConfigOverrides = Partial<FrickConfig>;
 
@@ -174,7 +202,10 @@ export function loadFrickConfig(
   const publicUrl = overrides.publicUrl ?? parseString(env.FRICK_PUBLIC_URL);
   const allowedOrigins =
     overrides.allowedOrigins ?? parseAllowedOrigins(env.FRICK_ALLOWED_ORIGINS, runtimeEnv);
+  const dbDriver = overrides.dbDriver ?? parseDbDriver(env.FRICK_DB_DRIVER);
   const dbPath = overrides.dbPath ?? parseString(env.FRICK_DB_PATH) ?? DEFAULT_DB_PATH;
+  const databaseUrl =
+    "databaseUrl" in overrides ? overrides.databaseUrl : parseString(env.FRICK_DATABASE_URL);
   const blobStoragePath =
     overrides.blobStoragePath ?? parseString(env.FRICK_BLOB_STORAGE_PATH) ?? DEFAULT_BLOB_STORAGE_PATH;
   const logLevel = overrides.logLevel ?? parseLogLevel(env.FRICK_LOG_LEVEL, "info");
@@ -263,6 +294,11 @@ export function loadFrickConfig(
     "platformEventsMaxRows",
   );
 
+  if (dbDriver === "postgres") {
+    throw new FrickConfigError(
+      "postgres storage driver is not yet implemented (FR-22) — set FRICK_DB_DRIVER=sqlite (the default) to start the server",
+    );
+  }
   if (runtimeEnv === "production" && demoAuthEnabled) {
     throw new FrickConfigError(
       "demoAuthEnabled=true is forbidden in production — unset FRICK_DEMO_AUTH_ENABLED or use a non-production FRICK_ENV",
@@ -292,7 +328,9 @@ export function loadFrickConfig(
     port,
     publicUrl,
     allowedOrigins,
+    dbDriver,
     dbPath,
+    databaseUrl,
     blobStoragePath,
     logLevel,
     otelEnabled,
@@ -385,6 +423,18 @@ function parseLogLevel(value: string | undefined, fallback: FrickLogLevel): Fric
   }
   throw new FrickConfigError(
     `FRICK_LOG_LEVEL must be one of debug, info, warn, error (got ${JSON.stringify(value)})`,
+  );
+}
+
+function parseDbDriver(value: string | undefined): FrickDbDriver {
+  if (value === undefined || value === "") {
+    return "sqlite";
+  }
+  if (VALID_DB_DRIVERS.has(value as FrickDbDriver)) {
+    return value as FrickDbDriver;
+  }
+  throw new FrickConfigError(
+    `FRICK_DB_DRIVER must be one of sqlite, postgres (got ${JSON.stringify(value)})`,
   );
 }
 

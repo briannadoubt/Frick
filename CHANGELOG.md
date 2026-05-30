@@ -6,6 +6,10 @@ Each package version is independent — a release header documents which package
 
 ## Unreleased
 
+### Server — storage-driver selector
+
+- **`@frick/server`:** Added a durable-storage driver selector to runtime config so a future Postgres driver can be chosen. `FRICK_DB_DRIVER` (`sqlite` | `postgres`, default `sqlite`) selects the driver, and `FRICK_DATABASE_URL` is parsed into config for future Postgres use. SQLite remains the default and the only implemented driver — `FRICK_DB_PATH` and the production `":memory:"` guard are unchanged. Selecting `FRICK_DB_DRIVER=postgres` fails fast at config validation with `postgres storage driver is not yet implemented (FR-22)`. No runtime behavior change for existing SQLite deployments. See [`docs/operations.md`](docs/operations.md) for the new env vars.
+
 ### Server — grantee leave-share / self-revocation
 
 - New `POST /share/grants/:id/leave` route lets the grantee of a share self-revoke ("leave") their own grant, returning `{ grant }` with the revoked row. Previously only the grant owner could revoke (via `DELETE /share/grants/:id`), so a recipient had no way to drop their own access (FR-72). The new route is grantee-only: any other caller — including the owner — gets a tenant-isolated `404`, and `DELETE` remains owner-only. Self-revocation reuses the existing idempotent revoke path, so leaving an already-revoked grant returns the existing revoked row. Documented in `docs/operations.md` and `docs/threat-model.md`.

@@ -12,7 +12,9 @@ describe("loadFrickConfig", () => {
       port: 4099,
       publicUrl: undefined,
       allowedOrigins: ["*"],
+      dbDriver: "sqlite",
       dbPath: "./frick.sqlite",
+      databaseUrl: undefined,
       blobStoragePath: "./frick-blobs/",
       logLevel: "info",
       inspectionEnabled: true,
@@ -65,6 +67,7 @@ describe("loadFrickConfig", () => {
           FRICK_PORT: "5000",
           FRICK_PUBLIC_URL: "https://frick.example.com",
           FRICK_ALLOWED_ORIGINS: "https://a.example, https://b.example",
+          FRICK_DB_DRIVER: "sqlite",
           FRICK_DB_PATH: "/tmp/frick.sqlite",
           FRICK_BLOB_STORAGE_PATH: "/tmp/frick-blobs",
           FRICK_LOG_LEVEL: "debug",
@@ -87,6 +90,7 @@ describe("loadFrickConfig", () => {
     expect(config.port).toBe(5000);
     expect(config.publicUrl).toBe("https://frick.example.com");
     expect(config.allowedOrigins).toEqual(["https://a.example", "https://b.example"]);
+    expect(config.dbDriver).toBe("sqlite");
     expect(config.dbPath).toBe("/tmp/frick.sqlite");
     expect(config.blobStoragePath).toBe("/tmp/frick-blobs");
     expect(config.logLevel).toBe("debug");
@@ -228,5 +232,69 @@ describe("loadFrickConfig", () => {
     expect(() =>
       loadFrickConfig({}, { env: { FRICK_OTEL_METRIC_EXPORT_INTERVAL_MS: "0" }, warn: () => {} }),
     ).toThrow(FrickConfigError);
+  });
+});
+
+describe("loadFrickConfig storage driver", () => {
+  it("defaults the db driver to sqlite", () => {
+    const config = loadFrickConfig({}, { env: {}, warn: () => {} });
+    expect(config.dbDriver).toBe("sqlite");
+    expect(config.databaseUrl).toBeUndefined();
+    expect(config.dbPath).toBe("./frick.sqlite");
+  });
+
+  it("accepts an explicit sqlite driver and keeps FRICK_DB_PATH working", () => {
+    const config = loadFrickConfig(
+      {},
+      {
+        env: { FRICK_DB_DRIVER: "sqlite", FRICK_DB_PATH: "/var/lib/frick.sqlite" },
+        warn: () => {},
+      },
+    );
+    expect(config.dbDriver).toBe("sqlite");
+    expect(config.dbPath).toBe("/var/lib/frick.sqlite");
+  });
+
+  it("parses FRICK_DATABASE_URL into config for future postgres use", () => {
+    const config = loadFrickConfig(
+      {},
+      {
+        env: { FRICK_DATABASE_URL: "postgres://user:pass@localhost:5432/frick" },
+        warn: () => {},
+      },
+    );
+    // Driver stays sqlite; the URL is parsed but inert until FR-22.
+    expect(config.dbDriver).toBe("sqlite");
+    expect(config.databaseUrl).toBe("postgres://user:pass@localhost:5432/frick");
+  });
+
+  it("throws FrickConfigError on an invalid db driver value", () => {
+    expect(() =>
+      loadFrickConfig({}, { env: { FRICK_DB_DRIVER: "mysql" }, warn: () => {} }),
+    ).toThrow(FrickConfigError);
+  });
+
+  it("rejects the postgres driver as not yet implemented (FR-22)", () => {
+    expect(() =>
+      loadFrickConfig({}, { env: { FRICK_DB_DRIVER: "postgres" }, warn: () => {} }),
+    ).toThrow(/postgres storage driver is not yet implemented \(FR-22\)/);
+  });
+
+  it("rejects the postgres driver even via overrides", () => {
+    expect(() => loadFrickConfig({ dbDriver: "postgres" }, { env: {}, warn: () => {} })).toThrow(
+      FrickConfigError,
+    );
+  });
+
+  it("still guards dbPath ':memory:' in production when the sqlite driver is selected", () => {
+    expect(() =>
+      loadFrickConfig(
+        {},
+        {
+          env: { FRICK_ENV: "production", FRICK_DB_DRIVER: "sqlite", FRICK_DB_PATH: ":memory:" },
+          warn: () => {},
+        },
+      ),
+    ).toThrow(/dbPath ':memory:' is forbidden in production/);
   });
 });
