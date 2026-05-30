@@ -6,6 +6,10 @@ Each package version is independent — a release header documents which package
 
 ## Unreleased
 
+### Server — grantee leave-share / self-revocation
+
+- New `POST /share/grants/:id/leave` route lets the grantee of a share self-revoke ("leave") their own grant, returning `{ grant }` with the revoked row. Previously only the grant owner could revoke (via `DELETE /share/grants/:id`), so a recipient had no way to drop their own access (FR-72). The new route is grantee-only: any other caller — including the owner — gets a tenant-isolated `404`, and `DELETE` remains owner-only. Self-revocation reuses the existing idempotent revoke path, so leaving an already-revoked grant returns the existing revoked row. Documented in `docs/operations.md` and `docs/threat-model.md`.
+
 ### Design — token validation hardening
 
 - `@frick/design` validation (`pnpm design:check`, run as part of `pnpm design:generate` / `pnpm verify:generated`) now catches more classes of token mistakes and fails the build on any of them:

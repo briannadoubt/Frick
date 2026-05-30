@@ -1604,10 +1604,10 @@ export function createFrickServer(options: ServerOptions = {}) {
           return;
         }
         const existing = store.grants.getById(principal.tenantId, grantId);
-        // Only the owner that issued the invitation can revoke. Grantees
-        // who want to drop access call DELETE /share/grants/:id too, but
-        // we only honour it for the owner here — letting a grantee revoke
-        // is a separate "leave" flow that RangerCRM can layer on top.
+        // Only the owner that issued the invitation can revoke via DELETE.
+        // Grantees who want to drop their own access use the dedicated
+        // POST /share/grants/:id/leave route below; we keep DELETE
+        // owner-only so revoke and self-revocation stay distinct verbs.
         if (!existing || existing.ownerUserId !== principal.userId) {
           sendJson(response, 404, { error: "grant_not_found" });
           return;
@@ -1621,6 +1621,44 @@ export function createFrickServer(options: ServerOptions = {}) {
         sendJson(response, 200, { grant });
       } catch (error) {
         sendErrorWithMetrics(response, error, "share_grant_revoke_rejected");
+      }
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname.startsWith("/share/grants/") &&
+      url.pathname.endsWith("/leave")
+    ) {
+      try {
+        const encodedId = url.pathname.slice(
+          "/share/grants/".length,
+          url.pathname.length - "/leave".length,
+        );
+        const grantId = decodeURIComponent(encodedId);
+        if (!grantId) {
+          sendJson(response, 404, { error: "grant_not_found" });
+          return;
+        }
+        const existing = store.grants.getById(principal.tenantId, grantId);
+        // Self-revocation ("leave share"): only the grantee may leave their
+        // own grant. Owners revoke via DELETE /share/grants/:id. A caller
+        // who is not the grantee (including the owner) gets a 404 so the
+        // route never leaks the existence of grants the caller does not
+        // hold. Tenant isolation is enforced by the tenant-scoped lookup.
+        if (!existing || existing.granteeUserId !== principal.userId) {
+          sendJson(response, 404, { error: "grant_not_found" });
+          return;
+        }
+        const now = new Date().toISOString();
+        const grant = store.grants.revoke({
+          tenantId: principal.tenantId,
+          id: grantId,
+          now,
+        });
+        sendJson(response, 200, { grant });
+      } catch (error) {
+        sendErrorWithMetrics(response, error, "share_grant_leave_rejected");
       }
       return;
     }

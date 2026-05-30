@@ -205,6 +205,170 @@ describe("sharing primitives — invitations and grants", () => {
 });
 
 
+describe("sharing primitives — grantee leave-share / self-revocation (FR-72)", () => {
+  it("grantee leaves their own grant; it is revoked and excluded from list", async () => {
+    app = await startServer();
+    const owner = await devLogin(app.httpUrl, { userId: "user-o-leave", tenantId: "t1" });
+    const recipient = await devLogin(app.httpUrl, { userId: "user-r-leave", tenantId: "t1" });
+
+    const inviteRes = await postJson(
+      `${app.httpUrl}/share/invite`,
+      { recordType: "Account", recordId: "acct-leave", permission: "write" },
+      owner.sessionToken,
+    );
+    const acceptRes = await postJson(
+      `${app.httpUrl}/share/accept`,
+      { token: inviteRes.body.invitation.token },
+      recipient.sessionToken,
+    );
+    const grantId: string = acceptRes.body.grant.id;
+
+    const leave = await postEmpty(
+      `${app.httpUrl}/share/grants/${grantId}/leave`,
+      recipient.sessionToken,
+    );
+    expect(leave.status).toBe(200);
+    expect(leave.body.grant.id).toBe(grantId);
+    expect(leave.body.grant.revokedAt).toBeTruthy();
+
+    // Grantee's active list no longer contains the left grant.
+    const granteeList = await getJson(`${app.httpUrl}/share/grants`, recipient.sessionToken);
+    expect(granteeList.body.grants.map((g: any) => g.id)).not.toContain(grantId);
+
+    // Owner's active list also drops it; includeRevoked still surfaces it.
+    const ownerList = await getJson(`${app.httpUrl}/share/grants`, owner.sessionToken);
+    expect(ownerList.body.grants.map((g: any) => g.id)).not.toContain(grantId);
+    const ownerWithRevoked = await getJson(
+      `${app.httpUrl}/share/grants?includeRevoked=true`,
+      owner.sessionToken,
+    );
+    expect(ownerWithRevoked.body.grants.map((g: any) => g.id)).toContain(grantId);
+  });
+
+  it("leaving an already-left grant is idempotent (still 200)", async () => {
+    app = await startServer();
+    const owner = await devLogin(app.httpUrl, { userId: "user-o-idem", tenantId: "t1" });
+    const recipient = await devLogin(app.httpUrl, { userId: "user-r-idem", tenantId: "t1" });
+
+    const inviteRes = await postJson(
+      `${app.httpUrl}/share/invite`,
+      { recordType: "Account", recordId: "acct-idem", permission: "read" },
+      owner.sessionToken,
+    );
+    const acceptRes = await postJson(
+      `${app.httpUrl}/share/accept`,
+      { token: inviteRes.body.invitation.token },
+      recipient.sessionToken,
+    );
+    const grantId: string = acceptRes.body.grant.id;
+
+    const first = await postEmpty(
+      `${app.httpUrl}/share/grants/${grantId}/leave`,
+      recipient.sessionToken,
+    );
+    expect(first.status).toBe(200);
+    const second = await postEmpty(
+      `${app.httpUrl}/share/grants/${grantId}/leave`,
+      recipient.sessionToken,
+    );
+    expect(second.status).toBe(200);
+    expect(second.body.grant.revokedAt).toBeTruthy();
+  });
+
+  it("a non-grantee cannot leave a grant (owner and stranger get 404)", async () => {
+    app = await startServer();
+    const owner = await devLogin(app.httpUrl, { userId: "user-o-noleave", tenantId: "t1" });
+    const recipient = await devLogin(app.httpUrl, { userId: "user-r-noleave", tenantId: "t1" });
+    const stranger = await devLogin(app.httpUrl, { userId: "user-s-noleave", tenantId: "t1" });
+
+    const inviteRes = await postJson(
+      `${app.httpUrl}/share/invite`,
+      { recordType: "Account", recordId: "acct-noleave", permission: "write" },
+      owner.sessionToken,
+    );
+    const acceptRes = await postJson(
+      `${app.httpUrl}/share/accept`,
+      { token: inviteRes.body.invitation.token },
+      recipient.sessionToken,
+    );
+    const grantId: string = acceptRes.body.grant.id;
+
+    // The owner is not the grantee — leave must not honour them (DELETE is
+    // their revoke verb). A stranger gets the same tenant-isolated 404.
+    const ownerLeave = await postEmpty(
+      `${app.httpUrl}/share/grants/${grantId}/leave`,
+      owner.sessionToken,
+    );
+    expect(ownerLeave.status).toBe(404);
+
+    const strangerLeave = await postEmpty(
+      `${app.httpUrl}/share/grants/${grantId}/leave`,
+      stranger.sessionToken,
+    );
+    expect(strangerLeave.status).toBe(404);
+
+    // The grant is still active for the grantee after the rejected attempts.
+    const granteeList = await getJson(`${app.httpUrl}/share/grants`, recipient.sessionToken);
+    expect(granteeList.body.grants.map((g: any) => g.id)).toContain(grantId);
+  });
+
+  it("a principal in another tenant cannot leave a grant from tenant t1 (tenant isolation)", async () => {
+    app = await startServer();
+    const owner = await devLogin(app.httpUrl, { userId: "user-o-tleave", tenantId: "t1" });
+    const recipient = await devLogin(app.httpUrl, { userId: "user-r-tleave", tenantId: "t1" });
+    // A different principal living in t2. The grant lives in t1, so the
+    // tenant-scoped lookup must not find it for a t2 caller. (user_id is
+    // globally unique in auth_accounts, so this is necessarily a distinct
+    // userId — tenant scoping is what the leave route relies on.)
+    const crossTenant = await devLogin(app.httpUrl, { userId: "user-x-tleave", tenantId: "t2" });
+
+    const inviteRes = await postJson(
+      `${app.httpUrl}/share/invite`,
+      { recordType: "Account", recordId: "acct-tleave", permission: "write" },
+      owner.sessionToken,
+    );
+    const acceptRes = await postJson(
+      `${app.httpUrl}/share/accept`,
+      { token: inviteRes.body.invitation.token },
+      recipient.sessionToken,
+    );
+    const grantId: string = acceptRes.body.grant.id;
+
+    const crossLeave = await postEmpty(
+      `${app.httpUrl}/share/grants/${grantId}/leave`,
+      crossTenant.sessionToken,
+    );
+    expect(crossLeave.status).toBe(404);
+
+    // The grant is still active for the real grantee in t1.
+    const granteeList = await getJson(`${app.httpUrl}/share/grants`, recipient.sessionToken);
+    expect(granteeList.body.grants.map((g: any) => g.id)).toContain(grantId);
+  });
+
+  it("owner revoke via DELETE still works after the leave route is added", async () => {
+    app = await startServer();
+    const owner = await devLogin(app.httpUrl, { userId: "user-o-stillrevoke", tenantId: "t1" });
+    const recipient = await devLogin(app.httpUrl, { userId: "user-r-stillrevoke", tenantId: "t1" });
+
+    const inviteRes = await postJson(
+      `${app.httpUrl}/share/invite`,
+      { recordType: "Account", recordId: "acct-stillrevoke", permission: "write" },
+      owner.sessionToken,
+    );
+    const acceptRes = await postJson(
+      `${app.httpUrl}/share/accept`,
+      { token: inviteRes.body.invitation.token },
+      recipient.sessionToken,
+    );
+    const grantId: string = acceptRes.body.grant.id;
+
+    const revoke = await deleteRequest(`${app.httpUrl}/share/grants/${grantId}`, owner.sessionToken);
+    expect(revoke.status).toBe(200);
+    expect(revoke.body.grant.revokedAt).toBeTruthy();
+  });
+});
+
+
 describe("sharing primitives — authz integration", () => {
   it("grant flips a policy-hook deny on object.write back to allow; revoke restores deny", async () => {
     // App-level policy hook: only the original owner can write Account.
@@ -395,6 +559,23 @@ async function deleteRequest(
 ): Promise<{ status: number; body: any }> {
   const response = await fetch(url, {
     method: "DELETE",
+    headers: { authorization: `Bearer ${sessionToken}` },
+  });
+  const text = await response.text();
+  return {
+    status: response.status,
+    body: text.length > 0 ? JSON.parse(text) : undefined,
+  };
+}
+
+// Bodyless POST — used by the grantee leave-share route, which reads no
+// request body and authorizes purely from the session principal + path id.
+async function postEmpty(
+  url: string,
+  sessionToken: string,
+): Promise<{ status: number; body: any }> {
+  const response = await fetch(url, {
+    method: "POST",
     headers: { authorization: `Bearer ${sessionToken}` },
   });
   const text = await response.text();
