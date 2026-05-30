@@ -89,6 +89,12 @@ A multi-commit rollout that lifts the client SDKs from "you can hand-write it" t
 
 ### Server (`@frick/server`)
 
+- Added framework sharing primitives: `POST /share/invite` creates a
+  single-use invitation token for an object record, `POST /share/accept`
+  redeems a token into a durable grant, `GET /share/grants` lists active grants
+  for the principal as owner or grantee, and `DELETE /share/grants/:id`
+  revokes owner-issued grants. Active grants relax same-tenant `object.read`
+  and `object.write` denials for the granted record only.
 - Added optional `identityProviders.apple` server routes. Apps can mount
   `POST /auth/apple/verify` for Apple identity-token verification and
   `POST /auth/apple/notifications` for Apple server-to-server notifications;
@@ -100,6 +106,10 @@ A multi-commit rollout that lifts the client SDKs from "you can hand-write it" t
   `POST /auth/google/verify`; email/password signup and login are available at
   `POST /auth/email/signup` and `POST /auth/email/login`, using the same
   app-owned User mapping, first-sign-in hook, and session shape.
+- Email/password identity routes now include `POST /auth/email/forgot-password`
+  and `POST /auth/email/reset-password`. Reset tokens are single-use,
+  SHA-256-hashed at rest, expire after 60 minutes, avoid email enumeration on
+  request, and delete active sessions after a successful password change.
 - `POST /analytics/events` now ingests authenticated product analytics into
   the platform event pipeline as `analytics.user_event`, deriving tenant,
   subject, device, and replica identity from the active session and returning

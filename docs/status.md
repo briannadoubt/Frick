@@ -1,6 +1,6 @@
 # Current Status
 
-Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScript runtime, React bindings, Swift SDK, Android/Kotlin SDK, design-token packages, CLI, and demo apps. The public contract is still hardening, so storage layout, route details, and package surfaces can change before a stable 1.0 release.
+Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScript runtime, React bindings, Swift SDK, Android/Kotlin SDK, design-token packages, DevTools, MCP runtime inspection, Agent Kit guidance surfaces, CLI, and demo apps / harnesses. The public contract is still hardening, so storage layout, route details, and package surfaces can change before a stable 1.0 release.
 
 ## Stable Enough To Build Against
 
@@ -14,8 +14,13 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
 - Optional identity-provider server routes through
   `createFrickServer({ identityProviders })`: Apple JWT verification and
   server-to-server notifications, Google ID-token verification, email/password
-  signup/login, app-owned User object mapping, first-sign-in hooks, and normal
-  session minting.
+  signup/login, email password reset tokens, app-owned User object mapping,
+  first-sign-in hooks, and normal session minting.
+- Cross-user sharing primitives for object records: owners can create
+  single-use invitation tokens, recipients can accept them into durable
+  read/write grants, owners can list and revoke grants, and active grants
+  relax `object.read` / `object.write` authorization decisions within the
+  same tenant.
 - Fricken Dashboard, served locally by `frick dashboard` and mountable at
   `/_frick/dashboard`, for inspecting health, readiness, schema identity,
   schema resources, tenant-visible schema object rows, metrics, jobs,
@@ -49,7 +54,7 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
   no-op until the app installs an OTel provider. Swift and Android expose
   dependency-light telemetry hooks for analytics `track` calls only; they do
   not bundle native OTel SDKs, and native sync telemetry remains pending.
-- Swift and Android WebSocket sync transports with capability handshake, object subscriptions/upserts, presence, packed-frame decoding, cache compatibility, and cross-device draft helpers.
+- Swift and Android WebSocket sync transports with capability handshake, object subscriptions/upserts, presence, packed-frame decoding, cache compatibility, and cross-device draft helpers. Swift clients can pass an app schema hash into `FrickClient(schemaHash:)`, auto-clear framework cache state when sign-in swaps users, and buffer frames issued immediately after `connect()` until the WebSocket opens.
 
 ## Known Limitations
 
@@ -64,9 +69,14 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
 - Multi-app servers route by URL prefix and WebSocket Hello schema id, but
   storage, configured handlers, projection registries, job workers, and
   processors are still shared at the server level.
+- Sharing is scoped to individual object records and same-tenant principals.
+  It does not cascade to child records, streams, projections, search results,
+  blobs, jobs, or arbitrary app routes. Grantees cannot currently revoke their
+  own access as a separate "leave share" flow; only the grant owner can revoke.
 - Identity-provider sessions use a fixed 30-day lifetime today and the
-  provider routes do not yet share the built-in auth attempt limiter. Generic
-  OIDC, SAML, and arbitrary OAuth provider routing remain unimplemented.
+  provider routes, including email password reset endpoints, do not yet share
+  the built-in auth attempt limiter. Generic OIDC, SAML, and arbitrary OAuth
+  provider routing remain unimplemented.
 - Blob bytes are stored in SQLite today. `FRICK_BLOB_STORAGE_PATH` is parsed for a future filesystem driver but is not the active blob-byte store.
 - Web Push registration validation and adapter code exist, but the documented
   public push-adapter exports and CLI credential provisioning currently cover

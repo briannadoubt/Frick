@@ -36,7 +36,8 @@ Companion docs:
 
 - [ ] `pnpm exec tsx scripts/bump-version.ts --package @frick/protocol --release <type>`
 - [ ] Repeat for each affected package (`@frick/core`, `@frick/react`,
-  `@frick/design`, `@frick/design-web`, `@frick/devtools`)
+  `@frick/design`, `@frick/design-web`, `@frick/devtools`,
+  `@frick/agent-kit`, `@frick/mcp`)
   - `@frick/cli`, `@frick/server`, and `@frick/web` remain private workspace
     packages and are excluded from npm publishing until deliberately made
     public.
@@ -58,8 +59,8 @@ Companion docs:
   - Before the first automated npm release, configure npm trusted publishing
     for each public package in npm (`@frick/protocol`, `@frick/core`,
     `@frick/design`, `@frick/react`, `@frick/design-web`,
-    `@frick/devtools`) to trust this repository and workflow filename
-    (`publish-npm.yml`).
+    `@frick/devtools`, `@frick/agent-kit`, `@frick/mcp`) to trust this
+    repository and workflow filename (`publish-npm.yml`).
   - Confirm each package's npm metadata uses the repository URL
     `git+https://github.com/<owner>/<repo>.git` for the repository running
     the workflow and includes the package's workspace directory.
@@ -74,6 +75,8 @@ Companion docs:
   @frick/react
   @frick/design-web
   @frick/devtools
+  @frick/agent-kit
+  @frick/mcp
   ```
 - [ ] Swift: tagging is the publish step. SPM consumers pin to the
   `framework-vX.Y.Z` tag; there is no separate Swift registry push.
@@ -93,9 +96,11 @@ Companion docs:
   npm init -y
   pnpm add @frick/protocol@X.Y.Z @frick/core@X.Y.Z @frick/react@X.Y.Z
   pnpm add @frick/design@X.Y.Z @frick/design-web@X.Y.Z @frick/devtools@X.Y.Z
+  pnpm add @frick/agent-kit@X.Y.Z @frick/mcp@X.Y.Z
   node --input-type=module -e 'await Promise.all([
     import("@frick/protocol"), import("@frick/core"), import("@frick/react"),
-    import("@frick/design"), import("@frick/design-web"), import("@frick/devtools")
+    import("@frick/design"), import("@frick/design-web"), import("@frick/devtools"),
+    import("@frick/agent-kit"), import("@frick/mcp")
   ])'
   ```
   Use the exact versions the workflow published; omit packages that were

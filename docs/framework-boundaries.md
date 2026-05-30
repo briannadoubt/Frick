@@ -7,11 +7,19 @@ Status: Contract baseline audit.
 - `@frick/protocol`: canonical schema types, codecs, frame types, generated artifact helpers, schema compatibility helpers, shared error envelopes, capability metadata, and protocol fixtures.
 - `@frick/core`: UI-agnostic TypeScript runtime for cache, subscriptions, sync status, offline appends, presence, signals, and schema compatibility behavior.
 - `@frick/react`: React provider and hooks over `@frick/core`.
+- `@frick/devtools`: embeddable React DevTools widgets for client sync status,
+  pending mutations, optimistic overlays, and runtime diagnostics.
+- `@frick/mcp`: read-only MCP server for inspecting a running Frick app's
+  schema, health, resources, and runtime metadata from agent harnesses.
+- `@frick/agent-kit`: portable guidance pack that installs Frick skills,
+  agent profiles, Cursor rules, and shared spine references into scaffolded
+  apps.
 - `@frick/design`: canonical design-token authoring and generation.
 - `@frick/design-web`: reusable React design primitives and workspace shell components.
 - `packages/swift`: Swift client SDK package.
 - `packages/design-swift`: Swift design package.
 - `apps/android/frick`: Android/Kotlin client SDK module.
+- `apps/android/frick-compose`: Android Compose helpers over the Kotlin SDK.
 - `apps/android/design`: Android/Kotlin design module.
 - `apps/server`: Frick server runtime. Public baseline API is the
   `@frick/server` package entrypoint: `createFrickServer`, documented server
@@ -43,8 +51,9 @@ Internal modules may change while public package entry points stay stable.
 - `apps/web`
 - `apps/ios/FrickDemo`
 - `apps/android/app`
+- `apps/rangercrm-server`
 
-Demo apps prove framework behavior. They must not contain protocol, auth/session, schema compatibility, storage, or generated artifact behavior that real apps would need to copy.
+Demo apps and product-schema harnesses prove framework behavior. They must not contain protocol, auth/session, schema compatibility, storage, or generated artifact behavior that real apps would need to copy. `apps/rangercrm-server` is a private downstream integration harness for RangerCRM schema/server work, not a public example app.
 
 ## Local Tooling
 
@@ -58,6 +67,10 @@ Demo apps prove framework behavior. They must not contain protocol, auth/session
   `/health`, `/ready`, `/_frick/inspect/*`, and `/_frick/dashboard/api/*`
   endpoints, but it must not create an alternate operational API or become the
   only way to operate a Frick deployment.
+- `packages/agent-kit/adapters/*`: generated or projected harness surfaces
+  for Codex, Claude Code, and Cursor. Update the canonical skills, agents,
+  references, and manifest first when changing guidance, then refresh adapter
+  files consistently.
 
 ## Generated Files
 

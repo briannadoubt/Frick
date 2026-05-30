@@ -230,7 +230,7 @@ shutdown.
 `createFrickServer({ identityProviders })` mounts provider-owned auth routes
 alongside the built-in `/auth/signup`, `/auth/login`, and `/auth/dev-login`
 routes. The current implementation supports Apple, Google ID tokens, and
-email/password accounts:
+email/password accounts with single-use password reset tokens:
 
 - `POST /auth/apple/verify` verifies an Apple `identityToken` against Apple's
   JWKS with the configured audience, creates or finds the mapped app-owned User
@@ -248,6 +248,16 @@ email/password accounts:
 - `POST /auth/email/login` verifies `{ email, password }` and returns
   `{ session, user, isNewUser: false }`. Unknown email and bad password share
   the same `401 invalid_credentials` response.
+- `POST /auth/email/forgot-password` accepts `{ email }`, normalizes the email,
+  always returns `200 { ok: true }`, and only calls
+  `email.onPasswordResetRequested` when the address maps to a real account.
+  The hook receives `{ email, userId, tenantId, token, expiresAt }`; compose
+  the reset URL in app code and send it through the app's email adapter.
+- `POST /auth/email/reset-password` accepts `{ token, password }`, enforces the
+  email provider's `minPasswordLength`, consumes the single-use reset token,
+  updates the password, deletes active sessions for that user, and returns
+  `200 { ok: true }`. Invalid, expired, or already-consumed tokens return
+  `400 { error: "invalid_or_expired_token" }`.
 
 These routes are not controlled by `FRICK_DEMO_AUTH_ENABLED`; they are mounted
 only for configured providers. Apps must provide a User object mapping when
@@ -255,13 +265,41 @@ they do not use the conventional `User.appleSubject`, `User.googleSubject`,
 `User.email`, `User.displayName`, `User.primaryTenantId`, and `User.revokedAt`
 fields. On first sign-in, the optional `onFirstSignIn` hook receives
 `provider: "apple" | "google" | "email"` and decides the tenant id, user id
-override, display name, and extra User fields. Provider sessions are normal
-Frick bearer sessions; today these provider routes use a fixed 30-day session
-lifetime rather than `FRICK_SESSION_TTL_SECONDS` and do not share the built-in
-auth attempt limiter.
+override, display name, and extra User fields. Email reset tokens are random
+opaque values stored only as SHA-256 hashes and expire after 60 minutes.
+Provider sessions are normal Frick bearer sessions; today these provider routes
+use a fixed 30-day session lifetime rather than `FRICK_SESSION_TTL_SECONDS` and
+do not share the built-in auth attempt limiter.
 
 The framework still does not implement generic OIDC, SAML, or arbitrary OAuth
 provider routing.
+
+## Sharing routes
+
+The server always mounts authenticated sharing routes for framework object
+records. Sharing uses a two-step model: an owner creates an invitation token
+out-of-band, and the recipient redeems that token into a durable grant in the
+same tenant.
+
+- `POST /share/invite` accepts `{ recordType, recordId, permission,
+  expiresInSeconds? }` and returns `201 { invitation }`. `permission` is
+  `"read"` or `"write"`. The default invitation lifetime is 14 days; larger
+  client lifetimes are clamped to 90 days.
+- `POST /share/accept` accepts `{ token }` and returns `201 { grant }`.
+  Tokens are single-use, tenant-bound, expire at `expiresAt`, and cannot be
+  accepted by the user who created them.
+- `GET /share/grants?recordType=&recordId=&includeRevoked=true` returns grants
+  where the principal is either the owner or the grantee. Revoked grants are
+  excluded unless `includeRevoked=true`.
+- `DELETE /share/grants/:id` marks a grant revoked and returns `{ grant }`.
+  Only the owner who issued the underlying invitation can revoke it today.
+
+Active grants participate in the framework authorization path for
+`object.read` and `object.write` only. A `"write"` grant satisfies reads and
+writes; a `"read"` grant satisfies reads only. Grants never cross tenant
+boundaries and do not cascade to child records, streams, blobs, jobs,
+projections, search indexes, or custom app routes unless the app builds those
+semantics on top.
 
 ## Health vs. ready
 

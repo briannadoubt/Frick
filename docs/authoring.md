@@ -285,7 +285,13 @@ createFrickServer({
   identityProviders: {
     apple: { audience: "com.example.myapp" },
     google: { clientId: "123.apps.googleusercontent.com" },
-    email: { minPasswordLength: 12 },
+    email: {
+      minPasswordLength: 12,
+      onPasswordResetRequested: async ({ email, tenantId, token }) => {
+        const resetUrl = `https://app.example/reset-password?token=${token}`;
+        await appMailer.sendPasswordReset({ tenantId, to: email, resetUrl });
+      },
+    },
     userObject: {
       type: "User",
       appleSubjectField: "appleSubject",
@@ -316,10 +322,18 @@ Supported routes:
 - `POST /auth/email/login` accepts `{ email, password }`, avoids email
   enumeration by returning `invalid_credentials` for unknown emails and bad
   passwords, and mints a session for valid credentials.
+- `POST /auth/email/forgot-password` accepts `{ email }`, always returns
+  `{ ok: true }`, and calls `email.onPasswordResetRequested` only when the
+  address exists. The hook receives the raw single-use reset token so app code
+  can compose its own reset URL and dispatch email.
+- `POST /auth/email/reset-password` accepts `{ token, password }`, enforces
+  `minPasswordLength`, consumes the reset token, changes the password, and
+  deletes active sessions for that user.
 
 The `session` shape is the same session object used by the TypeScript, Swift,
 and Android clients. The app still owns its User schema, tenant membership
 model, and any first-sign-in side effects through the mapping and hooks above.
+Email reset tokens are stored hashed at rest and expire after 60 minutes.
 Generic OIDC, SAML, and arbitrary OAuth provider routing are not implemented.
 
 ## Client telemetry
