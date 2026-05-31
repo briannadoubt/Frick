@@ -6,6 +6,13 @@ Each package version is independent — a release header documents which package
 
 ## Unreleased
 
+### Design — runtime design-context switching (web)
+
+- **`@frick/design-web`:** `FrickDesignProvider` now switches the full design context — `mode` (`system` | `light` | `dark`), `density` (`compact` | `regular` | `comfortable`), `brand` (`frick` | `frickenChat` | custom), and `iconPack` (`native` | `frick` | custom) — at runtime with no reload. The provider applies the matching `data-frick-*` attributes that select the generated CSS-variable block in `tokens.css`, so every resolved color, metric, and component re-resolves live when any axis changes (FR-95). Each axis can be **controlled** (pass the prop) or **uncontrolled** (`default*` props + the new `setMode` / `setDensity` / `setBrand` / `setIconPack` / `setDesignContext` setters exposed on the context). The new `useDesignContext()` hook is the canonical accessor; `useFrickDesign()` remains as an alias.
+- Context axis types were realigned with the canonical `@frick/design` model (previously `density` was missing `regular`, `brand` was missing `frickenChat`, and `iconPack` was `lucide`). The provider default context is now `light` / `regular` / `frick` / `native`, matching the `:root` block emitted by `pnpm design:generate` (it previously defaulted to `comfortable`, which did not match the generated default).
+- Icons are now icon-pack-aware: `FrickIconGlyph` (and every component that renders an icon) renders the platform-native lucide glyph for `iconPack: "native"` and a self-contained brand fallback pack (`frickIcons`) for any non-native pack, so switching the icon pack updates rendered glyphs live. Exposes `nativeIcons`, `frickIcons`, and `iconPackFor()`. The previous `semanticIcons` export is kept as an alias of `nativeIcons`.
+- No generated artifact, token schema, or `components.css` change. iOS/Android are unchanged.
+
 ### Server — storage-driver selector
 
 - **`@frick/server`:** Added a durable-storage driver selector to runtime config so a future Postgres driver can be chosen. `FRICK_DB_DRIVER` (`sqlite` | `postgres`, default `sqlite`) selects the driver, and `FRICK_DATABASE_URL` is parsed into config for future Postgres use. SQLite remains the default and the only implemented driver — `FRICK_DB_PATH` and the production `":memory:"` guard are unchanged. Selecting `FRICK_DB_DRIVER=postgres` fails fast at config validation with `postgres storage driver is not yet implemented (FR-22)`. No runtime behavior change for existing SQLite deployments. See [`docs/operations.md`](docs/operations.md) for the new env vars.

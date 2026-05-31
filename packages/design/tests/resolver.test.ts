@@ -62,6 +62,73 @@ describe("Frick design resolver", () => {
     expect(ios.icons["workspace.settings"]).toEqual({ family: "sf", name: "gearshape" });
   });
 
+  it("resolves mode-specific colors so switching mode changes resolved values", () => {
+    const light = resolveDesign(frickDesignDefinition, {
+      mode: "light",
+      density: "regular",
+      brand: "frick",
+      iconPack: "native",
+      platform: "web",
+    });
+    const dark = resolveDesign(frickDesignDefinition, {
+      mode: "dark",
+      density: "regular",
+      brand: "frick",
+      iconPack: "native",
+      platform: "web",
+    });
+
+    expect(light.semantic.color.page).toBe("#f6fbf8");
+    expect(light.semantic.color.surface).toBe("#ffffff");
+    expect(dark.semantic.color.page).toBe("#0c1110");
+    expect(dark.semantic.color.surface).toBe("#17211f");
+    expect(dark.semantic.color.page).not.toBe(light.semantic.color.page);
+  });
+
+  it("resolves brand-specific colors so switching brand changes resolved values", () => {
+    const frick = resolveDesign(frickDesignDefinition, {
+      mode: "light",
+      density: "regular",
+      brand: "frick",
+      iconPack: "native",
+      platform: "web",
+    });
+    const frickenChat = resolveDesign(frickDesignDefinition, {
+      mode: "light",
+      density: "regular",
+      brand: "frickenChat",
+      iconPack: "native",
+      platform: "web",
+    });
+
+    expect(frick.semantic.color.actionPrimary).toBe("#168463");
+    expect(frickenChat.semantic.color.actionPrimary).toBe("#5279dc");
+    expect(frick.component.button.background).toBe("#168463");
+    expect(frickenChat.component.button.background).toBe("#5279dc");
+    expect(frickenChat.semantic.color.outgoingBubble).toBe("#dce8ff");
+  });
+
+  it("falls back to the brand icon family when the icon pack is not native", () => {
+    const native = resolveDesign(frickDesignDefinition, {
+      mode: "light",
+      density: "regular",
+      brand: "frick",
+      iconPack: "native",
+      platform: "web",
+    });
+    const frickPack = resolveDesign(frickDesignDefinition, {
+      mode: "light",
+      density: "regular",
+      brand: "frick",
+      iconPack: "frick",
+      platform: "web",
+    });
+
+    expect(native.icons["action.send"]).toEqual({ family: "lucide", name: "Send" });
+    expect(frickPack.icons["action.send"]).toEqual({ family: "frick", name: "send" });
+    expect(frickPack.icons["action.send"]).not.toEqual(native.icons["action.send"]);
+  });
+
   it("rejects unresolved aliases", () => {
     expect(() =>
       resolveDesign(
