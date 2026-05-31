@@ -901,6 +901,28 @@
   margin-block-start: var(--frick-space-1);
 }
 
+.frick-date-range__inputs {
+  display: grid;
+  gap: var(--frick-space-3);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+@media (max-width: 480px) {
+  .frick-date-range__inputs {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.frick-date-range__part {
+  display: grid;
+  gap: var(--frick-space-1);
+  min-inline-size: 0;
+}
+
+.frick-date-range__part .frick-input:disabled {
+  opacity: var(--frick-opacity-disabled);
+}
+
 .frick-chart-surface {
   display: grid;
   gap: var(--frick-space-3);

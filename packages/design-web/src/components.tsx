@@ -702,6 +702,10 @@ export function DataTable<T extends UnknownRecord>({ rows, rowKey, children, cla
   );
 }
 
+/** Canonical Phase-1 name for the tokenized data table. */
+export const Table = DataTable;
+export type TableProps<T extends UnknownRecord> = DataTableProps<T>;
+
 export interface DataGridProps extends HTMLAttributes<HTMLDivElement> {
   columns?: number;
 }
@@ -726,6 +730,10 @@ export function Metric({ label, value, delta, className, ...props }: MetricProps
     </div>
   );
 }
+
+/** Canonical Phase-1 name for the tokenized metric surface. */
+export const MetricCard = Metric;
+export type MetricCardProps = MetricProps;
 
 export interface TimelineItem {
   id: string;
@@ -756,12 +764,116 @@ export function Timeline({ items, className, ...props }: TimelineProps) {
   );
 }
 
-export function DatePicker(props: TextFieldProps) {
+export type DatePickerProps = Omit<TextFieldProps, "type">;
+
+export function DatePicker(props: DatePickerProps) {
   return <TextField type="date" {...props} />;
 }
 
-export function TimePicker(props: TextFieldProps) {
+export function TimePicker(props: DatePickerProps) {
   return <TextField type="time" {...props} />;
+}
+
+export function DateTimePicker(props: DatePickerProps) {
+  return <TextField type="datetime-local" {...props} />;
+}
+
+export interface DateRangeValue {
+  start?: string;
+  end?: string;
+}
+
+export interface DateRangePickerProps
+  extends Omit<HTMLAttributes<HTMLDivElement>, "onChange" | "defaultValue"> {
+  label?: ReactNode;
+  error?: ReactNode;
+  hint?: ReactNode;
+  value?: DateRangeValue;
+  defaultValue?: DateRangeValue;
+  startLabel?: ReactNode;
+  endLabel?: ReactNode;
+  disabled?: boolean;
+  required?: boolean;
+  /** Inclusive lower bound applied to both inputs. */
+  min?: string;
+  /** Inclusive upper bound applied to both inputs. */
+  max?: string;
+  onChange?: (value: DateRangeValue) => void;
+}
+
+export function DateRangePicker({
+  label,
+  error,
+  hint,
+  value,
+  defaultValue,
+  startLabel = "Start",
+  endLabel = "End",
+  disabled,
+  required,
+  min,
+  max,
+  onChange,
+  className,
+  id,
+  ...props
+}: DateRangePickerProps) {
+  const baseId =
+    id ?? (typeof label === "string" ? `frick-range-${label.toLowerCase().replace(/\s+/g, "-")}` : undefined);
+  const startId = baseId ? `${baseId}-start` : undefined;
+  const endId = baseId ? `${baseId}-end` : undefined;
+  const invalid = Boolean(error) || undefined;
+  const isControlled = value !== undefined;
+  const current = value ?? defaultValue ?? {};
+
+  function bound(key: keyof DateRangeValue) {
+    return isControlled ? { value: current[key] ?? "" } : { defaultValue: defaultValue?.[key] ?? "" };
+  }
+
+  return (
+    <div
+      aria-label={typeof label === "string" ? label : undefined}
+      className={cx("frick-field", "frick-date-range", className)}
+      role="group"
+      {...props}
+    >
+      {label ? <Label>{label}</Label> : null}
+      <div className="frick-date-range__inputs">
+        <div className="frick-date-range__part">
+          {startLabel ? <Label htmlFor={startId}>{startLabel}</Label> : null}
+          <input
+            aria-invalid={invalid}
+            className="frick-input"
+            disabled={disabled}
+            id={startId}
+            max={current.end ?? max}
+            min={min}
+            onChange={(event) => onChange?.({ ...current, start: event.target.value })}
+            required={required}
+            type="date"
+            {...bound("start")}
+          />
+        </div>
+        <div className="frick-date-range__part">
+          {endLabel ? <Label htmlFor={endId}>{endLabel}</Label> : null}
+          <input
+            aria-invalid={invalid}
+            className="frick-input"
+            disabled={disabled}
+            id={endId}
+            max={max}
+            min={current.start ?? min}
+            onChange={(event) => onChange?.({ ...current, end: event.target.value })}
+            required={required}
+            type="date"
+            {...bound("end")}
+          />
+        </div>
+      </div>
+      {hint ? <div className="frick-field__hint">{hint}</div> : null}
+      {error ? <div className="frick-field__error">{error}</div> : null}
+    </div>
+  );
 }
 
 export interface ChartSurfaceProps extends Omit<HTMLAttributes<HTMLDivElement>, "title"> {
