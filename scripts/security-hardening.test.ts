@@ -53,11 +53,20 @@ describe("release hardening", () => {
     expect(bumpVersion).toContain("rev-parse");
   });
 
-  test("generated artifact verification covers TypeScript core generated files", () => {
+  test("generated artifact verification regenerates and gates the whole tracked tree", () => {
     const source = read("scripts/check-generated-artifacts.ts");
 
-    expect(source).toContain("packages/core/src/generated/bindings.ts");
-    expect(source).toContain("packages/core/src/generated/errors.ts");
+    // Runs the generators that (re)produce the TypeScript core generated files
+    // (packages/core/src/generated/{bindings,errors}.ts) plus the native and
+    // design artifacts.
+    expect(source).toContain("schema:generate");
+    expect(source).toContain("fixtures:generate");
+    expect(source).toContain("design:generate");
+    // Then fails on ANY generator-introduced tracked-file drift rather than a
+    // hardcoded path allowlist, so generated output anywhere in the tree —
+    // including the core generated files — is covered (FR-108).
+    expect(source).toContain("status");
+    expect(source).toContain("process.exit(1)");
   });
 
   test("Tilt install is lockfile-driven and disables lifecycle scripts", () => {
