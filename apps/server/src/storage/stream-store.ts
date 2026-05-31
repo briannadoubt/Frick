@@ -236,6 +236,26 @@ export class StreamStore {
   }
 
   /**
+   * Cheap cursor probe (FR-116). Returns the highest `sequence` and the total
+   * event count for a stream within a tenant without unpacking any payloads,
+   * backing `GET /streams/:type/:id/cursor`. An empty or unknown stream yields
+   * `{ headSequence: 0, count: 0 }`.
+   */
+  head(
+    tenantId: string,
+    stream: string,
+    streamId: string,
+  ): { headSequence: number; count: number } {
+    const row = this.db
+      .prepare(
+        `SELECT COALESCE(MAX(sequence), 0) AS head, COUNT(*) AS count
+          FROM stream_events WHERE tenant_id = ? AND stream_type = ? AND stream_id = ?`,
+      )
+      .get(tenantId, stream, streamId) as { head: number; count: number };
+    return { headSequence: Number(row.head), count: Number(row.count) };
+  }
+
+  /**
    * Backwards-paginated read. Returns up to `limit` events whose `sequence`
    * is strictly less than `before`, ordered oldest-first so callers can
    * `[...older, ...current]` without an extra reverse. `limit` is clamped to

@@ -38,6 +38,7 @@ public enum FrickErrorCode: String, Codable, CaseIterable, Sendable {
   case storageConflict = "storage.conflict"
   case storageNotFound = "storage.notFound"
   case streamAppendRejected = "stream.appendRejected"
+  case streamInvalidCursor = "stream.invalidCursor"
   case syncProtocolError = "sync.protocolError"
   case syncReconnectExhausted = "sync.reconnectExhausted"
   case blobTooLarge = "blob.tooLarge"

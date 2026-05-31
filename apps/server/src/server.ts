@@ -2207,6 +2207,29 @@ export function createFrickServer(options: ServerOptions = {}) {
           tenantMembershipReader(store, principal.tenantId),
           policyHooks,
         );
+        // FR-116: cheap cursor head probe — MAX(sequence)+COUNT, no payloads.
+        if (parts[4] === "cursor") {
+          sendJson(response, 200, store.streamHead(principal.tenantId, stream, key));
+          return;
+        }
+        // FR-116: forward cursor read. `?since=<seq>` returns the events whose
+        // sequence is strictly greater than the cursor, ascending, paginated
+        // by `?limit=`. A non-numeric / negative cursor is a client error.
+        const sinceParam = url.searchParams.get("since");
+        if (sinceParam !== null) {
+          const since = Number(sinceParam);
+          if (!Number.isInteger(since) || since < 0) {
+            throw new InvalidStreamCursorError(sinceParam);
+          }
+          const limit = parseStreamPageLimit(
+            url.searchParams.get("limit"),
+            tenantLimits.maxStreamPageSize,
+            tenantLimits.maxStreamPageSize,
+          );
+          const events = store.readEvents(principal.tenantId, stream, key, since, limit);
+          sendJson(response, 200, { events });
+          return;
+        }
         const after = Number(url.searchParams.get("after") ?? "0");
         const beforeParam = url.searchParams.get("before");
         const limitParam = url.searchParams.get("limit");
@@ -2699,6 +2722,18 @@ class InvalidSearchQueryError extends Error {
 }
 
 /**
+ * A `?since=` cursor on a stream read was not a non-negative integer (FR-116).
+ * Surfaces as a 400 `stream.invalidCursor`.
+ */
+class InvalidStreamCursorError extends Error {
+  readonly reason = "invalidCursor";
+  constructor(value: string) {
+    super(`Invalid stream cursor: ${value}`);
+    this.name = "InvalidStreamCursorError";
+  }
+}
+
+/**
  * Validate body.tenantId at an auth boundary. Returns the normalized tenant
  * id. If the caller supplied a `tenantId` field at all (even empty string),
  * it must match {@link validateTenantId}'s strict regex; if omitted, the
@@ -2887,6 +2922,9 @@ function httpErrorCode(error: unknown): FrickErrorCode {
   }
   if (error instanceof InvalidSearchQueryError) {
     return "sync.protocolError";
+  }
+  if (error instanceof InvalidStreamCursorError) {
+    return "stream.invalidCursor";
   }
   if (error instanceof FrickLimitError) {
     if (error.limit === "maxBlobBytes") {

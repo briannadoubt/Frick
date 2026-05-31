@@ -18,6 +18,7 @@ export const FRICK_ERROR_CODES = [
   "storage.conflict",
   "storage.notFound",
   "stream.appendRejected",
+  "stream.invalidCursor",
   "sync.protocolError",
   "sync.reconnectExhausted",
   "blob.tooLarge",

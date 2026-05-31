@@ -998,6 +998,19 @@ export class FrickStore {
     return this.streams.readBefore(tenantId, stream, streamId, before, limit);
   }
 
+  /**
+   * Cheap cursor head probe for a stream (FR-116): the highest sequence and
+   * total event count within a tenant, no payloads unpacked. Forwards to
+   * {@link StreamStore.head}.
+   */
+  streamHead(
+    tenantId: string,
+    stream: string,
+    streamId: string,
+  ): { headSequence: number; count: number } {
+    return this.streams.head(tenantId, stream, streamId);
+  }
+
   setPresence(type: string, key: string, value: PlainObject, ttlMs: number): void;
   setPresence(
     tenantId: string,
