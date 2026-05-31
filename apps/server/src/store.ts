@@ -657,7 +657,7 @@ export class FrickStore {
       this.schema,
       args.type,
     );
-    return this.objects.upsertWithPolicy({
+    const result = this.objects.upsertWithPolicy({
       tenantId,
       objectType: args.type,
       objectId: args.id,
@@ -665,6 +665,22 @@ export class FrickStore {
       ...(args.expectedVersion !== undefined ? { expectedVersion: args.expectedVersion } : {}),
       mergePolicy,
     });
+    // Fan a write notification to projections + search on every successful
+    // upsert (the policy path throws on conflict, so reaching here means the
+    // row was written). This mirrors the legacy positional `upsertObject` and
+    // the `appendEvent` stream path — without it, object-sourced projections
+    // and search indexes would never observe writes made through the HTTP
+    // object route or the WebSocket ObjectUpsert frame.
+    const stored = this.objects.read(tenantId, args.type, args.id) ?? args.value;
+    this.#notifyProjections({
+      kind: "objectUpsert",
+      tenantId,
+      objectType: args.type,
+      objectId: args.id,
+      object: stored,
+    });
+    this.#notifySearchForObject(tenantId, args.type, args.id, stored);
+    return result;
   }
 
   /** Effective merge policy for an object type, resolved from the schema. */

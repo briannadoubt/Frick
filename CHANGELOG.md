@@ -6,6 +6,12 @@ Each package version is independent — a release header documents which package
 
 ## Unreleased
 
+### Server — live projection delta-push over the sync gateway
+
+- **`@frick/server`:** Apps can now register projections at boot via the new `ServerOptions.projections` field (`createFrickServer({ projections: [...] })`). Each projection's declared object/stream `sources` are validated against the active schema at startup — an unknown source type fails fast with a `FrickConfigError` instead of silently never matching a write (FR-110). Registered projections remain available for HTTP read at `GET /projections/:name`.
+- A projection's `apply` now runs on object upserts made through the durable write path (`upsertObjectWithPolicy`, used by `PUT /objects/...` and the WebSocket `ObjectUpsert` frame), not only the legacy positional `upsertObject`. Previously object-sourced projections (and search indexes) never observed writes from the normal app paths; stream-sourced projections were unaffected.
+- Sync clients subscribing with kind `"projection"` now receive an **initial snapshot** of the projection's current rows (delivered as a `ProjectionDelta` frame) followed by live `ProjectionDelta` updates as source objects/streams change. Both the snapshot and live deltas are scoped to the subscriber's tenant — cross-tenant rows are never leaked (FR-111). The registry materializes a tenant-scoped row map from each `apply` change to back the snapshot. No wire-protocol or `@frick/core` change — the existing `useProjection()` client path consumes the snapshot exactly like an incremental delta. See [`docs/operations.md`](docs/operations.md).
+
 ### Design — runtime design-context switching (web)
 
 - **`@frick/design-web`:** `FrickDesignProvider` now switches the full design context — `mode` (`system` | `light` | `dark`), `density` (`compact` | `regular` | `comfortable`), `brand` (`frick` | `frickenChat` | custom), and `iconPack` (`native` | `frick` | custom) — at runtime with no reload. The provider applies the matching `data-frick-*` attributes that select the generated CSS-variable block in `tokens.css`, so every resolved color, metric, and component re-resolves live when any axis changes (FR-95). Each axis can be **controlled** (pass the prop) or **uncontrolled** (`default*` props + the new `setMode` / `setDensity` / `setBrand` / `setIconPack` / `setDesignContext` setters exposed on the context). The new `useDesignContext()` hook is the canonical accessor; `useFrickDesign()` remains as an alias.

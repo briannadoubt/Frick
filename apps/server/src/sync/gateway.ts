@@ -947,6 +947,23 @@ export class SyncGateway {
     }
     this.#subscriptions.addSubscription(client, payload);
 
+    if (payload.kind === "projection") {
+      // Deliver an initial snapshot of the projection's current rows scoped
+      // to this principal's tenant. The wire shape is a ProjectionDelta frame
+      // whose changes each upsert one row — the client applies them exactly
+      // like an incremental delta, so no separate snapshot frame is needed.
+      // Cross-tenant rows are never included because `snapshot()` is
+      // tenant-keyed; we still run the per-principal change filter to mirror
+      // the live fan-out path.
+      const rows = this.#projections?.snapshot(payload.name, principal.tenantId) ?? [];
+      const changes = filterProjectionChangesForPrincipal(payload.name, rows, principal);
+      this.#sendFrame(client, [
+        FrameKind.ProjectionDelta,
+        { projection: payload.name, changes },
+      ]);
+      return;
+    }
+
     if (payload.kind === "stream") {
       const key = requireKey(payload);
       const cursor = payload.cursor ?? 0;

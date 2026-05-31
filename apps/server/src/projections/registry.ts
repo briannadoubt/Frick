@@ -8,11 +8,13 @@ import type { FrickStore } from "../store.js";
  * an app-owned inbox, activity feed, or leaderboard can watch stream events
  * and object upserts to maintain its own read model.
  *
- * Projections in this slice are HTTP-read-only: a registered projection
- * exposes an optional `read(ctx, query)` method that the framework wires up
- * at `GET /projections/:name`. Real-time delta push over the sync gateway is
- * deliberately deferred — see the projections design note in
- * `docs/operations.md`.
+ * A registered projection exposes an optional `read(ctx, query)` method that
+ * the framework wires up at `GET /projections/:name` for HTTP reads, and
+ * (since FR-109) streams live row changes to subscribed clients over the
+ * sync gateway as `ProjectionDelta` frames. The registry materializes a
+ * tenant-scoped copy of every row change a handler declares so the gateway
+ * can serve an initial snapshot when a client subscribes. See the
+ * projections design note in `docs/operations.md`.
  */
 
 export interface FrickProjectionSourceObject {
@@ -127,6 +129,16 @@ export interface FrickProjectionRegistry {
    * gateway is the only intended consumer.
    */
   setDeltaListener(listener: ((notice: ProjectionDeltaNotice) => void) | undefined): void;
+  /**
+   * Return the current materialized rows for `name` scoped to `tenantId`, as
+   * the list of changes that would reproduce them on a fresh client. Used by
+   * the sync gateway to deliver an initial snapshot on subscribe. Rows are
+   * tracked from the `changes` declared by the projection handler's
+   * `apply(...)`, so this only reflects state the handler has chosen to
+   * publish — a projection that never returns changes has an empty snapshot.
+   * Returns an empty array for an unknown projection or a tenant with no rows.
+   */
+  snapshot(name: string, tenantId: string): ProjectionChange[];
 }
 
 export interface CreateFrickProjectionRegistryOptions {
@@ -140,6 +152,37 @@ export function createFrickProjectionRegistry(
   const projections: FrickProjection[] = [];
   const byName = new Map<string, FrickProjection>();
   let deltaListener: ((notice: ProjectionDeltaNotice) => void) | undefined = options.onDelta;
+  // Materialized snapshot state: projection name -> tenant id -> (row key ->
+  // row value). Populated from the `changes` a handler returns from
+  // `apply(...)`, so the gateway can replay current rows to a fresh
+  // subscriber. Tenant-scoped so a snapshot never leaks cross-tenant rows.
+  const rowsByProjection = new Map<string, Map<string, Map<string, PlainObject>>>();
+
+  function applyChangesToSnapshot(projection: string, tenantId: string, changes: ProjectionChange[]): void {
+    let byTenant = rowsByProjection.get(projection);
+    if (!byTenant) {
+      byTenant = new Map();
+      rowsByProjection.set(projection, byTenant);
+    }
+    let rows = byTenant.get(tenantId);
+    if (!rows) {
+      rows = new Map();
+      byTenant.set(tenantId, rows);
+    }
+    for (const change of changes) {
+      if (change.value === null) {
+        rows.delete(change.key);
+      } else {
+        rows.set(change.key, change.value);
+      }
+    }
+    if (rows.size === 0) {
+      byTenant.delete(tenantId);
+      if (byTenant.size === 0) {
+        rowsByProjection.delete(projection);
+      }
+    }
+  }
 
   function register(projection: FrickProjection): void {
     if (byName.has(projection.name)) {
@@ -163,6 +206,12 @@ export function createFrickProjectionRegistry(
       if (projection.sources.some((source) => matches(source, event))) {
         try {
           const result = projection.handler.apply(event, ctx);
+          if (result && result.changes.length > 0) {
+            // Materialize the row change into the tenant-scoped snapshot
+            // state regardless of whether a listener is attached, so a
+            // client that subscribes later still gets a complete snapshot.
+            applyChangesToSnapshot(projection.name, ctx.tenantId, result.changes);
+          }
           if (result && result.changes.length > 0 && deltaListener) {
             try {
               deltaListener({
@@ -208,6 +257,13 @@ export function createFrickProjectionRegistry(
     rebuildAll,
     setDeltaListener(listener) {
       deltaListener = listener;
+    },
+    snapshot(name, tenantId) {
+      const rows = rowsByProjection.get(name)?.get(tenantId);
+      if (!rows) {
+        return [];
+      }
+      return [...rows.entries()].map(([key, value]) => ({ key, value }));
     },
   };
 }

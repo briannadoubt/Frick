@@ -76,6 +76,12 @@ describe("projection deltas over the sync gateway", () => {
       ]),
     );
 
+    // On subscribe the gateway delivers an initial snapshot first. No source
+    // event has fired yet, so the snapshot is empty.
+    const snapshot = await deltas.next();
+    expect(snapshot.projection).toBe(DEMO_PROJECTION_NAME);
+    expect(snapshot.changes).toEqual([]);
+
     const append = await postJson(
       `${app.httpUrl}/append`,
       {
@@ -123,6 +129,11 @@ describe("projection deltas over the sync gateway", () => {
         },
       ]),
     );
+
+    // Drain the (empty) initial snapshot delivered on subscribe so the
+    // cross-tenant assertion below only observes live fan-out.
+    const snapshot = await deltas.next();
+    expect(snapshot.changes).toEqual([]);
 
     // Tenant-b emits a matching event; subscriber in tenant-a must not see
     // a delta because the gateway scopes by tenant.

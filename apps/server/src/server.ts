@@ -64,7 +64,9 @@ import {
 import { SseRegistry } from "./sync/sse.js";
 import {
   createFrickProjectionRegistry,
+  type FrickProjection,
   type FrickProjectionContext,
+  type FrickProjectionRegistry,
 } from "./projections/registry.js";
 import {
   createFrickSearchIndexRegistry,
@@ -283,6 +285,17 @@ export interface ServerOptions {
     indexes?: readonly FrickSearchIndexDefinition[];
   };
   /**
+   * App-defined projections registered at boot. Each projection derives a
+   * read model from one or more source object/stream types and is exposed
+   * for HTTP read (`GET /projections/:name`) and live delta push over the
+   * sync gateway (clients subscribe with a `projection` frame and receive an
+   * initial snapshot followed by tenant-scoped `ProjectionDelta` updates).
+   *
+   * Every declared source `type` must reference a real object or stream type
+   * in the active schema; otherwise boot throws {@link FrickConfigError}.
+   */
+  projections?: readonly FrickProjection[];
+  /**
    * Override the schema used by the underlying store. Defaults to
    * {@link foundationSchema}. Primarily exposed for tests that need to
    * exercise behaviors (e.g. {@link FrickObjectMergePolicy}) on object
@@ -413,6 +426,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     sendError(response, error, requestId);
   }
   const projections = createFrickProjectionRegistry();
+  registerProjections(projections, options.projections ?? [], runtimeSchema);
   const searchIndexes = createFrickSearchIndexRegistry();
   for (const def of options.search?.indexes ?? []) {
     searchIndexes.register(def);
@@ -2497,6 +2511,34 @@ class ProjectionNotFoundError extends Error {
     super(`Projection "${name}" not found`);
     this.name = "ProjectionNotFoundError";
     this.projection = name;
+  }
+}
+
+/**
+ * Register app-provided projections at boot. Each projection's declared
+ * sources must reference a real object/stream type in the active schema —
+ * otherwise we fail fast with {@link FrickConfigError} so a typo'd source
+ * surfaces at startup rather than silently never matching a write. Duplicate
+ * names are rejected by the registry itself.
+ */
+function registerProjections(
+  registry: FrickProjectionRegistry,
+  projections: readonly FrickProjection[],
+  schema: FrickSchema,
+): void {
+  const objectTypes = new Set(schema.objects.map((object) => object.name));
+  const streamTypes = new Set(schema.streams.map((stream) => stream.name));
+  for (const projection of projections) {
+    for (const source of projection.sources) {
+      const known = source.kind === "object" ? objectTypes : streamTypes;
+      if (!known.has(source.type)) {
+        throw new FrickConfigError(
+          `Projection "${projection.name}" declares an unknown ${source.kind} source "${source.type}". ` +
+            `It must reference a ${source.kind} type defined in the active schema "${schema.schemaId}".`,
+        );
+      }
+    }
+    registry.register(projection);
   }
 }
 
