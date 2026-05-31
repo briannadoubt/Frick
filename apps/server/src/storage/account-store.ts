@@ -117,6 +117,20 @@ export class AccountStore {
     return fromRow(row);
   }
 
+  /**
+   * Remove an account row, scoped to a single tenant. Used by the self-service
+   * account-deletion flow. Returns true when a row was actually deleted, false
+   * when no `(tenant_id, user_id)` match existed — idempotent. `user_id` is the
+   * stable principal identifier; the tenant scope keeps the delete from ever
+   * reaching across tenants.
+   */
+  delete(tenantId: string, userId: string): boolean {
+    const result = this.db
+      .prepare("DELETE FROM auth_accounts WHERE tenant_id = ? AND user_id = ?")
+      .run(tenantId, userId);
+    return result.changes > 0;
+  }
+
   private readRowByIdentity(tenantId: string, identity: string): AccountRow | undefined {
     return this.db
       .prepare(

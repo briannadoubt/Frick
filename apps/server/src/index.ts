@@ -123,6 +123,12 @@ export {
   type OnAccountExport,
 } from "./compliance/account-export.js";
 export {
+  deleteAccountData,
+  type AccountDeleteOptions,
+  type AccountDeleteResult,
+  type OnAccountDelete,
+} from "./compliance/account-delete.js";
+export {
   FrickStore,
   type StoreOptions,
   type FrickStoreWriteEvent,

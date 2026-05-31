@@ -395,6 +395,63 @@ read it performs to `principal.tenantId` / `principal.userId` — the framework
 cannot enforce isolation on queries it does not own. When no hook is registered
 the `app` key is omitted.
 
+## Account data deletion
+
+The server always mounts an authenticated self-service deletion route at
+`DELETE /account` (with `POST /account` accepted as an alias for clients that
+cannot send a body-less `DELETE`). Like the export, this is the data-subject
+"delete my own data" surface — the calling principal erasing their **own**
+account — distinct from the operator-driven `/_frick/admin/data-subject` erase.
+The route is gated by the standard protected-path authentication, so a request
+without a valid session token returns `401`.
+
+The framework default removes, scoped to the calling principal's tenant only:
+
+- every object record the principal owns — across every object type in the
+  active schema — matched on the same `DEFAULT_OWNER_FIELDS`
+  (`ownerId` / `userId` / `createdBy`) ownership convention the export uses
+  (override via `AccountDeleteOptions`);
+- every session row for the principal in that tenant (the caller's own session
+  included, so the token stops authenticating immediately and any live gateway
+  connection for it is closed); and
+- the principal's `auth_accounts` row.
+
+Tenant isolation is enforced by the tenant-scoped store, so a record from
+another tenant is never touched — not even a cross-tenant record whose owner
+field happens to equal the caller's `userId`. The response sets
+`cache-control: no-store` and reports what was removed:
+
+```jsonc
+{
+  "ok": true,
+  "tenantId": "_default",
+  "userId": "user-ada",
+  "deletedAt": "2026-05-30T12:00:00.000Z",
+  "accountDeleted": true,
+  "deletedSessions": 1,
+  "deletedObjects": { "<ObjectType>": 0 }
+}
+```
+
+The deletion is idempotent at the storage layer, but once the account row is
+gone the session no longer authenticates, so a second call returns `401`.
+
+App augmentation: pass `onAccountDelete(principal, result)` to
+`createFrickServer` to cascade app-specific deletion (stream history, blob
+content, derived projections, third-party records). It runs **after** the
+framework default has committed, receives the framework's result (so it can read
+the counts), and is responsible for scoping its own deletes to
+`principal.tenantId` / `principal.userId` — the framework cannot enforce
+isolation on tables it does not own. A throw from the hook surfaces as an
+`account_delete_rejected` error after the framework data is already gone, so keep
+cascades idempotent.
+
+Every deletion appends an `account.delete` row to the admin audit hash chain
+(target = the deleted `userId`, detail = tenant + removed counts), giving an
+operator a tamper-evident record of data-subject deletions. Retention policies
+(soft-delete windows, legal-hold) are out of scope here — a deletion is
+immediate and hard.
+
 ## Outbound email
 
 Frick ships a pluggable outbound email surface that mirrors the push-adapter

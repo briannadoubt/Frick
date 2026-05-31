@@ -1171,6 +1171,15 @@ export class FrickStore {
     return this.sessions.deleteForUser(userId, tenantId);
   }
 
+  /**
+   * Remove an account row, scoped to a single tenant. Used by the self-service
+   * account-deletion flow ({@link deleteAccountData}). Returns true when a row
+   * was removed, false when no `(tenantId, userId)` match existed — idempotent.
+   */
+  deleteAccount(tenantId: string, userId: string): boolean {
+    return this.accounts.delete(tenantId, userId);
+  }
+
   enqueueJob(type: string, value: PlainObject): void;
   enqueueJob(tenantId: string, type: string, value: PlainObject): void;
   enqueueJob(a: string, b: string | PlainObject, c?: PlainObject): void {

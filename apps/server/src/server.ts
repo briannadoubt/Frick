@@ -94,6 +94,10 @@ import {
   type AccountExport,
   type OnAccountExport,
 } from "./compliance/account-export.js";
+import {
+  deleteAccountData,
+  type OnAccountDelete,
+} from "./compliance/account-delete.js";
 import { FrickObjectVersionConflictError } from "./storage/object-errors.js";
 import {
   FrickConfigError,
@@ -223,6 +227,18 @@ export interface ServerOptions {
    * {@link OnAccountExport} and `docs/operations.md`.
    */
   onAccountExport?: OnAccountExport;
+  /**
+   * App cascade hook for `DELETE /account`. The framework default removes every
+   * object record the calling principal owns (within their tenant), all of
+   * their sessions in that tenant, and their account record. Supply this hook to
+   * cascade app-specific deletion (stream history, blob content, derived
+   * projections, third-party records). It runs AFTER the framework-default
+   * deletion has committed, receives the resolved {@link Principal} and the
+   * framework's {@link AccountDeleteResult}, and MUST scope every delete it
+   * performs to `principal.tenantId`/`principal.userId`. See
+   * {@link OnAccountDelete} and `docs/operations.md`.
+   */
+  onAccountDelete?: OnAccountDelete;
   /**
    * Bounded runtime limits. Partial — missing fields fall back to
    * {@link DEFAULT_FRICK_LIMITS}.
@@ -1335,6 +1351,65 @@ export function createFrickServer(options: ServerOptions = {}) {
         sendAuthJson(response, 200, bundle);
       } catch (error) {
         sendErrorWithMetrics(response, error, "account_export_rejected");
+      }
+      return;
+    }
+
+    if (
+      url.pathname === "/account" &&
+      (request.method === "DELETE" || request.method === "POST")
+    ) {
+      try {
+        // Self-service account deletion: removes the CALLING principal's OWN
+        // data only. `deleteAccountData` scopes every object delete to the
+        // principal's tenant + userId (same owner-field convention the export
+        // uses) and removes the principal's sessions + account row scoped to
+        // (userId, tenantId). Never touches another principal's or another
+        // tenant's data. `principal` was resolved before the deletion, so
+        // concurrent in-flight requests that already resolved their own
+        // principal are unaffected.
+        const result = deleteAccountData(store, principal);
+        // App-specific cascade runs after the framework default has committed,
+        // so the hook can read the returned counts and the framework's data is
+        // already gone. The hook owns its own tenant/owner scoping.
+        if (options.onAccountDelete) {
+          await options.onAccountDelete(principal, result);
+        }
+        // Drop any live gateway connection bound to the caller's session so a
+        // streaming client doesn't keep reading against a now-deleted account.
+        const token = sessionTokenFromRequest(request, url);
+        if (token) {
+          gateway.closeSession(token);
+        }
+        // Audit the deletion on the shared admin-audit hash chain. Best-effort:
+        // a single dropped audit row must not fail a legitimate deletion.
+        try {
+          store.adminAudit.record({
+            adminTokenFingerprint,
+            action: "account.delete",
+            target: principal.userId,
+            outcome: "allow",
+            detail: JSON.stringify({
+              tenantId: principal.tenantId,
+              accountDeleted: result.accountDeleted,
+              deletedSessions: result.deletedSessions,
+              deletedObjects: result.deletedObjects,
+            }),
+          });
+        } catch {
+          // Audit failures are best-effort; the deletion itself has committed.
+        }
+        sendAuthJson(response, 200, {
+          ok: true,
+          tenantId: result.tenantId,
+          userId: result.userId,
+          deletedAt: result.deletedAt,
+          accountDeleted: result.accountDeleted,
+          deletedSessions: result.deletedSessions,
+          deletedObjects: result.deletedObjects,
+        });
+      } catch (error) {
+        sendErrorWithMetrics(response, error, "account_delete_rejected");
       }
       return;
     }
@@ -4254,6 +4329,7 @@ function isProtectedPath(pathname: string): boolean {
     pathname === "/signals" ||
     pathname.startsWith("/signals/") ||
     pathname === "/analytics/events" ||
+    pathname === "/account" ||
     pathname === "/account/export" ||
     pathname === "/streams" ||
     pathname.startsWith("/streams/") ||
