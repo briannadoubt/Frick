@@ -123,14 +123,35 @@ owner intended.
   route only honours the grantee, and DELETE only honours the owner; any other
   caller gets a tenant-isolated `404`. Revoked grants stay in storage for
   audit/listing but no longer participate in authorization.
+- A grant cascades **read** access to the primitives derived from the shared
+  object (FR-70). Because streams and projections are keyed by an id rather than
+  by object type, the cascade matches by **record id**: a grant on object
+  record `(recordType, recordId)` authorizes the grantee to read
+    - the stream whose `streamId === recordId`, and
+    - the projection rows whose subscribe/read `key === recordId`,
+  within the same tenant. The cascade runs after baseline policy and app policy
+  hooks and only relaxes `notAuthorizedForResource` / `ownerMismatch` /
+  `notMember` denials (the same fail-open-only contract as object reads). It is
+  strictly read-only:
+  `stream.append` and every write verb are never relaxed, and a `"read"` grant
+  is sufficient (a `"write"` grant also satisfies it because `"write"`
+  satisfies `"read"`). When a surface has no resolvable row id — e.g. a
+  whole-projection subscribe with no `key` — the cascade is skipped and the
+  original deny stands (fail closed: deny rather than over-share).
 
 **Known gaps.**
 
 - Share creation currently trusts an authenticated tenant principal to issue an
   invitation for the named record; apps that need stricter owner/admin checks
   should gate the calling workflow with policy or product logic.
-- Grants are object-record scoped only. They do not cascade to related rows,
-  streams, projections, blobs, jobs, search results, or custom app routes.
+- The grant cascade is intentionally narrow. It covers the shared object's
+  associated stream (by `streamId`) and projection rows (by `key`) only. Grants
+  still do not cascade to blobs, jobs, search results, or custom app routes;
+  those derived surfaces remain object-record/owner scoped (search-result
+  cascade is tracked separately under FR-71). The cascade keys purely on id
+  equality — an app that reuses one id across an object type and an *unrelated*
+  stream/projection would share both; apps with such id collisions should
+  namespace ids or tighten access with a policy hook.
 
 ---
 

@@ -155,6 +155,44 @@ export class GrantStore {
     }
     return false;
   }
+
+  /**
+   * Cascade lookup used by stream + projection read authorization (FR-70).
+   * Returns true iff an active (non-revoked) grant exists for `granteeUserId`
+   * on *any* object record whose `record_id` equals `recordId` within
+   * `tenantId`, whose permission satisfies `"read"`.
+   *
+   * Streams and projections are keyed by an id (`streamId` / projection `key`),
+   * not by object type, so the cascade matches by record id rather than
+   * `(record_type, record_id)`. A `"read"` grant suffices: the cascade is
+   * read-only and never authorizes writes to the derived primitives. Matching
+   * `"read"` also matches `"write"` grants because `"write"` satisfies
+   * `"read"` (see {@link frickSharingPermissionSatisfies}).
+   */
+  hasActiveGrantForRecordId(args: {
+    tenantId: string;
+    granteeUserId: string;
+    recordId: string;
+  }): boolean {
+    const rows = this.db
+      .prepare(
+        `SELECT permission FROM grants
+          WHERE tenant_id = ? AND grantee_user_id = ?
+            AND record_id = ?
+            AND revoked_at IS NULL`,
+      )
+      .all(
+        args.tenantId,
+        args.granteeUserId,
+        args.recordId,
+      ) as unknown as Array<{ permission: string }>;
+    for (const row of rows) {
+      if (frickSharingPermissionSatisfies(row.permission as FrickSharingPermission, "read")) {
+        return true;
+      }
+    }
+    return false;
+  }
 }
 
 function toGrant(row: GrantSqlRow): FrickGrant {

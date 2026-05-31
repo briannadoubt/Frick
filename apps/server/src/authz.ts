@@ -24,6 +24,30 @@ export type FrickGrantLookup = (args: {
   required: FrickSharingPermission;
 }) => boolean;
 
+/**
+ * Cascade variant of {@link FrickGrantLookup} used by stream + projection
+ * reads (FR-70). A grant is always issued against a specific object record
+ * `(recordType, recordId)`, but a shared object's data also surfaces through
+ * the stream and projection rows derived from it. Streams and projections are
+ * not keyed by object *type* — they are keyed by an id (`streamId` for a
+ * stream, the projection `key`). The framework therefore cascades read access
+ * by *record id*: a grantee who holds an active, read-satisfying grant on any
+ * object record whose `recordId` equals the stream's `streamId` (or the
+ * projection's `key`) within the same tenant may read that stream / projection
+ * row.
+ *
+ * Returns `true` iff such a grant exists. Implemented by the server's
+ * {@link GrantStore} and passed in as a plain function so authz stays
+ * decoupled from storage. The cascade is read-only: it never relaxes
+ * `stream.append` or any write verb.
+ */
+export type FrickCascadeGrantLookup = (args: {
+  tenantId: string;
+  granteeUserId: string;
+  /** The stream's `streamId` or the projection's `key`. */
+  recordId: string;
+}) => boolean;
+
 export interface Principal {
   userId: string;
   deviceId: string;
@@ -336,9 +360,11 @@ function decideWithHooks(
   memberships: MembershipReader,
   hooks: readonly FrickPolicyHook[] | undefined,
   grantLookup?: FrickGrantLookup,
+  cascadeGrantLookup?: FrickCascadeGrantLookup,
 ): FrickDecision {
   const afterHooks = applyPolicyHooks(decide(input, memberships), input, hooks);
-  return relaxWithGrants(afterHooks, input, grantLookup);
+  const afterObjectGrants = relaxWithGrants(afterHooks, input, grantLookup);
+  return relaxWithCascadeGrants(afterObjectGrants, input, cascadeGrantLookup);
 }
 
 /**
@@ -393,6 +419,72 @@ function relaxWithGrants(
   return allowed ? ALLOW : decision;
 }
 
+/**
+ * Cross-user sharing cascade for derived primitives (FR-70). Runs after the
+ * baseline policy, app hooks, and the object-record grant relaxation. Only
+ * flips a deny to allow; never the other direction.
+ *
+ * Eligibility: the action is `stream.read` or `projection.read`, the resource
+ * identifies a specific stream/projection *row* (kind + key present), the deny
+ * reason is `notAuthorizedForResource` or `ownerMismatch`, and a registered
+ * cascade lookup confirms the principal holds an active, read-satisfying grant
+ * on an object record whose id equals the row's id.
+ *
+ * Association rule (documented in docs/threat-model.md): a grant on object
+ * record `(recordType, recordId)` authorizes the grantee to READ
+ *  - the stream whose `streamId === recordId`, and
+ *  - the projection rows whose `key === recordId`,
+ * within the same tenant. The match is by record id, because streams and
+ * projections are keyed by id, not by object type. When a surface has no
+ * resolvable row id (e.g. a projection subscribe without a `key`, which spans
+ * the whole projection), the cascade is skipped and the original deny stands —
+ * we fail closed rather than over-share.
+ *
+ * The cascade is strictly read-only: `stream.append` and every write verb are
+ * never relaxed here. It is also skipped for `tenantMismatch` /
+ * `unauthenticated` / `notMember` / `schema*` (out of scope for sharing),
+ * when no cascade lookup is provided, or when there is no principal.
+ */
+function relaxWithCascadeGrants(
+  decision: FrickDecision,
+  input: FrickPolicyInput,
+  cascadeGrantLookup: FrickCascadeGrantLookup | undefined,
+): FrickDecision {
+  if (decision.allow || !cascadeGrantLookup) {
+    return decision;
+  }
+  if (input.action !== "stream.read" && input.action !== "projection.read") {
+    return decision;
+  }
+  // Mirror the reason filter used by the object-record grant relaxation
+  // (`relaxWithGrants`): only same-tenant ownership/authorization denials are
+  // eligible. `tenantMismatch` / `unauthenticated` / `schema*` stay denied.
+  if (
+    decision.reason !== "notAuthorizedForResource" &&
+    decision.reason !== "ownerMismatch" &&
+    decision.reason !== "notMember"
+  ) {
+    return decision;
+  }
+  const principal = input.principal;
+  if (!principal) {
+    return decision;
+  }
+  const { kind, key } = input.resource;
+  // The cascade needs a concrete row id to tie back to a granted object.
+  // Without one (e.g. a whole-projection subscribe) we cannot prove the
+  // association, so we leave the deny in place (fail closed).
+  if ((kind !== "stream" && kind !== "projection") || !key) {
+    return decision;
+  }
+  const allowed = cascadeGrantLookup({
+    tenantId: principal.tenantId,
+    granteeUserId: principal.userId,
+    recordId: key,
+  });
+  return allowed ? ALLOW : decision;
+}
+
 export function principalFromHello(
   replicaId: string,
   deviceId: string,
@@ -427,6 +519,7 @@ export function assertCanSubscribe(
   key: string | undefined,
   memberships: MembershipReader,
   hooks?: readonly FrickPolicyHook[],
+  cascadeGrantLookup?: FrickCascadeGrantLookup,
 ): void {
   if (kind === "projection") {
     const decision = decideWithHooks(
@@ -437,6 +530,8 @@ export function assertCanSubscribe(
       },
       memberships,
       hooks,
+      undefined,
+      cascadeGrantLookup,
     );
     if (!decision.allow) {
       throw new AuthorizationError(decision);
@@ -480,6 +575,8 @@ export function assertCanSubscribe(
     { principal, action: "stream.read", resource: { kind: "stream", name, ...(key !== undefined ? { key } : {}) } },
     memberships,
     hooks,
+    undefined,
+    cascadeGrantLookup,
   );
   if (!decision.allow) {
     throw new AuthorizationError(decision);
