@@ -275,9 +275,9 @@ export interface ServerOptions {
   /**
    * Push-notification framework configuration. Adapters supplied here are
    * registered before the default test adapter, so an app that wires its
-   * own `platform: "test"` adapter overrides the framework default. Real
-   * APNs / FCM / web-push adapters are out-of-tree — credentials and SDK
-   * dependencies don't belong in the core server bundle.
+   * own `platform: "test"` adapter overrides the framework default. The
+   * built-in APNs, FCM, and Web Push reference adapters are exported from
+   * `@frick/server` and documented package subpaths.
    */
   push?: {
     adapters?: FrickPushAdapter[];
