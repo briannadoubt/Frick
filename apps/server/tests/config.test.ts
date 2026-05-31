@@ -20,6 +20,7 @@ describe("loadFrickConfig", () => {
       dbDriver: "sqlite",
       dbPath: "./frick.sqlite",
       databaseUrl: undefined,
+      blobDriver: "sqlite",
       blobStoragePath: "./frick-blobs/",
       logLevel: "info",
       inspectionEnabled: true,
@@ -436,5 +437,38 @@ describe("loadFrickConfig storage driver", () => {
         },
       ),
     ).toThrow(/dbPath ':memory:' is forbidden in production/);
+  });
+
+  it("defaults the blob driver to sqlite (FR-53)", () => {
+    const config = loadFrickConfig({}, { env: {}, warn: () => {} });
+    expect(config.blobDriver).toBe("sqlite");
+    expect(config.blobStoragePath).toBe("./frick-blobs/");
+  });
+
+  it("accepts the filesystem blob driver with a storage path (FR-53)", () => {
+    const config = loadFrickConfig(
+      {},
+      {
+        env: { FRICK_BLOB_DRIVER: "filesystem", FRICK_BLOB_STORAGE_PATH: "/var/lib/frick-blobs" },
+        warn: () => {},
+      },
+    );
+    expect(config.blobDriver).toBe("filesystem");
+    expect(config.blobStoragePath).toBe("/var/lib/frick-blobs");
+  });
+
+  it("rejects an invalid blob driver value (FR-53)", () => {
+    expect(() =>
+      loadFrickConfig({}, { env: { FRICK_BLOB_DRIVER: "s3" }, warn: () => {} }),
+    ).toThrow(FrickConfigError);
+  });
+
+  it("rejects the filesystem blob driver when no storage path is set (FR-53)", () => {
+    expect(() =>
+      loadFrickConfig(
+        { blobStoragePath: "" },
+        { env: { FRICK_BLOB_DRIVER: "filesystem" }, warn: () => {} },
+      ),
+    ).toThrow(/FRICK_BLOB_DRIVER=filesystem requires FRICK_BLOB_STORAGE_PATH/);
   });
 });

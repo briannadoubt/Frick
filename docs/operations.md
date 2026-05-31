@@ -58,7 +58,8 @@ All variables are optional. Defaults match the runtime mode.
 | `FRICK_DB_DRIVER`           | `sqlite`                    | `sqlite`                              | Durable-storage driver. One of `sqlite` or `postgres`. `sqlite` is the only implemented driver; selecting `postgres` fails fast at startup with a "not yet implemented (FR-22)" error. |
 | `FRICK_DB_PATH`             | `./frick.sqlite`            | `./frick.sqlite`                      | SQLite path (used by the `sqlite` driver). `":memory:"` is rejected in production. |
 | `FRICK_DATABASE_URL`        | unset                       | unset                                 | Connection string reserved for the future `postgres` driver (FR-22). Ignored by the `sqlite` driver. |
-| `FRICK_BLOB_STORAGE_PATH`   | `./frick-blobs/`            | `./frick-blobs/`                      | Parsed for future filesystem blob storage; current blob bytes are SQLite-backed. |
+| `FRICK_BLOB_DRIVER`         | `sqlite`                    | `sqlite`                              | Blob-bytes storage driver. One of `sqlite` or `filesystem`. `sqlite` keeps blob bytes in the SQLite `blob_content` table; `filesystem` stores them under `FRICK_BLOB_STORAGE_PATH` in tenant-isolated, id-keyed files. Blob metadata always stays in SQLite. Selecting `filesystem` without a writable `FRICK_BLOB_STORAGE_PATH` fails fast at startup. |
+| `FRICK_BLOB_STORAGE_PATH`   | `./frick-blobs/`            | `./frick-blobs/`                      | Filesystem root for blob bytes. Used by the `filesystem` blob driver; inert under the default `sqlite` driver. Must be a writable directory when `FRICK_BLOB_DRIVER=filesystem`. |
 | `FRICK_LOG_LEVEL`           | `info`                      | `info`                                | One of `debug`, `info`, `warn`, `error`.                             |
 | `FRICK_OTEL_ENABLED`        | `true` when an OTLP endpoint is set; otherwise `false` | same | Enables the built-in OpenTelemetry SDK runtime.                      |
 | `FRICK_OTEL_SERVICE_NAME`   | `frick-server`              | `frick-server`                        | OTel service name. Falls back to `OTEL_SERVICE_NAME` when set.        |
@@ -1113,9 +1114,14 @@ Content-Type: application/json
 - The CLI exists in the monorepo as `pnpm cli <command>` and can be built
   as `frick`, but it is still private and imports server internals directly.
   Publishing a standalone npm CLI remains a release-surface follow-up.
-- Blob content is stored in SQLite today. `FRICK_BLOB_STORAGE_PATH` is
-  parsed and exposed for a future filesystem driver, but the current server
-  does not write blob bytes there.
+- Blob bytes default to SQLite (`FRICK_BLOB_DRIVER=sqlite`, the `blob_content`
+  table). Set `FRICK_BLOB_DRIVER=filesystem` with a writable
+  `FRICK_BLOB_STORAGE_PATH` to store blob bytes on the local filesystem instead;
+  bytes are written to tenant-isolated, id-keyed files so one tenant can never
+  read another's. Blob metadata stays in SQLite under either driver. The
+  filesystem driver fails fast at startup if the storage path is missing or not
+  writable. Object-storage (S3) and derivative offloading are separate
+  follow-ups (FR-54, FR-55).
 - Outbound email ships the Resend reference adapter and an in-memory test
   adapter only (see "Outbound email"). Other providers (SES, Postmark, SMTP)
   are implemented out-of-tree against the exported `FrickEmailAdapter`

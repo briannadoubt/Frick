@@ -6,9 +6,10 @@
  * blob storage paths, and log level. A storage-driver selector (`dbDriver`)
  * now lets a future Postgres driver be chosen; SQLite stays the default and the
  * only implemented driver, with `postgres` rejected at validation time until
- * FR-22 lands. The local-filesystem blob driver and CORS enforcement itself
- * still land in a later slice — this module just parses, validates, and exposes
- * the values.
+ * FR-22 lands. A separate blob-bytes driver selector (`blobDriver`, FR-53) can
+ * move blob bytes to the local filesystem under `FRICK_BLOB_STORAGE_PATH`;
+ * SQLite stays the default. CORS enforcement itself still lands in a later
+ * slice — this module just parses, validates, and exposes the values.
  */
 
 export type FrickEnv = "development" | "test" | "production";
@@ -25,6 +26,17 @@ export type FrickPlatformEventsDriver = "sqlite" | "kafka";
  * gate in {@link loadFrickConfig}.
  */
 export type FrickDbDriver = "sqlite" | "postgres";
+
+/**
+ * Blob-bytes storage driver selector (FR-53). Mirrors {@link FrickDbDriver}:
+ * `sqlite` is the default and keeps blob bytes in the SQLite `blob_content`
+ * table; `filesystem` stores the bytes under {@link FrickConfig.blobStoragePath}
+ * in tenant-isolated, id-keyed files. Blob *metadata* always lives in SQLite
+ * regardless of this setting. Selecting `filesystem` without a writable
+ * `FRICK_BLOB_STORAGE_PATH` fails fast at config validation; see the gate in
+ * {@link loadFrickConfig}.
+ */
+export type FrickBlobDriver = "sqlite" | "filesystem";
 
 export interface FrickConfig {
   /** Runtime environment. Drives defaults for the rest of the config. */
@@ -88,7 +100,17 @@ export interface FrickConfig {
    * the env var is unset.
    */
   databaseUrl: string | undefined;
-  /** Filesystem directory for blob storage (current driver is local fs). */
+  /**
+   * Blob-bytes storage driver. Defaults to `sqlite` (bytes in the SQLite
+   * `blob_content` table). `filesystem` moves the bytes under
+   * {@link FrickConfig.blobStoragePath}; blob metadata stays in SQLite either
+   * way. Selecting `filesystem` requires a writable `blobStoragePath`.
+   */
+  blobDriver: FrickBlobDriver;
+  /**
+   * Filesystem directory for blob bytes. Used by the `filesystem` blob driver
+   * (FR-53); parsed but inert under the default `sqlite` driver.
+   */
   blobStoragePath: string;
   /** Threshold for the structured logger. */
   logLevel: FrickLogLevel;
@@ -190,6 +212,10 @@ const VALID_DB_DRIVERS: ReadonlySet<FrickDbDriver> = new Set<FrickDbDriver>([
   "sqlite",
   "postgres",
 ]);
+const VALID_BLOB_DRIVERS: ReadonlySet<FrickBlobDriver> = new Set<FrickBlobDriver>([
+  "sqlite",
+  "filesystem",
+]);
 
 /**
  * A single subdomain-wildcard allowlist entry: `<scheme>://*.<rest-of-host>`.
@@ -237,6 +263,7 @@ export function loadFrickConfig(
   const dbPath = overrides.dbPath ?? parseString(env.FRICK_DB_PATH) ?? DEFAULT_DB_PATH;
   const databaseUrl =
     "databaseUrl" in overrides ? overrides.databaseUrl : parseString(env.FRICK_DATABASE_URL);
+  const blobDriver = overrides.blobDriver ?? parseBlobDriver(env.FRICK_BLOB_DRIVER);
   const blobStoragePath =
     overrides.blobStoragePath ?? parseString(env.FRICK_BLOB_STORAGE_PATH) ?? DEFAULT_BLOB_STORAGE_PATH;
   const logLevel = overrides.logLevel ?? parseLogLevel(env.FRICK_LOG_LEVEL, "info");
@@ -339,6 +366,11 @@ export function loadFrickConfig(
       "postgres storage driver is not yet implemented (FR-22) — set FRICK_DB_DRIVER=sqlite (the default) to start the server",
     );
   }
+  if (blobDriver === "filesystem" && blobStoragePath.trim() === "") {
+    throw new FrickConfigError(
+      "FRICK_BLOB_DRIVER=filesystem requires FRICK_BLOB_STORAGE_PATH to be set to a writable directory",
+    );
+  }
   if (runtimeEnv === "production" && demoAuthEnabled) {
     throw new FrickConfigError(
       "demoAuthEnabled=true is forbidden in production — unset FRICK_DEMO_AUTH_ENABLED or use a non-production FRICK_ENV",
@@ -371,6 +403,7 @@ export function loadFrickConfig(
     dbDriver,
     dbPath,
     databaseUrl,
+    blobDriver,
     blobStoragePath,
     logLevel,
     otelEnabled,
@@ -476,6 +509,18 @@ function parseDbDriver(value: string | undefined): FrickDbDriver {
   }
   throw new FrickConfigError(
     `FRICK_DB_DRIVER must be one of sqlite, postgres (got ${JSON.stringify(value)})`,
+  );
+}
+
+function parseBlobDriver(value: string | undefined): FrickBlobDriver {
+  if (value === undefined || value === "") {
+    return "sqlite";
+  }
+  if (VALID_BLOB_DRIVERS.has(value as FrickBlobDriver)) {
+    return value as FrickBlobDriver;
+  }
+  throw new FrickConfigError(
+    `FRICK_BLOB_DRIVER must be one of sqlite, filesystem (got ${JSON.stringify(value)})`,
   );
 }
 
