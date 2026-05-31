@@ -342,6 +342,59 @@ boundaries and do not cascade to child records, streams, blobs, jobs,
 projections, search indexes, or custom app routes unless the app builds those
 semantics on top.
 
+## Account data export
+
+The server always mounts an authenticated self-service data-export route. This
+is the data-subject "give me a copy of my own data" surface (distinct from the
+operator-driven `/_frick/admin/data-subject` route, which exports an arbitrary
+user's framework-owned records for a privileged operator).
+
+- `GET /account/export` returns the calling principal's own data as a single
+  JSON bundle and sets `cache-control: no-store`. No request body or query
+  parameters are required. An unauthenticated request returns `401`.
+
+The bundle shape is:
+
+```jsonc
+{
+  "tenantId": "_default",
+  "userId": "user-ada",
+  "generatedAt": "2026-05-30T12:00:00.000Z",
+  "schemaHash": "…",
+  "objects": {
+    "<ObjectType>": [ /* records this principal owns, with `id` */ ]
+  },
+  "app": { /* present only when an onAccountExport hook is registered */ }
+}
+```
+
+Scoping and isolation:
+
+- Object reads are tenant-scoped to the session's tenant, so a record from
+  another tenant can never appear — even one whose owner field matches the
+  caller's `userId`.
+- A record is treated as owned by the principal when one of its
+  `ownerId` / `userId` / `createdBy` fields equals the principal's `userId`
+  (the framework default; see `DEFAULT_OWNER_FIELDS`). Apps whose schema uses a
+  different owner field can override this in their own export wiring.
+- Object types the principal owns no records of appear with an empty array so
+  the bundle shape is stable.
+
+Sensitivity handling: this is the principal's own data, so `pii`, `private`
+(the default), and `content` fields are returned in full — the point of the
+export is to hand the user everything they authored. Only `secret`-classified
+fields (credentials, tokens, internal secrets that may be co-located on an
+owned record) are masked with `<redacted>`, so an export can never become a
+credential-exfiltration vector. See `docs/threat-model.md`.
+
+App augmentation: pass `onAccountExport(principal, base)` to `createFrickServer`
+to add app-specific data (e.g. stream history, blob metadata) to the bundle.
+The hook receives the resolved principal and the framework's owned-object base;
+its return value is attached as `app`. The hook is responsible for scoping every
+read it performs to `principal.tenantId` / `principal.userId` — the framework
+cannot enforce isolation on queries it does not own. When no hook is registered
+the `app` key is omitted.
+
 ## Outbound email
 
 Frick ships a pluggable outbound email surface that mirrors the push-adapter
