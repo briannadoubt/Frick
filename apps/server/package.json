@@ -20,6 +20,11 @@
       "types": "./dist/push/fcm-adapter.d.ts",
       "import": "./dist/push/fcm-adapter.js",
       "default": "./dist/push/fcm-adapter.js"
+    },
+    "./email/resend-adapter": {
+      "types": "./dist/email/resend-adapter.d.ts",
+      "import": "./dist/email/resend-adapter.js",
+      "default": "./dist/email/resend-adapter.js"
     }
   },
   "files": [

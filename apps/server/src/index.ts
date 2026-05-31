@@ -69,12 +69,37 @@ export {
   type PushCredentialError,
   type WebPushCredentials,
 } from "./push/credentials.js";
+export {
+  type FrickEmailAdapter,
+  type FrickEmailContext,
+  type FrickEmailDelivery,
+  type FrickEmailMessage,
+} from "./email/types.js";
+export {
+  createFrickEmailRouter,
+  type FrickEmailRouter,
+  type FrickEmailRouterOptions,
+  type PasswordResetEmailOptions,
+  type VerificationEmailOptions,
+} from "./email/router.js";
+export {
+  createFrickResendEmailAdapter,
+  type FrickResendEmailAdapter,
+  type ResendAdapterOptions,
+} from "./email/resend-adapter.js";
+export {
+  createFrickTestEmailAdapter,
+  type FrickTestEmailAdapter,
+} from "./email/test-adapter.js";
 export { FrickStore, type StoreOptions } from "./store.js";
 export { createNoopLogger, type FrickLogger } from "./logger.js";
 export {
   type IdentityProvidersConfig,
   type AppleProviderConfig,
   type EmailProviderConfig,
+  type EmailOutboundConfig,
+  type EmailWelcomeConfig,
+  type PasswordResetRequest,
   type GoogleProviderConfig,
   type UserObjectMapping,
   type OnFirstSignIn,
