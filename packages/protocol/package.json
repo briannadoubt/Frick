@@ -16,6 +16,9 @@
     }
   },
   "types": "./dist/index.d.ts",
+  "scripts": {
+    "test": "cd ../.. && vitest run packages/protocol/tests"
+  },
   "files": [
     "dist",
     "fixtures",

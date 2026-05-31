@@ -6,6 +6,11 @@ Each package version is independent — a release header documents which package
 
 ## Unreleased
 
+### Protocol — optional schema artifact signing + client verification
+
+- **`@frick/protocol`:** Added OPTIONAL Ed25519 signing of generated schema artifacts to close the build-pipeline poisoning gap in [`docs/threat-model.md`](docs/threat-model.md) (FR-45). New exports `signSchemaArtifact` / `verifySchemaArtifact` (plus `verifySchemaArtifactForSchema`, `schemaArtifactIdentity`, `schemaArtifactManifestEntry`, `canonicalizeSchemaIdentity`, `sha256Hex`) sign over a canonical representation of the schema identity — `schemaId` + `schemaHash` + `schemaRevision` + a manifest of emitted artifact files and their SHA-256 digests — using `node:crypto`. Keys may be `KeyObject`, PEM, or base64-DER. Verification returns a structured `{ valid, reason }` result instead of throwing.
+- `pnpm schema:generate` now emits a detached signature at `packages/protocol/generated/schema-signature.json` **only when** `FRICK_SCHEMA_SIGNING_KEY` is set; without a key, signing is a no-op so default generation is byte-for-byte unchanged and `pnpm verify:generated` stays clean. The signature path is gitignored (release-pipeline artifact, never committed). `packages/protocol/scripts/verify-schema-signature.ts` is a runnable example clients can adapt to verify a bundle against a trusted public key. No mandatory key infrastructure is required.
+
 ### Server — storage-driver selector
 
 - **`@frick/server`:** Added a durable-storage driver selector to runtime config so a future Postgres driver can be chosen. `FRICK_DB_DRIVER` (`sqlite` | `postgres`, default `sqlite`) selects the driver, and `FRICK_DATABASE_URL` is parsed into config for future Postgres use. SQLite remains the default and the only implemented driver — `FRICK_DB_PATH` and the production `":memory:"` guard are unchanged. Selecting `FRICK_DB_DRIVER=postgres` fails fast at config validation with `postgres storage driver is not yet implemented (FR-22)`. No runtime behavior change for existing SQLite deployments. See [`docs/operations.md`](docs/operations.md) for the new env vars.
