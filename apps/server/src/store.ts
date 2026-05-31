@@ -199,6 +199,41 @@ export interface StoreOptions {
   platformEventsPruneIntervalMs?: number;
 }
 
+/**
+ * Change notification emitted by the store on every successful object upsert
+ * and stream append, regardless of which caller drove the write (a client WS
+ * frame, an HTTP route, or a server-side job calling `store.upsertObject` /
+ * `store.appendEvent` directly). It carries exactly what the sync gateway
+ * needs to build the on-the-wire delta frame, so the gateway can fan out
+ * server-originated writes to already-subscribed connections — closing the
+ * gap where background jobs/app routes persisted data but never live-pushed
+ * it (FR-114).
+ *
+ * The store does NOT broadcast itself: it only emits. A single consumer (the
+ * sync gateway) registers via {@link FrickStore.setWriteListener} and owns
+ * the fan-out + cluster-bus forwarding. Keeping the store as the *only*
+ * emission point means every write path broadcasts through exactly one funnel
+ * — there is no second inline broadcast to double-fire.
+ */
+export type FrickStoreWriteEvent =
+  | {
+      kind: "objectUpsert";
+      tenantId: string;
+      objectType: string;
+      objectId: string;
+      /** Stored (post-merge) object state, including its `id` field. */
+      object: PlainObject;
+    }
+  | {
+      kind: "streamAppend";
+      tenantId: string;
+      /** The freshly-appended, persisted event. */
+      event: StoredEvent;
+    };
+
+/** Consumer of {@link FrickStoreWriteEvent}s — the sync gateway. */
+export type FrickStoreWriteListener = (event: FrickStoreWriteEvent) => void;
+
 export class FrickStore {
   readonly schema: FrickSchema;
   readonly objects: ObjectStore;
@@ -253,6 +288,14 @@ export class FrickStore {
   #devtoolsPruneTimer: ReturnType<typeof setInterval> | undefined;
   #platformEventsPruneTimer: ReturnType<typeof setInterval> | undefined;
   #closed = false;
+  /**
+   * Single optional consumer of object-upsert / stream-append change events,
+   * set by the sync gateway at boot via {@link setWriteListener}. The store
+   * never broadcasts directly; it only fires this hook so the gateway can fan
+   * the change out to subscribers (and onto the cluster bus) — see
+   * {@link FrickStoreWriteEvent}.
+   */
+  #writeListener: FrickStoreWriteListener | undefined;
 
   constructor(options: StoreOptions) {
     if (options.path !== ":memory:") {
@@ -606,6 +649,13 @@ export class FrickStore {
         object: stored,
       });
       this.#notifySearchForObject(tenantId, type, id, stored);
+      this.#notifyWriteListener({
+        kind: "objectUpsert",
+        tenantId,
+        objectType: type,
+        objectId: id,
+        object: stored,
+      });
       return;
     }
     // 4-arg form: (type, id, value, version?)
@@ -623,6 +673,13 @@ export class FrickStore {
       object: stored,
     });
     this.#notifySearchForObject(DEFAULT_TENANT_ID, type, id, stored);
+    this.#notifyWriteListener({
+      kind: "objectUpsert",
+      tenantId: DEFAULT_TENANT_ID,
+      objectType: type,
+      objectId: id,
+      object: stored,
+    });
   }
 
   #notifySearchForObject(tenantId: string, type: string, id: string, value: PlainObject): void {
@@ -680,6 +737,13 @@ export class FrickStore {
       object: stored,
     });
     this.#notifySearchForObject(tenantId, args.type, args.id, stored);
+    this.#notifyWriteListener({
+      kind: "objectUpsert",
+      tenantId,
+      objectType: args.type,
+      objectId: args.id,
+      object: stored,
+    });
     return result;
   }
 
@@ -783,6 +847,11 @@ export class FrickStore {
           },
         },
       );
+      this.#notifyWriteListener({
+        kind: "streamAppend",
+        tenantId: result.event.tenantId,
+        event: result.event,
+      });
     }
     return result;
   }
@@ -837,6 +906,37 @@ export class FrickStore {
       logger: this.#logger,
     };
     this.projections.notify(event, ctx);
+  }
+
+  /**
+   * Register the single store-write listener (the sync gateway). Passing
+   * `undefined` detaches it — the gateway does this on close so a torn-down
+   * gateway never fans out after its sockets are gone. Replaces any existing
+   * listener; only one consumer is expected, matching the projection
+   * delta-listener model.
+   */
+  setWriteListener(listener: FrickStoreWriteListener | undefined): void {
+    this.#writeListener = listener;
+  }
+
+  /**
+   * Fire the store-write listener for a successful object/stream write. Any
+   * listener throw is swallowed and logged — a fan-out hiccup must never tear
+   * down the originating write, mirroring how {@link #notifySearch} isolates
+   * indexer failures.
+   */
+  #notifyWriteListener(event: FrickStoreWriteEvent): void {
+    if (!this.#writeListener) {
+      return;
+    }
+    try {
+      this.#writeListener(event);
+    } catch (error) {
+      this.#logger.warn("frick.store.write_listener_failed", {
+        kind: event.kind,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   readEvents(stream: string, streamId: string, after: number, limit?: number): StoredEvent[];

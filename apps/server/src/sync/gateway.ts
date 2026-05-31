@@ -41,7 +41,7 @@ import {
   type Principal,
 } from "../authz.js";
 import { FrickObjectVersionConflictError } from "../storage/object-errors.js";
-import type { FrickStore } from "../store.js";
+import type { FrickStore, FrickStoreWriteEvent } from "../store.js";
 import type { StoredEvent } from "../storage/stream-store.js";
 import type {
   FrickProjectionRegistry,
@@ -158,6 +158,16 @@ export class SyncGateway {
     if (this.#projections) {
       this.#projections.setDeltaListener((notice) => this.publishProjectionDelta(notice));
     }
+    // Single broadcast funnel for object/stream writes. Every successful
+    // object upsert and stream append — whether driven by a client WS frame,
+    // an HTTP route, or a server-side job/route calling the store directly —
+    // flows through this one listener and out to subscribers (FR-114). The
+    // gateway is the *only* broadcaster of these deltas: the WS frame handlers
+    // and HTTP routes no longer publish inline, so a single write never
+    // double-fires. `publishObjects`/`publishStreamEvent` also forward to the
+    // cluster bus, so server-originated writes reach peer nodes with the same
+    // parity client mutations already had.
+    this.store.setWriteListener((event) => this.#handleStoreWrite(event));
     if (this.#clusterBus) {
       this.#clusterUnsubscribe = this.#clusterBus.subscribe((envelope) =>
         this.#handleClusterEnvelope(envelope),
@@ -275,6 +285,7 @@ export class SyncGateway {
     this.#heartbeatTimers.clear();
     this.#clientsBySessionToken.clear();
     this.#projections?.setDeltaListener(undefined);
+    this.store.setWriteListener(undefined);
     this.#clusterUnsubscribe?.();
     this.#clusterUnsubscribe = undefined;
     this.#subscriptions.closeAll();
@@ -491,6 +502,26 @@ export class SyncGateway {
         { projection: notice.projection, changes },
       ]);
     }
+  }
+
+  /**
+   * Fan out a store-level write notification (FR-114). Routes object upserts
+   * to {@link publishObjects} and stream appends to {@link publishStreamEvent}
+   * — the exact same wire frames and cluster-bus forwarding used for
+   * client-originated mutations. Because this is the single broadcast source
+   * for these writes, the value here is the *stored* (post-merge) object state
+   * the store already read back, which is the correct snapshot to push to
+   * other replicas regardless of merge policy.
+   */
+  #handleStoreWrite(event: FrickStoreWriteEvent): void {
+    if (event.kind === "objectUpsert") {
+      this.publishObjects(event.objectType, [event.object], event.tenantId);
+      return;
+    }
+    this.publishStreamEvent(event.event);
+    // Keep the SSE bridge fed from the same single funnel so EventSource
+    // subscribers see server-originated appends too, not just client ones.
+    this.options.onStreamEvent?.(event.event);
   }
 
   #startHeartbeat(client: SyncClient, socket: WebSocket): ReturnType<typeof setInterval> {
@@ -1086,10 +1117,10 @@ export class SyncGateway {
       });
       this.#sendFrame(client, [FrameKind.Ack, { requestId: payload.requestId, cursor: result.event.sequence }]);
 
-      if (result.created) {
-        this.publishStreamEvent(result.event);
-        this.options.onStreamEvent?.(result.event);
-      }
+      // No inline broadcast here: `appendEvent` fires the store write listener
+      // on a created event, which fans it out to gateway subscribers, the SSE
+      // bridge, and the cluster bus through the single funnel in
+      // `#handleStoreWrite`. Broadcasting here too would double-fire (FR-114).
     } finally {
       this.#pendingAppendCounts.set(client, Math.max(0, (this.#pendingAppendCounts.get(client) ?? 1) - 1));
     }
@@ -1157,8 +1188,10 @@ export class SyncGateway {
           FrameKind.Ack,
           { requestId: payload.requestId, version: result.nextVersion },
         ]);
-        const written: PlainObject = { id: payload.objectId, ...withoutEnvelopeId(payload.value) };
-        this.publishObjects(payload.objectType, [written], principal.tenantId);
+        // No inline broadcast here: `upsertObjectWithPolicy` fires the store
+        // write listener, which fans this upsert out (and onto the cluster
+        // bus) through the single funnel in `#handleStoreWrite`. Broadcasting
+        // here too would deliver the delta twice (FR-114).
       } catch (error) {
         if (error instanceof FrickObjectVersionConflictError) {
           const envelope = createFrickErrorEnvelope({
@@ -1672,11 +1705,6 @@ function measureByteLength(payload: unknown): number {
     return Buffer.byteLength(payload);
   }
   return 0;
-}
-
-function withoutEnvelopeId(value: PlainObject): PlainObject {
-  const { id: _id, ...rest } = value;
-  return rest;
 }
 
 function schemaFromClientCapabilities(client: FrickClientCapabilities, serverSchema: FrickSchema): FrickSchema {
