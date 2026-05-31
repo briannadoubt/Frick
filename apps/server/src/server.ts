@@ -461,6 +461,8 @@ export function createFrickServer(options: ServerOptions = {}) {
     platformEventsRetentionMs: config.platformEventsRetentionMs,
     platformEventsMaxRows: config.platformEventsMaxRows,
     idempotencyReplayWindowMs: config.idempotencyReplayWindowMs,
+    blobDriver: config.blobDriver,
+    blobStoragePath: config.blobStoragePath,
   });
   const platformEvents =
     options.platformEvents ??
@@ -2413,6 +2415,8 @@ function isFrickConfig(value: FrickConfig | FrickConfigOverrides): value is Fric
     typeof v.port === "number" &&
     typeof v.dbDriver === "string" &&
     typeof v.dbPath === "string" &&
+    typeof v.blobDriver === "string" &&
+    typeof v.blobStoragePath === "string" &&
     typeof v.logLevel === "string" &&
     typeof v.otelEnabled === "boolean" &&
     typeof v.otelServiceName === "string" &&

@@ -14,6 +14,10 @@ import { AccountStore, type StoredAccount } from "./storage/account-store.js";
 import { PasswordResetTokenStore } from "./storage/password-reset-store.js";
 import { AdminAuditStore } from "./storage/admin-audit-store.js";
 import { BlobStore, type BlobMetadata, type BlobMetadataInput } from "./storage/blob-store.js";
+import {
+  createBlobBytesDriver,
+  type FrickBlobDriver,
+} from "./storage/blob-bytes-driver.js";
 import { BlobDerivativeStore } from "./storage/blob-derivative-store.js";
 import {
   createFrickBlobProcessorRegistry,
@@ -103,6 +107,18 @@ export interface StoreOptions {
   path: string;
   schema?: FrickSchema;
   seed?: boolean;
+  /**
+   * Blob-bytes storage driver (FR-53). `sqlite` (the default) keeps blob bytes
+   * in the SQLite `blob_content` table; `filesystem` writes them under
+   * {@link StoreOptions.blobStoragePath}. Blob metadata always lives in SQLite
+   * regardless of this setting.
+   */
+  blobDriver?: FrickBlobDriver;
+  /**
+   * Filesystem root for blob bytes. Required and validated (writable directory)
+   * when {@link StoreOptions.blobDriver} is `filesystem`; ignored otherwise.
+   */
+  blobStoragePath?: string;
   /**
    * Capacity of the in-process LRU front cache for idempotency lookups.
    * Defaults to {@link DEFAULT_IDEMPOTENCY_CACHE_CAPACITY}. Eviction is purely
@@ -325,7 +341,14 @@ export class FrickStore {
     });
     this.presence = new PresenceStore(this.#db, this.schema);
     this.signals = new SignalStore(this.#db, this.schema);
-    this.blobs = new BlobStore(this.#db);
+    this.blobs = new BlobStore(
+      this.#db,
+      createBlobBytesDriver({
+        driver: options.blobDriver ?? "sqlite",
+        db: this.#db,
+        blobStoragePath: options.blobStoragePath,
+      }),
+    );
     this.blobDerivatives = new BlobDerivativeStore(this.#db);
     this.blobProcessors = createFrickBlobProcessorRegistry();
     this.jobs = new JobStore(this.#db);

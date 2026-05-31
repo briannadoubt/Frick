@@ -1,4 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
+import {
+  SqliteBlobBytesDriver,
+  type BlobBytesDriver,
+} from "./blob-bytes-driver.js";
 
 export interface BlobMetadataInput {
   blobId: string;
@@ -25,12 +29,21 @@ interface BlobRow {
   created_at: string;
 }
 
-interface BlobContentRow {
-  content: Uint8Array;
-}
-
 export class BlobStore {
-  constructor(private readonly db: DatabaseSync) {}
+  readonly #bytes: BlobBytesDriver;
+
+  /**
+   * Blob *metadata* always lives in SQLite (`this.db`). Blob *bytes* are served
+   * by a pluggable {@link BlobBytesDriver} (FR-53). When no driver is supplied,
+   * the store defaults to the SQLite bytes driver, preserving the historical
+   * behavior of storing bytes in the `blob_content` table.
+   */
+  constructor(
+    private readonly db: DatabaseSync,
+    bytes?: BlobBytesDriver,
+  ) {
+    this.#bytes = bytes ?? new SqliteBlobBytesDriver(db);
+  }
 
   create(tenantId: string, metadata: BlobMetadataInput): void {
     this.db
@@ -77,19 +90,19 @@ export class BlobStore {
   }
 
   writeContent(tenantId: string, blobId: string, content: Uint8Array): void {
-    this.db
-      .prepare(
-        `INSERT OR REPLACE INTO blob_content (blob_id, content, updated_at, tenant_id)
-          VALUES (?, ?, ?, ?)`,
-      )
-      .run(blobId, Buffer.from(content), new Date().toISOString(), tenantId);
+    this.#bytes.write(tenantId, blobId, content);
   }
 
   readContent(tenantId: string, blobId: string): Uint8Array | undefined {
-    const row = this.db
-      .prepare("SELECT content FROM blob_content WHERE tenant_id = ? AND blob_id = ?")
-      .get(tenantId, blobId) as BlobContentRow | undefined;
-    return row ? Buffer.from(row.content) : undefined;
+    return this.#bytes.read(tenantId, blobId);
+  }
+
+  deleteContent(tenantId: string, blobId: string): void {
+    this.#bytes.delete(tenantId, blobId);
+  }
+
+  hasContent(tenantId: string, blobId: string): boolean {
+    return this.#bytes.exists(tenantId, blobId);
   }
 }
 

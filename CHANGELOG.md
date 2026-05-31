@@ -6,6 +6,11 @@ Each package version is independent — a release header documents which package
 
 ## Unreleased
 
+### Server — filesystem blob-bytes driver
+
+- **`@frick/server`:** Blob bytes can now be stored on the local filesystem instead of SQLite. A new `FRICK_BLOB_DRIVER` selector (mirroring the FR-21 `FRICK_DB_DRIVER` pattern) chooses the blob-bytes backend: `sqlite` (the default, unchanged — bytes stay in the `blob_content` table) or `filesystem` (FR-53). Under the `filesystem` driver, blob bytes are written under `FRICK_BLOB_STORAGE_PATH` in tenant-isolated, id-keyed files; identifiers are hashed into the on-disk path so a crafted blob id can never escape its tenant directory, and one tenant can never read, write, or delete another tenant's bytes. Blob *metadata* always stays in SQLite under either driver, and the blob HTTP route contract is unchanged.
+- The `filesystem` driver fails fast at startup: selecting it without a `FRICK_BLOB_STORAGE_PATH` is rejected at config validation, and a path that is not a writable directory is rejected when the driver is constructed. Writes go through a temp-file + atomic rename so a concurrent reader never observes a partial file. New internal storage seam `BlobBytesDriver` (`SqliteBlobBytesDriver` / `FilesystemBlobBytesDriver`) with `write` / `read` / `delete` / `exists`; `BlobStore` gains `deleteContent` / `hasContent`. Object-storage (S3, FR-54), derivatives offload (FR-55), and quotas (FR-56) remain separate follow-ups. See [`docs/operations.md`](docs/operations.md).
+
 ### Server — live push for server-originated object/stream writes
 
 - **`@frick/server`:** Object upserts and stream appends made **server-side** through the store — a background job or app command route calling `store.upsertObject` / `store.upsertObjectWithPolicy` / `store.appendEvent` directly — now live-push to already-subscribed sync clients as `Delta` frames, closing the gap where such writes persisted and updated projections/search but never reached connected subscribers until the slower cursor resync (FR-114). HTTP `PUT /objects/...` writes, which previously did not broadcast at all, now also push live. Deltas remain tenant-scoped (a subscriber only sees writes in its own tenant).
