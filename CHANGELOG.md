@@ -13,6 +13,11 @@ Each package version is independent — a release header documents which package
 - Icons are now icon-pack-aware: `FrickIconGlyph` (and every component that renders an icon) renders the platform-native lucide glyph for `iconPack: "native"` and a self-contained brand fallback pack (`frickIcons`) for any non-native pack, so switching the icon pack updates rendered glyphs live. Exposes `nativeIcons`, `frickIcons`, and `iconPackFor()`. The previous `semanticIcons` export is kept as an alias of `nativeIcons`.
 - No generated artifact, token schema, or `components.css` change. iOS/Android are unchanged.
 
+### Server / CLI — Web Push adapter export + VAPID provisioning
+
+- **`@frick/server`:** The Web Push adapter is now a documented package export, completing the push trio next to APNs and FCM. `createFrickWebPushAdapter` and its types are reachable both from the package root and via the new `@frick/server/push/web-push-adapter` subpath (mirroring `@frick/server/push/apns-adapter` and `@frick/server/push/fcm-adapter`). No adapter behavior changed — Web Push still deliberately sends an empty push body; encrypted payloads (RFC 8291) remain follow-up work (FR-7).
+- **`@frick/cli`:** `frick tenants set-push --platform webpush --subject <mailto:|https:> --public-key <b64url> --private-key <pem-file>` now provisions per-tenant Web Push VAPID credentials, encrypting them with `FRICK_PUSH_CRED_KEY` into `tenant_settings.push.webPush.encrypted` (same envelope as the existing `apns`/`fcm` workflows). Private key material is read from disk and is not echoed. See [`docs/push-adapters.md`](docs/push-adapters.md).
+
 ### Server — storage-driver selector
 
 - **`@frick/server`:** Added a durable-storage driver selector to runtime config so a future Postgres driver can be chosen. `FRICK_DB_DRIVER` (`sqlite` | `postgres`, default `sqlite`) selects the driver, and `FRICK_DATABASE_URL` is parsed into config for future Postgres use. SQLite remains the default and the only implemented driver — `FRICK_DB_PATH` and the production `":memory:"` guard are unchanged. Selecting `FRICK_DB_DRIVER=postgres` fails fast at config validation with `postgres storage driver is not yet implemented (FR-22)`. No runtime behavior change for existing SQLite deployments. See [`docs/operations.md`](docs/operations.md) for the new env vars.

@@ -7,11 +7,15 @@
  * stream split all behave as a downstream automation script would see them.
  */
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { loadWebPushCredentials } from "../../server/src/push/credentials.js";
+import { TenantSettingsStore } from "../../server/src/storage/tenant-settings-store.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -544,6 +548,109 @@ describe("frick tenants", () => {
     const list = await runCli(["tenants", "list", "--db-path", dbPath, "--env", "development"]);
     const listBody = parseLastJson(list.stdout) as { tenants: Array<{ tenantId: string }> };
     expect(listBody.tenants.map((t) => t.tenantId)).toContain("tenant-x");
+  });
+
+  it("set-push --platform webpush wraps VAPID credentials that the server can decrypt", async () => {
+    const credKey = randomBytes(32).toString("base64");
+    await runCli(["migrate", "up", "--db-path", dbPath, "--env", "development"]);
+
+    const { privateKey: vapidPrivatePem } = generateKeyPairSync("ec", {
+      namedCurve: "prime256v1",
+      publicKeyEncoding: { type: "spki", format: "pem" },
+      privateKeyEncoding: { type: "pkcs8", format: "pem" },
+    });
+    const pemPath = join(tmpRoot, "vapid-private.pem");
+    writeFileSync(pemPath, vapidPrivatePem);
+
+    const result = await runCli(
+      [
+        "tenants",
+        "set-push",
+        "_default",
+        "--platform",
+        "webpush",
+        "--subject",
+        "mailto:ops@example.com",
+        "--public-key",
+        "BJ-fake-vapid-public-key",
+        "--private-key",
+        pemPath,
+        "--db-path",
+        dbPath,
+        "--env",
+        "development",
+      ],
+      { env: { FRICK_PUSH_CRED_KEY: credKey } },
+    );
+    expect(result.exitCode).toBe(0);
+    const body = parseLastJson(result.stdout) as { ok: boolean; tenantId: string; platform: string };
+    expect(body.ok).toBe(true);
+    expect(body.tenantId).toBe("_default");
+    expect(body.platform).toBe("webpush");
+
+    // The server-side credential loader must be able to decrypt what the CLI wrote.
+    const db = new DatabaseSync(dbPath);
+    try {
+      const tenantSettings = new TenantSettingsStore(db);
+      const loaded = loadWebPushCredentials(tenantSettings, "_default", {
+        FRICK_PUSH_CRED_KEY: credKey,
+      });
+      expect(loaded.ok).toBe(true);
+      if (loaded.ok) {
+        expect(loaded.value.subject).toBe("mailto:ops@example.com");
+        expect(loaded.value.publicKey).toBe("BJ-fake-vapid-public-key");
+        expect(loaded.value.privateKey).toBe(vapidPrivatePem);
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it("set-push --platform webpush rejects a subject that is not mailto: or https://", async () => {
+    await runCli(["migrate", "up", "--db-path", dbPath, "--env", "development"]);
+    const pemPath = join(tmpRoot, "vapid-bad-subject.pem");
+    writeFileSync(pemPath, "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n");
+    const result = await runCli(
+      [
+        "tenants",
+        "set-push",
+        "_default",
+        "--platform",
+        "webpush",
+        "--subject",
+        "ops@example.com",
+        "--public-key",
+        "BJ-fake",
+        "--private-key",
+        pemPath,
+        "--db-path",
+        dbPath,
+        "--env",
+        "development",
+      ],
+      { env: { FRICK_PUSH_CRED_KEY: randomBytes(32).toString("base64") } },
+    );
+    expect(result.exitCode).toBe(1);
+    const err = parseLastJson(result.stderr) as { error: { code: string } };
+    expect(err.error.code).toBe("tenants.setPush.invalidVapidSubject");
+  });
+
+  it("set-push rejects an unsupported platform", async () => {
+    await runCli(["migrate", "up", "--db-path", dbPath, "--env", "development"]);
+    const result = await runCli([
+      "tenants",
+      "set-push",
+      "_default",
+      "--platform",
+      "carrier-pigeon",
+      "--db-path",
+      dbPath,
+      "--env",
+      "development",
+    ]);
+    expect(result.exitCode).toBe(2);
+    const err = parseLastJson(result.stderr) as { error: { code: string } };
+    expect(err.error.code).toBe("cli.usage");
   });
 });
 

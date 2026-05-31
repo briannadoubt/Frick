@@ -6,11 +6,11 @@ Frick currently has three push adapter implementations:
 |---|---|---|
 | APNs | public subpath `@frick/server/push/apns-adapter`; source at [`apps/server/src/push/apns-adapter.ts`](../apps/server/src/push/apns-adapter.ts) | `apns` |
 | FCM (v1) | public subpath `@frick/server/push/fcm-adapter`; source at [`apps/server/src/push/fcm-adapter.ts`](../apps/server/src/push/fcm-adapter.ts) | `fcm` |
-| Web Push | internal source at [`apps/server/src/push/web-push-adapter.ts`](../apps/server/src/push/web-push-adapter.ts) | `webPush` |
+| Web Push | public subpath `@frick/server/push/web-push-adapter`; source at [`apps/server/src/push/web-push-adapter.ts`](../apps/server/src/push/web-push-adapter.ts) | `webPush` |
 
 All adapters conform to [`FrickPushAdapter`](../apps/server/src/push/types.ts) and slot into the existing notification router, job framework, and dead-token revocation paths. They only handle the platform-specific encoding + transport step — fan-out, retries, and registration tombstoning live in the router.
 
-APNs and FCM are the documented package exports and have CLI credential workflows today. Web Push registration tokens are accepted by the server and validated as PushSubscription JSON, but the adapter is not yet exported through `@frick/server` and `frick tenants set-push` does not yet write Web Push VAPID credentials.
+All three adapters are documented package exports and have CLI credential workflows today. Web Push registration tokens are accepted by the server and validated as PushSubscription JSON. The Web Push adapter still deliberately sends an empty push body — encrypted Web Push payloads (RFC 8291) remain follow-up work (FR-7).
 
 The framework's in-memory `TestPushAdapter` ships unchanged for local development and tests.
 
@@ -38,13 +38,15 @@ app code
 import { createFrickServer } from "@frick/server";
 import { createFrickApnsAdapter } from "@frick/server/push/apns-adapter";
 import { createFrickFcmAdapter } from "@frick/server/push/fcm-adapter";
+import { createFrickWebPushAdapter } from "@frick/server/push/web-push-adapter";
 
 const apns = createFrickApnsAdapter();
 const fcm = createFrickFcmAdapter();
+const webPush = createFrickWebPushAdapter();
 
 const server = createFrickServer({
   push: {
-    adapters: [apns, fcm],
+    adapters: [apns, fcm, webPush],
     // The default test adapter is still registered for the "test" platform.
     // Apps that want to fully replace it can pass their own here.
   },
@@ -107,12 +109,24 @@ The CLI reads `project_id`, `client_email`, and `private_key` out of the service
 
 ### Web Push
 
-The server accepts `platform: "webPush"` registrations when the registration
-token is JSON for a public HTTPS `PushSubscription`. The current adapter reads
-VAPID credentials from `tenant_settings.push.webPush.encrypted`, but there is
-no public `frick tenants set-push --platform webPush` command yet. Treat Web
-Push credential provisioning as framework-internal until a documented CLI or
-package export is added.
+You need: a VAPID keypair and a contact subject. The subject must be a
+`mailto:` or `https://` URI. The public key is the base64url VAPID application
+server key (the `k=` parameter the adapter sends); the private key is the
+PEM-encoded EC (P-256) private key the adapter signs the VAPID JWT with.
+
+```sh
+frick tenants set-push tenant-acme \
+  --platform webpush \
+  --subject mailto:ops@acme.com \
+  --public-key BJ...base64url... \
+  --private-key ./vapid-private.pem
+```
+
+The CLI reads the private key from the `--private-key` file (key material is
+not echoed) and stores the wrapped envelope under
+`tenant_settings.push.webPush.encrypted`. The server accepts
+`platform: "webPush"` registrations when the registration token is JSON for a
+public HTTPS `PushSubscription`.
 
 ## Observability
 

@@ -5,12 +5,15 @@
  *     wrap APNs credentials with `FRICK_PUSH_CRED_KEY` and store in `tenant_settings`.
  * `frick tenants set-push <id> --platform fcm --service-account <file>` —
  *     wrap FCM service-account JSON and store in `tenant_settings`.
+ * `frick tenants set-push <id> --platform webpush --subject <mailto:|https:> --public-key <b64url> --private-key <pem-file>` —
+ *     wrap Web Push VAPID credentials and store in `tenant_settings`.
  */
 import { readFileSync } from "node:fs";
 import { TenantAlreadyExistsError } from "../../../server/src/storage/tenant-store.js";
 import {
   saveApnsCredentials,
   saveFcmCredentials,
+  saveWebPushCredentials,
 } from "../../../server/src/push/credentials.js";
 import type { ParsedArgs } from "../argv.js";
 import { CliFailureError, CliUsageError } from "../errors.js";
@@ -110,7 +113,32 @@ function tenantsSetPush(parsed: ParsedArgs, out: OutputOptions): number {
       emit({ ok: true, tenantId, platform: "fcm" }, out);
       return 0;
     }
-    throw new CliUsageError(`Unsupported --platform: ${platform}`, { expected: ["apns", "fcm"] });
+    if (platform === "webpush") {
+      const subject = requireFlag(parsed.flags, "subject");
+      if (!subject.startsWith("mailto:") && !subject.startsWith("https://")) {
+        throw new CliFailureError(
+          "tenants.setPush.invalidVapidSubject",
+          "Web Push --subject must be a mailto: or https:// URI",
+          { subject },
+        );
+      }
+      const publicKey = requireFlag(parsed.flags, "public-key");
+      const privateKeyPath = requireFlag(parsed.flags, "private-key");
+      const privateKey = readFileSync(privateKeyPath, "utf8");
+      const result = saveWebPushCredentials(store.tenantSettings, tenantId, {
+        subject,
+        publicKey,
+        privateKey,
+      });
+      if (!result.ok) {
+        throw new CliFailureError(result.error.code, result.error.message, { tenantId });
+      }
+      emit({ ok: true, tenantId, platform: "webpush" }, out);
+      return 0;
+    }
+    throw new CliUsageError(`Unsupported --platform: ${platform}`, {
+      expected: ["apns", "fcm", "webpush"],
+    });
   } finally {
     store.close();
   }

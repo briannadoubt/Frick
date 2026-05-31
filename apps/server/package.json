@@ -25,6 +25,11 @@
       "types": "./dist/email/resend-adapter.d.ts",
       "import": "./dist/email/resend-adapter.js",
       "default": "./dist/email/resend-adapter.js"
+    },
+    "./push/web-push-adapter": {
+      "types": "./dist/push/web-push-adapter.d.ts",
+      "import": "./dist/push/web-push-adapter.js",
+      "default": "./dist/push/web-push-adapter.js"
     }
   },
   "files": [

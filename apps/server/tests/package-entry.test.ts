@@ -26,7 +26,8 @@ describe("@frick/server package entry", () => {
             const mod = await import(${JSON.stringify(sourceIndexPath)});
             console.log(JSON.stringify({
               createFrickServer: typeof mod.createFrickServer,
-              MemoryClusterBus: typeof mod.MemoryClusterBus
+              MemoryClusterBus: typeof mod.MemoryClusterBus,
+              createFrickWebPushAdapter: typeof mod.createFrickWebPushAdapter
             }));
           })();
         `,
@@ -40,6 +41,42 @@ describe("@frick/server package entry", () => {
     expect(JSON.parse(stdout.trim())).toEqual({
       createFrickServer: "function",
       MemoryClusterBus: "function",
+      createFrickWebPushAdapter: "function",
+    });
+  });
+
+  it("re-exports the web push adapter factory from the documented subpath source", async () => {
+    const webPushSource = resolve(packageRoot, "src/push/web-push-adapter.ts");
+    const { stdout } = await execFileAsync(
+      "pnpm",
+      [
+        "exec",
+        "tsx",
+        "-e",
+        `
+          (async () => {
+            const mod = await import(${JSON.stringify(webPushSource)});
+            const adapter = mod.createFrickWebPushAdapter();
+            console.log(JSON.stringify({
+              createFrickWebPushAdapter: typeof mod.createFrickWebPushAdapter,
+              validateWebPushRegistrationToken: typeof mod.validateWebPushRegistrationToken,
+              platform: adapter.platform,
+              send: typeof adapter.send
+            }));
+          })();
+        `,
+      ],
+      {
+        cwd: repoRoot,
+        timeout: 2_000,
+      },
+    );
+
+    expect(JSON.parse(stdout.trim())).toEqual({
+      createFrickWebPushAdapter: "function",
+      validateWebPushRegistrationToken: "function",
+      platform: "webPush",
+      send: "function",
     });
   });
 
@@ -64,6 +101,10 @@ describe("@frick/server package entry", () => {
     expect(body.exports?.["./push/fcm-adapter"]).toMatchObject({
       types: "./dist/push/fcm-adapter.d.ts",
       import: "./dist/push/fcm-adapter.js",
+    });
+    expect(body.exports?.["./push/web-push-adapter"]).toMatchObject({
+      types: "./dist/push/web-push-adapter.d.ts",
+      import: "./dist/push/web-push-adapter.js",
     });
     expect(body.scripts?.dev).toBe("tsx src/dev.ts");
     expect(body.scripts?.build).toBe("tsc -b");
