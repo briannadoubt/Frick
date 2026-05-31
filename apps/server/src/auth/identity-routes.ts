@@ -46,7 +46,6 @@ import type { FrickEmailAdapter } from "../email/types.js";
  */
 
 const SYSTEM_TENANT = "_default";
-const SESSION_TTL_DAYS = 30;
 
 export interface IdentityProvidersConfig {
   apple?: AppleProviderConfig;
@@ -281,11 +280,50 @@ export interface IdentityRouter {
   handle(req: IncomingMessage, res: ServerResponse): Promise<boolean>;
 }
 
+/**
+ * Shared auth-attempt throttle, injected by the server so the identity-provider
+ * verify endpoints and the email password-reset endpoints count against the
+ * SAME per-identifier/IP ceiling as the built-in password-login routes (FR-29).
+ *
+ * The server's adapter delegates to its single
+ * `FixedWindowAuthAttemptLimiter`. `check` returns `{ retryAfterSeconds }` when
+ * the attempt is over the limit (the caller must reject with 429) and
+ * `undefined` when it is allowed. When the whole throttle is omitted the
+ * identity routes run unthrottled — only the case in narrow unit tests that
+ * don't wire a server.
+ */
+export interface IdentityAuthThrottle {
+  /** Resolve the client IP for a request, matching the password-login path. */
+  clientIp(req: IncomingMessage): string;
+  check(input: {
+    route: string;
+    identifier: string;
+    ip: string;
+  }): { retryAfterSeconds: number } | undefined;
+}
+
 export interface IdentityRouterOptions {
   store: FrickStore;
   config: IdentityProvidersConfig;
   logger: FrickLogger;
+  /**
+   * Session lifetime in seconds for provider-minted sessions. Threaded from the
+   * server's `FRICK_SESSION_TTL_SECONDS` config so every provider session
+   * (Apple/Google/OIDC/email) honors the single configured TTL instead of a
+   * hardcoded 30-day lifetime (FR-29). Falls back to a 30-day default only when
+   * a caller constructs the router directly without passing it.
+   */
+  sessionTtlSeconds?: number;
+  /**
+   * Shared auth-attempt throttle. When provided, provider-verify and
+   * password-reset endpoints are rate-limited through the same limiter the
+   * built-in password-login routes use (FR-29).
+   */
+  authThrottle?: IdentityAuthThrottle;
 }
+
+/** Fallback TTL when no `sessionTtlSeconds` is supplied (legacy 30 days). */
+const FALLBACK_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 interface ResolvedUserObject {
   type: string;
@@ -344,6 +382,34 @@ export function createIdentityRouter(
     oidcRuntimes.set(providerConfig.id, createOidcProviderRuntime(providerConfig));
   }
 
+  // FR-29: one TTL knob for every provider session. Threaded from the server's
+  // configured `FRICK_SESSION_TTL_SECONDS`; only falls back to the legacy
+  // 30-day value when a caller constructs the router without passing it.
+  const sessionTtlSeconds = options.sessionTtlSeconds ?? FALLBACK_SESSION_TTL_SECONDS;
+
+  // FR-29: shared auth-attempt throttle. Provider-verify and password-reset
+  // endpoints run through the same limiter `/auth/login` uses, so an attacker
+  // can't sidestep the password-login ceiling by hammering a provider route.
+  // Returns true when the request was rate-limited (a 429 has been sent and the
+  // caller must stop processing).
+  const authThrottle = options.authThrottle;
+  function throttled(input: {
+    req: IncomingMessage;
+    res: ServerResponse;
+    route: string;
+    identifier: string;
+  }): boolean {
+    if (!authThrottle) return false;
+    const limited = authThrottle.check({
+      route: input.route,
+      identifier: input.identifier,
+      ip: authThrottle.clientIp(input.req),
+    });
+    if (!limited) return false;
+    sendRateLimited(input.res, limited.retryAfterSeconds);
+    return true;
+  }
+
   async function handleAppleVerify(
     req: IncomingMessage,
     res: ServerResponse,
@@ -352,6 +418,8 @@ export function createIdentityRouter(
       sendJson(res, 404, { error: "apple_provider_not_configured" });
       return;
     }
+    // FR-29: throttle by IP — the identityToken isn't a stable identifier yet.
+    if (throttled({ req, res, route: "apple-verify", identifier: "" })) return;
     let body: { identityToken?: unknown; fullName?: unknown; deviceId?: unknown; replicaId?: unknown };
     try {
       body = (await readJsonBody(req)) as typeof body;
@@ -415,6 +483,7 @@ export function createIdentityRouter(
         findPrimaryTenantForUser(options.store, existing.id as string);
       const session = mintSession({
         store: options.store,
+        sessionTtlSeconds,
         userId: existing.id as string,
         tenantId: primaryTenantId,
         displayName: (existing[userObject.displayNameField] as string) ?? "Crate user",
@@ -474,6 +543,7 @@ export function createIdentityRouter(
 
     const session = mintSession({
       store: options.store,
+      sessionTtlSeconds,
       userId,
       tenantId: hook.tenantId,
       displayName,
@@ -500,6 +570,8 @@ export function createIdentityRouter(
       sendJson(res, 404, { error: "google_provider_not_configured" });
       return;
     }
+    // FR-29: throttle by IP — the idToken isn't a stable identifier yet.
+    if (throttled({ req, res, route: "google-verify", identifier: "" })) return;
     let body: { idToken?: unknown; deviceId?: unknown; replicaId?: unknown };
     try {
       body = (await readJsonBody(req)) as typeof body;
@@ -559,6 +631,7 @@ export function createIdentityRouter(
         findPrimaryTenantForUser(options.store, existing.id as string);
       const session = mintSession({
         store: options.store,
+        sessionTtlSeconds,
         userId: existing.id as string,
         tenantId: primaryTenantId,
         displayName: (existing[userObject.displayNameField] as string) ?? "Crate user",
@@ -622,6 +695,7 @@ export function createIdentityRouter(
 
     const session = mintSession({
       store: options.store,
+      sessionTtlSeconds,
       userId,
       tenantId: hook.tenantId,
       displayName,
@@ -650,6 +724,8 @@ export function createIdentityRouter(
       sendJson(res, 404, { error: "oidc_provider_not_configured", providerId });
       return;
     }
+    // FR-29: throttle per provider id, by IP (the idToken isn't stable yet).
+    if (throttled({ req, res, route: `oidc-verify:${providerId}`, identifier: "" })) return;
     let body: { idToken?: unknown; nonce?: unknown; deviceId?: unknown; replicaId?: unknown };
     try {
       body = (await readJsonBody(req)) as typeof body;
@@ -723,6 +799,7 @@ export function createIdentityRouter(
         findPrimaryTenantForUser(options.store, existing.id as string);
       const session = mintSession({
         store: options.store,
+        sessionTtlSeconds,
         userId: existing.id as string,
         tenantId: primaryTenantId,
         displayName: (existing[userObject.displayNameField] as string) ?? "Crate user",
@@ -794,6 +871,7 @@ export function createIdentityRouter(
 
     const session = mintSession({
       store: options.store,
+      sessionTtlSeconds,
       userId,
       tenantId: hook.tenantId,
       displayName,
@@ -912,6 +990,7 @@ export function createIdentityRouter(
 
     const session = mintSession({
       store: options.store,
+      sessionTtlSeconds,
       userId,
       tenantId: hook.tenantId,
       displayName,
@@ -994,6 +1073,7 @@ export function createIdentityRouter(
 
     const session = mintSession({
       store: options.store,
+      sessionTtlSeconds,
       userId: user.id,
       tenantId: primaryTenantId,
       displayName: (user[userObject.displayNameField] as string) ?? email,
@@ -1173,6 +1253,10 @@ export function createIdentityRouter(
       sendJson(res, 400, { error: "invalid_email" });
       return;
     }
+    // FR-29: throttle by email (+ IP fallback) so reset-token issuance can't be
+    // hammered for one address; runs before lookup so it also caps unknown
+    // emails without leaking whether an account exists.
+    if (throttled({ req, res, route: "forgot-password", identifier: email })) return;
     const user = findUserBySubject(
       options.store,
       userObject,
@@ -1275,6 +1359,8 @@ export function createIdentityRouter(
       sendJson(res, 400, { error: "missing_token" });
       return;
     }
+    // FR-29: throttle reset-token guessing by token value (+ IP fallback).
+    if (throttled({ req, res, route: "reset-password", identifier: token })) return;
     if (password.length < minLen) {
       sendJson(res, 400, {
         error: "password_too_short",
@@ -1449,6 +1535,12 @@ function mintSession(input: {
   userId: string;
   tenantId: string;
   displayName: string;
+  /**
+   * Session lifetime in seconds. Threaded from the server's configured
+   * `FRICK_SESSION_TTL_SECONDS` so every provider session honors the same TTL
+   * as the built-in password-login sessions (FR-29).
+   */
+  sessionTtlSeconds: number;
   deviceId?: string | undefined;
   replicaId?: string | undefined;
   /**
@@ -1472,7 +1564,7 @@ function mintSession(input: {
   const deviceId = input.deviceId ?? `device-${randomBytes(8).toString("hex")}`;
   const replicaId = input.replicaId ?? `replica-${randomBytes(8).toString("hex")}`;
   const expiresAt = new Date(
-    Date.now() + SESSION_TTL_DAYS * 24 * 60 * 60 * 1000,
+    Date.now() + input.sessionTtlSeconds * 1000,
   ).toISOString();
   input.store.createSession({
     sessionToken,
@@ -1506,6 +1598,17 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.setHeader("access-control-allow-methods", "POST, OPTIONS");
   res.setHeader("access-control-allow-headers", "content-type, authorization");
   res.end(json);
+}
+
+/**
+ * 429 for a rate-limited provider/reset attempt (FR-29). Carries a
+ * `retry-after` header plus `retryAfterSeconds` in the body, in this router's
+ * own flat `{ error }` envelope so it stays consistent with the other
+ * identity-route error responses.
+ */
+function sendRateLimited(res: ServerResponse, retryAfterSeconds: number): void {
+  res.setHeader("retry-after", String(retryAfterSeconds));
+  sendJson(res, 429, { error: "rate_limited", retryAfterSeconds });
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
