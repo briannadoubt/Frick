@@ -2218,10 +2218,10 @@ export function createFrickServer(options: ServerOptions = {}) {
           event,
           payload,
         });
-        if (result.created) {
-          gateway.publishStreamEvent(result.event);
-          sse.publishStreamEvent(result.event);
-        }
+        // No inline broadcast: `store.appendEvent` fires the store write
+        // listener on a created event, which the sync gateway fans out to WS
+        // subscribers, the SSE bridge, and the cluster bus through its single
+        // funnel (FR-114). Broadcasting here too would double-fire.
         sendJson(response, 200, { ok: true, event: result.event });
       } catch (error) {
         sendErrorWithMetrics(response, error, "append_rejected");

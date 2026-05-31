@@ -817,6 +817,37 @@ state is per-node and not persisted — it is rebuilt from `apply` changes as
 writes flow, and a `projections/:name/rebuild` admin call re-derives a
 projection's state from source data.
 
+## Server-originated object and stream live push
+
+Object upserts and stream appends are live-pushed to already-subscribed sync
+clients **regardless of which caller drove the write**. Whether a write
+arrives as a client WebSocket `ObjectUpsert`/`Append` frame, an HTTP
+`PUT /objects/...` / append request, or a server-side caller invoking
+`store.upsertObject` / `store.upsertObjectWithPolicy` / `store.appendEvent`
+directly (a background job or an app command route), the subscriber receives
+the same `Delta` frame.
+
+This is wired through a single broadcast funnel. The store fires a write-change
+notification on every successful object upsert and stream append; the sync
+gateway is the sole consumer of that notification and fans the change out to
+matching subscribers. The gateway no longer broadcasts inline from its frame
+handlers or the HTTP routes — so a single write produces exactly one delta per
+subscriber, never a duplicate. The broadcast carries the **stored** (post-merge)
+object state, which is the correct snapshot to replicate under any merge policy.
+
+Because the funnel reuses the same publish path as before, deltas remain
+tenant-scoped (a subscriber only sees writes in its own tenant) and, when a
+cluster bus is configured, server-originated writes forward to peer nodes
+(`objects` / `streamEvent` envelopes) with the same parity client mutations
+already had. The SSE bridge is fed from the same funnel, so EventSource
+subscribers also receive server-originated stream appends.
+
+One observable nuance: a client that writes and is also subscribed receives
+the canonical `Delta` for its own write. Because the broadcast fires inside the
+store write, that `Delta` may arrive **before** the write's `Ack`. The two are
+independent on the client (the delta updates the cache, the ack clears the
+pending write), so ordering is not contractual and convergence is unaffected.
+
 ## Backup and restore
 
 The framework ships a portable dump/restore format. Use it for offline

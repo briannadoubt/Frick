@@ -331,7 +331,15 @@ describe("foundation sync gateway", () => {
     );
 
     const frames = await appendFrames;
-    expect(frames.map((frame) => frame[0])).toEqual([FrameKind.Ack, FrameKind.Delta]);
+    // The originating client receives both an Ack (write confirmation) and a
+    // Delta (the canonical event). Since FR-114 routes the broadcast through
+    // the store write listener — which fires synchronously inside
+    // `appendEvent`, before the handler sends its Ack — the Delta may arrive
+    // before the Ack. The two are independent on the client (the Delta updates
+    // the cache; the Ack clears the pending write), so order is not contractual.
+    expect(frames.map((frame) => frame[0]).sort()).toEqual(
+      [FrameKind.Ack, FrameKind.Delta].sort(),
+    );
     socket.close();
   });
 

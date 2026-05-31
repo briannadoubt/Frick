@@ -100,7 +100,12 @@ export {
   type AccountExportOptions,
   type OnAccountExport,
 } from "./compliance/account-export.js";
-export { FrickStore, type StoreOptions } from "./store.js";
+export {
+  FrickStore,
+  type StoreOptions,
+  type FrickStoreWriteEvent,
+  type FrickStoreWriteListener,
+} from "./store.js";
 export { createNoopLogger, type FrickLogger } from "./logger.js";
 export {
   type IdentityProvidersConfig,
