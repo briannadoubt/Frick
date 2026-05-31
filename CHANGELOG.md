@@ -6,6 +6,10 @@ Each package version is independent — a release header documents which package
 
 ## Unreleased
 
+### Server — stream cursor query API
+
+- **`@frick/server`:** Added `GET /streams/:type/:id/cursor` returning `{ headSequence, count }` — a cheap tenant-scoped head probe (max sequence + event count, no payloads decoded) — and extended `GET /streams/:type/:id` with `?since=<sequence>`, which returns only events with `sequence > since` in ascending order (paginated by `?limit=`), so a client can resume a stream from a known position without replaying history. `?before=` paging is unchanged; a non-numeric `since` returns `400 stream.invalidCursor`. Backed by new `StreamStore.readAfter` / `StreamStore.headSequence` helpers (FR-116). Unblocks cursor-based stream resume for downstream consumers.
+
 ### Server — live push for server-originated object/stream writes
 
 - **`@frick/server`:** Object upserts and stream appends made **server-side** through the store — a background job or app command route calling `store.upsertObject` / `store.upsertObjectWithPolicy` / `store.appendEvent` directly — now live-push to already-subscribed sync clients as `Delta` frames, closing the gap where such writes persisted and updated projections/search but never reached connected subscribers until the slower cursor resync (FR-114). HTTP `PUT /objects/...` writes, which previously did not broadcast at all, now also push live. Deltas remain tenant-scoped (a subscriber only sees writes in its own tenant).
