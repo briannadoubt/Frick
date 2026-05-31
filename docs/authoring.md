@@ -285,6 +285,15 @@ createFrickServer({
   identityProviders: {
     apple: { audience: "com.example.myapp" },
     google: { clientId: "123.apps.googleusercontent.com" },
+    oidc: [
+      {
+        id: "okta",
+        issuer: "https://example.okta.com",
+        clientId: "0oaExampleClientId",
+        discovery: true, // or: jwksUri: "https://example.okta.com/oauth2/v1/keys"
+        claimMappings: { extra: { department: "dept" } },
+      },
+    ],
     email: {
       minPasswordLength: 12,
       onPasswordResetRequested: async ({ email, tenantId, token }) => {
@@ -296,6 +305,7 @@ createFrickServer({
       type: "User",
       appleSubjectField: "appleSubject",
       googleSubjectField: "googleSubject",
+      oidcSubjectField: "oidcSubject",
       emailField: "email",
       primaryTenantField: "primaryTenantId",
     },
@@ -317,6 +327,13 @@ Supported routes:
 - `POST /auth/google/verify` accepts `{ idToken, deviceId?, replicaId? }`,
   verifies the Google ID token against the configured OAuth client id, and
   returns the same `{ session, user, isNewUser }` shape.
+- `POST /auth/oidc/:providerId/verify` accepts `{ idToken, nonce?, deviceId?,
+  replicaId? }` for a provider declared in `identityProviders.oidc`, verifies
+  the OIDC ID token against the provider's JWKS (resolved from `jwksUri` or the
+  issuer's discovery document), checks `iss`/`aud`/expiry (and `nonce` when
+  supplied), maps standard + `claimMappings` claims into the User object, and
+  returns the same `{ session, user, isNewUser }` shape. The verified `sub` is
+  stored as `"<providerId>:<sub>"` on the configured `oidcSubjectField`.
 - `POST /auth/email/signup` accepts `{ email, password, displayName? }`,
   creates the mapped User row plus a password account, and mints a session.
 - `POST /auth/email/login` accepts `{ email, password }`, avoids email
@@ -334,7 +351,8 @@ The `session` shape is the same session object used by the TypeScript, Swift,
 and Android clients. The app still owns its User schema, tenant membership
 model, and any first-sign-in side effects through the mapping and hooks above.
 Email reset tokens are stored hashed at rest and expire after 60 minutes.
-Generic OIDC, SAML, and arbitrary OAuth provider routing are not implemented.
+Generic OpenID Connect issuers are supported via `identityProviders.oidc`;
+SAML and arbitrary non-OIDC OAuth provider routing are not implemented.
 
 ## Client telemetry
 

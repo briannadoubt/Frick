@@ -75,7 +75,9 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
   own access as a separate "leave share" flow; only the grant owner can revoke.
 - Identity-provider sessions use a fixed 30-day lifetime today and the
   provider routes, including email password reset endpoints, do not yet share
-  the built-in auth attempt limiter. Generic OIDC, SAML, and arbitrary OAuth
+  the built-in auth attempt limiter. Apple, Google, generic OIDC issuers
+  (`identityProviders.oidc`, with direct-`jwksUri` or discovery-resolved key
+  sets), and email/password are supported; SAML and arbitrary non-OIDC OAuth
   provider routing remain unimplemented.
 - Blob bytes are stored in SQLite today. `FRICK_BLOB_STORAGE_PATH` is parsed for a future filesystem driver but is not the active blob-byte store.
 - Web Push registration validation and adapter code exist, but the documented
