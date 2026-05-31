@@ -409,8 +409,50 @@ that happens to be co-located on a record they own.
   a schema that stores ownership under a different field, or that models shared
   records, must override the owner-field set (or supplement via the hook) to
   export those records.
-- Account *deletion* and *retention* policies are out of scope for this route
-  (tracked separately); export neither deletes nor tombstones anything.
+- Account *retention* policies (soft-delete windows, legal-hold) are out of
+  scope for this route (tracked separately); account *deletion* is the
+  self-service surface described next.
+
+---
+
+## Self-service account deletion
+
+**Threat.** The authenticated `DELETE /account` route (alias `POST /account`)
+erases a principal's own account, sessions, and owned object rows. Deletion is
+destructive and irreversible, so the risks are (a) a scoping bug that deletes
+*another* principal's or another tenant's data, and (b) an unauthenticated or
+cross-principal actor triggering a deletion.
+
+**Today.**
+
+- The route is gated by the standard protected-path authentication; an
+  unauthenticated request returns `401` before the handler runs. The principal —
+  including its tenant — is derived from the session token and cannot be
+  overridden by the body or path, so there is no way for one principal to name
+  another as the deletion target.
+- The framework default (`deleteAccountData`) reuses the export's scoping:
+  object deletes go through the tenant-scoped store, owner matching uses the
+  same `ownerId` / `userId` / `createdBy` convention (`DEFAULT_OWNER_FIELDS`),
+  and session/account deletes are scoped to `(userId, tenantId)`. A cross-tenant
+  record whose owner field collides with the caller's `userId` is therefore
+  never reached (verified by test).
+- App-specific cascades run only through the explicit `onAccountDelete` hook,
+  which the host wires deliberately and which owns its own tenant/owner scoping.
+  It runs after the framework default has committed, so a hook failure is
+  fail-forward (framework-managed data stays deleted) rather than a silent
+  partial rollback.
+- Every deletion appends an `account.delete` entry to the tamper-evident admin
+  audit hash chain, so a forced or fraudulent deletion is detectable after the
+  fact. The response sets `cache-control: no-store`.
+
+**Known gaps.**
+
+- The framework default scopes ownership to the conventional owner-field names;
+  a schema that stores ownership under a different field, or that models shared
+  records, must override the owner-field set (or supplement via the hook) to
+  delete those records.
+- Retention/soft-delete and legal-hold are out of scope (tracked separately) —
+  a deletion is immediate and hard.
 
 ---
 
