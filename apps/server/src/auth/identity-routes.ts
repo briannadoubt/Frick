@@ -8,6 +8,12 @@ import {
   verifyAppleNotificationPayload,
 } from "./apple.js";
 import { verifyGoogleIdToken } from "./google.js";
+import {
+  createOidcProviderRuntime,
+  type OidcProviderConfig,
+  type OidcProviderRuntime,
+  type VerifyOidcOptions,
+} from "./oidc.js";
 import { createFrickEmailRouter, type FrickEmailRouter } from "../email/router.js";
 import type { FrickEmailAdapter } from "../email/types.js";
 
@@ -60,6 +66,18 @@ export interface IdentityProvidersConfig {
   google?: GoogleProviderConfig;
 
   /**
+   * Enable one or more generic OpenID Connect providers (Okta, Auth0,
+   * Microsoft Entra, Keycloak, any standards-compliant issuer). Each entry
+   * mounts `POST /auth/oidc/:id/verify`. The client obtains an `id_token`
+   * from the issuer and POSTs it; Frick verifies it against the provider's
+   * JWKS (resolved directly via `jwksUri` or fetched from the issuer's
+   * discovery document) and mints a session via the same `onFirstSignIn`
+   * path Apple/Google use (provider:"oidc", providerId:"<id>"). Provider
+   * ids must be unique.
+   */
+  oidc?: OidcProviderConfig[];
+
+  /**
    * Schema object name + field mapping that points Frick at the app's
    * User-shaped object. Defaults to `{ type: "User" }` with conventional
    * field names. Fields default to standard names — override if the app
@@ -90,6 +108,13 @@ export interface IdentityProvidersConfig {
   appleJwksOverride?: ReturnType<typeof createRemoteJWKSet>;
   /** Same idea, for Google. */
   googleJwksOverride?: ReturnType<typeof createRemoteJWKSet>;
+  /**
+   * Test seam — per-OIDC-provider verification overrides keyed by provider
+   * id. Each entry may supply a local `jwksOverride` and/or a
+   * `discoveryOverride` so verification (and discovery resolution) runs
+   * fully offline. Production code leaves this undefined.
+   */
+  oidcVerifyOverrides?: Record<string, Pick<VerifyOidcOptions, "jwksOverride" | "discoveryOverride">>;
 }
 
 export interface AppleProviderConfig {
@@ -191,6 +216,13 @@ export interface UserObjectMapping {
   type?: string;
   appleSubjectField?: string;
   googleSubjectField?: string;
+  /**
+   * Field that stores the generic-OIDC subject. Because an app may wire
+   * several OIDC providers, Frick stores a composite `"<providerId>:<sub>"`
+   * here so two issuers that happen to share a `sub` value never collide.
+   * Defaults to `oidcSubject`.
+   */
+  oidcSubjectField?: string;
   emailField?: string;
   displayNameField?: string;
   createdAtField?: string;
@@ -205,13 +237,19 @@ export interface UserObjectMapping {
 }
 
 export interface OnFirstSignInInput {
-  provider: "apple" | "google" | "email";
+  provider: "apple" | "google" | "email" | "oidc";
   /**
    * Stable provider-side identifier:
    *   apple/google → the IdP's `sub` claim
+   *   oidc         → the issuer's `sub` claim (scope it with `providerId`)
    *   email        → the lowercased email
    */
   subject: string;
+  /**
+   * For `provider: "oidc"`, the configured provider id (e.g. "okta") this
+   * sign-in came through. Undefined for the built-in providers.
+   */
+  providerId?: string;
   email: string | undefined;
   fullName: { givenName?: string; familyName?: string } | undefined;
 }
@@ -253,6 +291,7 @@ interface ResolvedUserObject {
   type: string;
   appleSubjectField: string;
   googleSubjectField: string;
+  oidcSubjectField: string;
   emailField: string;
   displayNameField: string;
   createdAtField: string;
@@ -264,6 +303,7 @@ const DEFAULT_USER_FIELDS: ResolvedUserObject = {
   type: "User",
   appleSubjectField: "appleSubject",
   googleSubjectField: "googleSubject",
+  oidcSubjectField: "oidcSubject",
   emailField: "email",
   displayNameField: "displayName",
   createdAtField: "createdAt",
@@ -289,6 +329,20 @@ export function createIdentityRouter(
         defaultFrom: outbound.defaultFrom,
       })
     : undefined;
+
+  // Generic OIDC providers, built once and keyed by provider id. JWKS /
+  // discovery resolution is lazy (deferred to the first verify) + memoized
+  // inside each runtime, so unused providers never touch the network. A
+  // duplicate provider id is a hard config error — routing is by id.
+  const oidcRuntimes = new Map<string, OidcProviderRuntime>();
+  for (const providerConfig of options.config.oidc ?? []) {
+    if (oidcRuntimes.has(providerConfig.id)) {
+      throw new Error(
+        `identityProviders.oidc has duplicate provider id "${providerConfig.id}"`,
+      );
+    }
+    oidcRuntimes.set(providerConfig.id, createOidcProviderRuntime(providerConfig));
+  }
 
   async function handleAppleVerify(
     req: IncomingMessage,
@@ -576,6 +630,179 @@ export function createIdentityRouter(
     });
     log.info("auth.google.signin_new", {
       event: "auth.google.signin_new",
+      userId,
+      tenantId: hook.tenantId,
+    });
+    sendJson(res, 200, {
+      session: toFrickSessionShape(session, options.store.schema.hash),
+      user: { id: userId, ...userRow },
+      isNewUser: true,
+    });
+  }
+
+  async function handleOidcVerify(
+    providerId: string,
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    const runtime = oidcRuntimes.get(providerId);
+    if (!runtime) {
+      sendJson(res, 404, { error: "oidc_provider_not_configured", providerId });
+      return;
+    }
+    let body: { idToken?: unknown; nonce?: unknown; deviceId?: unknown; replicaId?: unknown };
+    try {
+      body = (await readJsonBody(req)) as typeof body;
+    } catch {
+      sendJson(res, 400, { error: "invalid_json" });
+      return;
+    }
+    const idToken = typeof body.idToken === "string" ? body.idToken : "";
+    if (!idToken) {
+      sendJson(res, 400, { error: "idToken required" });
+      return;
+    }
+    const expectedNonce = typeof body.nonce === "string" ? body.nonce : undefined;
+
+    const override = options.config.oidcVerifyOverrides?.[providerId];
+    const verifyOptions: VerifyOidcOptions = {
+      ...(expectedNonce !== undefined ? { expectedNonce } : {}),
+      ...(override?.jwksOverride ? { jwksOverride: override.jwksOverride } : {}),
+      ...(override?.discoveryOverride
+        ? { discoveryOverride: override.discoveryOverride }
+        : {}),
+    };
+
+    let verified;
+    try {
+      verified = await runtime.verify(idToken, verifyOptions);
+    } catch (err) {
+      const code = (err as { code?: string }).code ?? "JWTVerifyError";
+      log.info("auth.oidc.verify_failed", {
+        event: "auth.oidc.verify_failed",
+        providerId,
+        code,
+      });
+      sendJson(res, 401, {
+        error: "oidc_token_invalid",
+        providerId,
+        code,
+        message: err instanceof Error ? err.message : "verification failed",
+      });
+      return;
+    }
+
+    const deviceId = typeof body.deviceId === "string" ? body.deviceId : undefined;
+    const replicaId = typeof body.replicaId === "string" ? body.replicaId : undefined;
+
+    // Subjects are scoped by provider id so two issuers that reuse the same
+    // `sub` value never alias onto the same User row.
+    const scopedSubject = `${providerId}:${verified.subject}`;
+    const existing = findUserBySubject(
+      options.store,
+      userObject,
+      userObject.oidcSubjectField,
+      scopedSubject,
+    );
+
+    if (existing) {
+      if (existing[userObject.revokedAtField]) {
+        log.info("auth.oidc.signin_blocked_revoked", {
+          event: "auth.oidc.signin_blocked_revoked",
+          providerId,
+          userId: existing.id as string,
+        });
+        sendJson(res, 403, {
+          error: "user_revoked",
+          message: "This account has been revoked.",
+        });
+        return;
+      }
+      const primaryTenantId =
+        (existing[userObject.primaryTenantField] as string | undefined) ??
+        findPrimaryTenantForUser(options.store, existing.id as string);
+      const session = mintSession({
+        store: options.store,
+        userId: existing.id as string,
+        tenantId: primaryTenantId,
+        displayName: (existing[userObject.displayNameField] as string) ?? "Crate user",
+        deviceId,
+        replicaId,
+      });
+      log.info("auth.oidc.signin_existing", {
+        event: "auth.oidc.signin_existing",
+        providerId,
+        userId: existing.id,
+        tenantId: primaryTenantId,
+      });
+      sendJson(res, 200, {
+        session: toFrickSessionShape(session, options.store.schema.hash),
+        user: existing,
+        isNewUser: false,
+      });
+      return;
+    }
+
+    // First sign-in. Standard OIDC claims (name / preferred_username / email)
+    // and any configured claimMappings populate the User row; the app picks
+    // the tenant + userId via onFirstSignIn.
+    const defaultDisplayName =
+      verified.name ??
+      verified.preferredUsername ??
+      (verified.email ? verified.email.split("@")[0]! : "Crate user");
+    let hook: OnFirstSignInResult;
+    try {
+      const cb = options.config.onFirstSignIn;
+      const fullName = verified.name ? { givenName: verified.name } : undefined;
+      hook = cb
+        ? await cb({
+            provider: "oidc",
+            providerId,
+            subject: verified.subject,
+            email: verified.email,
+            fullName,
+          })
+        : { tenantId: SYSTEM_TENANT };
+    } catch (err) {
+      log.error("auth.oidc.onFirstSignIn_failed", {
+        event: "auth.oidc.onFirstSignIn_failed",
+        providerId,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      sendJson(res, 500, { error: "first_sign_in_failed" });
+      return;
+    }
+
+    const userId = hook.userId ?? `user-${randomUUID()}`;
+    const displayName = hook.displayName ?? defaultDisplayName;
+    const now = Date.now();
+    const userRow: Record<string, unknown> = {
+      [userObject.displayNameField]: displayName,
+      [userObject.emailField]: verified.email,
+      [userObject.appleSubjectField]: undefined,
+      [userObject.googleSubjectField]: undefined,
+      [userObject.oidcSubjectField]: scopedSubject,
+      [userObject.createdAtField]: now,
+      [userObject.revokedAtField]: undefined,
+      [userObject.primaryTenantField]: hook.tenantId,
+      // claimMappings.extra first, so an explicit onFirstSignIn extraUserFields
+      // (app-authoritative) can still override a mapped claim.
+      ...verified.extraUserFields,
+      ...(hook.extraUserFields ?? {}),
+    };
+    options.store.upsertObject(SYSTEM_TENANT, userObject.type, userId, userRow);
+
+    const session = mintSession({
+      store: options.store,
+      userId,
+      tenantId: hook.tenantId,
+      displayName,
+      deviceId,
+      replicaId,
+    });
+    log.info("auth.oidc.signin_new", {
+      event: "auth.oidc.signin_new",
+      providerId,
       userId,
       tenantId: hook.tenantId,
     });
@@ -1110,6 +1337,16 @@ export function createIdentityRouter(
       }
       if (req.method === "POST" && url.pathname === "/auth/google/verify") {
         await handleGoogleVerify(req, res);
+        return true;
+      }
+      // Generic OIDC: /auth/oidc/:providerId/verify
+      const oidcMatch =
+        req.method === "POST"
+          ? /^\/auth\/oidc\/([^/]+)\/verify$/.exec(url.pathname)
+          : null;
+      if (oidcMatch) {
+        const providerId = decodeURIComponent(oidcMatch[1]!);
+        await handleOidcVerify(providerId, req, res);
         return true;
       }
       return false;

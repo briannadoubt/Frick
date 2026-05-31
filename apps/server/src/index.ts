@@ -109,6 +109,14 @@ export {
   type OnRevokeInput,
 } from "./auth/identity-routes.js";
 export {
+  type OidcProviderConfig,
+  type OidcClaimMappings,
+  type OidcProviderRuntime,
+  type VerifiedOidcIdentity,
+  type VerifyOidcOptions,
+  type OidcDiscoveryDocument,
+} from "./auth/oidc.js";
+export {
   createFrickAppRegistry,
   type FrickAppDefinition,
   type FrickAppRegistry,

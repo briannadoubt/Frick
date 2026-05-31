@@ -14,10 +14,12 @@ Rules:
 - Use structured auth errors: `auth.unauthenticated`, `auth.forbidden`, and `auth.sessionExpired`.
 - When using `identityProviders`, keep the app-owned User mapping explicit and
   verify only the implemented provider routes: `/auth/apple/verify`,
-  `/auth/apple/notifications`, `/auth/google/verify`, `/auth/email/signup`,
-  `/auth/email/login`, `/auth/email/forgot-password`, and
-  `/auth/email/reset-password`; do not treat generic OIDC/SAML/arbitrary OAuth
-  as implemented.
+  `/auth/apple/notifications`, `/auth/google/verify`,
+  `/auth/oidc/:providerId/verify` (one per configured `identityProviders.oidc`
+  entry), `/auth/email/signup`, `/auth/email/login`,
+  `/auth/email/forgot-password`, and `/auth/email/reset-password`. Generic OIDC
+  issuers are supported via `identityProviders.oidc`; do not treat SAML or
+  arbitrary non-OIDC OAuth as implemented.
 - For email password reset, keep the response enumeration-safe, store only
   hashed single-use tokens, route delivery through the app-owned reset hook,
   and delete active sessions after a successful reset.

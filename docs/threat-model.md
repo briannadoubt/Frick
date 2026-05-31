@@ -389,13 +389,23 @@ so a deployment audit can flag it.
 ## Identity providers (current state)
 
 Apps may configure `createFrickServer({ identityProviders })` to mount provider
-routes for Apple, Google, and email/password accounts. The framework verifies
-Apple identity and notification JWTs with `jose`, Apple's published JWKS,
-issuer `https://appleid.apple.com`, and the app-configured audience. It
-verifies Google ID tokens with Google's published JWKS, accepted Google issuer
-values, and the app-configured OAuth client id. Apple and Google use the
-verified `sub` claim as the stable provider subject, never a client-supplied
-user id.
+routes for Apple, Google, generic OpenID Connect issuers, and email/password
+accounts. The framework verifies Apple identity and notification JWTs with
+`jose`, Apple's published JWKS, issuer `https://appleid.apple.com`, and the
+app-configured audience. It verifies Google ID tokens with Google's published
+JWKS, accepted Google issuer values, and the app-configured OAuth client id.
+Generic OIDC providers (`identityProviders.oidc`) are verified with `jose`
+against the provider's JWKS — resolved either from a configured `jwksUri` or by
+fetching the issuer's `<issuer>/.well-known/openid-configuration` discovery
+document and reading its `jwks_uri` — and checked against the configured
+`issuer`, the configured audience (defaulting to the OAuth `clientId`), and
+expiry, plus the request `nonce` when one is supplied. When discovery is used,
+the discovery document's own `issuer` must match the configured issuer, so a
+hijacked well-known endpoint cannot silently repoint key resolution at another
+IdP. Apple, Google, and OIDC all use the verified `sub` claim as the stable
+provider subject, never a client-supplied user id; OIDC subjects are stored as
+a per-provider composite `"<providerId>:<sub>"` so two issuers cannot alias onto
+the same account.
 
 The app owns the User schema object. Frick writes and reads that row through
 the configured field mapping, calls `onFirstSignIn` so the app can choose the
@@ -417,7 +427,8 @@ optional `onRevoke` hook.
   sessions.
 - The provider routes, including email password reset endpoints, do not yet
   share the built-in auth attempt limiter.
-- Generic OIDC, SAML, and arbitrary OAuth provider routing are not implemented.
+- SAML and arbitrary non-OIDC OAuth provider routing are not implemented
+  (generic OIDC issuers are now supported via `identityProviders.oidc`).
 
 ---
 
@@ -426,8 +437,8 @@ optional `onRevoke` hook.
 The following are recognised threats the framework does not address and is
 not yet planning to:
 
-- Generic federated identity beyond the built-in Apple, Google, and
-  email/password provider routes (OIDC, SAML, or arbitrary OAuth providers).
+- Federated identity beyond the built-in Apple, Google, generic OIDC, and
+  email/password provider routes (SAML or arbitrary non-OIDC OAuth providers).
 - Side-channel attacks on the SQLite file (encryption at rest).
 - Hardware attestation for native clients.
 - End-to-end encryption of message payloads. The framework sees plaintext

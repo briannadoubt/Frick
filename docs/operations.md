@@ -242,8 +242,9 @@ shutdown.
 
 `createFrickServer({ identityProviders })` mounts provider-owned auth routes
 alongside the built-in `/auth/signup`, `/auth/login`, and `/auth/dev-login`
-routes. The current implementation supports Apple, Google ID tokens, and
-email/password accounts with single-use password reset tokens:
+routes. The current implementation supports Apple, Google ID tokens, generic
+OpenID Connect issuers, and email/password accounts with single-use password
+reset tokens:
 
 - `POST /auth/apple/verify` verifies an Apple `identityToken` against Apple's
   JWKS with the configured audience, creates or finds the mapped app-owned User
@@ -255,6 +256,24 @@ email/password accounts with single-use password reset tokens:
 - `POST /auth/google/verify` verifies a Google `idToken` against Google's JWKS
   and the configured OAuth client id, creates or finds the mapped User object by
   `googleSubjectField`, and returns `{ session, user, isNewUser }`.
+- `POST /auth/oidc/:providerId/verify` verifies a generic OpenID Connect
+  `idToken` for a configured provider (Okta, Auth0, Microsoft Entra, Keycloak,
+  any standards-compliant issuer). Apps declare providers via
+  `identityProviders.oidc: [{ id, issuer, clientId, audience?, jwksUri? |
+  discovery, claimMappings? }]`. Each provider resolves its signing keys
+  either from a directly-configured `jwksUri` or by fetching the issuer's
+  discovery document at `<issuer>/.well-known/openid-configuration` and reading
+  its `jwks_uri` (when `discovery: true`). Verification uses `jose` to check the
+  signature against the resolved JWKS, the `iss` claim against the configured
+  `issuer`, the `aud` claim against `audience` (defaulting to `clientId`), and
+  expiry; the optional request `nonce` is checked when supplied in the body.
+  Standard claims `sub`, `email`, `name`, and `preferred_username` plus any
+  configured `claimMappings.extra` (`{ "<UserField>": "<claim>" }`) populate the
+  mapped User object. The verified `sub` is stored on `oidcSubjectField` as a
+  per-provider composite `"<providerId>:<sub>"`, so two issuers that reuse the
+  same subject value never alias onto one account. Returns
+  `{ session, user, isNewUser }`. An unconfigured `:providerId` returns `404`,
+  and verification failures return `401 { error: "oidc_token_invalid", code }`.
 - `POST /auth/email/signup` creates a mapped User row and password account from
   `{ email, password, displayName? }`. Email is normalized to lowercase, the
   default minimum password length is 8, and duplicate emails return `409`.
@@ -278,17 +297,18 @@ email/password accounts with single-use password reset tokens:
 These routes are not controlled by `FRICK_DEMO_AUTH_ENABLED`; they are mounted
 only for configured providers. Apps must provide a User object mapping when
 they do not use the conventional `User.appleSubject`, `User.googleSubject`,
-`User.email`, `User.displayName`, `User.primaryTenantId`, and `User.revokedAt`
-fields. On first sign-in, the optional `onFirstSignIn` hook receives
-`provider: "apple" | "google" | "email"` and decides the tenant id, user id
-override, display name, and extra User fields. Email reset tokens are random
+`User.oidcSubject`, `User.email`, `User.displayName`, `User.primaryTenantId`,
+and `User.revokedAt` fields. On first sign-in, the optional `onFirstSignIn` hook
+receives `provider: "apple" | "google" | "email" | "oidc"` (with `providerId`
+set for OIDC sign-ins) and decides the tenant id, user id override, display
+name, and extra User fields. Email reset tokens are random
 opaque values stored only as SHA-256 hashes and expire after 60 minutes.
 Provider sessions are normal Frick bearer sessions; today these provider routes
 use a fixed 30-day session lifetime rather than `FRICK_SESSION_TTL_SECONDS` and
 do not share the built-in auth attempt limiter.
 
-The framework still does not implement generic OIDC, SAML, or arbitrary OAuth
-provider routing.
+The framework now supports generic OpenID Connect issuers (above). SAML and
+arbitrary non-OIDC OAuth provider routing remain unimplemented.
 
 ## Sharing routes
 
