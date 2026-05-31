@@ -1,14 +1,20 @@
 /**
- * Web Push adapter (VAPID-authenticated).
+ * Web Push adapter (VAPID-authenticated, RFC 8291 encrypted payloads).
  *
  * Closes the third leg of the push trio next to APNs and FCM. The
  * adapter signs a per-endpoint VAPID JWT (ES256 over the credential's
- * private key), POSTs an empty body to the push subscription's
- * `endpoint`, and lets the browser-side Service Worker show a generic
- * wake-up notification. Full payload encryption per RFC 8291 is a
- * non-trivial follow-up and is intentionally not implemented here; the
- * first iteration avoids sending title/body plaintext through the Web
- * Push payload and routes users back to the authenticated app feed.
+ * private key) and POSTs to the push subscription's `endpoint`.
+ *
+ * When the subscription carries the browser's `p256dh` + `auth` keys and
+ * the intent has a payload, the adapter encrypts the notification body
+ * per RFC 8291 (Message Encryption for Web Push) using the `aes128gcm`
+ * content encoding (RFC 8188) and sends the ciphertext as the request
+ * body with `Content-Encoding: aes128gcm`. The browser Service Worker
+ * then has the decrypted `title`/`body`/`data` in its `push` event.
+ *
+ * When no subscription keys are present (older registrations) the adapter
+ * falls back to an EMPTY body and lets the Service Worker show a generic
+ * wake-up notification — backward compatible with the pre-FR-60 behavior.
  *
  * The push registration's `token` field is a JSON-encoded string of the
  * browser's `PushSubscription` (`{ endpoint, keys: { p256dh, auth } }`)
@@ -24,7 +30,14 @@
  *   - 5xx → `push.serverError`.
  */
 
-import { createSign } from "node:crypto";
+import {
+  createECDH,
+  createHmac,
+  createSign,
+  createCipheriv,
+  randomBytes,
+  type CipherGCM,
+} from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import type {
@@ -38,6 +51,11 @@ import { loadWebPushCredentials, type WebPushCredentials } from "./credentials.j
 
 /** VAPID JWT is valid up to 24h; refresh well before that to absorb skew. */
 const JWT_REFRESH_MS = 12 * 60 * 60 * 1000;
+
+/** Web Push (RFC 8291) caps the application payload at 4096 octets. */
+const MAX_WEB_PUSH_PAYLOAD = 4096;
+/** TTL (seconds) the push service holds an undelivered message for. */
+const WEB_PUSH_TTL = "2419200";
 
 export interface WebPushAdapterOptions {
   readonly fetch?: typeof fetch;
@@ -116,18 +134,171 @@ export function createFrickWebPushAdapter(options: WebPushAdapterOptions = {}): 
     const audience = new URL(subscription.endpoint).origin;
     const headers: Record<string, string> = {
       ...vapidHeader(credentialResult.value, audience),
-      "content-length": "0",
-      ttl: "60",
+      ttl: WEB_PUSH_TTL,
     };
+
+    // RFC 8291: encrypt the notification payload when the subscription
+    // carries the browser keys. Older registrations (no keys) keep the
+    // backward-compatible empty-body wake-up path.
+    const plaintext = encodeNotificationPayload(intent);
+    // `BodyInit` doesn't list Node's `Buffer`, but `Buffer` is a `Uint8Array`
+    // subclass, which `BodyInit` does accept — the runtime value is unchanged.
+    let body: BodyInit = "";
+    if (plaintext !== undefined && subscription.keys.p256dh && subscription.keys.auth) {
+      let encrypted: Buffer;
+      try {
+        encrypted = encryptWebPushPayload(
+          plaintext,
+          subscription.keys.p256dh,
+          subscription.keys.auth,
+        );
+      } catch {
+        return {
+          registration,
+          attemptedAt: new Date().toISOString(),
+          status: "failed",
+          error: {
+            code: "push.badDeviceToken",
+            message: "Registration token is not a valid PushSubscription JSON",
+          },
+        };
+      }
+      if (encrypted.length > MAX_WEB_PUSH_PAYLOAD) {
+        return {
+          registration,
+          attemptedAt: new Date().toISOString(),
+          status: "failed",
+          error: {
+            code: "push.payloadTooLarge",
+            message: `Encrypted Web Push payload is ${encrypted.length} bytes (max ${MAX_WEB_PUSH_PAYLOAD})`,
+          },
+        };
+      }
+      body = encrypted as unknown as BodyInit;
+      headers["content-encoding"] = "aes128gcm";
+      headers["content-length"] = String(encrypted.length);
+    } else {
+      headers["content-length"] = "0";
+    }
+
     const response = await fetchImpl(subscription.endpoint, {
       method: "POST",
       headers,
-      body: "",
+      body,
     });
     return translateWebPushResult(response, registration, intent);
   }
 
   return { platform: "webPush", send };
+}
+
+/**
+ * Serialize the notification intent into the JSON blob the browser
+ * Service Worker reads off the decrypted `push` event. Returns
+ * `undefined` when there is nothing meaningful to encrypt so the adapter
+ * can fall back to the empty-body wake-up path.
+ */
+function encodeNotificationPayload(intent: FrickNotificationIntent): string | undefined {
+  const { title, body, data } = intent.body;
+  if (title === undefined && body === undefined && data === undefined) {
+    return undefined;
+  }
+  const payload: Record<string, unknown> = { intent: intent.intent };
+  if (title !== undefined) payload.title = title;
+  if (body !== undefined) payload.body = body;
+  if (data !== undefined) payload.data = data;
+  if (intent.threadId !== undefined) payload.threadId = intent.threadId;
+  if (intent.deepLink !== undefined) payload.deepLink = intent.deepLink;
+  return JSON.stringify(payload);
+}
+
+/**
+ * Encrypt a Web Push payload per RFC 8291 using the `aes128gcm` content
+ * encoding (RFC 8188).
+ *
+ * Steps (RFC 8291 §3.4):
+ *   1. Generate an ephemeral P-256 keypair (`as_*`) and ECDH against the
+ *      subscription's public key (`ua_public`, the `p256dh` value) to get
+ *      the shared `ecdh_secret`.
+ *   2. Derive the input keying material with HKDF-SHA-256 keyed by the
+ *      subscription `auth` secret as salt, with
+ *      `info = "WebPush: info\0" || ua_public || as_public`.
+ *   3. Generate a random 16-byte content-encoding salt and run the
+ *      RFC 8188 HKDF to derive the 16-byte AES-128-GCM content-encryption
+ *      key (`info = "Content-Encoding: aes128gcm\0"`) and the 12-byte
+ *      nonce (`info = "Content-Encoding: nonce\0"`).
+ *   4. AES-128-GCM encrypt the single record: `plaintext || 0x02`
+ *      delimiter padding (last record), no extra padding.
+ *   5. Frame the body as the RFC 8188 header
+ *      (`salt(16) || rs(4) || idlen(1) || keyid`) where `keyid` is the
+ *      uncompressed ephemeral public key, followed by the ciphertext.
+ *
+ * @param payload    UTF-8 plaintext to deliver.
+ * @param p256dhB64  Subscription `p256dh` (base64url, uncompressed P-256 point).
+ * @param authB64    Subscription `auth` secret (base64url, 16 bytes).
+ */
+export function encryptWebPushPayload(
+  payload: string | Buffer,
+  p256dhB64: string,
+  authB64: string,
+): Buffer {
+  const uaPublic = decodeBase64Url(p256dhB64);
+  const authSecret = decodeBase64Url(authB64);
+  if (uaPublic.length !== 65 || uaPublic[0] !== 0x04) {
+    throw new Error("p256dh must be a 65-byte uncompressed P-256 point");
+  }
+  if (authSecret.length === 0) {
+    throw new Error("auth secret must not be empty");
+  }
+
+  const ecdh = createECDH("prime256v1");
+  ecdh.generateKeys();
+  const asPublic = ecdh.getPublicKey(); // 65-byte uncompressed point.
+  const ecdhSecret = ecdh.computeSecret(uaPublic); // 32-byte shared secret.
+
+  // RFC 8291 §3.3: derive the pseudo-random key from the shared secret,
+  // keyed by the auth secret, binding both public keys.
+  const keyInfo = Buffer.concat([
+    Buffer.from("WebPush: info\0", "utf8"),
+    uaPublic,
+    asPublic,
+  ]);
+  const ikm = hkdf(authSecret, ecdhSecret, keyInfo, 32);
+
+  // RFC 8188 §2.2: content-encoding salt seeds the per-record key/nonce.
+  const salt = randomBytes(16);
+  const cek = hkdf(salt, ikm, Buffer.from("Content-Encoding: aes128gcm\0", "utf8"), 16);
+  const nonce = hkdf(salt, ikm, Buffer.from("Content-Encoding: nonce\0", "utf8"), 12);
+
+  // Single-record framing: append the 0x02 "last record" delimiter.
+  const plaintext = typeof payload === "string" ? Buffer.from(payload, "utf8") : payload;
+  const record = Buffer.concat([plaintext, Buffer.from([0x02])]);
+
+  const cipher = createCipheriv("aes-128-gcm", cek, nonce) as CipherGCM;
+  const ciphertext = Buffer.concat([cipher.update(record), cipher.final(), cipher.getAuthTag()]);
+
+  // RFC 8188 §2.1 header: salt(16) || rs(4, big-endian) || idlen(1) || keyid.
+  const rs = Buffer.alloc(4);
+  // The record size MUST be large enough to hold the whole ciphertext.
+  rs.writeUInt32BE(Math.max(ciphertext.length, MAX_WEB_PUSH_PAYLOAD), 0);
+  const idlen = Buffer.from([asPublic.length]);
+  return Buffer.concat([salt, rs, idlen, asPublic, ciphertext]);
+}
+
+/**
+ * HKDF (RFC 5869) with SHA-256 for the short output lengths Web Push
+ * needs (≤ 32 bytes), so a single expand block suffices.
+ */
+function hkdf(salt: Buffer, ikm: Buffer, info: Buffer, length: number): Buffer {
+  const prk = createHmac("sha256", salt).update(ikm).digest();
+  const t = createHmac("sha256", prk)
+    .update(Buffer.concat([info, Buffer.from([0x01])]))
+    .digest();
+  return t.subarray(0, length);
+}
+
+function decodeBase64Url(value: string): Buffer {
+  return Buffer.from(value, "base64url");
 }
 
 function translateWebPushResult(
