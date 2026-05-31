@@ -1,4 +1,26 @@
 export { createFrickServer, defaultDatabasePath, type FrickAppRoute, type ServerOptions } from "./server.js";
+// Extension-authoring types: the symbols apps need to author the
+// `policyHooks` and `blobProcessors` they pass to `createFrickServer`.
+// Referenced by `ServerOptions` but otherwise internal — surfaced here so
+// hosts can type their hooks directly instead of indexing into `ServerOptions`.
+export {
+  ALLOW,
+  deny,
+  type FrickAction,
+  type FrickDecision,
+  type FrickDecisionReason,
+  type FrickPolicyHook,
+  type FrickPolicyInput,
+  type Principal,
+} from "./authz.js";
+export {
+  type FrickBlobProcessContext,
+  type FrickBlobProcessResult,
+  type FrickBlobProcessor,
+  type FrickBlobProcessorRegistry,
+  type FrickBlobValidateContext,
+  type FrickBlobValidationResult,
+} from "./blobs/processor.js";
 export {
   type FrickJobContext,
   type FrickJobHandler,
