@@ -712,14 +712,37 @@ or `passwordHash` are redacted before emission. Set
 
 ## Projection delta push
 
-Projections may emit deltas over the sync WebSocket. Clients subscribe
-with kind `"projection"` and the projection's registered name (the
-optional `key` is reserved for future per-row scoping and is ignored
-today). The server pushes `ProjectionDelta` frames whenever a registered
-projection's `apply` returns row changes; deltas are scoped to the
-producing tenant. Subscribing to an unknown projection nacks with
-`auth.forbidden` + `details.reason = "projectionNotFound"`. Today this
-is an in-process broadcast; cross-process fan-out is a follow-up.
+Apps register projections at boot via `ServerOptions.projections`
+(`createFrickServer({ projections: [...] })`). Each projection declares one
+or more `sources` (object or stream types); at startup the server validates
+that every declared source `type` exists in the active schema and throws a
+`FrickConfigError` otherwise, so a typo surfaces at boot rather than
+silently never matching a write. Projections are also exposed for HTTP read
+at `GET /projections/:name` when the handler implements `read`.
+
+A projection's `apply(event, ctx)` runs after every matching source write —
+object upserts (HTTP `PUT /objects/...` or the WebSocket `ObjectUpsert`
+frame) and stream appends alike — and may return `{ changes }` declaring the
+affected rows. The registry materializes those changes into a tenant-scoped
+row map so later subscribers can be replayed the current state.
+
+Clients subscribe over the sync WebSocket with kind `"projection"` and the
+projection's registered name (the optional `key` is reserved for future
+per-row scoping and is ignored today). On subscribe the server delivers an
+**initial snapshot** — a `ProjectionDelta` frame whose changes upsert every
+current row for the subscriber's tenant (empty when the projection has no
+rows yet) — and thereafter pushes a `ProjectionDelta` frame on each new
+`apply` change. Both the snapshot and live deltas are scoped to the
+subscriber's tenant, so a client never sees another tenant's rows.
+Subscribing to an unknown projection nacks with `auth.forbidden` +
+`details.reason = "projectionNotFound"`.
+
+Fan-out is in-process by default; when a cluster bus is configured the
+gateway also forwards each delta to peer nodes (`projectionDelta`
+envelopes) so subscribers on any node receive it. The materialized snapshot
+state is per-node and not persisted — it is rebuilt from `apply` changes as
+writes flow, and a `projections/:name/rebuild` admin call re-derives a
+projection's state from source data.
 
 ## Backup and restore
 
