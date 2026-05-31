@@ -239,10 +239,19 @@ against a Frick server hosted at `frick.example`.
   disallowed origins are refused at the `verifyClient` callback with HTTP
   403. Same-origin / server-to-server requests (no `Origin` header) bypass
   CORS by design — this is correct browser semantics, not a gap. Allowlist
-  matching is exact-string only: pattern matching (regex, suffix, subdomain
-  wildcards) is a known limitation. Session tokens still travel via
-  `Authorization: Bearer …` rather than cookies, so the browser will not
-  silently attach credentials cross-origin even before CORS rules apply.
+  entries may be the allow-all wildcard `*`, an exact origin, or a single
+  subdomain wildcard of the form `<scheme>://*.<host>` (e.g.
+  `https://*.example.com`). A subdomain wildcard matches any non-empty
+  subdomain prefix over the same scheme and port — `https://app.example.com`
+  and `https://a.b.example.com` match `https://*.example.com`, but the apex
+  `https://example.com` does **not** unless it is also listed exactly. Mid-host
+  wildcards, bare-host wildcards (`https://*`), and multiple wildcards per
+  entry are rejected at config load with `FrickConfigError`. When a request
+  origin matches via wildcard, the server reflects the concrete request origin
+  (with `Vary: Origin`) rather than the pattern string. Session tokens still
+  travel via `Authorization: Bearer …` rather than cookies, so the browser
+  will not silently attach credentials cross-origin even before CORS rules
+  apply.
 
 **Known gaps.**
 
@@ -251,8 +260,9 @@ against a Frick server hosted at `frick.example`.
   can still reach the body of a disallowed-origin request — this is
   intentional and matches industry-standard CORS semantics. Operators that
   want hard server-side refusal can apply it at a reverse proxy.
-- No subdomain or pattern matching; large deployments that need many
-  per-tenant origins must list each exact value.
+- Wildcard matching is limited to a single leading-label subdomain wildcard
+  per entry (`<scheme>://*.<host>`). Path-, scheme-, or port-level patterns,
+  regex entries, and multi-segment wildcards are intentionally unsupported.
 
 ---
 

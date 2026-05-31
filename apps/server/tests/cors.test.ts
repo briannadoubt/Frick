@@ -168,6 +168,59 @@ describe("CORS enforcement (HTTP)", () => {
     });
     expect(badPreflight.status).toBe(403);
   });
+
+  it("subdomain wildcard allowlist reflects matching subdomains and rejects others", async () => {
+    app = await startServer({
+      config: {
+        env: "production",
+        allowedOrigins: ["https://*.example.com"],
+        dbPath: tmpDbPath(),
+        inspectionEnabled: false,
+      },
+    });
+
+    // A matching subdomain is reflected (not the wildcard string) with Vary.
+    const okTenant = await fetch(`${app.httpUrl}/health`, {
+      headers: { origin: "https://tenant42.example.com" },
+    });
+    expect(okTenant.headers.get("access-control-allow-origin")).toBe(
+      "https://tenant42.example.com",
+    );
+    expect(okTenant.headers.get("vary")).toBe("Origin");
+
+    // Preflight for a matching subdomain succeeds.
+    const okPreflight = await fetch(`${app.httpUrl}/objects`, {
+      method: "OPTIONS",
+      headers: {
+        origin: "https://app.example.com",
+        "access-control-request-method": "GET",
+      },
+    });
+    expect(okPreflight.status).toBe(204);
+    expect(okPreflight.headers.get("access-control-allow-origin")).toBe(
+      "https://app.example.com",
+    );
+
+    // The apex host is NOT covered by the wildcard.
+    const apexPreflight = await fetch(`${app.httpUrl}/objects`, {
+      method: "OPTIONS",
+      headers: {
+        origin: "https://example.com",
+        "access-control-request-method": "GET",
+      },
+    });
+    expect(apexPreflight.status).toBe(403);
+
+    // A lookalike domain is rejected.
+    const evilPreflight = await fetch(`${app.httpUrl}/objects`, {
+      method: "OPTIONS",
+      headers: {
+        origin: "https://app.notexample.com",
+        "access-control-request-method": "GET",
+      },
+    });
+    expect(evilPreflight.status).toBe(403);
+  });
 });
 
 describe("CORS enforcement (WebSocket upgrade)", () => {
