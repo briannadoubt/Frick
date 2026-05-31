@@ -236,6 +236,14 @@ Encrypts a Firebase service-account JSON file with `FRICK_PUSH_CRED_KEY` and
 stores it in `tenant_settings`. The file must include `project_id`,
 `client_email`, and `private_key`.
 
+### `frick tenants set-push <tenantId> --platform webpush --subject <mailto:|https:> --public-key <b64url> --private-key <pem-file>`
+
+Encrypts Web Push VAPID credentials with `FRICK_PUSH_CRED_KEY` and stores them
+in `tenant_settings`. `--subject` must be a `mailto:` or `https://` URI;
+`--public-key` is the base64url VAPID application server key; `--private-key`
+points at a PEM-encoded EC (P-256) private key file. Private key material is
+read from disk and is not echoed.
+
 ### `frick backup [--tenant-id <id>|all] [--output <path>]`
 
 Streams a portable NDJSON framework database dump. It defaults to the
