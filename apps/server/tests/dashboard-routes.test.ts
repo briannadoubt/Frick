@@ -305,6 +305,59 @@ describe("mounted dashboard", () => {
     ]);
   });
 
+  it("masks secret/pii/content field values in dashboard object data while keeping public values", async () => {
+    const sensitiveSchema: FrickSchema = {
+      ...productTestSchema,
+      name: "frick-sensitivity-dashboard",
+      schemaId: "frick-sensitivity-dashboard",
+      hash: "frick-sensitivity-dashboard-0.1.0",
+      objects: [
+        {
+          id: 1,
+          name: "Credential",
+          fields: [
+            { id: 1, name: "label", kind: "string", required: true, sensitivity: "public" },
+            { id: 2, name: "email", kind: "string", required: true, sensitivity: "pii" },
+            { id: 3, name: "apiToken", kind: "string", required: false, sensitivity: "secret" },
+            { id: 4, name: "note", kind: "string", required: false, sensitivity: "content" },
+            { id: 5, name: "internalRef", kind: "string", required: false }, // default private
+          ],
+          indexes: [{ id: 1, name: "all", fields: ["label"] }],
+        },
+      ],
+      streams: [],
+      events: [],
+      presences: [],
+      signals: [],
+      blobs: [],
+      jobs: [],
+      projections: [],
+    };
+
+    app = await startServer({ schema: sensitiveSchema });
+    app.store.upsertObject("_default", "Credential", "cred-1", {
+      label: "Primary key",
+      email: "ada@example.com",
+      apiToken: "tok_live_secret",
+      note: "do not share",
+      internalRef: "ref-123",
+    });
+
+    const response = await fetch(`${app.httpUrl}/_frick/dashboard/api/data/objects/Credential`, {
+      headers: await inspectHeaders(app.httpUrl),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.rows).toHaveLength(1);
+    const row = body.rows[0];
+    expect(row.label).toBe("Primary key"); // public passes through
+    expect(row.email).toBe("<redacted>"); // pii masked
+    expect(row.apiToken).toBe("<redacted>"); // secret masked
+    expect(row.note).toBe("<redacted>"); // content masked
+    expect(row.internalRef).toBe("ref-123"); // private default not masked
+  });
+
   it("serves tenant-scoped accounts through the mounted dashboard accounts API", async () => {
     app = await startServer();
     app.store.createAccountUser({

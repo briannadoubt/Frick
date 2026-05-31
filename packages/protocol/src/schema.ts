@@ -9,6 +9,34 @@ export type FieldKind =
   | "enum"
   | "json";
 
+/**
+ * Sensitivity classification for a field's values. Informs how the framework
+ * treats the field in logs, diagnostics, admin inspection, and (future) data
+ * export / deletion / audit workflows.
+ *
+ *  - "public": safe for normal app reads and logs when otherwise authorized.
+ *  - "private" (default when omitted): authorized app reads only; never
+ *    surfaced in broad inspection or diagnostics output.
+ *  - "pii": personal data that participates in export / deletion / privacy
+ *    workflows; masked in logs and diagnostics.
+ *  - "secret": credentials or tokens; never logged, exported casually, or
+ *    shown in diagnostics. Always masked.
+ *  - "content": user-generated message / file content; privacy-safe logs and
+ *    inspection avoid raw values.
+ */
+export type FieldSensitivity = "public" | "private" | "pii" | "secret" | "content";
+
+/**
+ * Default classification applied to fields that omit {@link FieldDef.sensitivity}.
+ *
+ * We default to "private" rather than "public" so that an un-annotated field is
+ * treated conservatively (authorized reads only, kept out of broad inspection
+ * output). This keeps existing schemas — which carry no `sensitivity` — safe by
+ * default while remaining fully backward-compatible: nothing changes on the
+ * wire, and authoring a field as "public" is an explicit opt-in.
+ */
+export const DEFAULT_FIELD_SENSITIVITY: FieldSensitivity = "private";
+
 export interface FieldDef {
   id: number;
   name: string;
@@ -16,6 +44,30 @@ export interface FieldDef {
   required: boolean;
   ref?: string;
   enumValues?: string[];
+  /**
+   * Optional sensitivity classification. When omitted the framework treats the
+   * field as {@link DEFAULT_FIELD_SENSITIVITY}. Server-only metadata: it is not
+   * propagated to generated native artifacts (Swift / Kotlin / TS bindings),
+   * so adding or changing it never requires regenerating those outputs and is
+   * wire-backwards-compatible. See {@link FieldSensitivity}.
+   */
+  sensitivity?: FieldSensitivity;
+}
+
+const FIELD_SENSITIVITY_VALUES: ReadonlySet<string> = new Set<FieldSensitivity>([
+  "public",
+  "private",
+  "pii",
+  "secret",
+  "content",
+]);
+
+/**
+ * Resolve the effective sensitivity for a field, falling back to
+ * {@link DEFAULT_FIELD_SENSITIVITY} when the annotation is omitted.
+ */
+export function resolveFieldSensitivity(field: Pick<FieldDef, "sensitivity">): FieldSensitivity {
+  return field.sensitivity ?? DEFAULT_FIELD_SENSITIVITY;
 }
 
 export interface IndexDef {
@@ -355,6 +407,12 @@ function validateFields(
 
     if (field.kind === "enum" && (!field.enumValues || field.enumValues.length === 0)) {
       throw new Error(`Enum field ${owner}.${field.name} must declare enumValues`);
+    }
+
+    if (field.sensitivity !== undefined && !FIELD_SENSITIVITY_VALUES.has(field.sensitivity)) {
+      throw new Error(
+        `Unknown sensitivity "${String(field.sensitivity)}" for field ${owner}.${field.name}`,
+      );
     }
   }
 }
