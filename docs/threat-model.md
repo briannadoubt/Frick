@@ -212,11 +212,28 @@ the server can no longer interpret, or vice versa.
   drifting client can detect the mismatch from any failed request, not just
   the handshake.
 
+- The framework supports OPTIONAL detached signing of generated schema
+  artefacts. `signSchemaArtifact` / `verifySchemaArtifact` (`@frick/protocol`)
+  use Ed25519 (`node:crypto`) to sign a canonical representation of the schema
+  identity — `schemaId` + `schemaHash` + `schemaRevision` + a manifest of the
+  emitted artifact files and their SHA-256 digests. When
+  `FRICK_SCHEMA_SIGNING_KEY` (a PEM or base64-DER private key) is set,
+  `pnpm schema:generate` emits a detached signature at
+  `packages/protocol/generated/schema-signature.json` (gitignored — published
+  as a release-pipeline artifact, never committed). A client that ships the
+  matching trusted public key can call `verifySchemaArtifact` (or
+  `verifySchemaArtifactForSchema`, which additionally pins the expected schema
+  identity) to reject a poisoned bundle. The example verifier
+  `packages/protocol/scripts/verify-schema-signature.ts` shows the client
+  flow.
+
 **Known gaps.**
 
-- The framework does not yet sign schema artefacts. A malicious actor that
-  controls the build pipeline could publish a poisoned schema bundle to
-  native apps. Signing is deferred.
+- Signing is opt-in and the framework does not yet ship a default trusted key
+  or key-rotation tooling. Without `FRICK_SCHEMA_SIGNING_KEY` set, generation
+  emits no signature and clients perform no artefact verification, so a
+  build-pipeline compromise is only mitigated for deployments that have
+  adopted signing and distributed a public key to clients out of band.
 
 ---
 

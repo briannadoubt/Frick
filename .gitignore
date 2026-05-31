@@ -40,3 +40,8 @@ service-account*.json
 !.env.example
 
 .scope/
+
+# Optional detached schema signature (FR-45). Emitted only when
+# FRICK_SCHEMA_SIGNING_KEY is set during `pnpm schema:generate`; published as a
+# release-pipeline artifact, never committed to the repo.
+packages/protocol/generated/
