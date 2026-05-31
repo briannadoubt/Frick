@@ -32,6 +32,7 @@ import {
   assertCanSubscribe,
   assertCanWriteObject,
   assertCanWritePresence,
+  canSubscriberReadObjectRecord,
   AuthenticationError,
   AuthorizationError,
   SessionExpiredError,
@@ -588,6 +589,11 @@ export class SyncGateway {
   /** Local-only object fan-out, also reused by the cluster handler. */
   #fanOutObjects(type: string, objects: PlainObject[], tenantId?: string): void {
     const cursor = Date.now();
+    // Short-circuit: per-record read authz only changes the row set when an
+    // app registered a policy hook OR a grant has ever been issued. With
+    // neither, the baseline decision allows every in-tenant row, so existing
+    // deployments pay no per-row decide() cost (FR-116).
+    const perRecordActive = this.#perRecordReadAuthzActive();
     for (const { client: subscriber } of this.#subscriptions.objectSubscribers(type)) {
       const principal = subscriber.principal;
       if (!principal || !this.#isPrincipalActive(principal)) {
@@ -596,9 +602,18 @@ export class SyncGateway {
       if (tenantId !== undefined && principal.tenantId !== tenantId) {
         continue;
       }
-      const visibleObjects = objects.filter((object) =>
+      // Tenant scoping is already applied above. The store-level visibility
+      // hook (currently allow-all) is the first cut; FR-116 then adds the
+      // per-record layer per subscriber: the same decide() + policy-hook +
+      // grant pipeline the HTTP object read path uses for `object.read`, so a
+      // denied row is never fanned out and a grant on a record makes it
+      // visible to its grantee.
+      const tenantVisible = objects.filter((object) =>
         this.store.isObjectVisibleToUser(principal.tenantId, type, object, principal.userId),
       );
+      const visibleObjects = perRecordActive
+        ? tenantVisible.filter((object) => this.#canSubscriberReadObject(principal, type, object))
+        : tenantVisible;
       if (visibleObjects.length === 0) {
         continue;
       }
@@ -607,6 +622,41 @@ export class SyncGateway {
         { objects: packObjects(this.store, type, visibleObjects), events: [], cursor },
       ]);
     }
+  }
+
+  /**
+   * `true` when per-record read authorization can change the row set a
+   * subscriber sees — i.e. an app registered a policy hook, or a sharing grant
+   * has ever been issued. When `false`, the framework's baseline `object.read`
+   * decision allows every in-tenant row, so the snapshot/fan-out paths skip
+   * per-row `decide()` entirely and keep the original allow-all behavior with
+   * zero per-row cost (FR-116). Cheap: a length read plus a single EXISTS probe.
+   */
+  #perRecordReadAuthzActive(): boolean {
+    return this.#policyHooks.length > 0 || !this.store.grants.isEmpty;
+  }
+
+  /**
+   * Per-record read visibility for one subscriber, using the exact authz the
+   * HTTP object read path uses: `object.read` baseline + app policy hooks +
+   * grant relaxation. Tenant scoping is already enforced by the caller, so the
+   * resource tenant matches the principal's tenant here. Objects missing a
+   * string `id` are treated as readable — they cannot be keyed for a grant or
+   * policy decision and the original fan-out delivered them.
+   */
+  #canSubscriberReadObject(principal: Principal, type: string, object: PlainObject): boolean {
+    const id = object.id;
+    if (typeof id !== "string") {
+      return true;
+    }
+    return canSubscriberReadObjectRecord(
+      principal,
+      type,
+      id,
+      tenantMembershipReader(this.store, principal.tenantId),
+      this.#policyHooks,
+      this.#grantLookup,
+    );
   }
 
   /**
@@ -1015,11 +1065,24 @@ export class SyncGateway {
     }
 
     if (payload.kind === "object") {
-      const objects = packObjects(
-        this.store,
+      // The initial snapshot is tenant-scoped at the store layer
+      // (listObjectsForUser), then filtered per-record for THIS subscriber with
+      // the same decide() + policy-hook + grant pipeline the live delta fan-out
+      // and the HTTP object read path use (FR-116). Rows the subscriber is not
+      // authorized to read are omitted; a grant on a record makes it visible to
+      // the grantee. Skipped entirely (allow-all) when no policy hook or grant
+      // is configured — see #perRecordReadAuthzActive / #fanOutObjects.
+      const tenantRows = this.store.listObjectsForUser(
+        principal.tenantId,
         payload.name,
-        this.store.listObjectsForUser(principal.tenantId, payload.name, principal.userId),
+        principal.userId,
       );
+      const visibleRows = this.#perRecordReadAuthzActive()
+        ? tenantRows.filter((object) =>
+            this.#canSubscriberReadObject(principal, payload.name, object),
+          )
+        : tenantRows;
+      const objects = packObjects(this.store, payload.name, visibleRows);
       this.#sendFrame(client, [FrameKind.Snapshot, { subscriptionId: payload.subscriptionId, objects, cursor: 0 }]);
     }
   }

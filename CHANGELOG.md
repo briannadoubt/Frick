@@ -6,6 +6,10 @@ Each package version is independent — a release header documents which package
 
 ## Unreleased
 
+### Server — per-record authz on object subscriptions
+
+- **`@frick/server`:** Object subscriptions are now authorized **per record** (FR-116). The initial snapshot and every live object delta are filtered for each subscriber with the same policy-hook + sharing-grant pipeline that gates individual `object.read` calls, layered on top of the existing tenant scoping. A tightening-only policy hook that denies `object.read` for a principal now removes those rows from that subscriber's snapshot and live stream, and a grant on a record makes exactly that record visible to the grantee — so different subscribers on the same object type can see different row sets. Per-record evaluation short-circuits to the prior allow-all behavior (no per-row cost) when no policy hook is registered and no sharing grant has ever been issued. The wire protocol, `@frick/core`, the HTTP object read authz, and the grant CRUD API are unchanged. Unblocks per-record customer-portal visibility over live sync (aquarius-os AQ-63).
+
 ### Server — stream cursor query API
 
 - **`@frick/server`:** Added `GET /streams/:type/:id/cursor` returning `{ headSequence, count }` — a cheap tenant-scoped head probe (max sequence + event count, no payloads decoded) — and extended `GET /streams/:type/:id` with `?since=<sequence>`, which returns only events with `sequence > since` in ascending order (paginated by `?limit=`), so a client can resume a stream from a known position without replaying history. `?before=` paging is unchanged; a non-numeric `since` returns `400 stream.invalidCursor`. Backed by new `StreamStore.readAfter` / `StreamStore.headSequence` helpers (FR-116). Unblocks cursor-based stream resume for downstream consumers.

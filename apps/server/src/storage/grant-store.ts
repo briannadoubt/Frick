@@ -41,6 +41,22 @@ export interface ListGrantsArgs {
 export class GrantStore {
   constructor(private readonly db: DatabaseSync) {}
 
+  /**
+   * `true` while the `grants` table holds no rows at all (revoked rows still
+   * count as present). Used by the sync delivery path (FR-116) as a cheap
+   * short-circuit: with no grants AND no policy hooks, per-record read
+   * authorization on object subscriptions can be skipped entirely because the
+   * baseline decision allows every in-tenant row. A single `EXISTS` probe
+   * against a table that is empty in the common deployment, called once per
+   * fan-out batch (not per row).
+   */
+  get isEmpty(): boolean {
+    const row = this.db
+      .prepare("SELECT EXISTS(SELECT 1 FROM grants) AS present")
+      .get() as { present: number } | undefined;
+    return (row?.present ?? 0) === 0;
+  }
+
   create(args: CreateGrantArgs): FrickGrant {
     this.db
       .prepare(

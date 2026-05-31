@@ -20,7 +20,7 @@ async function append(streamId: string, text: string, token: string): Promise<vo
       requestId: `req-${streamId}-${text}`,
       replicaId: "replica-1",
       event: "MessageSent",
-      payload: { messageId: `msg-${streamId}-${text}`, authorId: "u1", text },
+      payload: { messageId: `msg-${streamId}-${text}`, authorId: "user1", text },
     }),
   });
   if (!res.ok) throw new Error(`append failed: ${res.status} ${await res.text()}`);
@@ -35,7 +35,7 @@ async function get(path: string, token: string): Promise<{ status: number; body:
 
 describe("stream cursor query API (FR-116)", () => {
   it("GET /streams/:type/:id/cursor returns head sequence + count without payloads", async () => {
-    const token = await demoLogin(running, { userId: "u1", tenantId: "t1" });
+    const token = await demoLogin(running, { userId: "user1", tenantId: "t1" });
     for (const t of ["a", "b", "c", "d", "e"]) await append("conv1", t, token);
 
     const { status, body } = await get("/streams/MessageStream/conv1/cursor", token);
@@ -45,14 +45,14 @@ describe("stream cursor query API (FR-116)", () => {
   });
 
   it("returns headSequence 0 for an empty/unknown stream", async () => {
-    const token = await demoLogin(running, { userId: "u1", tenantId: "t1" });
+    const token = await demoLogin(running, { userId: "user1", tenantId: "t1" });
     const { status, body } = await get("/streams/MessageStream/never-written/cursor", token);
     expect(status).toBe(200);
     expect(body).toEqual({ headSequence: 0, count: 0 });
   });
 
   it("GET ?since=N returns only events after N, ascending", async () => {
-    const token = await demoLogin(running, { userId: "u1", tenantId: "t1" });
+    const token = await demoLogin(running, { userId: "user1", tenantId: "t1" });
     for (const t of ["a", "b", "c", "d", "e"]) await append("conv2", t, token);
 
     const { status, body } = await get("/streams/MessageStream/conv2?since=2", token);
@@ -61,21 +61,21 @@ describe("stream cursor query API (FR-116)", () => {
   });
 
   it("?since at the head returns no events", async () => {
-    const token = await demoLogin(running, { userId: "u1", tenantId: "t1" });
+    const token = await demoLogin(running, { userId: "user1", tenantId: "t1" });
     for (const t of ["a", "b", "c"]) await append("conv3", t, token);
     const { body } = await get("/streams/MessageStream/conv3?since=3", token);
     expect(body.events).toEqual([]);
   });
 
   it("?since respects ?limit and stays ascending", async () => {
-    const token = await demoLogin(running, { userId: "u1", tenantId: "t1" });
+    const token = await demoLogin(running, { userId: "user1", tenantId: "t1" });
     for (const t of ["a", "b", "c", "d", "e"]) await append("conv4", t, token);
     const { body } = await get("/streams/MessageStream/conv4?since=1&limit=2", token);
     expect(body.events.map((e: any) => e.payload.text)).toEqual(["b", "c"]);
   });
 
   it("rejects a non-numeric ?since with 400", async () => {
-    const token = await demoLogin(running, { userId: "u1", tenantId: "t1" });
+    const token = await demoLogin(running, { userId: "user1", tenantId: "t1" });
     await append("conv5", "a", token);
     const { status, body } = await get("/streams/MessageStream/conv5?since=notanumber", token);
     expect(status).toBe(400);
@@ -83,10 +83,10 @@ describe("stream cursor query API (FR-116)", () => {
   });
 
   it("cursor + since are tenant-scoped", async () => {
-    const t1 = await demoLogin(running, { userId: "u1", tenantId: "t1" });
+    const t1 = await demoLogin(running, { userId: "user1", tenantId: "t1" });
     for (const t of ["a", "b", "c"]) await append("shared", t, t1);
 
-    const t2 = await demoLogin(running, { userId: "u2", tenantId: "t2" });
+    const t2 = await demoLogin(running, { userId: "user2", tenantId: "t2" });
     const cursor = await get("/streams/MessageStream/shared/cursor", t2);
     expect(cursor.body).toEqual({ headSequence: 0, count: 0 });
 
