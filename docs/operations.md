@@ -430,7 +430,11 @@ read-only schema object rows for the mounted dashboard data browser. Tenant
 session principals are pinned to their session tenant and use the same
 object-visibility filter as sync snapshots; admin bearers may pass `tenantId`
 to inspect a tenant's rows directly. The endpoint validates `:type` against the
-active schema and caps `limit` at 200 rows.
+active schema and caps `limit` at 200 rows. Field values are redacted by their
+schema-declared sensitivity classification before being returned: fields marked
+`pii`, `secret`, or `content` are replaced with `"<redacted>"`, while `public`
+and (the default) `private` values pass through. Annotate fields with
+`sensitivity` in the schema to keep sensitive values out of inspection output.
 
 `/_frick/dashboard/api/accounts?limit=50&tenantId=_default` returns sanitized
 account rows for the mounted dashboard Auth view: `tenantId`, `userId`,

@@ -1,4 +1,4 @@
-import type { PlainObject } from "@frick/protocol";
+import { redactRecords, type PlainObject } from "@frick/protocol";
 import type { Principal } from "../authz.js";
 import type { FrickStore } from "../store.js";
 
@@ -28,7 +28,8 @@ export interface BuildDashboardObjectDataInput {
 export function buildDashboardObjectData(
   input: BuildDashboardObjectDataInput,
 ): DashboardObjectData | undefined {
-  if (!input.store.schema.objects.some((object) => object.name === input.type)) {
+  const objectDef = input.store.schema.objects.find((object) => object.name === input.type);
+  if (!objectDef) {
     return undefined;
   }
 
@@ -40,7 +41,11 @@ export function buildDashboardObjectData(
   const visibleRows = scope === "admin"
     ? input.store.listObjects(tenantId, input.type)
     : input.store.listObjectsForUser(tenantId, input.type, input.principal.userId);
-  const rows = visibleRows.slice(0, limit);
+  // Mask schema fields classified as `secret` / `pii` / `content` so raw
+  // sensitive values never surface in admin/tenant inspection output. Fields
+  // default to `private` when unannotated, which is not masked here (it is a
+  // legitimate authorized read), while leaving `public` values untouched.
+  const rows = redactRecords(visibleRows.slice(0, limit), objectDef.fields);
 
   return {
     schemaHash: input.store.schema.hash,
