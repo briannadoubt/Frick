@@ -13,6 +13,7 @@ export const FRICK_ERROR_CODES = [
   "sync.reconnectExhausted",
   "blob.tooLarge",
   "blob.unsupportedContentType",
+  "blob.quotaExceeded",
   "rateLimit.exceeded",
   "server.internal",
 ] as const;

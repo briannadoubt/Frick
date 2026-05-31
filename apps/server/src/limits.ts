@@ -15,6 +15,16 @@ export interface FrickLimits {
   maxStreamAppendPayloadBytes: number;
   /** Maximum byte length of an uploaded blob body. */
   maxBlobBytes: number;
+  /**
+   * Maximum total bytes of blob content owned by a single principal, keyed by
+   * `(tenantId, ownerId)`. Enforced on upload: a new blob (or a re-upload that
+   * grows an existing blob) is rejected with `blob.quotaExceeded` when it would
+   * push the owner's summed `byte_length` over this cap. The default is
+   * effectively unlimited ({@link Number.MAX_SAFE_INTEGER}), so existing
+   * deployments keep their prior unbounded behavior until an operator opts in
+   * via `FRICK_MAX_BLOB_BYTES_PER_PRINCIPAL` or a per-tenant override.
+   */
+  maxBlobBytesPerPrincipal: number;
   /** Maximum number of concurrent subscriptions allowed per websocket connection. */
   maxSubscriptionsPerConnection: number;
   /** Maximum page size for stream pagination. */
@@ -70,6 +80,8 @@ export const DEFAULT_FRICK_LIMITS: FrickLimits = Object.freeze({
   maxHttpBodyBytes: 5_000_000,
   maxStreamAppendPayloadBytes: 256_000,
   maxBlobBytes: 25_000_000,
+  // Effectively unlimited by default — per-principal blob quota is opt-in.
+  maxBlobBytesPerPrincipal: Number.MAX_SAFE_INTEGER,
   maxSubscriptionsPerConnection: 256,
   maxStreamPageSize: 500,
   maxSearchQueryBytes: 4_096,
@@ -118,6 +130,13 @@ export function limitsFromEnv(env: NodeJS.ProcessEnv = process.env): Partial<Fri
   if (maxConnectionsPerPrincipal !== undefined) {
     overrides.maxConnectionsPerPrincipal = maxConnectionsPerPrincipal;
   }
+  const maxBlobBytesPerPrincipal = parsePositiveIntegerEnv(
+    env.FRICK_MAX_BLOB_BYTES_PER_PRINCIPAL,
+    "FRICK_MAX_BLOB_BYTES_PER_PRINCIPAL",
+  );
+  if (maxBlobBytesPerPrincipal !== undefined) {
+    overrides.maxBlobBytesPerPrincipal = maxBlobBytesPerPrincipal;
+  }
   return overrides;
 }
 
@@ -136,7 +155,7 @@ function parsePositiveIntegerEnv(value: string | undefined, varName: string): nu
  * Thrown when a runtime limit is exceeded. The wire shape always uses the
  * existing {@link import("@frick/protocol").FrickErrorEnvelope} — callers
  * translate this error into the appropriate `rateLimit.exceeded`,
- * `blob.tooLarge`, or `stream.appendRejected` envelope.
+ * `blob.tooLarge`, `blob.quotaExceeded`, or `stream.appendRejected` envelope.
  */
 export class FrickLimitError extends Error {
   readonly limit: keyof FrickLimits;

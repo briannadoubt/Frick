@@ -89,6 +89,22 @@ export class BlobStore {
     return rows.map(mapBlobRow);
   }
 
+  /**
+   * Sum the `byte_length` of every blob owned by `(tenantId, ownerId)`. This is
+   * the per-principal usage figure the upload route checks against the
+   * configured quota (FR-56). The query is tenant- and owner-scoped, so one
+   * principal's usage never reflects another principal's or another tenant's
+   * blobs. Returns `0` when the owner has no blobs.
+   */
+  totalBytesForOwner(tenantId: string, ownerId: string): number {
+    const row = this.db
+      .prepare(
+        "SELECT COALESCE(SUM(byte_length), 0) AS total FROM blob_metadata WHERE tenant_id = ? AND owner_id = ?",
+      )
+      .get(tenantId, ownerId) as { total: number | bigint } | undefined;
+    return row ? Number(row.total) : 0;
+  }
+
   writeContent(tenantId: string, blobId: string, content: Uint8Array): void {
     this.#bytes.write(tenantId, blobId, content);
   }

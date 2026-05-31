@@ -6,6 +6,10 @@ Each package version is independent — a release header documents which package
 
 ## Unreleased
 
+### Server — per-user blob quota
+
+- Added a configurable per-principal `(tenantId, ownerId)` total-bytes blob quota (`maxBlobBytesPerPrincipal` limit + `FRICK_MAX_BLOB_BYTES_PER_PRINCIPAL` env var, also per-tenant overridable via `tenant_settings`). Uploads that would push an owner's summed blob bytes over the cap are rejected with the new `blob.quotaExceeded` error envelope (HTTP 413) before any metadata row or bytes are written. `GET /blobs?ownerId=<id>` now returns the owner's `usage` (`usedBytes`/`quotaBytes`) alongside the list. The default cap is effectively unlimited, so existing deployments are unchanged until they opt in. (FR-56)
+
 ### Server — stream cursor query API
 
 - **`@frick/server`:** Added `GET /streams/:type/:id/cursor` returning `{ headSequence, count }` — a cheap tenant-scoped head probe (max sequence + event count, no payloads decoded) — and extended `GET /streams/:type/:id` with `?since=<sequence>`, which returns only events with `sequence > since` in ascending order (paginated by `?limit=`), so a client can resume a stream from a known position without replaying history. `?before=` paging is unchanged; a non-numeric `since` returns `400 stream.invalidCursor`. Backed by new `StreamStore.readAfter` / `StreamStore.headSequence` helpers (FR-116). Unblocks cursor-based stream resume for downstream consumers.

@@ -42,6 +42,7 @@ public enum FrickErrorCode: String, Codable, CaseIterable, Sendable {
   case syncReconnectExhausted = "sync.reconnectExhausted"
   case blobTooLarge = "blob.tooLarge"
   case blobUnsupportedContentType = "blob.unsupportedContentType"
+  case blobQuotaExceeded = "blob.quotaExceeded"
   case rateLimitExceeded = "rateLimit.exceeded"
   case serverInternal = "server.internal"
 }

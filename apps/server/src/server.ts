@@ -1921,10 +1921,28 @@ export function createFrickServer(options: ServerOptions = {}) {
         if (principal.scope !== "admin" && requestedOwnerId !== undefined) {
           assertCanReadBlob(principal, requestedOwnerId, policyHooks);
         }
-        sendJson(response, 200, {
+        const responseBody: Record<string, unknown> = {
           schemaHash: store.schema.hash,
           data: store.blobs.list(principal.tenantId, requestedOwnerId),
-        });
+        };
+        // Quota-aware listing (FR-56): when scoped to a single owner, report
+        // that owner's current usage and the effective per-principal cap.
+        // `quotaBytes` is null when no quota is configured, so clients can
+        // distinguish "unlimited" from a finite limit.
+        if (requestedOwnerId !== undefined) {
+          const quota = tenantLimits.maxBlobBytesPerPrincipal;
+          const quotaConfigured =
+            Number.isFinite(quota) && quota < Number.MAX_SAFE_INTEGER;
+          responseBody.usage = {
+            ownerId: requestedOwnerId,
+            usedBytes: store.blobs.totalBytesForOwner(
+              principal.tenantId,
+              requestedOwnerId,
+            ),
+            quotaBytes: quotaConfigured ? quota : null,
+          };
+        }
+        sendJson(response, 200, responseBody);
       } catch (error) {
         sendErrorWithMetrics(response, error, "blob_list_rejected");
       }
@@ -1985,6 +2003,31 @@ export function createFrickServer(options: ServerOptions = {}) {
           });
           if (!verdict.ok) {
             throw new BlobValidationRejectedError(processor.id, verdict.reason);
+          }
+        }
+
+        // Per-principal blob quota (FR-56). Compute the owner's projected total
+        // bytes after this upload: their current usage, minus the bytes of the
+        // blob being overwritten (so a same-id re-upload isn't double-counted),
+        // plus the incoming bytes. Reject before any row or bytes are written
+        // when the projection would exceed the configured cap. Scoped to
+        // `(tenantId, resolvedOwnerId)` and driver-independent. The default cap
+        // is effectively unlimited, so this is a no-op unless configured.
+        const quota = tenantLimits.maxBlobBytesPerPrincipal;
+        if (Number.isFinite(quota) && quota < Number.MAX_SAFE_INTEGER) {
+          const currentBytes = store.blobs.totalBytesForOwner(
+            principal.tenantId,
+            resolvedOwnerId,
+          );
+          const existingBytes = metadata ? metadata.byteLength : 0;
+          const projected = currentBytes - existingBytes + content.byteLength;
+          if (projected > quota) {
+            throw new FrickLimitError({
+              limit: "maxBlobBytesPerPrincipal",
+              actualValue: projected,
+              configuredMax: quota,
+              message: `blob quota exceeded for owner ${resolvedOwnerId}: ${projected} > ${quota}`,
+            });
           }
         }
 
@@ -2891,6 +2934,9 @@ function httpErrorCode(error: unknown): FrickErrorCode {
   if (error instanceof FrickLimitError) {
     if (error.limit === "maxBlobBytes") {
       return "blob.tooLarge";
+    }
+    if (error.limit === "maxBlobBytesPerPrincipal") {
+      return "blob.quotaExceeded";
     }
     if (error.limit === "maxStreamAppendPayloadBytes") {
       return "stream.appendRejected";
