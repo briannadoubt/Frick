@@ -6,6 +6,12 @@ Each package version is independent — a release header documents which package
 
 ## Unreleased
 
+### Server — self-service account data export
+
+- **`@frick/server`:** Added an authenticated `GET /account/export` route that returns the calling principal's OWN data as a single JSON bundle, grouped by object type, scoped to the principal's tenant (FR-66). A record is included when one of its `ownerId` / `userId` / `createdBy` fields (`DEFAULT_OWNER_FIELDS`) equals the principal's `userId`; tenant isolation is enforced by the tenant-scoped store, so another tenant's records never appear even when an owner field matches. Unauthenticated requests return `401` and the response is `no-store`. This is the data-subject "copy of my own data" surface, distinct from the operator-driven `/_frick/admin/data-subject` route.
+- Apps can augment the bundle with an `onAccountExport(principal, base)` hook on `createFrickServer` options; its return value is attached under `app` (omitted when no hook is registered). The hook is responsible for scoping its own reads to `principal.tenantId` / `principal.userId`.
+- Sensitivity (FR-65): because the export is the user's own data, `pii`, `private` (default), and `content` fields are returned in full; only `secret`-classified fields are masked with `<redacted>` so the export can never become a credential-exfiltration channel. New exports `buildAccountExportBase`, `DEFAULT_OWNER_FIELDS`, `ACCOUNT_EXPORT_REDACTED_SENSITIVITIES`, and types `AccountExport` / `AccountExportBase` / `AccountExportOptions` / `OnAccountExport`. Account deletion and retention remain out of scope (tracked separately). See [`docs/operations.md`](docs/operations.md) and [`docs/threat-model.md`](docs/threat-model.md).
+
 ### Server — live projection delta-push over the sync gateway
 
 - **`@frick/server`:** Apps can now register projections at boot via the new `ServerOptions.projections` field (`createFrickServer({ projections: [...] })`). Each projection's declared object/stream `sources` are validated against the active schema at startup — an unknown source type fails fast with a `FrickConfigError` instead of silently never matching a write (FR-110). Registered projections remain available for HTTP read at `GET /projections/:name`.

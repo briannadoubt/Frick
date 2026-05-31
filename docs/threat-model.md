@@ -375,6 +375,45 @@ account re-homing still needs an explicit migration workflow.
 
 ---
 
+## Self-service account data export
+
+**Threat.** The authenticated `GET /account/export` route returns a principal's
+own data. A naive implementation could leak another principal's records, cross
+a tenant boundary, or hand the requester secret material (credentials, tokens)
+that happens to be co-located on a record they own.
+
+**Today.**
+
+- The route is gated by the standard protected-path authentication; an
+  unauthenticated request returns `401`. The principal — including its tenant —
+  is derived from the session token and cannot be overridden by the body or
+  path.
+- Object reads go through the tenant-scoped store, so the export only ever sees
+  the session's tenant. A cross-tenant record whose owner field matches the
+  caller's `userId` is still invisible (verified by test).
+- Within the tenant, records are filtered to those the principal owns: a record
+  is included only when one of its `ownerId` / `userId` / `createdBy` fields
+  equals the principal's `userId`.
+- Sensitivity: the export is the user's own data, so `pii`, `private`, and
+  `content` fields are returned in full. `secret`-classified fields are masked
+  with `<redacted>` (via the FR-65 `redactRecord` helper) so the export cannot
+  become a credential-exfiltration channel.
+- The response sets `cache-control: no-store`.
+- App-specific data is added only through the explicit `onAccountExport` hook,
+  which the host wires deliberately and which is responsible for scoping its own
+  reads to the principal's tenant and user id.
+
+**Known gaps.**
+
+- The framework default scopes ownership to the conventional owner-field names;
+  a schema that stores ownership under a different field, or that models shared
+  records, must override the owner-field set (or supplement via the hook) to
+  export those records.
+- Account *deletion* and *retention* policies are out of scope for this route
+  (tracked separately); export neither deletes nor tombstones anything.
+
+---
+
 ## Password storage (current state)
 
 The framework hashes account passwords with Node's `crypto.scrypt` using a

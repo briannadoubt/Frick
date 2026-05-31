@@ -89,6 +89,11 @@ import { TenantAlreadyExistsError } from "./storage/tenant-store.js";
 import { DEFAULT_IDEMPOTENCY_KEY_RETENTION_MS, FrickStore } from "./store.js";
 import { exportDataSubject } from "./compliance/data-subject-export.js";
 import { eraseDataSubject } from "./compliance/data-subject-erase.js";
+import {
+  buildAccountExportBase,
+  type AccountExport,
+  type OnAccountExport,
+} from "./compliance/account-export.js";
 import { FrickObjectVersionConflictError } from "./storage/object-errors.js";
 import {
   FrickConfigError,
@@ -207,6 +212,17 @@ export interface ServerOptions {
    * outcome. See {@link FrickPolicyHook}.
    */
   policyHooks?: readonly FrickPolicyHook[];
+  /**
+   * App augmentation hook for `GET /account/export`. The framework default
+   * returns every object record the calling principal owns (grouped by object
+   * type, within their tenant). Supply this hook to add app-specific data
+   * (e.g. stream history, blob metadata) to the bundle — its return value is
+   * attached to the response as `app`. The hook receives the resolved
+   * {@link Principal} and the framework's owned-object base; it MUST scope
+   * every read it performs to `principal.tenantId`/`principal.userId`. See
+   * {@link OnAccountExport} and `docs/operations.md`.
+   */
+  onAccountExport?: OnAccountExport;
   /**
    * Bounded runtime limits. Partial — missing fields fall back to
    * {@link DEFAULT_FRICK_LIMITS}.
@@ -1296,6 +1312,29 @@ export function createFrickServer(options: ServerOptions = {}) {
         });
       } catch (error) {
         sendErrorWithMetrics(response, error, "analytics_rejected");
+      }
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/account/export") {
+      try {
+        // Self-service data export: the calling principal's OWN data only.
+        // `buildAccountExportBase` scopes object reads to the principal's
+        // tenant + userId and masks `secret`-classified fields; the optional
+        // app hook layers product-specific data on top (and is responsible
+        // for its own tenant/owner scoping). Never returns another
+        // principal's or another tenant's data.
+        const base = buildAccountExportBase(store, principal);
+        const bundle: AccountExport = { ...base };
+        if (options.onAccountExport) {
+          const appExtra = await options.onAccountExport(principal, base);
+          if (appExtra !== undefined) {
+            bundle.app = appExtra;
+          }
+        }
+        sendAuthJson(response, 200, bundle);
+      } catch (error) {
+        sendErrorWithMetrics(response, error, "account_export_rejected");
       }
       return;
     }
@@ -4215,6 +4254,7 @@ function isProtectedPath(pathname: string): boolean {
     pathname === "/signals" ||
     pathname.startsWith("/signals/") ||
     pathname === "/analytics/events" ||
+    pathname === "/account/export" ||
     pathname === "/streams" ||
     pathname.startsWith("/streams/") ||
     pathname === "/append" ||

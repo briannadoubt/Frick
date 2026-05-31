@@ -91,6 +91,15 @@ export {
   createFrickTestEmailAdapter,
   type FrickTestEmailAdapter,
 } from "./email/test-adapter.js";
+export {
+  ACCOUNT_EXPORT_REDACTED_SENSITIVITIES,
+  DEFAULT_OWNER_FIELDS,
+  buildAccountExportBase,
+  type AccountExport,
+  type AccountExportBase,
+  type AccountExportOptions,
+  type OnAccountExport,
+} from "./compliance/account-export.js";
 export { FrickStore, type StoreOptions } from "./store.js";
 export { createNoopLogger, type FrickLogger } from "./logger.js";
 export {
