@@ -6,6 +6,8 @@
  * callers can rely on {@link DEFAULT_FRICK_LIMITS} or pass a partial override
  * to {@link mergeLimits}.
  */
+import { FrickConfigError } from "./config.js";
+
 export interface FrickLimits {
   /** Maximum size of a parsed JSON HTTP body, in bytes. */
   maxHttpBodyBytes: number;
@@ -31,6 +33,15 @@ export interface FrickLimits {
   maxWebSocketFrameBytes: number;
   /** Maximum concurrently accepted WebSocket connections. */
   maxWebSocketConnections: number;
+  /**
+   * Maximum concurrent WebSocket connections allowed for a single
+   * authenticated principal, keyed by `(tenantId, userId)`. Enforced at
+   * connect/handshake independently of the global
+   * {@link FrickLimits.maxWebSocketConnections} cap, so one abusive principal
+   * cannot exhaust the connection budget for others. Unauthenticated
+   * (pre-handshake) connections are not counted against any principal.
+   */
+  maxConnectionsPerPrincipal: number;
   /** Maximum bytes ws may buffer for an outbound client before the server closes it. */
   maxWebSocketOutboundBufferedBytes: number;
   /** Maximum concurrently open Server-Sent Events connections. */
@@ -68,6 +79,7 @@ export const DEFAULT_FRICK_LIMITS: FrickLimits = Object.freeze({
   maxPendingAppendsPerClient: 1_000,
   maxWebSocketFrameBytes: 524_288,
   maxWebSocketConnections: 10_000,
+  maxConnectionsPerPrincipal: 64,
   maxWebSocketOutboundBufferedBytes: 1_048_576,
   maxSseConnections: 10_000,
   maxSseOutboundBufferedBytes: 1_048_576,
@@ -86,6 +98,38 @@ export function mergeLimits(overrides?: Partial<FrickLimits>): FrickLimits {
     return { ...DEFAULT_FRICK_LIMITS };
   }
   return { ...DEFAULT_FRICK_LIMITS, ...overrides };
+}
+
+/**
+ * Read the subset of {@link FrickLimits} that is configurable via environment
+ * variables. Returns only the fields whose env var is set, so callers can
+ * layer explicit `createFrickServer({ limits })` overrides on top. Unset or
+ * empty values are omitted (the framework default then applies).
+ *
+ * Values must be positive integers, matching the `FRICK_*` positive-integer
+ * env convention in `config.ts`; invalid values throw {@link FrickConfigError}.
+ */
+export function limitsFromEnv(env: NodeJS.ProcessEnv = process.env): Partial<FrickLimits> {
+  const overrides: Partial<FrickLimits> = {};
+  const maxConnectionsPerPrincipal = parsePositiveIntegerEnv(
+    env.FRICK_MAX_CONNECTIONS_PER_PRINCIPAL,
+    "FRICK_MAX_CONNECTIONS_PER_PRINCIPAL",
+  );
+  if (maxConnectionsPerPrincipal !== undefined) {
+    overrides.maxConnectionsPerPrincipal = maxConnectionsPerPrincipal;
+  }
+  return overrides;
+}
+
+function parsePositiveIntegerEnv(value: string | undefined, varName: string): number | undefined {
+  if (value === undefined || value === "") {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new FrickConfigError(`${varName} must be a positive integer (got ${JSON.stringify(value)})`);
+  }
+  return parsed;
 }
 
 /**

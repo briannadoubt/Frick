@@ -86,6 +86,17 @@ export class SyncGateway {
   readonly #completedHandshakes = new WeakSet<SyncClient>();
   readonly #clientsBySessionToken = new Map<string, Set<SyncClient>>();
   /**
+   * In-process per-principal concurrent-connection counters, keyed by
+   * `(tenantId, userId)` (see {@link SyncGateway.#principalConnectionKey}).
+   * Consistent with the single-node model — counters are not persisted and
+   * reset on restart. `#reservedPrincipalKey` records the key each client
+   * currently holds a reservation against, so we release exactly the slot we
+   * reserved even after the connection's principal is rebound by a later
+   * Hello frame.
+   */
+  readonly #connectionsByPrincipal = new Map<string, number>();
+  readonly #reservedPrincipalKey = new WeakMap<SyncClient, string>();
+  /**
    * Per-connection resolved {@link FrickLimits}. Populated once at attach
    * time when we know the principal's tenant id, then re-used across every
    * frame for the lifetime of the connection. Settings change infrequently
@@ -177,16 +188,27 @@ export class SyncGateway {
         ...(principal ? { principal } : {}),
         ...(principal && sessionToken ? { sessionToken } : {}),
       };
-      this.#subscriptions.addClient(client);
-      if (principal && sessionToken) this.#addSessionClient(sessionToken, client);
-      if (principal) this.#bumpTenantCount(principal.tenantId, +1);
-      this.#pendingAppendCounts.set(client, 0);
-      this.#lastSeenAt.set(client, Date.now());
       // Resolve per-tenant limits once per connection; fall back to global
       // when no principal (e.g. pre-hello unauthenticated connect).
       const resolved = principal
         ? resolveTenantLimits(principal.tenantId, this.store, this.#limits)
         : this.#limits;
+      // Per-principal connection cap: when this connection authenticates at
+      // connect (bearer token), reserve a slot before any other registration
+      // so an over-cap principal is rejected without touching shared state.
+      // The reservation is keyed by `(tenantId, userId)`, so it isolates one
+      // principal's abuse from every other principal. Connections that
+      // authenticate later (via the Hello frame) are reserved in
+      // `#setClientSession` instead.
+      if (principal && !this.#tryReservePrincipalConnection(client, principal, resolved)) {
+        this.#rejectPrincipalConnection(client, resolved);
+        return;
+      }
+      this.#subscriptions.addClient(client);
+      if (principal && sessionToken) this.#addSessionClient(sessionToken, client);
+      if (principal) this.#bumpTenantCount(principal.tenantId, +1);
+      this.#pendingAppendCounts.set(client, 0);
+      this.#lastSeenAt.set(client, Date.now());
       this.#clientLimits.set(client, resolved);
       this.#activeConnections += 1;
       this.#connectionsGauge?.set(this.#activeConnections);
@@ -222,6 +244,7 @@ export class SyncGateway {
         this.#heartbeatTimers.delete(heartbeat);
         this.#subscriptions.removeClient(client);
         this.#removeSessionClient(client);
+        this.#releasePrincipalConnection(client);
         this.#telemetryConnections.delete(client);
         if (client.principal) this.#bumpTenantCount(client.principal.tenantId, -1);
         this.#activeConnections = Math.max(0, this.#activeConnections - 1);
@@ -352,6 +375,84 @@ export class SyncGateway {
     }
     if (transitioned) {
       this.#clusterBus?.setSubscribedTenants?.(new Set(this.#tenantSubscriberCounts.keys()));
+    }
+  }
+
+  /**
+   * Connection-counter key for a principal. Tenant-scoped so the same
+   * `userId` in two tenants is counted independently. Uses a NUL separator
+   * (matching `authAttemptKey`) so ids containing other delimiters can't
+   * collide across the two key components.
+   */
+  #principalConnectionKey(principal: Principal): string {
+    return `${principal.tenantId} ${principal.userId}`;
+  }
+
+  /**
+   * Try to reserve one per-principal connection slot for `client`. Returns
+   * `false` (without mutating any counter) when the principal is already at
+   * `limits.maxConnectionsPerPrincipal`. On success the reservation is
+   * recorded so {@link SyncGateway.#releasePrincipalConnection} can release
+   * exactly this slot. Idempotent per client: a client that already holds a
+   * reservation for the same key keeps it without double-counting.
+   */
+  #tryReservePrincipalConnection(client: SyncClient, principal: Principal, limits: FrickLimits): boolean {
+    const key = this.#principalConnectionKey(principal);
+    if (this.#reservedPrincipalKey.get(client) === key) {
+      return true;
+    }
+    // The principal changed (Hello rebind); drop the prior reservation first.
+    this.#releasePrincipalConnection(client);
+    const current = this.#connectionsByPrincipal.get(key) ?? 0;
+    if (current >= limits.maxConnectionsPerPrincipal) {
+      return false;
+    }
+    this.#connectionsByPrincipal.set(key, current + 1);
+    this.#reservedPrincipalKey.set(client, key);
+    return true;
+  }
+
+  /** Release the per-principal connection slot held by `client`, if any. */
+  #releasePrincipalConnection(client: SyncClient): void {
+    const key = this.#reservedPrincipalKey.get(client);
+    if (key === undefined) {
+      return;
+    }
+    this.#reservedPrincipalKey.delete(client);
+    const current = this.#connectionsByPrincipal.get(key) ?? 0;
+    const next = current - 1;
+    if (next <= 0) {
+      this.#connectionsByPrincipal.delete(key);
+    } else {
+      this.#connectionsByPrincipal.set(key, next);
+    }
+  }
+
+  /**
+   * Reject an over-cap connection: send a structured `rateLimit.exceeded`
+   * Nack envelope, then close with code 1013 ("try again later"), mirroring
+   * the global {@link FrickLimits.maxWebSocketConnections} close code. The
+   * client was never registered, so no shared state needs unwinding.
+   */
+  #rejectPrincipalConnection(client: SyncClient, limits: FrickLimits): void {
+    const envelope = createFrickErrorEnvelope({
+      code: "rateLimit.exceeded",
+      message: "Per-principal connection limit exceeded",
+      requestId: "connect",
+      retryable: true,
+      details: {
+        limit: "maxConnectionsPerPrincipal",
+        configuredMax: limits.maxConnectionsPerPrincipal,
+      },
+    });
+    sendFrame(client.socket, [
+      FrameKind.Nack,
+      { requestId: "connect", error: envelope, code: envelope.code, message: envelope.message },
+    ], { maxBufferedAmount: limits.maxWebSocketOutboundBufferedBytes });
+    try {
+      client.socket.close(1013, "Per-principal connection limit exceeded");
+    } catch {
+      client.socket.terminate();
     }
   }
 
@@ -1283,21 +1384,54 @@ export class SyncGateway {
       });
       return false;
     }
-    if (client.principal) {
-      if (!samePrincipal(client.principal, principal)) {
-        this.#sendHelloAuthNack(client, {
-          code: "auth.forbidden",
-          message: "Hello session token does not match the connection principal",
-          reason: "notAuthorizedForResource",
-        });
-        return false;
-      }
-      this.#setClientSession(client, sessionToken, principal);
-      return true;
+    if (client.principal && !samePrincipal(client.principal, principal)) {
+      this.#sendHelloAuthNack(client, {
+        code: "auth.forbidden",
+        message: "Hello session token does not match the connection principal",
+        reason: "notAuthorizedForResource",
+      });
+      return false;
+    }
+
+    // Enforce the per-principal connection cap for Hello-authenticated
+    // connections. Connections that authenticated at connect already hold a
+    // reservation for this principal — the reserve call is idempotent for the
+    // same `(tenantId, userId)` key, so it returns true without re-counting.
+    const reservationLimits = resolveTenantLimits(principal.tenantId, this.store, this.#limits);
+    if (!this.#tryReservePrincipalConnection(client, principal, reservationLimits)) {
+      this.#rejectHelloPrincipalConnection(client, reservationLimits);
+      return false;
     }
 
     this.#setClientSession(client, sessionToken, principal);
     return true;
+  }
+
+  /**
+   * Reject a Hello whose principal is over the per-principal connection cap.
+   * Sends a structured `rateLimit.exceeded` Nack keyed to the `hello` request
+   * id, then closes with 1013 — mirroring the connect-time rejection.
+   */
+  #rejectHelloPrincipalConnection(client: SyncClient, limits: FrickLimits): void {
+    const envelope = createFrickErrorEnvelope({
+      code: "rateLimit.exceeded",
+      message: "Per-principal connection limit exceeded",
+      requestId: "hello",
+      retryable: true,
+      details: {
+        limit: "maxConnectionsPerPrincipal",
+        configuredMax: limits.maxConnectionsPerPrincipal,
+      },
+    });
+    this.#sendFrame(client, [
+      FrameKind.Nack,
+      { requestId: "hello", error: envelope, code: envelope.code, message: envelope.message },
+    ]);
+    try {
+      client.socket.close(1013, "Per-principal connection limit exceeded");
+    } catch {
+      // socket already closing
+    }
   }
 
   #sendHelloAuthNack(

@@ -77,6 +77,7 @@ All variables are optional. Defaults match the runtime mode.
 | `FRICK_PLATFORM_EVENTS_RETENTION_MS` | `604800000` (7d)    | `604800000`                           | SQLite platform event retention window. Positive integer milliseconds. |
 | `FRICK_PLATFORM_EVENTS_MAX_ROWS` | `1000000`               | `1000000`                             | SQLite platform event row cap after retention pruning. Positive integer. |
 | `FRICK_IDEMPOTENCY_REPLAY_WINDOW_MS` | `86400000` (24h)    | `86400000`                            | Replay-window bound (ms) for `requestId` idempotency, enforced at lookup time independent of retention/pruning: a retry older than the window mints a fresh event. Positive integer. |
+| `FRICK_MAX_CONNECTIONS_PER_PRINCIPAL` | `64`               | `64`                                  | Per-principal concurrent WebSocket connection cap (see Runtime limits). Positive integer. An explicit `createFrickServer({ limits })` override wins over this env var. |
 
 Validation errors throw `FrickConfigError` at startup, before any port is
 opened. Unknown env values (e.g. `FRICK_ENV=staging`) are fatal — the
@@ -157,9 +158,11 @@ stdout so automation can always parse the JSON record.
 ## Runtime limits
 
 `createFrickServer({ limits })` accepts partial `FrickLimits` overrides. Any
-omitted field falls back to the framework default. These limits are enforced
-inside the server and should complement, not replace, reverse-proxy request
-and connection caps.
+omitted field falls back to the framework default. `maxConnectionsPerPrincipal`
+can also be set with the `FRICK_MAX_CONNECTIONS_PER_PRINCIPAL` env var; an
+explicit `limits` override wins over the env var, which wins over the default.
+These limits are enforced inside the server and should complement, not replace,
+reverse-proxy request and connection caps.
 
 | Limit | Default | Applies to |
 | --- | ---: | --- |
@@ -174,7 +177,8 @@ and connection caps.
 | `maxSearchFilterValueBytes` | 512 | each search filter value after stringification |
 | `maxPendingAppendsPerClient` | 1,000 | queued appends per WebSocket client |
 | `maxWebSocketFrameBytes` | 524,288 | inbound WebSocket frame payloads |
-| `maxWebSocketConnections` | 10,000 | concurrently accepted WebSocket connections |
+| `maxWebSocketConnections` | 10,000 | concurrently accepted WebSocket connections (global) |
+| `maxConnectionsPerPrincipal` | 64 | concurrent WebSocket connections per authenticated principal, keyed by `(tenantId, userId)` |
 | `maxWebSocketOutboundBufferedBytes` | 1,048,576 | queued outbound bytes per WebSocket client |
 | `maxSseConnections` | 10,000 | concurrently open SSE connections |
 | `maxSseOutboundBufferedBytes` | 1,048,576 | queued outbound bytes per SSE response |
@@ -185,7 +189,13 @@ Forward stream reads return at most `maxStreamPageSize` events by default and
 include `cursor` plus `hasMore` so clients can continue from the last delivered
 sequence. Oversized WebSocket frames are rejected by the `ws` parser before
 MessagePack decode and the connection is closed. WebSocket connections over
-`maxWebSocketConnections` are closed with code `1013`; SSE requests over
+`maxWebSocketConnections` are closed with code `1013`. WebSocket connections
+that would exceed `maxConnectionsPerPrincipal` for their authenticated
+principal — enforced at connect when a bearer token is present, otherwise at
+the `Hello` handshake — receive a `rateLimit.exceeded` Nack (with
+`details.limit: "maxConnectionsPerPrincipal"`) and are closed with code
+`1013`; the cap is keyed per `(tenantId, userId)`, so one principal hitting
+its cap never affects other principals. SSE requests over
 `maxSseConnections` return `429 rateLimit.exceeded`. Slow clients whose
 WebSocket or SSE outbound buffers exceed their configured caps are closed
 rather than allowed to accumulate unbounded queued data. Auth attempts over

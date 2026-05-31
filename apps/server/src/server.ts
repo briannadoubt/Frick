@@ -96,7 +96,7 @@ import {
   type FrickConfigOverrides,
 } from "./config.js";
 import { createConsoleLogger, createNoopLogger, type FrickLogger } from "./logger.js";
-import { FrickLimitError, mergeLimits, type FrickLimits } from "./limits.js";
+import { FrickLimitError, limitsFromEnv, mergeLimits, type FrickLimits } from "./limits.js";
 import { resolveTenantLimits } from "./tenant-config.js";
 import { createInMemoryMetrics, type FrickMetrics } from "./metrics.js";
 import {
@@ -382,7 +382,9 @@ export function createFrickServer(options: ServerOptions = {}) {
     process.env.VITEST !== undefined;
   const logger =
     options.logger ?? (inTestRunner ? createNoopLogger() : createConsoleLogger(config));
-  const limits = mergeLimits(options.limits);
+  // Env-derived limit overrides form the base; explicit `options.limits`
+  // win over them, and both win over the framework defaults.
+  const limits = mergeLimits({ ...limitsFromEnv(), ...options.limits });
   const metrics = options.metrics ?? createInMemoryMetrics();
   const telemetry =
     options.telemetry ?? createFrickTelemetryRuntime({ config, logger });

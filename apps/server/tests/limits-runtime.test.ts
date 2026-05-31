@@ -218,6 +218,91 @@ describe("websocket heartbeat timeout", () => {
   });
 });
 
+describe("per-principal connection cap", () => {
+  it("allows connections up to maxConnectionsPerPrincipal", async () => {
+    app = await startServer({ limits: { maxConnectionsPerPrincipal: 2 } });
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    const first = await connect(app.url, login.sessionToken);
+    const second = await connect(app.url, login.sessionToken);
+
+    // Neither connection should be closed by the per-principal cap.
+    expect(first.readyState).toBe(WebSocket.OPEN);
+    expect(second.readyState).toBe(WebSocket.OPEN);
+
+    first.close();
+    second.close();
+  });
+
+  it("rejects connections beyond the per-principal cap with rateLimit.exceeded", async () => {
+    app = await startServer({ limits: { maxConnectionsPerPrincipal: 1 } });
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    const held = await connect(app.url, login.sessionToken);
+
+    const frames: FrickFrame[] = [];
+    const overCap = await connect(app.url, login.sessionToken, frames);
+    const closeCode = await waitForClose(overCap);
+
+    expect(closeCode).toBe(1013);
+    const nack = frames.find((frame) => frame[0] === FrameKind.Nack);
+    expect(nack).toBeDefined();
+    expect(nack![1]).toMatchObject({
+      requestId: "connect",
+      error: expect.objectContaining({
+        code: "rateLimit.exceeded",
+        details: expect.objectContaining({
+          limit: "maxConnectionsPerPrincipal",
+          configuredMax: 1,
+        }),
+      }),
+    });
+
+    // The first principal's existing connection must be untouched.
+    expect(held.readyState).toBe(WebSocket.OPEN);
+    held.close();
+  });
+
+  it("limits two principals independently", async () => {
+    app = await startServer({ limits: { maxConnectionsPerPrincipal: 1 } });
+    const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const grace = await devLogin(app.httpUrl, { userId: "user-grace" });
+
+    const adaHeld = await connect(app.url, ada.sessionToken);
+
+    // Ada is at her cap — a second Ada connection is rejected.
+    const adaOverCap = await connect(app.url, ada.sessionToken);
+    const adaCloseCode = await waitForClose(adaOverCap);
+    expect(adaCloseCode).toBe(1013);
+
+    // Grace, a different principal, is unaffected and can still connect.
+    const graceHeld = await connect(app.url, grace.sessionToken);
+    expect(graceHeld.readyState).toBe(WebSocket.OPEN);
+    expect(adaHeld.readyState).toBe(WebSocket.OPEN);
+
+    adaHeld.close();
+    graceHeld.close();
+  });
+
+  it("frees a principal slot when a connection closes", async () => {
+    app = await startServer({ limits: { maxConnectionsPerPrincipal: 1 } });
+    const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    const first = await connect(app.url, login.sessionToken);
+    const firstClosed = new Promise<void>((resolve) => first.once("close", () => resolve()));
+    first.close();
+    await firstClosed;
+    // Give the server's close handler a tick to release the reservation.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // The slot is free again, so a fresh connection for the same principal is
+    // accepted rather than rejected.
+    const second = await connect(app.url, login.sessionToken);
+    expect(second.readyState).toBe(WebSocket.OPEN);
+    second.close();
+  });
+});
+
 describe("presence TTL clamping", () => {
   it("clamps presence TTL above presenceTtlMaxSeconds", async () => {
     app = await startServer({ limits: { presenceTtlMaxSeconds: 7 } });
@@ -326,11 +411,21 @@ async function startServer(options: { limits?: Parameters<typeof createFrickServ
   };
 }
 
-async function connect(url: string, sessionToken?: string): Promise<WebSocket> {
+async function connect(
+  url: string,
+  sessionToken?: string,
+  collectFrames?: FrickFrame[],
+): Promise<WebSocket> {
   const socket = new WebSocket(
     url,
     sessionToken ? { headers: authHeaders(sessionToken) } : undefined,
   );
+  // Attach the message listener before `open` resolves so server frames sent
+  // immediately on connect (e.g. an over-cap rateLimit.exceeded Nack issued
+  // right before close) are never missed by a late listener.
+  if (collectFrames) {
+    socket.on("message", (data) => collectFrames.push(decodeFrame(data as Buffer)));
+  }
   await new Promise<void>((resolve) => socket.once("open", resolve));
   return socket;
 }
@@ -338,6 +433,19 @@ async function connect(url: string, sessionToken?: string): Promise<WebSocket> {
 async function nextFrame(socket: WebSocket): Promise<FrickFrame> {
   return new Promise((resolve) => {
     socket.once("message", (data) => resolve(decodeFrame(data as Buffer)));
+  });
+}
+
+async function waitForClose(socket: WebSocket, timeoutMs = 2000): Promise<number> {
+  if (socket.readyState === WebSocket.CLOSED) {
+    return 1006;
+  }
+  return new Promise<number>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("socket was not closed")), timeoutMs);
+    socket.once("close", (code) => {
+      clearTimeout(timer);
+      resolve(code);
+    });
   });
 }
 
