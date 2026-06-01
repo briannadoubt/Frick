@@ -415,16 +415,31 @@ describe("loadFrickConfig storage driver", () => {
     ).toThrow(FrickConfigError);
   });
 
-  it("rejects the postgres driver as not yet implemented (FR-22)", () => {
+  it("rejects the postgres driver when FRICK_DATABASE_URL is missing (FR-22)", () => {
     expect(() =>
       loadFrickConfig({}, { env: { FRICK_DB_DRIVER: "postgres" }, warn: () => {} }),
-    ).toThrow(/postgres storage driver is not yet implemented \(FR-22\)/);
+    ).toThrow(/FRICK_DB_DRIVER=postgres requires FRICK_DATABASE_URL/);
   });
 
-  it("rejects the postgres driver even via overrides", () => {
+  it("rejects the postgres driver via overrides when no database URL is set", () => {
     expect(() => loadFrickConfig({ dbDriver: "postgres" }, { env: {}, warn: () => {} })).toThrow(
       FrickConfigError,
     );
+  });
+
+  it("accepts the postgres driver when FRICK_DATABASE_URL is provided (FR-22)", () => {
+    const config = loadFrickConfig(
+      {},
+      {
+        env: {
+          FRICK_DB_DRIVER: "postgres",
+          FRICK_DATABASE_URL: "postgres://user:pass@localhost:5432/frick",
+        },
+        warn: () => {},
+      },
+    );
+    expect(config.dbDriver).toBe("postgres");
+    expect(config.databaseUrl).toBe("postgres://user:pass@localhost:5432/frick");
   });
 
   it("still guards dbPath ':memory:' in production when the sqlite driver is selected", () => {
