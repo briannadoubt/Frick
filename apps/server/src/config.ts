@@ -19,11 +19,10 @@ export type FrickLogLevel = "debug" | "info" | "warn" | "error";
 export type FrickPlatformEventsDriver = "sqlite" | "kafka";
 
 /**
- * Durable-storage driver selector. SQLite is the default and, today, the only
- * implemented driver — every `*Store` under `src/storage/` is backed by
- * single-writer `node:sqlite`. `postgres` is reserved for a future driver
- * (FR-22) and is rejected at config-validation time until that lands; see the
- * gate in {@link loadFrickConfig}.
+ * Durable-storage driver selector. `sqlite` is the default and uses
+ * `node:sqlite` (single-writer). `postgres` selects the Postgres migration
+ * runner (FR-22) and requires `FRICK_DATABASE_URL` to be set; the individual
+ * `*Store` implementations still target SQLite (FR-23 ports those).
  */
 export type FrickDbDriver = "sqlite" | "postgres";
 
@@ -87,9 +86,9 @@ export interface FrickConfig {
    */
   allowedOrigins: string[];
   /**
-   * Durable-storage driver. Defaults to `sqlite`, which is the only driver
-   * implemented today. Selecting `postgres` fails fast at config validation
-   * until the Postgres driver lands (FR-22).
+   * Durable-storage driver. Defaults to `sqlite`. Selecting `postgres`
+   * requires `FRICK_DATABASE_URL` to be set; the migration runner (FR-22)
+   * will apply the Postgres schema on first boot.
    */
   dbDriver: FrickDbDriver;
   /** SQLite database path. Used by the `sqlite` driver. Tests pass `":memory:"`. */
@@ -361,9 +360,9 @@ export function loadFrickConfig(
     "idempotencyReplayWindowMs",
   );
 
-  if (dbDriver === "postgres") {
+  if (dbDriver === "postgres" && !databaseUrl) {
     throw new FrickConfigError(
-      "postgres storage driver is not yet implemented (FR-22) — set FRICK_DB_DRIVER=sqlite (the default) to start the server",
+      "FRICK_DB_DRIVER=postgres requires FRICK_DATABASE_URL to be set to a valid Postgres connection string",
     );
   }
   if (blobDriver === "filesystem" && blobStoragePath.trim() === "") {
