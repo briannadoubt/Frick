@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -77,10 +84,22 @@ describe("FilesystemBlobBytesDriver", () => {
     // A blobId crafted to escape the tenant dir must stay confined; bytes are
     // recoverable only via the same (tenantId, blobId) pair, and nothing is
     // written outside the configured root.
+    //
+    // The naive escape target depends on where the OS hands us a temp root:
+    // on a Linux runner `<tmp>/frick-blobs-*/../../etc/passwd` resolves to the
+    // real `/etc/passwd`, which already exists, so a bare `existsSync(...) ===
+    // false` check is environment-dependent (green on macOS, red on Linux).
+    // Snapshot the target instead and assert the write neither *creates* nor
+    // *modifies* it — that is the real confinement property, and it holds
+    // regardless of the tmp layout.
+    const escapeTarget = join(root, "..", "..", "etc", "passwd");
+    const before = existsSync(escapeTarget) ? readFileSync(escapeTarget) : undefined;
+
     driver.write("tenant-a", "../../etc/passwd", HELLO);
     expect(driver.read("tenant-a", "../../etc/passwd")).toEqual(Buffer.from(HELLO));
-    // The escape target was never created outside the root.
-    expect(existsSync(join(root, "..", "..", "etc", "passwd"))).toBe(false);
+
+    const after = existsSync(escapeTarget) ? readFileSync(escapeTarget) : undefined;
+    expect(after).toEqual(before);
     // Everything written lives under the root.
     expect(readdirSync(root).length).toBeGreaterThan(0);
   });
