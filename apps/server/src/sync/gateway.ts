@@ -36,6 +36,7 @@ import {
   AuthorizationError,
   SessionExpiredError,
   tenantMembershipReader,
+  type FrickCascadeGrantLookup,
   type FrickGrantLookup,
   type FrickPolicyHook,
   type Principal,

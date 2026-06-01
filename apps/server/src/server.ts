@@ -29,6 +29,7 @@ import {
   assertCanSubscribe,
   assertCanWriteObject,
   tenantMembershipReader,
+  type FrickCascadeGrantLookup,
   type FrickGrantLookup,
   type FrickPolicyHook,
   type Principal,

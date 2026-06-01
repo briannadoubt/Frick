@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { createSchema } from "@frick/protocol";
+import type { FrickSchema } from "@frick/protocol";
 import { createFrickServer } from "../src/server.js";
 import {
   assertCanSubscribe,
@@ -19,15 +19,57 @@ import {
 
 // Object + a same-name stream so a shared `document` record id can tie back to
 // a `documentEdits` stream keyed by that same id.
-const schema = createSchema({
-  objects: [{ name: "Document", fields: { title: "string" } }],
-  streams: [
+const schema: FrickSchema = {
+  name: "frick-sharing-cascade-test",
+  schemaId: "frick-sharing-cascade-test",
+  schemaVersion: "0.1.0",
+  schemaRevision: 1,
+  minimumClientRevision: 1,
+  minimumServerRevision: 1,
+  protocol: "frick.realtime",
+  protocolVersion: 1,
+  compatibility: "greenfield-cutover",
+  hash: "frick-sharing-cascade-test-0.1.0",
+  objects: [
     {
-      name: "documentEdits",
-      events: { edited: { summary: "string" } },
+      id: 1,
+      name: "Document",
+      fields: [{ id: 1, name: "title", kind: "string", required: false }],
+      indexes: [{ id: 1, name: "all", fields: ["title"] }],
     },
   ],
-});
+  streams: [
+    {
+      id: 1,
+      name: "documentEdits",
+      keyFields: [{ id: 1, name: "documentId", kind: "string", required: true }],
+      events: ["edited"],
+    },
+  ],
+  events: [
+    {
+      id: 1,
+      name: "edited",
+      fields: [{ id: 1, name: "summary", kind: "string", required: true }],
+    },
+  ],
+  presences: [],
+  signals: [],
+  blobs: [],
+  jobs: [],
+  projections: [
+    {
+      id: 1,
+      name: "documentSummary",
+      source: "documentEdits",
+      fields: [
+        { id: 1, name: "documentId", kind: "string", required: true },
+        { id: 2, name: "summary", kind: "string", required: false },
+      ],
+      indexes: [{ id: 1, name: "byDocument", fields: ["documentId"] }],
+    },
+  ],
+};
 
 /**
  * Policy hook modelling an app whose streams + projections are private to a
@@ -74,11 +116,14 @@ describe("FR-70 — assertCanSubscribe cascade (unit)", () => {
     args.granteeUserId === GRANTEE_ID &&
     args.recordId === RECORD_ID;
 
+  // NOTE: `key` has no default. A defaulted param would replace an
+  // explicitly-passed `undefined`, silently turning the whole-projection
+  // (no-key) case into a keyed read — callers pass the key explicitly.
   function attempt(
     userId: string,
     tenant: string,
     kind: "stream" | "projection",
-    key: string | undefined = RECORD_ID,
+    key: string | undefined,
   ): "allow" | "deny" {
     const principal = principalFromUserId(userId, "r", "d", tenant);
     try {
@@ -100,27 +145,30 @@ describe("FR-70 — assertCanSubscribe cascade (unit)", () => {
 
   for (const kind of ["stream", "projection"] as const) {
     it(`grantee can read the shared object's ${kind}`, () => {
-      expect(attempt(GRANTEE_ID, TENANT, kind)).toBe("allow");
+      expect(attempt(GRANTEE_ID, TENANT, kind, RECORD_ID)).toBe("allow");
     });
 
     it(`non-grantee in the same tenant cannot read the ${kind}`, () => {
-      expect(attempt(STRANGER_ID, TENANT, kind)).toBe("deny");
+      expect(attempt(STRANGER_ID, TENANT, kind, RECORD_ID)).toBe("deny");
     });
 
     it(`owner is unaffected for the ${kind}`, () => {
-      expect(attempt(OWNER_ID, TENANT, kind)).toBe("allow");
+      expect(attempt(OWNER_ID, TENANT, kind, RECORD_ID)).toBe("allow");
     });
 
     it(`cross-tenant grantee cannot read the ${kind}`, () => {
       // Same userId, different tenant: the cascade lookup is tenant-scoped, so
       // the grant does not apply and the deny stands.
-      expect(attempt(GRANTEE_ID, "tenant-other", kind)).toBe("deny");
+      expect(attempt(GRANTEE_ID, "tenant-other", kind, RECORD_ID)).toBe("deny");
     });
   }
 
   it("cascade does not apply when the row id does not match the grant", () => {
     expect(attempt(GRANTEE_ID, TENANT, "stream", "doc-2")).toBe("deny");
   });
+
+  // NOTE: passing undefined here is intentional and now reaches the cascade as
+  // a genuinely absent key (the helper no longer defaults it).
 
   it("whole-projection subscribe (no key) fails closed", () => {
     // No key -> no resolvable record id -> cascade skipped -> the owner-only
@@ -192,10 +240,11 @@ describe("FR-70 — HTTP stream read cascade", () => {
     const granteeRead = await getStream(app.httpUrl, docId, granteeT1.sessionToken);
     expect(granteeRead.status).toBe(200);
 
-    // A user with the same id but in another tenant has no grant there ->
-    // denied (tenant-scoped cascade).
+    // A user in another tenant has no grant there -> denied (the cascade is
+    // tenant-scoped). A distinct userId is required because dev-login binds a
+    // userId to a single tenant, so the t1 grantee's id can't re-login under t2.
     const granteeT2 = await devLogin(app.httpUrl, {
-      userId: "user-grantee",
+      userId: "user-grantee-t2",
       tenantId: "t2",
     });
     const crossTenantRead = await getStream(app.httpUrl, docId, granteeT2.sessionToken);
@@ -299,11 +348,13 @@ async function startServerImpl(
   close: () => Promise<void>;
 }> {
   const server = createFrickServer({
+    port: 0,
+    dbPath: ":memory:",
     schema,
     ...options,
   });
   await server.listen();
-  const addr = server.httpServer.address();
+  const addr = server.server.address();
   const port = typeof addr === "object" && addr ? addr.port : 0;
   return {
     httpUrl: `http://127.0.0.1:${port}`,
