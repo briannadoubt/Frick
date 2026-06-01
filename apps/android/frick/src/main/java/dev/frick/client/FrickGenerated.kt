@@ -50,6 +50,7 @@ enum class FrickErrorCode(val wireValue: String) {
   SYNC_RECONNECT_EXHAUSTED("sync.reconnectExhausted"),
   BLOB_TOO_LARGE("blob.tooLarge"),
   BLOB_UNSUPPORTED_CONTENT_TYPE("blob.unsupportedContentType"),
+  BLOB_QUOTA_EXCEEDED("blob.quotaExceeded"),
   RATE_LIMIT_EXCEEDED("rateLimit.exceeded"),
   SERVER_INTERNAL("server.internal"),
   ;
@@ -68,6 +69,7 @@ enum class FrickErrorCode(val wireValue: String) {
       "sync.reconnectExhausted" to SYNC_RECONNECT_EXHAUSTED,
       "blob.tooLarge" to BLOB_TOO_LARGE,
       "blob.unsupportedContentType" to BLOB_UNSUPPORTED_CONTENT_TYPE,
+      "blob.quotaExceeded" to BLOB_QUOTA_EXCEEDED,
       "rateLimit.exceeded" to RATE_LIMIT_EXCEEDED,
       "server.internal" to SERVER_INTERNAL,
     )

@@ -9,6 +9,7 @@ import type { FrickLimits } from "./limits.js";
  */
 export interface FrickTenantLimits {
   maxBlobBytes?: number;
+  maxBlobBytesPerPrincipal?: number;
   maxStreamAppendPayloadBytes?: number;
   maxSubscriptionsPerConnection?: number;
   maxPendingAppendsPerClient?: number;
@@ -22,6 +23,7 @@ export interface FrickTenantLimits {
  */
 const OVERRIDABLE_KEYS = [
   "maxBlobBytes",
+  "maxBlobBytesPerPrincipal",
   "maxStreamAppendPayloadBytes",
   "maxSubscriptionsPerConnection",
   "maxPendingAppendsPerClient",

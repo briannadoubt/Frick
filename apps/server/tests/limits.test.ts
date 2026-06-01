@@ -20,6 +20,7 @@ describe("FrickLimits", () => {
       "maxHttpBodyBytes",
       "maxStreamAppendPayloadBytes",
       "maxBlobBytes",
+      "maxBlobBytesPerPrincipal",
       "maxSubscriptionsPerConnection",
       "maxStreamPageSize",
       "maxSearchQueryBytes",
@@ -85,6 +86,23 @@ describe("FrickLimits", () => {
     expect(limitsFromEnv({ FRICK_MAX_CONNECTIONS_PER_PRINCIPAL: "10" })).toEqual({
       maxConnectionsPerPrincipal: 10,
     });
+  });
+
+  it("defaults the per-principal blob quota to effectively unlimited", () => {
+    expect(DEFAULT_FRICK_LIMITS.maxBlobBytesPerPrincipal).toBe(Number.MAX_SAFE_INTEGER);
+    expect(mergeLimits().maxBlobBytesPerPrincipal).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it("reads the per-principal blob quota from the environment", () => {
+    expect(limitsFromEnv({ FRICK_MAX_BLOB_BYTES_PER_PRINCIPAL: "3000" })).toEqual({
+      maxBlobBytesPerPrincipal: 3000,
+    });
+  });
+
+  it("rejects a non-positive-integer per-principal blob quota env value", () => {
+    expect(() => limitsFromEnv({ FRICK_MAX_BLOB_BYTES_PER_PRINCIPAL: "0" })).toThrow(FrickConfigError);
+    expect(() => limitsFromEnv({ FRICK_MAX_BLOB_BYTES_PER_PRINCIPAL: "-5" })).toThrow(FrickConfigError);
+    expect(() => limitsFromEnv({ FRICK_MAX_BLOB_BYTES_PER_PRINCIPAL: "x" })).toThrow(FrickConfigError);
   });
 
   it("rejects a non-positive-integer per-principal connection cap env value", () => {
