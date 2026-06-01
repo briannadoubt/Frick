@@ -51,6 +51,47 @@ jobs:
       - name: End-to-end smoke
         run: pnpm e2e:smoke
 
+  ts-postgres:
+    name: TypeScript (Postgres migration runner)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Exercises the Postgres schema + migration runner (FR-22) against a real
+    # Postgres instead of skipping the live suite. Scoped to the pg-migrations
+    # file only — porting the per-store implementations onto Postgres (so the
+    # full @frick/server suite can run here) is FR-23; widen the command then.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: frick_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # pnpm/action-setup@v4
+        # Version read from `packageManager` in package.json.
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Postgres migration suite
+        run: pnpm test:pg
+        env:
+          FRICK_DATABASE_URL: postgres://postgres:postgres@localhost:5432/frick_test
+
   swift:
     name: Swift (FrickSwift + FrickDesign)
     runs-on: macos-15
