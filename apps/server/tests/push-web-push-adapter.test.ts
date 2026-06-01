@@ -3,7 +3,7 @@
  * so we don't dial real push services; the adapter is exercised
  * end-to-end (parse subscription, sign JWT, POST, translate response).
  */
-import { generateKeyPairSync, randomBytes } from "node:crypto";
+import { createECDH, generateKeyPairSync, randomBytes } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { foundationSchema } from "@frick/protocol";
@@ -19,6 +19,12 @@ import type {
 
 function freshKey(): string {
   return randomBytes(32).toString("base64");
+}
+
+function generateP256Ecdh(): ReturnType<typeof createECDH> {
+  const ecdh = createECDH("prime256v1");
+  ecdh.generateKeys();
+  return ecdh;
 }
 
 function generateP256Pem(): string {
@@ -95,7 +101,7 @@ describe("web push adapter", () => {
     expect(delivery.error?.code).toBe("push.credentials.missing");
   });
 
-  it("delivers a 201 response as success", async () => {
+  it("delivers a 201 response as success, sending an empty body when the subscription has no keys", async () => {
     const env = { FRICK_PUSH_CRED_KEY: freshKey() };
     const { tenantSettings } = setupTenant(env);
     let observedAuth = "";
@@ -114,12 +120,49 @@ describe("web push adapter", () => {
         body: { title: "Sensitive title", body: "Secret body", data: { secret: "do-not-send" } },
         deepLink: "/conversations/secret",
       },
-      registration(JSON.stringify({ endpoint: "https://push.example.test/p/abc", keys: { p256dh: "p", auth: "a" } })),
+      // No subscription keys → backward-compatible empty-body wake-up path.
+      registration(JSON.stringify({ endpoint: "https://push.example.test/p/abc" })),
       makeCtx(tenantSettings),
     );
     expect(delivery.status).toBe("delivered");
     expect(observedAuth).toMatch(/^vapid t=.+ k=fake-public-key$/);
     expect(observedBody).toBe("");
+  });
+
+  it("encrypts the payload (aes128gcm) when the subscription carries p256dh + auth", async () => {
+    const env = { FRICK_PUSH_CRED_KEY: freshKey() };
+    const { tenantSettings } = setupTenant(env);
+    const subscriberEcdh = generateP256Ecdh();
+    let observedHeaders: Record<string, string> = {};
+    let observedBody: BodyInit | null | undefined;
+    const fetchImpl: typeof fetch = async (_url, init) => {
+      observedHeaders = (init?.headers as Record<string, string>) ?? {};
+      observedBody = init?.body;
+      return new Response(null, { status: 201 });
+    };
+    const adapter = createFrickWebPushAdapter({ env, fetch: fetchImpl, resolveHostname: publicResolver });
+    const delivery = await adapter.send(
+      { ...intent, body: { title: "Hi", body: "Secret body" } },
+      registration(
+        JSON.stringify({
+          endpoint: "https://push.example.test/p/abc",
+          keys: {
+            p256dh: subscriberEcdh.getPublicKey().toString("base64url"),
+            auth: Buffer.alloc(16, 7).toString("base64url"),
+          },
+        }),
+      ),
+      makeCtx(tenantSettings),
+    );
+    expect(delivery.status).toBe("delivered");
+    expect(observedHeaders["content-encoding"]).toBe("aes128gcm");
+    expect(Buffer.isBuffer(observedBody)).toBe(true);
+    const body = observedBody as Buffer;
+    expect(observedHeaders["content-length"]).toBe(String(body.length));
+    // RFC 8188 header: salt(16) || rs(4) || idlen(1) || keyid (65-byte point).
+    expect(body.subarray(0, 16).length).toBe(16);
+    expect(body[20]).toBe(65);
+    expect(body[21]).toBe(0x04);
   });
 
   it("translates 410 Gone to push.unregistered", async () => {

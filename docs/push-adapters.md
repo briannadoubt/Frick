@@ -10,7 +10,7 @@ Frick currently has three push adapter implementations:
 
 All adapters conform to [`FrickPushAdapter`](../apps/server/src/push/types.ts) and slot into the existing notification router, job framework, and dead-token revocation paths. They only handle the platform-specific encoding + transport step — fan-out, retries, and registration tombstoning live in the router.
 
-All three adapters are documented package exports and have CLI credential workflows today. Web Push registration tokens are accepted by the server and validated as PushSubscription JSON. The Web Push adapter still deliberately sends an empty push body — encrypted Web Push payloads (RFC 8291) remain follow-up work (FR-7).
+All three adapters are documented package exports and have CLI credential workflows today. Web Push registration tokens are accepted by the server and validated as PushSubscription JSON. The Web Push adapter encrypts the notification payload per RFC 8291 (`aes128gcm` content encoding, RFC 8188) when the subscription carries the browser's `p256dh` + `auth` keys; older registrations without those keys keep the backward-compatible empty-body wake-up path.
 
 The framework's in-memory `TestPushAdapter` ships unchanged for local development and tests.
 
@@ -61,7 +61,44 @@ process.on("SIGTERM", async () => {
 });
 ```
 
-The adapters resolve per-tenant credentials at delivery time via `ctx.store.tenantSettings`. There is no per-tenant *adapter instance* — one global APNs adapter handles every tenant, with cached HTTP/2 sessions and JWTs keyed by `(tenantId, endpoint)` and `(tenantId, keyId)` respectively. FCM is the same: one global adapter, OAuth2 access tokens cached per `(tenantId, clientEmail)`. The Web Push implementation signs VAPID JWTs per endpoint origin and deliberately sends an empty push body; encrypted Web Push payloads remain follow-up work.
+The adapters resolve per-tenant credentials at delivery time via `ctx.store.tenantSettings`. There is no per-tenant *adapter instance* — one global APNs adapter handles every tenant, with cached HTTP/2 sessions and JWTs keyed by `(tenantId, endpoint)` and `(tenantId, keyId)` respectively. FCM is the same: one global adapter, OAuth2 access tokens cached per `(tenantId, clientEmail)`. The Web Push implementation signs VAPID JWTs per endpoint origin and encrypts the notification payload per RFC 8291 when the subscription carries browser keys.
+
+## Encrypted Web Push payloads (RFC 8291)
+
+When a `PushSubscription` registration includes the browser's `keys.p256dh`
+(the user agent's uncompressed P-256 public point, base64url) and `keys.auth`
+(a 16-byte secret, base64url), the Web Push adapter encrypts the notification
+content end-to-end so the push service never sees plaintext. The encrypted
+blob is delivered with `Content-Encoding: aes128gcm`; the Service Worker's
+`push` event receives the decrypted JSON (`{ intent, title, body, data,
+threadId, deepLink }`).
+
+The adapter follows RFC 8291 (Message Encryption for Web Push) with the
+`aes128gcm` content encoding from RFC 8188:
+
+1. Generate an ephemeral P-256 keypair (`node:crypto` ECDH `prime256v1`) and
+   run ECDH against the subscription's `p256dh` to get the shared secret.
+2. HKDF-SHA-256 the shared secret keyed by the `auth` secret as salt, with
+   `info = "WebPush: info\0" || ua_public || as_public`, to derive the input
+   keying material.
+3. Generate a random 16-byte content-encoding salt and HKDF-derive the
+   16-byte AES-128-GCM key (`info = "Content-Encoding: aes128gcm\0"`) and the
+   12-byte nonce (`info = "Content-Encoding: nonce\0"`).
+4. AES-128-GCM encrypt a single record: `plaintext || 0x02` (the last-record
+   delimiter), no further padding.
+5. Frame the request body as the RFC 8188 header
+   `salt(16) || rs(4, big-endian) || idlen(1) || keyid` followed by the
+   ciphertext, where `keyid` is the uncompressed ephemeral server public key.
+
+A fresh ephemeral keypair and salt are used on every send. The encrypted body
+is capped at 4096 octets (RFC 8291); an over-cap payload returns
+`push.payloadTooLarge` without dispatching. Registrations whose subscription
+omits `p256dh`/`auth` still send an empty body (the pre-FR-60 wake-up path).
+Multi-key rotation for the encryption material is out of scope here (FR-61).
+
+The `encryptWebPushPayload(payload, p256dh, auth)` helper is exported from
+`@frick/server/push/web-push-adapter` for callers that need to build the body
+directly.
 
 ## Required environment variable
 
@@ -172,7 +209,7 @@ Apps that want different revocation behavior can subclass the adapter or supply 
 ## Threat model notes
 
 - **At rest:** credentials are AES-256-GCM ciphertext. Anyone with read access to `tenant_settings` plus `FRICK_PUSH_CRED_KEY` can decrypt; without the key, the ciphertext is opaque.
-- **In transit:** APNs uses TLS via HTTP/2; FCM and Web Push use TLS via HTTPS. The adapters don't pin certificates.
+- **In transit:** APNs uses TLS via HTTP/2; FCM and Web Push use TLS via HTTPS. The adapters don't pin certificates. Web Push payloads are additionally encrypted end-to-end per RFC 8291 (`aes128gcm`) so the push service relays opaque ciphertext — only the subscribing browser, holding the `p256dh` private key + `auth` secret, can decrypt.
 - **In memory:** decrypted credentials live on the adapter's HTTP/2 session cache (APNs), in the closure of the JWT signer (FCM), or in the Web Push VAPID signing path. They are not written to logs.
 - **JWTs:** APNs JWTs are signed with the tenant's `.p8`; FCM service-account JWTs are short-lived (1 hour) and used only to obtain a longer-lived OAuth2 access token; Web Push VAPID JWTs are cached per public key and endpoint origin. Tokens are not persisted.
 
