@@ -1,0 +1,71 @@
+name: Publish Swift Package
+
+# Runs on `swift-vX.Y.Z` tag pushes. Mirrors packages/swift (with history) to
+# the standalone briannadoubt/FrickSwift repo so it can be consumed as a remote
+# SwiftPM dependency (XCRemoteSwiftPackageReference). SwiftPM can't resolve a
+# package nested in a subdirectory, so the mirror repo's root IS the package.
+# The monorepo stays the single source of truth; the mirror is publish-only.
+#
+# One-time setup: add a repository secret `SWIFT_MIRROR_TOKEN` — a PAT (classic
+# `repo`, or fine-grained with Contents: read & write) scoped to
+# briannadoubt/FrickSwift. Without it the publish step cannot push to the mirror.
+#
+# To cut a release: tag a commit on `main` with `swift-vX.Y.Z` and push the tag.
+# The version applied to the mirror is the tag minus the `swift-v` prefix.
+on:
+  push:
+    tags:
+      - 'swift-v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-swift-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Mirror packages/swift to FrickSwift
+    if: ${{ startsWith(github.ref, 'refs/tags/swift-v') }}
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify Swift release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#swift-v}"
+          if ! [[ "${version}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Expected swift-v<semver> tag, got ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+          if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then
+            git fetch --no-tags --prune --unshallow origin +refs/heads/main:refs/remotes/origin/main
+          else
+            git fetch --no-tags --prune origin +refs/heads/main:refs/remotes/origin/main
+          fi
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "Release tag ${GITHUB_REF_NAME} must point at a commit on origin/main" >&2
+            exit 1
+          fi
+
+      - name: Build package (gate)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd packages/swift
+          swift build
+
+      - name: Publish mirror
+        shell: bash
+        env:
+          FRICK_SWIFT_MIRROR: https://x-access-token:${{ secrets.SWIFT_MIRROR_TOKEN }}@github.com/briannadoubt/FrickSwift.git
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#swift-v}"
+          scripts/publish-swift.sh "${version}"
