@@ -81,6 +81,7 @@ export class SyncGateway {
   readonly #limits: FrickLimits;
   readonly #policyHooks: readonly FrickPolicyHook[];
   readonly #grantLookup: FrickGrantLookup;
+  readonly #cascadeGrantLookup: FrickCascadeGrantLookup;
   readonly #pendingAppendCounts = new WeakMap<SyncClient, number>();
   readonly #lastSeenAt = new WeakMap<SyncClient, number>();
   readonly #completedHandshakes = new WeakSet<SyncClient>();
@@ -149,6 +150,8 @@ export class SyncGateway {
     this.#limits = options.limits ?? DEFAULT_FRICK_LIMITS;
     this.#policyHooks = options.policyHooks ?? [];
     this.#grantLookup = (args) => this.store.grants.hasActiveGrantFor(args);
+    this.#cascadeGrantLookup = (args) =>
+      this.store.grants.hasActiveGrantForRecordId(args);
     this.#metrics = options.metrics;
     this.#connectionsGauge = this.#metrics?.gauge("frick.ws.connections.current");
     this.#telemetry = options.telemetry;
@@ -969,6 +972,7 @@ export class SyncGateway {
         payload.key,
         tenantMembershipReader(this.store, principal.tenantId),
         this.#policyHooks,
+        this.#cascadeGrantLookup,
       );
     } catch (error) {
       if (this.#sendAuthNack(client, payload.subscriptionId, error)) {

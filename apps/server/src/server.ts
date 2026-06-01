@@ -528,6 +528,12 @@ export function createFrickServer(options: ServerOptions = {}) {
   // authz.ts.
   const grantLookup: FrickGrantLookup = (args) =>
     store.grants.hasActiveGrantFor(args);
+  // Wired into assertCanSubscribe for stream + projection reads so a grant on
+  // an object record cascades read access to the stream whose `streamId`
+  // matches the granted record id and to projection rows keyed by that id
+  // (FR-70). Read-only; see `relaxWithCascadeGrants` in authz.ts.
+  const cascadeGrantLookup: FrickCascadeGrantLookup = (args) =>
+    store.grants.hasActiveGrantForRecordId(args);
   let inFlight = 0;
   let closing = false;
 
@@ -1837,6 +1843,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           query.key,
           tenantMembershipReader(store, principal.tenantId),
           policyHooks,
+          cascadeGrantLookup,
         );
         const ctx: FrickProjectionContext = {
           tenantId: principal.tenantId,
@@ -2249,6 +2256,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           key,
           tenantMembershipReader(store, principal.tenantId),
           policyHooks,
+          cascadeGrantLookup,
         );
         // FR-116: cheap cursor head probe — MAX(sequence)+COUNT, no payloads.
         if (parts[4] === "cursor") {
