@@ -182,6 +182,7 @@ export {
 } from "./platform/project.js";
 export {
   FRAMEWORK_MIGRATIONS,
+  FRAMEWORK_TABLES,
   FrickMigrationChecksumError,
   FrickMigrationError,
   FrickMigrationRevisionError,
@@ -192,6 +193,34 @@ export {
   type FrameworkMigration,
 } from "./storage/migrations.js";
 export { FrickResetRefusedError, resetFrickDatabase } from "./storage/reset.js";
+export {
+  TenantAlreadyExistsError,
+  TenantStore,
+  type TenantRow,
+} from "./storage/tenant-store.js";
+export { TenantSettingsStore } from "./storage/tenant-settings-store.js";
+export {
+  loadFrickConfig,
+  FrickConfigError,
+  type FrickConfig,
+  type FrickConfigOverrides,
+  type FrickEnv,
+  type FrickLogLevel,
+  type FrickDbDriver,
+  type FrickBlobDriver,
+  type FrickPlatformEventsDriver,
+} from "./config.js";
+export {
+  dumpFrickDatabase,
+  type FrickDumpHeader,
+  type FrickDumpOptions,
+} from "./backup/dump.js";
+export {
+  FrickRestoreRefusedError,
+  restoreFrickDatabase,
+  type FrickRestoreOptions,
+  type FrickRestoreReport,
+} from "./backup/restore.js";
 export {
   createFrickTelemetryRuntime,
   createNoopTelemetryRuntime,

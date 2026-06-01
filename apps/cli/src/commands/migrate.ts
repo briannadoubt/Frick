@@ -9,7 +9,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { FRAMEWORK_MIGRATIONS, listAppliedMigrations, runFrameworkMigrations } from "../../../server/src/storage/migrations.js";
+import { FRAMEWORK_MIGRATIONS, listAppliedMigrations, runFrameworkMigrations } from "@frick/server";
 import { foundationSchema } from "@frick/protocol";
 import type { ParsedArgs } from "../argv.js";
 import { CliUsageError, CliRefusedError } from "../errors.js";

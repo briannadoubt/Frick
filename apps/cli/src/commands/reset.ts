@@ -4,8 +4,7 @@
  * dropped (post-condition: 0 framework rows remain).
  */
 import { DatabaseSync } from "node:sqlite";
-import { FRAMEWORK_TABLES } from "../../../server/src/storage/migrations.js";
-import { resetFrickDatabase, FrickResetRefusedError } from "../../../server/src/storage/reset.js";
+import { FRAMEWORK_TABLES, resetFrickDatabase, FrickResetRefusedError } from "@frick/server";
 import type { ParsedArgs } from "../argv.js";
 import { CliRefusedError } from "../errors.js";
 import { contextFlagsFrom, loadConfig } from "../context.js";

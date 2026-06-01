@@ -2,13 +2,10 @@
  * Shared helpers for command handlers: turn `--db-path`/`--env` flags into a
  * loaded `FrickConfig` and (optionally) an opened `FrickStore`.
  *
- * The CLI imports from `apps/server` via relative paths. This is the
- * documented coupling — extracting `@frick/server` into a published library
- * is a separate slice. Until that lands, the CLI sits inside the monorepo
- * and reaches across into the server's `src/` tree.
+ * The CLI consumes `@frick/server` through its published public entrypoint —
+ * it never reaches into the server's `src/` tree.
  */
-import { loadFrickConfig, type FrickConfig, type FrickEnv } from "../../server/src/config.js";
-import { FrickStore } from "../../server/src/store.js";
+import { loadFrickConfig, FrickStore, type FrickConfig, type FrickEnv } from "@frick/server";
 import { requireString } from "./argv.js";
 
 export interface ContextFlags {

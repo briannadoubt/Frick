@@ -1,20 +1,41 @@
 {
   "name": "@frick/cli",
   "version": "0.0.0",
-  "private": true,
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bri/Frick.git",
+    "directory": "apps/cli"
+  },
   "bin": {
     "frick": "./dist/index.js"
   },
-  "main": "./src/index.ts",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
-    "build": "tsc && node scripts/copy-dashboard-assets.mjs",
+    "build": "tsc -b && node scripts/copy-dashboard-assets.mjs",
     "test": "vitest run"
   },
   "dependencies": {
     "@frick/agent-kit": "workspace:*",
     "@frick/mcp": "workspace:*",
-    "@frick/protocol": "workspace:*"
+    "@frick/protocol": "workspace:*",
+    "@frick/server": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",

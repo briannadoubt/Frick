@@ -9,12 +9,12 @@
  *     wrap Web Push VAPID credentials and store in `tenant_settings`.
  */
 import { readFileSync } from "node:fs";
-import { TenantAlreadyExistsError } from "../../../server/src/storage/tenant-store.js";
 import {
+  TenantAlreadyExistsError,
   saveApnsCredentials,
   saveFcmCredentials,
   saveWebPushCredentials,
-} from "../../../server/src/push/credentials.js";
+} from "@frick/server";
 import type { ParsedArgs } from "../argv.js";
 import { CliFailureError, CliUsageError } from "../errors.js";
 import { contextFlagsFrom, loadConfig, openStore } from "../context.js";

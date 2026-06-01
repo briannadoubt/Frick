@@ -32,6 +32,9 @@ importers:
       '@frick/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@frick/server':
+        specifier: workspace:*
+        version: link:../server
     devDependencies:
       '@types/node':
         specifier: ^24.10.0

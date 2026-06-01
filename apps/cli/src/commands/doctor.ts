@@ -13,7 +13,7 @@
  */
 import { DatabaseSync } from "node:sqlite";
 import { foundationSchema, validateSchema } from "@frick/protocol";
-import { computeMigrationChecksum, FRAMEWORK_MIGRATIONS, listAppliedMigrations } from "../../../server/src/storage/migrations.js";
+import { computeMigrationChecksum, FRAMEWORK_MIGRATIONS, listAppliedMigrations } from "@frick/server";
 import type { ParsedArgs } from "../argv.js";
 import { contextFlagsFrom, loadConfig } from "../context.js";
 import { emit, type OutputOptions } from "../output.js";
