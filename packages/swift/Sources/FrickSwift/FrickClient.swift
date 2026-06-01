@@ -1000,34 +1000,43 @@ public final class FrickClient: Sendable {
     }
 
     /// Install a freshly-minted session into the local store, resetting the
-    /// on-disk cache first if the persisted cache metadata is scoped to a
-    /// different user or a different schema hash than the incoming session
-    /// expects.
+    /// on-disk cache + pending appends first when the incoming session is a
+    /// live swap to a different user, or when this client build's schema hash
+    /// has drifted from the persisted cache row.
     ///
-    /// Frick's cache metadata is scoped to `(userId, schemaHash)`; reusing a
-    /// cache row minted under user A while signed in as user B (or under a
-    /// different schema revision than this client compiled against) trips
-    /// the scope guard in `verifyCacheCompatibility` and silently breaks
-    /// every subsequent `fetchObjects` call. Sign-in entry points (Apple,
-    /// Google, email, dev-login, generic login/signup) funnel through here
-    /// so callers no longer have to remember to call `resetCache()` before
-    /// swapping users or upgrading clients.
+    /// Frick's cache is scoped to `(userId, schemaHash)`; reusing rows minted
+    /// under user A while signed in as user B — or under a different schema
+    /// than this client compiled against — would leak A's data into B's
+    /// session. Sign-in entry points (Apple, Google, email, dev-login,
+    /// generic login/signup, restoreSession) funnel through here so callers
+    /// no longer have to remember to `resetCache()` before swapping users or
+    /// upgrading clients.
     ///
-    /// FR-3. The earlier implementation only compared against the in-memory
-    /// `sessionStore.session` — which is nil after `signOut()` or a fresh
-    /// process launch — and missed two real flows: sign-out → sign-in as
-    /// a different user (very common in shared simulators / family devices)
-    /// and schema-hash drift across client upgrades. Comparing against the
-    /// persisted metadata makes "sign in" the canonical cache-validity
-    /// checkpoint; the `verifyCacheCompatibility` calls in `fetchObjects` /
-    /// `connectSync` are now defense in depth rather than the only line.
+    /// Two complementary layers guard scope (RCRM-45, FR-3):
+    ///
+    ///   1. The fast path here. The user check compares the *in-memory*
+    ///      previous session: a live in-app swap (sign in as B while still
+    ///      holding A's session) clears immediately so stale rows never flash.
+    ///      The schema check compares the *persisted* metadata hash, catching
+    ///      a same-id/same-revision client upgrade that `reason()` below does
+    ///      not — it only inspects `schemaId`/`schemaRevision`, not the hash.
+    ///
+    ///   2. `verifyCacheCompatibility`, the canonical scope checkpoint that
+    ///      `fetchObjects` / `connectSync` run. It compares persisted metadata
+    ///      against the current session, so it covers the flows the in-memory
+    ///      check cannot see — a fresh process launch or a sign-out → sign-in
+    ///      as a different user, where `sessionStore.session` is nil at
+    ///      install time. We deliberately do NOT clear on a *persisted*
+    ///      user-scope mismatch here: doing so would wipe the very metadata
+    ///      this guard needs to surface a `FrickCacheIncompatibleError` and
+    ///      let the caller resetCache + refetch.
     ///
     /// Reset failures are swallowed: a stale cache row is preferable to
     /// refusing to sign in, and the next `verifyCacheCompatibility` call
     /// will surface the real error.
     private func installSession(_ newSession: FrickSession) {
         let cached = try? storage.loadCacheMetadata()
-        let userChanged = (cached?.userId).map { $0 != newSession.userId } ?? false
+        let userChanged = sessionStore.session.map { $0.userId != newSession.userId } ?? false
         let schemaChanged = (cached?.schemaHash).map { $0 != schemaHash } ?? false
         if userChanged || schemaChanged {
             try? storage.clearCache()
