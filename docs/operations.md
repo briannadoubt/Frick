@@ -350,6 +350,18 @@ boundaries and do not cascade to child records, streams, blobs, jobs,
 projections, search indexes, or custom app routes unless the app builds those
 semantics on top.
 
+Object **subscriptions** are authorized per record on the same pipeline (FR-116).
+The initial snapshot and every live `object.read` delta are filtered for each
+subscriber with the same policy-hook + grant evaluation used for individual
+reads, on top of tenant scoping: the subscription baseline allows tenant-wide
+reads, a policy hook that denies `object.read` for a principal removes those
+rows, and a grant on a record makes it visible to the grantee. Different
+subscribers on the same object type therefore see different row sets; denied
+rows are omitted from the snapshot and never fanned out to that connection.
+Per-record evaluation is skipped (allow-all, the prior behavior) when no policy
+hook is registered **and** no sharing grant has ever been issued, so deployments
+that use neither pay no per-row cost and see no behavior change.
+
 ## Account data export
 
 The server always mounts an authenticated self-service data-export route. This

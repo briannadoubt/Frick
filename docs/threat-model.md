@@ -117,6 +117,9 @@ owner intended.
   `notAuthorizedForResource` or `ownerMismatch`; it does not override
   unauthenticated, not-member, tenant-mismatch, or schema compatibility
   failures.
+- The same grant lookup runs per record on object subscription snapshots and
+  deltas (FR-116), so a grant relaxes live read visibility for the grantee, not
+  just individual HTTP-style reads.
 - The owner who issued the grant revokes it via `DELETE /share/grants/:id`,
   and the grantee can self-revoke ("leave") their own grant via
   `POST /share/grants/:id/leave`. Each verb is scoped to one role: the leave

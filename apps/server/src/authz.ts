@@ -664,6 +664,49 @@ export function assertCanReadObject(
   }
 }
 
+/**
+ * Per-record read visibility for one row delivered over an object SUBSCRIPTION
+ * (FR-116). Returns `true` iff this subscriber may see `(objectType, objectId)`
+ * in an object snapshot or live delta.
+ *
+ * It runs the same tightening-only pipeline the rest of object authz uses —
+ * baseline -> app policy hooks -> grant relaxation — for the `object.read`
+ * action, with the subscriber's principal, the registered policy hooks and the
+ * grant lookup. Only the baseline differs from {@link assertCanReadObject}:
+ *  - The subscription baseline is tenant-wide ALLOW. This is the historic
+ *    behavior of the sync object snapshot/fan-out before per-record authz: a
+ *    subscriber that passed {@link assertCanSubscribe} saw every in-tenant row,
+ *    so absent any app policy the row set is unchanged.
+ *  - A registered hook may TIGHTEN that allow to a deny for a given
+ *    principal/record (e.g. a customer portal denying `object.read` for the
+ *    customer role), exactly as {@link applyPolicyHooks} does elsewhere.
+ *  - A grant then relaxes a remaining deny back to allow for the records the
+ *    subscriber holds a grant on, mirroring {@link relaxWithGrants}.
+ *
+ * `assertCanReadObject` instead starts from deny-by-default because it gates a
+ * bare by-id read where the framework cannot assume tenant-wide visibility.
+ *
+ * Tenant scoping is enforced by the caller before this runs; the `memberships`
+ * reader is accepted for signature parity with the other object-authz helpers.
+ */
+export function canSubscriberReadObjectRecord(
+  principal: Principal,
+  objectType: string,
+  objectId: string,
+  memberships: MembershipReader,
+  hooks?: readonly FrickPolicyHook[],
+  grantLookup?: FrickGrantLookup,
+): boolean {
+  void memberships;
+  const input: FrickPolicyInput = {
+    principal,
+    action: "object.read",
+    resource: { kind: "object", name: objectType, key: objectId, tenantId: principal.tenantId },
+  };
+  const afterHooks = applyPolicyHooks(ALLOW, input, hooks);
+  return relaxWithGrants(afterHooks, input, grantLookup).allow;
+}
+
 export function assertCanWritePresence(
   principal: Principal,
   presence: string,
