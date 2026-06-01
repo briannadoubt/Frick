@@ -183,7 +183,7 @@ reverse-proxy request and connection caps.
 | `maxWebSocketOutboundBufferedBytes` | 1,048,576 | queued outbound bytes per WebSocket client |
 | `maxSseConnections` | 10,000 | concurrently open SSE connections |
 | `maxSseOutboundBufferedBytes` | 1,048,576 | queued outbound bytes per SSE response |
-| `maxAuthAttemptsPerWindow` | 30 | attempts per built-in `/auth/signup`, `/auth/login`, or `/auth/dev-login` route + tenant + identity/IP bucket |
+| `maxAuthAttemptsPerWindow` | 30 | attempts per auth route + identity/IP bucket. Covers password login/signup/dev-login, every identity-provider verify route (`/auth/apple/verify`, `/auth/google/verify`, `/auth/oidc/:id/verify`), and the email password-reset routes (`/auth/email/forgot-password`, `/auth/email/reset-password`) (FR-29) |
 | `authRateLimitWindowMs` | 300,000 | fixed auth-attempt rate-limit window |
 
 Forward stream reads return at most `maxStreamPageSize` events by default and
@@ -200,8 +200,10 @@ its cap never affects other principals. SSE requests over
 `maxSseConnections` return `429 rateLimit.exceeded`. Slow clients whose
 WebSocket or SSE outbound buffers exceed their configured caps are closed
 rather than allowed to accumulate unbounded queued data. Auth attempts over
-`maxAuthAttemptsPerWindow` in the current fixed window also return
-`429 rateLimit.exceeded`.
+`maxAuthAttemptsPerWindow` in the current fixed window also return `429`
+(`rateLimit.exceeded` for the password routes; `{ "error": "rate_limited" }`
+with a `Retry-After` header for the identity-provider verify and email
+password-reset routes — FR-29).
 
 ## App-owned HTTP routes
 
@@ -304,9 +306,14 @@ receives `provider: "apple" | "google" | "email" | "oidc"` (with `providerId`
 set for OIDC sign-ins) and decides the tenant id, user id override, display
 name, and extra User fields. Email reset tokens are random
 opaque values stored only as SHA-256 hashes and expire after 60 minutes.
-Provider sessions are normal Frick bearer sessions; today these provider routes
-use a fixed 30-day session lifetime rather than `FRICK_SESSION_TTL_SECONDS` and
-do not share the built-in auth attempt limiter.
+Provider sessions are normal Frick bearer sessions minted with the single
+configured `FRICK_SESSION_TTL_SECONDS` lifetime — the same TTL as
+password/dev-login sessions, not a separate fixed value (FR-29). The provider
+verify routes and the email password-reset routes share the built-in
+per-(route, identity/IP) auth-attempt limiter, returning `429
+{ "error": "rate_limited", "retryAfterSeconds" }` with a `Retry-After` header
+once `maxAuthAttemptsPerWindow` is exceeded; verify routes bucket by client IP,
+`forgot-password` by email, and `reset-password` by token.
 
 The framework now supports generic OpenID Connect issuers (above). SAML and
 arbitrary non-OIDC OAuth provider routing remain unimplemented.

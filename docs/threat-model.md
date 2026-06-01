@@ -522,13 +522,18 @@ Apple `consent-revoked` and `account-delete` notifications set the mapped
 `revokedAt` field and delete active sessions for the user before calling the
 optional `onRevoke` hook.
 
+Provider sessions are minted with the single configured
+`FRICK_SESSION_TTL_SECONDS` lifetime — the same TTL as built-in
+password/dev-login sessions, not a separate fixed 30-day value — and the
+provider verify routes plus the email password-reset routes share the same
+per-(route, identity/IP) auth-attempt limiter the password-login routes use
+(FR-29), so an attacker cannot sidestep the password-login ceiling by hammering
+a provider or reset route. Verify routes bucket by client IP; `forgot-password`
+buckets by email; `reset-password` by token. Tripping the limit returns `429`
+with a `Retry-After` header.
+
 **Known gaps.**
 
-- Provider sessions currently use a fixed 30-day lifetime instead of the
-  `FRICK_SESSION_TTL_SECONDS` knob used by built-in password/dev-login
-  sessions.
-- The provider routes, including email password reset endpoints, do not yet
-  share the built-in auth attempt limiter.
 - SAML and arbitrary non-OIDC OAuth provider routing are not implemented
   (generic OIDC issuers are now supported via `identityProviders.oidc`).
 

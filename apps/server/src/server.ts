@@ -624,6 +624,35 @@ export function createFrickServer(options: ServerOptions = {}) {
         store,
         config: options.identityProviders,
         logger,
+        // FR-29: provider-minted sessions honor the single configured TTL.
+        sessionTtlSeconds: config.sessionTtlSeconds,
+        // FR-29: provider-verify + email password-reset endpoints share the
+        // same auth-attempt limiter the built-in password-login routes use. The
+        // adapter delegates to the single `authAttemptLimiter` instance and
+        // translates its thrown `FrickLimitError` into a structured result the
+        // identity router turns into its own 429 envelope.
+        authThrottle: {
+          clientIp: (req) => clientIpFromRequest(req),
+          check: (input) => {
+            try {
+              authAttemptLimiter.check({
+                route: input.route,
+                tenantId: DEFAULT_TENANT_ID,
+                ...(input.identifier ? { identity: input.identifier } : {}),
+                clientIp: input.ip,
+                limits,
+              });
+              return undefined;
+            } catch (error) {
+              if (error instanceof FrickLimitError) {
+                return {
+                  retryAfterSeconds: Math.ceil(limits.authRateLimitWindowMs / 1000),
+                };
+              }
+              throw error;
+            }
+          },
+        },
       })
     : undefined;
 
@@ -2612,7 +2641,14 @@ class CorsOriginRejectedError extends Error {
 }
 
 interface AuthAttemptLimitInput {
-  route: "/auth/signup" | "/auth/login" | "/auth/dev-login";
+  /**
+   * Logical route bucket. The built-in password routes use their pathname;
+   * the identity-provider verify + email password-reset routes (FR-29) pass
+   * their own stable labels (e.g. `apple-verify`, `oidc-verify:<id>`,
+   * `forgot-password`, `reset-password`) so each shares the same per-window
+   * ceiling without colliding across routes.
+   */
+  route: string;
   tenantId: string;
   identity?: string;
   clientIp: string;
