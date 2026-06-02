@@ -3,14 +3,14 @@ import { sendFrame } from "./wire.js";
 import type { FrickStore } from "../store.js";
 import type { SubscriptionRegistry } from "./subscriptions.js";
 
-export function routeSignal(
+export async function routeSignal(
   store: FrickStore,
   subscriptions: SubscriptionRegistry,
   payload: SignalPayload,
   tenantId: string,
   options: { maxBufferedAmount?: number } = {},
-): void {
-  if (store.tenants.get(tenantId)?.archivedAt !== undefined) {
+): Promise<void> {
+  if ((await store.tenants.get(tenantId))?.archivedAt !== undefined) {
     return;
   }
   const envelope = packSignalEnvelope(store.schema, payload.name, payload.key, payload.value);
