@@ -1,4 +1,4 @@
-# @frick/protocol
+# @fricken/protocol
 
 Canonical wire-protocol types, msgpack codecs, schema metadata, and generated artifact helpers for the Frick framework.
 
@@ -18,7 +18,7 @@ See [`docs/versioning.md`](../../docs/versioning.md) for compatibility rules and
 ## Install
 
 ```sh
-pnpm add @frick/protocol
+pnpm add @fricken/protocol
 ```
 
 ## License

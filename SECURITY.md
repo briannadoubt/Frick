@@ -34,10 +34,10 @@ Maintainers may credit reporters by name in release notes unless the reporter pr
 
 In scope:
 
-- The `@frick/server` package (auth, tenant isolation, sync gateway, admin routes, storage).
-- The `@frick/protocol` wire format and schema identity contract.
+- The `@fricken/server` package (auth, tenant isolation, sync gateway, admin routes, storage).
+- The `@fricken/protocol` wire format and schema identity contract.
 - The native client SDKs (`packages/swift`, `apps/android/frick`) — credential handling, certificate validation, cache integrity.
-- The `@frick/cli` package, especially the `tenants set-push` credential-wrapping path.
+- The `@fricken/cli` package, especially the `tenants set-push` credential-wrapping path.
 - The push adapter modules (`apps/server/src/push/*`) — credential storage, JWT signing, transport.
 
 Out of scope (please don't submit reports for these):

@@ -6,7 +6,7 @@
 
 **Architecture:** This plan deliberately avoids mixing event pipeline, OTel, product analytics, deployment generation, and dashboard mutations into one patch. It creates a project-module contract, routes the existing server through that contract, adds a focused dashboard API module, and mounts the dashboard as an authenticated server surface. Follow-up plans build the event pipeline, OTel, analytics, client tracking, and deployment on top of this seam.
 
-**Tech Stack:** TypeScript, Node `http`, `node:fs/promises`, Vitest, existing Frick server/CLI/dashboard packages, existing `@frick/protocol` schema types.
+**Tech Stack:** TypeScript, Node `http`, `node:fs/promises`, Vitest, existing Frick server/CLI/dashboard packages, existing `@fricken/protocol` schema types.
 
 ---
 
@@ -145,7 +145,7 @@ Create `apps/server/tests/platform-project.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { foundationSchema } from "@frick/protocol";
+import { foundationSchema } from "@fricken/protocol";
 import {
   createFrickProjectModule,
   projectModuleToAppDefinition,
@@ -210,7 +210,7 @@ describe("Frick project module contract", () => {
 Run:
 
 ```bash
-pnpm --filter @frick/server test -- tests/platform-project.test.ts
+pnpm --filter @fricken/server test -- tests/platform-project.test.ts
 ```
 
 Expected: FAIL because `../src/platform/project.js` does not exist.
@@ -220,7 +220,7 @@ Expected: FAIL because `../src/platform/project.js` does not exist.
 Create `apps/server/src/platform/project.ts`:
 
 ```ts
-import { validateSchema, type FrickSchema } from "@frick/protocol";
+import { validateSchema, type FrickSchema } from "@fricken/protocol";
 import type { FrickAppDefinition } from "../apps/registry.js";
 import { FrickConfigError } from "../config.js";
 
@@ -308,7 +308,7 @@ export {
 Run:
 
 ```bash
-pnpm --filter @frick/server test -- tests/platform-project.test.ts
+pnpm --filter @fricken/server test -- tests/platform-project.test.ts
 ```
 
 Expected: PASS.
@@ -333,7 +333,7 @@ Create `apps/server/tests/dashboard-routes.test.ts` with this first test group:
 
 ```ts
 import { afterEach, describe, expect, it } from "vitest";
-import { foundationSchema, type FrickSchema } from "@frick/protocol";
+import { foundationSchema, type FrickSchema } from "@fricken/protocol";
 import {
   createFrickProjectModule,
   createFrickServer,
@@ -445,7 +445,7 @@ async function inspectHeaders(httpUrl: string): Promise<Record<string, string>> 
 Run:
 
 ```bash
-pnpm --filter @frick/server test -- tests/dashboard-routes.test.ts
+pnpm --filter @fricken/server test -- tests/dashboard-routes.test.ts
 ```
 
 Expected: FAIL because `ServerOptions` has no `project` property and the server still synthesizes the `"foundation"` app.
@@ -534,7 +534,7 @@ and then:
 Run:
 
 ```bash
-pnpm --filter @frick/server test -- tests/dashboard-routes.test.ts
+pnpm --filter @fricken/server test -- tests/dashboard-routes.test.ts
 ```
 
 Expected: PASS for the two project runtime tests.
@@ -544,7 +544,7 @@ Expected: PASS for the two project runtime tests.
 Run:
 
 ```bash
-pnpm --filter @frick/server test -- tests/ops-endpoints.test.ts
+pnpm --filter @fricken/server test -- tests/ops-endpoints.test.ts
 ```
 
 Expected: PASS. This confirms existing inspect behavior did not regress.
@@ -569,7 +569,7 @@ Create `apps/server/tests/dashboard-metadata.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { foundationSchema } from "@frick/protocol";
+import { foundationSchema } from "@fricken/protocol";
 import { createFrickAppRegistry } from "../src/apps/registry.js";
 import { buildDashboardMetadata } from "../src/dashboard/metadata.js";
 import { createFrickProjectModule } from "../src/platform/project.js";
@@ -623,7 +623,7 @@ describe("dashboard metadata", () => {
 Run:
 
 ```bash
-pnpm --filter @frick/server test -- tests/dashboard-metadata.test.ts
+pnpm --filter @fricken/server test -- tests/dashboard-metadata.test.ts
 ```
 
 Expected: FAIL because `../src/dashboard/metadata.js` does not exist.
@@ -633,7 +633,7 @@ Expected: FAIL because `../src/dashboard/metadata.js` does not exist.
 Create `apps/server/src/dashboard/metadata.ts`:
 
 ```ts
-import type { FrickSchema } from "@frick/protocol";
+import type { FrickSchema } from "@fricken/protocol";
 import type { FrickAppRegistry } from "../apps/registry.js";
 import type { FrickProjectModule } from "../platform/project.js";
 
@@ -746,7 +746,7 @@ function resourceSummaries(schema: FrickSchema): DashboardResourceSummary[] {
 Run:
 
 ```bash
-pnpm --filter @frick/server test -- tests/dashboard-metadata.test.ts
+pnpm --filter @fricken/server test -- tests/dashboard-metadata.test.ts
 ```
 
 Expected: PASS.
@@ -854,7 +854,7 @@ describe("mounted dashboard", () => {
 Run:
 
 ```bash
-pnpm --filter @frick/server test -- tests/dashboard-routes.test.ts
+pnpm --filter @fricken/server test -- tests/dashboard-routes.test.ts
 ```
 
 Expected: FAIL because `/_frick/dashboard` returns 404.
@@ -1106,7 +1106,7 @@ Expected: no output and exit 0.
 Run:
 
 ```bash
-pnpm --filter @frick/server test -- tests/dashboard-routes.test.ts
+pnpm --filter @fricken/server test -- tests/dashboard-routes.test.ts
 ```
 
 Expected: PASS.
@@ -1116,7 +1116,7 @@ Expected: PASS.
 Run:
 
 ```bash
-pnpm --filter @frick/server test -- tests/ops-endpoints.test.ts tests/admin-routes.test.ts tests/dashboard-routes.test.ts tests/dashboard-metadata.test.ts
+pnpm --filter @fricken/server test -- tests/ops-endpoints.test.ts tests/admin-routes.test.ts tests/dashboard-routes.test.ts tests/dashboard-metadata.test.ts
 ```
 
 Expected: PASS.
@@ -1150,7 +1150,7 @@ Append to the mounted dashboard metadata test in `apps/server/tests/dashboard-ro
 Run:
 
 ```bash
-pnpm --filter @frick/server test -- tests/dashboard-routes.test.ts
+pnpm --filter @fricken/server test -- tests/dashboard-routes.test.ts
 ```
 
 Expected: FAIL because the current dashboard script does not fetch mounted metadata.
@@ -1220,7 +1220,7 @@ Expected: no output and exit 0.
 Run:
 
 ```bash
-pnpm --filter @frick/server test -- tests/dashboard-routes.test.ts
+pnpm --filter @fricken/server test -- tests/dashboard-routes.test.ts
 ```
 
 Expected: PASS.
@@ -1312,7 +1312,7 @@ git commit -m "docs: document mounted frick dashboard foundation"
 - [ ] **Step 1: Run focused server tests**
 
 ```bash
-pnpm --filter @frick/server test -- tests/platform-project.test.ts tests/dashboard-metadata.test.ts tests/dashboard-routes.test.ts tests/ops-endpoints.test.ts tests/admin-routes.test.ts
+pnpm --filter @fricken/server test -- tests/platform-project.test.ts tests/dashboard-metadata.test.ts tests/dashboard-routes.test.ts tests/ops-endpoints.test.ts tests/admin-routes.test.ts
 ```
 
 Expected: PASS.

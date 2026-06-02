@@ -119,7 +119,7 @@ Most day-to-day work is one of these. Each links to the canonical reference.
 ├── packages/
 │   ├── protocol/    # canonical schema AST, codec, frame format, lint, fixtures, native DTO generation
 │   ├── core/        # UI-agnostic TypeScript client runtime (cache, sync, commands)
-│   ├── react/       # React provider + hooks built on @frick/core
+│   ├── react/       # React provider + hooks built on @fricken/core
 │   ├── devtools/    # embeddable React DevTools panel for client runtime state
 │   ├── swift/       # reusable Swift package (generated DTOs + runtime)
 │   ├── mcp/         # read-only MCP server for inspecting scaffolded Frick apps

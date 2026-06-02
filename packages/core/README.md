@@ -1,13 +1,13 @@
-# @frick/core
+# @fricken/core
 
 UI-agnostic TypeScript runtime for the Frick framework. Provides the `FrickClient` WebSocket runtime, signal-based subscriptions, local caches, offline-append queues, and sync-status diagnostics.
 
-Pair with [`@frick/react`](../react) for React hooks, or consume directly from any TS runtime.
+Pair with [`@fricken/react`](../react) for React hooks, or consume directly from any TS runtime.
 
 ## Install
 
 ```sh
-pnpm add @frick/core @frick/protocol
+pnpm add @fricken/core @fricken/protocol
 ```
 
 ## What's in here
@@ -20,14 +20,14 @@ pnpm add @frick/core @frick/protocol
 - `client.track(...)` plus `trackAnalyticsEvent(...)` for authenticated product analytics
 - `SyncStatus` with `serverCapabilities`, `schemaCompatibility`, `lastError`
 - OpenTelemetry-compatible client telemetry for analytics requests and sync WebSocket transport. The default bridge is a no-op until the host app installs an OTel provider; pass `telemetry: false` to `FrickClient` to disable it.
-- Generated error-code constants and guards exported from `@frick/core/errors`
+- Generated error-code constants and guards exported from `@fricken/core/errors`
 
 ## Public subpaths
 
-- `@frick/core` — client runtime, cache, sync, auth, analytics, and telemetry defaults.
-- `@frick/core/analytics` — standalone analytics posting helpers.
-- `@frick/core/telemetry` — telemetry runtime types and OTel bridge helpers.
-- `@frick/core/errors` — generated error-code constants and guards for structured envelopes.
+- `@fricken/core` — client runtime, cache, sync, auth, analytics, and telemetry defaults.
+- `@fricken/core/analytics` — standalone analytics posting helpers.
+- `@fricken/core/telemetry` — telemetry runtime types and OTel bridge helpers.
+- `@fricken/core/errors` — generated error-code constants and guards for structured envelopes.
 
 See [`docs/cross-platform-client-contract.md`](../../docs/cross-platform-client-contract.md) for the wire contract every client implements.
 

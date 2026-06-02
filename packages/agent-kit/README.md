@@ -1,9 +1,9 @@
-# @frick/agent-kit
+# @fricken/agent-kit
 
 Portable Frick agent compatibility pack for Codex, Claude Code, and Cursor.
 
 ```bash
-pnpm dlx @frick/agent-kit install --all --target ./my-frick-app
+pnpm dlx @fricken/agent-kit install --all --target ./my-frick-app
 ```
 
 The installer writes:

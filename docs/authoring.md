@@ -21,7 +21,7 @@ frick init my-app --agents all --mcp
 You can also install or refresh the kit later:
 
 ```
-pnpm dlx @frick/agent-kit install --all --target .
+pnpm dlx @fricken/agent-kit install --all --target .
 ```
 
 The kit adds Codex, Claude Code, and Cursor skills/subagents, Cursor rules,
@@ -70,7 +70,7 @@ follow-up steps.
 
 ```
 my-app/
-├── package.json          # name, version, scripts, @frick/* dependencies
+├── package.json          # name, version, scripts, @fricken/* dependencies
 ├── tsconfig.json         # standard strict TS config, ESNext modules
 ├── frick.config.json     # optional, overrides FRICK_* env vars
 ├── src/
@@ -89,7 +89,7 @@ don't delete the markers or scaffold will refuse to extend the file.
 ## How the scaffolded server connects to the framework
 
 The scaffolded `src/server.ts` is a thin module that imports `createFrickServer`
-from `@frick/server` and passes it the schema you author in `src/schema.ts`.
+from `@fricken/server` and passes it the schema you author in `src/schema.ts`.
 Everything else — HTTP routes, the SQLite store, the sync gateway, the
 projection registry, the auth surface — is owned by the framework. That keeps
 the app source narrow: the developer's job is to declare schema objects and
@@ -114,7 +114,7 @@ internals:
   and window.
 
 ```ts
-import { createFrickServer } from "@frick/server";
+import { createFrickServer } from "@fricken/server";
 import { schema } from "./schema.js";
 
 export const server = createFrickServer({
@@ -358,12 +358,12 @@ SAML and arbitrary non-OIDC OAuth provider routing are not implemented.
 
 The TypeScript runtime emits OpenTelemetry-compatible client spans and metrics
 without generated app code. `FrickClient` defaults to the OpenTelemetry API
-bridge from `@frick/core`; if the host app installs a browser OTel provider,
+bridge from `@fricken/core`; if the host app installs a browser OTel provider,
 Frick sync and analytics operations show up automatically. Without a provider,
 the bridge is a no-op.
 
 ```ts
-import { FrickClient, createOpenTelemetryClientRuntime } from "@frick/core";
+import { FrickClient, createOpenTelemetryClientRuntime } from "@fricken/core";
 
 const client = new FrickClient({
   endpoint: "wss://api.example.com/_frick/sync",
@@ -415,7 +415,7 @@ hardening spec in `internal/`.
 The templates are inlined as TypeScript modules under
 `apps/cli/src/templates/` and are versioned with the framework — running
 `frick init` always produces a layout compatible with the current
-`@frick/server` cut. We do not promise forward compatibility with older
-`@frick/*` releases. To upgrade an existing scaffold, bump the dependency
+`@fricken/server` cut. We do not promise forward compatibility with older
+`@fricken/*` releases. To upgrade an existing scaffold, bump the dependency
 pins in your app's `package.json` and re-run `frick schema check` to catch
 any drift; we do not currently ship an automatic re-scaffold path.

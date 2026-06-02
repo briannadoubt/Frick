@@ -1,4 +1,4 @@
-# @frick/mcp
+# @fricken/mcp
 
 MCP server for live Frick runtime inspection. It gives agent harnesses a
 read-only way to inspect a running app without importing server internals.

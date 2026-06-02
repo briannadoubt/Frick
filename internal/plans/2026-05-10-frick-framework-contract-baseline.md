@@ -91,11 +91,11 @@ Status: Contract baseline audit.
 
 ## Public Framework Packages
 
-- `@frick/protocol`: canonical schema types, codecs, frame types, generated artifact helpers, schema compatibility helpers, shared error envelopes, capability metadata, and protocol fixtures.
-- `@frick/core`: UI-agnostic TypeScript runtime for cache, subscriptions, sync status, offline appends, presence, signals, and schema compatibility behavior.
-- `@frick/react`: React provider and hooks over `@frick/core`.
-- `@frick/design`: canonical design-token authoring and generation.
-- `@frick/design-web`: reusable React design primitives and workspace shell components.
+- `@fricken/protocol`: canonical schema types, codecs, frame types, generated artifact helpers, schema compatibility helpers, shared error envelopes, capability metadata, and protocol fixtures.
+- `@fricken/core`: UI-agnostic TypeScript runtime for cache, subscriptions, sync status, offline appends, presence, signals, and schema compatibility behavior.
+- `@fricken/react`: React provider and hooks over `@fricken/core`.
+- `@fricken/design`: canonical design-token authoring and generation.
+- `@fricken/design-web`: reusable React design primitives and workspace shell components.
 - `packages/swift`: Swift client SDK package.
 - `packages/design-swift`: Swift design package.
 - `apps/android/frick`: Android/Kotlin client SDK module.

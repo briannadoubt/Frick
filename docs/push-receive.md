@@ -104,7 +104,7 @@ Server-side: `frick tenants set-push --platform fcm --service-account google-svc
 
 ## Web — Service Worker
 
-The web push pipeline is already wired by [`apps/web/public/frick-sw.js`](../apps/web/public/frick-sw.js) plus the `registerFrickBackgroundSync(...)` helper in `@frick/core`. The worker's `notificationclick` handler only accepts same-origin app routes, normalizes them to path/search/hash, then posts a `frick:navigate` message back to the active tab — your React app reads `data.url` and routes.
+The web push pipeline is already wired by [`apps/web/public/frick-sw.js`](../apps/web/public/frick-sw.js) plus the `registerFrickBackgroundSync(...)` helper in `@fricken/core`. The worker's `notificationclick` handler only accepts same-origin app routes, normalizes them to path/search/hash, then posts a `frick:navigate` message back to the active tab — your React app reads `data.url` and routes.
 
 ## Threat-model notes
 

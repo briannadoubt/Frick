@@ -1,17 +1,17 @@
-# @frick/react
+# @fricken/react
 
-React provider and hooks on top of [`@frick/core`](../core).
+React provider and hooks on top of [`@fricken/core`](../core).
 
 ## Install
 
 ```sh
-pnpm add @frick/react @frick/core @frick/protocol react
+pnpm add @fricken/react @fricken/core @fricken/protocol react
 ```
 
 ## Usage
 
 ```tsx
-import { FrickProvider, useObjects, useStream, useSyncStatus } from "@frick/react";
+import { FrickProvider, useObjects, useStream, useSyncStatus } from "@fricken/react";
 
 function App() {
   return (

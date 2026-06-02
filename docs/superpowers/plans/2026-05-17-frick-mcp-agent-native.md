@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Deepen the Frick Agent Kit with MCP-aware skills and agents, then add a CLI-owned `@frick/mcp` package so agents can inspect and operate Frick apps through standard MCP.
+**Goal:** Deepen the Frick Agent Kit with MCP-aware skills and agents, then add a CLI-owned `@fricken/mcp` package so agents can inspect and operate Frick apps through standard MCP.
 
-**Architecture:** Keep the agent-kit as the app-building instruction layer and add `@frick/mcp` as the runtime inspection layer. The MCP server uses stdio JSON-RPC, defaults to read-only tools over documented Frick HTTP/inspection surfaces, and is launched by `frick mcp` so the CLI remains the helm.
+**Architecture:** Keep the agent-kit as the app-building instruction layer and add `@fricken/mcp` as the runtime inspection layer. The MCP server uses stdio JSON-RPC, defaults to read-only tools over documented Frick HTTP/inspection surfaces, and is launched by `frick mcp` so the CLI remains the helm.
 
 **Tech Stack:** TypeScript 5.9, Node 24, pnpm workspaces, Vitest, JSON-RPC 2.0 over MCP stdio newline transport.
 
@@ -46,7 +46,7 @@ Add a capability that maps to `frick-mcp-runtime`, each harness's MCP subagent, 
 
 Document when to use MCP resources, tools, prompts, read-only mode, write-gated mode, tenant/session context, and CLI startup commands.
 
-### Task 3: Implement `@frick/mcp`
+### Task 3: Implement `@fricken/mcp`
 
 **Files:**
 - Create: `packages/mcp/package.json`

@@ -4,9 +4,9 @@ Frick currently has three push adapter implementations:
 
 | Adapter | Module | Platform |
 |---|---|---|
-| APNs | public subpath `@frick/server/push/apns-adapter`; source at [`apps/server/src/push/apns-adapter.ts`](../apps/server/src/push/apns-adapter.ts) | `apns` |
-| FCM (v1) | public subpath `@frick/server/push/fcm-adapter`; source at [`apps/server/src/push/fcm-adapter.ts`](../apps/server/src/push/fcm-adapter.ts) | `fcm` |
-| Web Push | public subpath `@frick/server/push/web-push-adapter`; source at [`apps/server/src/push/web-push-adapter.ts`](../apps/server/src/push/web-push-adapter.ts) | `webPush` |
+| APNs | public subpath `@fricken/server/push/apns-adapter`; source at [`apps/server/src/push/apns-adapter.ts`](../apps/server/src/push/apns-adapter.ts) | `apns` |
+| FCM (v1) | public subpath `@fricken/server/push/fcm-adapter`; source at [`apps/server/src/push/fcm-adapter.ts`](../apps/server/src/push/fcm-adapter.ts) | `fcm` |
+| Web Push | public subpath `@fricken/server/push/web-push-adapter`; source at [`apps/server/src/push/web-push-adapter.ts`](../apps/server/src/push/web-push-adapter.ts) | `webPush` |
 
 All adapters conform to [`FrickPushAdapter`](../apps/server/src/push/types.ts) and slot into the existing notification router, job framework, and dead-token revocation paths. They only handle the platform-specific encoding + transport step — fan-out, retries, and registration tombstoning live in the router.
 
@@ -35,10 +35,10 @@ app code
 ## Registering the adapters at server boot
 
 ```ts
-import { createFrickServer } from "@frick/server";
-import { createFrickApnsAdapter } from "@frick/server/push/apns-adapter";
-import { createFrickFcmAdapter } from "@frick/server/push/fcm-adapter";
-import { createFrickWebPushAdapter } from "@frick/server/push/web-push-adapter";
+import { createFrickServer } from "@fricken/server";
+import { createFrickApnsAdapter } from "@fricken/server/push/apns-adapter";
+import { createFrickFcmAdapter } from "@fricken/server/push/fcm-adapter";
+import { createFrickWebPushAdapter } from "@fricken/server/push/web-push-adapter";
 
 const apns = createFrickApnsAdapter();
 const fcm = createFrickFcmAdapter();
@@ -97,7 +97,7 @@ omits `p256dh`/`auth` still send an empty body (the pre-FR-60 wake-up path).
 Multi-key rotation for the encryption material is out of scope here (FR-61).
 
 The `encryptWebPushPayload(payload, p256dh, auth)` helper is exported from
-`@frick/server/push/web-push-adapter` for callers that need to build the body
+`@fricken/server/push/web-push-adapter` for callers that need to build the body
 directly.
 
 ## Required environment variable

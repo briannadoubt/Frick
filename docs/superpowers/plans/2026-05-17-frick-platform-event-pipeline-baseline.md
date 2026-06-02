@@ -314,7 +314,7 @@ definePlatformEventPipelineConformance({
 Run:
 
 ```bash
-pnpm --filter @frick/server test -- tests/platform-events-memory.test.ts
+pnpm --filter @fricken/server test -- tests/platform-events-memory.test.ts
 ```
 
 Expected: FAIL because `../src/platform-events/memory.js` and `../src/platform-events/types.js` do not exist.
@@ -387,7 +387,7 @@ Use `randomUUID` from `node:crypto`.
 Run:
 
 ```bash
-pnpm --filter @frick/server test -- tests/platform-events-memory.test.ts
+pnpm --filter @fricken/server test -- tests/platform-events-memory.test.ts
 pnpm typecheck
 ```
 
@@ -420,7 +420,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { definePlatformEventPipelineConformance } from "./platform-events.conformance.js";
 import { SqlitePlatformEventPipeline } from "../src/platform-events/sqlite.js";
 import { initializeStorage } from "../src/storage/schema.js";
-import { foundationSchema } from "@frick/protocol";
+import { foundationSchema } from "@fricken/protocol";
 import { FrickStore } from "../src/store.js";
 
 let db: DatabaseSync | undefined;
@@ -503,7 +503,7 @@ Modify `apps/server/tests/migrations.test.ts` expected migration ids to include 
 Run:
 
 ```bash
-pnpm --filter @frick/server test -- tests/platform-events-sqlite.test.ts tests/migrations.test.ts
+pnpm --filter @fricken/server test -- tests/platform-events-sqlite.test.ts tests/migrations.test.ts
 ```
 
 Expected: FAIL because SQLite platform event module and migration do not exist.
@@ -626,7 +626,7 @@ this.platformEvents = new SqlitePlatformEventPipeline(this.#db, {
 Run:
 
 ```bash
-pnpm --filter @frick/server test -- tests/platform-events-sqlite.test.ts tests/migrations.test.ts
+pnpm --filter @fricken/server test -- tests/platform-events-sqlite.test.ts tests/migrations.test.ts
 pnpm typecheck
 ```
 
@@ -737,7 +737,7 @@ async function inspectHeaders(httpUrl: string): Promise<Record<string, string>> 
 Run:
 
 ```bash
-pnpm --filter @frick/server test -- tests/platform-events-routes.test.ts
+pnpm --filter @fricken/server test -- tests/platform-events-routes.test.ts
 ```
 
 Expected: FAIL because routes do not exist.
@@ -840,7 +840,7 @@ platformEvents?: PlatformEventHealth;
 Run:
 
 ```bash
-pnpm --filter @frick/server test -- tests/platform-events-routes.test.ts tests/dashboard-routes.test.ts tests/ops-endpoints.test.ts
+pnpm --filter @fricken/server test -- tests/platform-events-routes.test.ts tests/dashboard-routes.test.ts tests/ops-endpoints.test.ts
 pnpm typecheck
 ```
 
@@ -869,7 +869,7 @@ git commit -m "feat(server): expose platform event pipeline health"
 Run:
 
 ```bash
-pnpm --filter @frick/server add kafkajs
+pnpm --filter @fricken/server add kafkajs
 ```
 
 Expected: `apps/server/package.json` and `pnpm-lock.yaml` update.
@@ -940,7 +940,7 @@ If brokers are empty, throw `FrickConfigError("FRICK_PLATFORM_EVENTS_KAFKA_BROKE
 Run:
 
 ```bash
-pnpm --filter @frick/server test -- tests/platform-events-kafka.test.ts
+pnpm --filter @fricken/server test -- tests/platform-events-kafka.test.ts
 pnpm typecheck
 ```
 
@@ -949,7 +949,7 @@ Expected: PASS with Kafka test skipped when `FRICK_TEST_KAFKA_BROKERS` is unset.
 If a local Redpanda/Kafka broker is available, also run:
 
 ```bash
-FRICK_TEST_KAFKA_BROKERS=127.0.0.1:9092 pnpm --filter @frick/server test -- tests/platform-events-kafka.test.ts
+FRICK_TEST_KAFKA_BROKERS=127.0.0.1:9092 pnpm --filter @fricken/server test -- tests/platform-events-kafka.test.ts
 ```
 
 Expected: PASS.
@@ -1034,7 +1034,7 @@ describe("runtime platform event publishers", () => {
 Run:
 
 ```bash
-pnpm --filter @frick/server test -- tests/platform-events-runtime.test.ts
+pnpm --filter @fricken/server test -- tests/platform-events-runtime.test.ts
 ```
 
 Expected: FAIL because worker does not accept/publish `platformEvents`.
@@ -1068,7 +1068,7 @@ Modify `apps/server/src/server.ts` when creating the job worker to pass `platfor
 Run:
 
 ```bash
-pnpm --filter @frick/server test -- tests/platform-events-runtime.test.ts tests/jobs-worker.test.ts tests/devtools-events.test.ts
+pnpm --filter @fricken/server test -- tests/platform-events-runtime.test.ts tests/jobs-worker.test.ts tests/devtools-events.test.ts
 pnpm typecheck
 ```
 
@@ -1102,7 +1102,7 @@ expect(await scriptResponse.text()).toContain("platform-events/health");
 Run:
 
 ```bash
-pnpm --filter @frick/server test -- tests/dashboard-routes.test.ts
+pnpm --filter @fricken/server test -- tests/dashboard-routes.test.ts
 ```
 
 Expected: FAIL because the dashboard script does not fetch platform event health.
@@ -1158,7 +1158,7 @@ Run:
 
 ```bash
 node --check apps/dev-dashboard/dashboard.js
-pnpm --filter @frick/server test -- tests/dashboard-routes.test.ts tests/platform-events-routes.test.ts
+pnpm --filter @fricken/server test -- tests/dashboard-routes.test.ts tests/platform-events-routes.test.ts
 rg -n "platform event|FRICK_PLATFORM_EVENTS|/_frick/inspect/platform-events|platform-events/health" docs CHANGELOG.md
 ```
 
@@ -1178,7 +1178,7 @@ git commit -m "docs: document platform event pipeline baseline"
 - [ ] **Step 1: Run focused tests**
 
 ```bash
-pnpm --filter @frick/server test -- tests/platform-events-memory.test.ts tests/platform-events-sqlite.test.ts tests/platform-events-routes.test.ts tests/platform-events-runtime.test.ts tests/dashboard-routes.test.ts tests/migrations.test.ts
+pnpm --filter @fricken/server test -- tests/platform-events-memory.test.ts tests/platform-events-sqlite.test.ts tests/platform-events-routes.test.ts tests/platform-events-runtime.test.ts tests/dashboard-routes.test.ts tests/migrations.test.ts
 ```
 
 Expected: PASS.

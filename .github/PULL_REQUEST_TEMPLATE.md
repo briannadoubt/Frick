@@ -21,7 +21,7 @@ Thanks for the PR! A few notes before you hit submit:
 ## Scope of change
 
 - [ ] Touches the wire protocol (`packages/protocol`)
-- [ ] Touches `@frick/server` runtime behavior
+- [ ] Touches `@fricken/server` runtime behavior
 - [ ] Touches the React, Swift, or Android client SDK
 - [ ] Touches the CLI surface
 - [ ] Adds or changes a database migration

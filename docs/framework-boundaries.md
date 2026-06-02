@@ -4,25 +4,25 @@ Status: Contract baseline audit.
 
 ## Public Framework Packages
 
-- `@frick/protocol`: canonical schema types, codecs, frame types, generated artifact helpers, schema compatibility helpers, shared error envelopes, capability metadata, and protocol fixtures.
-- `@frick/core`: UI-agnostic TypeScript runtime for cache, subscriptions, sync status, offline appends, presence, signals, and schema compatibility behavior.
-- `@frick/react`: React provider and hooks over `@frick/core`.
-- `@frick/devtools`: embeddable React DevTools widgets for client sync status,
+- `@fricken/protocol`: canonical schema types, codecs, frame types, generated artifact helpers, schema compatibility helpers, shared error envelopes, capability metadata, and protocol fixtures.
+- `@fricken/core`: UI-agnostic TypeScript runtime for cache, subscriptions, sync status, offline appends, presence, signals, and schema compatibility behavior.
+- `@fricken/react`: React provider and hooks over `@fricken/core`.
+- `@fricken/devtools`: embeddable React DevTools widgets for client sync status,
   pending mutations, optimistic overlays, and runtime diagnostics.
-- `@frick/mcp`: read-only MCP server for inspecting a running Frick app's
+- `@fricken/mcp`: read-only MCP server for inspecting a running Frick app's
   schema, health, resources, and runtime metadata from agent harnesses.
-- `@frick/agent-kit`: portable guidance pack that installs Frick skills,
+- `@fricken/agent-kit`: portable guidance pack that installs Frick skills,
   agent profiles, Cursor rules, and shared spine references into scaffolded
   apps.
-- `@frick/design`: canonical design-token authoring and generation.
-- `@frick/design-web`: reusable React design primitives and workspace shell components.
+- `@fricken/design`: canonical design-token authoring and generation.
+- `@fricken/design-web`: reusable React design primitives and workspace shell components.
 - `packages/swift`: Swift client SDK package.
 - `packages/design-swift`: Swift design package.
 - `apps/android/frick`: Android/Kotlin client SDK module.
 - `apps/android/frick-compose`: Android Compose helpers over the Kotlin SDK.
 - `apps/android/design`: Android/Kotlin design module.
 - `apps/server`: Frick server runtime. Public baseline API is the
-  `@frick/server` package entrypoint: `createFrickServer`, documented server
+  `@fricken/server` package entrypoint: `createFrickServer`, documented server
   options, telemetry types, project/module helpers, reset/migration helpers,
   job handler types, and the documented cluster bus. Production push adapters
   are exported through documented package subpaths. Route and storage internals
@@ -38,7 +38,7 @@ Status: Contract baseline audit.
 - Server route handlers inside `apps/server/src/server.ts`.
 - Server outbound email helpers under `apps/server/src/email/*`. The test and
   Resend adapters exist for framework development, but they are not exported
-  from `@frick/server` today; apps should not deep-import them until a package
+  from `@fricken/server` today; apps should not deep-import them until a package
   surface is documented.
 - Sync gateway internals under `apps/server/src/sync/*`.
 - Protocol generator scripts under `packages/protocol/scripts/*`.

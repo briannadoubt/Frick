@@ -2,7 +2,7 @@
 
 The single-process default works fine for a few thousand concurrent WebSocket subscribers. Past that, you need to run multiple server nodes behind a load balancer — and that means cross-node fan-out, because a write that lands on node A has to reach a subscriber connected to node B.
 
-This page documents the framework's cluster surface, the in-memory default that ships with `@frick/server`, and what a production Redis / NATS adapter looks like.
+This page documents the framework's cluster surface, the in-memory default that ships with `@fricken/server`, and what a production Redis / NATS adapter looks like.
 
 ## What "horizontal scale" actually requires
 
@@ -41,7 +41,7 @@ Ships in the box. Useful for:
 - **Single-node deploys** that may want to scale to N nodes later without rewiring — the in-memory bus is a no-op on the wire so wiring it now adds nothing but a useless `originNodeId` on every envelope.
 
 ```ts
-import { createFrickServer, MemoryClusterBus } from "@frick/server";
+import { createFrickServer, MemoryClusterBus } from "@fricken/server";
 
 const server = createFrickServer({
   clusterBus: new MemoryClusterBus(), // optional; unset for true single-node
@@ -54,7 +54,7 @@ A production adapter wraps Redis / NATS / Kafka / any pub-sub-shaped substrate. 
 
 ```ts
 import { createClient } from "redis";
-import type { ClusterEnvelope, ClusterEnvelopeHandler, FrickClusterBus, NodeId } from "@frick/server";
+import type { ClusterEnvelope, ClusterEnvelopeHandler, FrickClusterBus, NodeId } from "@fricken/server";
 
 const CHANNEL = "frick.cluster";
 

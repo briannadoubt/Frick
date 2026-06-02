@@ -6,7 +6,7 @@ Use this split for fullstack app work:
 
 - Orchestrator: updates the spine, decides scope, keeps commands and acceptance criteria visible.
 - Backend: schema, server wiring, projections, jobs, blobs, auth, tenancy, migrations.
-- Web: React UI, `@frick/react`, `@frick/core`, browser cache behavior, design-web.
+- Web: React UI, `@fricken/react`, `@fricken/core`, browser cache behavior, design-web.
 - iOS: Swift DTOs, Swift runtime, cache reset behavior, push receive, design-swift.
 - Android: Kotlin DTOs, runtime, StateFlow sync state, push receive, design module.
 - Debugger/reviewer: sync diagnostics, generated drift, cross-platform parity, release gates.

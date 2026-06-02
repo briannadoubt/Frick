@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a publishable `@frick/agent-kit` package that installs Frick-aware plugins, skills, subagent profiles, and Cursor rules into new application projects.
+**Goal:** Add a publishable `@fricken/agent-kit` package that installs Frick-aware plugins, skills, subagent profiles, and Cursor rules into new application projects.
 
 **Architecture:** The package owns one canonical capability manifest plus portable `SKILL.md` files, shared references, and adapter-specific projections for Codex, Claude Code, and Cursor. A zero-dependency TypeScript installer copies the requested harness surfaces into a target app and reports JSON output for agent automation.
 
@@ -116,7 +116,7 @@ The root scripts include `packages/agent-kit` in `build:packages` and `typecheck
 
 - [ ] **Step 2: Update docs and release tests**
 
-The hardening tests include `packages/agent-kit` in the public npm package set. Authoring docs describe the installer command. Versioning lists `@frick/agent-kit`.
+The hardening tests include `packages/agent-kit` in the public npm package set. Authoring docs describe the installer command. Versioning lists `@fricken/agent-kit`.
 
 ### Task 5: Verify
 

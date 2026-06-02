@@ -8,7 +8,7 @@ Framework packages follow [SemVer 2.0.0](https://semver.org/) with the following
 
 - **Major (`X.0.0`)** — incompatible change. Triggered by either:
   - a breaking change to the public TypeScript/Swift/Kotlin surface, **or**
-  - a `schemaRevision` bump in `@frick/protocol` that older clients cannot decode (e.g. a removed frame kind, a renamed envelope field, or a changed wire encoding).
+  - a `schemaRevision` bump in `@fricken/protocol` that older clients cannot decode (e.g. a removed frame kind, a renamed envelope field, or a changed wire encoding).
 - **Minor (`0.Y.0`)** — additive, backwards-compatible change. New exports, new frame kinds that older servers ignore, new optional capability flags, new SQL migrations that are forward-compatible.
 - **Patch (`0.0.Z`)** — bug fixes, documentation, internal refactors with no API or wire surface change.
 
@@ -18,17 +18,17 @@ A new framework version **does not** imply a new schema revision. A release that
 
 | Package | Language | Version source |
 | --- | --- | --- |
-| `@frick/protocol` | TypeScript | `packages/protocol/package.json` |
-| `@frick/core` | TypeScript | `packages/core/package.json` |
-| `@frick/react` | TypeScript | `packages/react/package.json` |
-| `@frick/design` | TypeScript | `packages/design/package.json` |
-| `@frick/design-web` | TypeScript | `packages/design-web/package.json` |
-| `@frick/devtools` | TypeScript | `packages/devtools/package.json` |
-| `@frick/agent-kit` | TypeScript | `packages/agent-kit/package.json` |
-| `@frick/mcp` | TypeScript | `packages/mcp/package.json` |
-| `@frick/server` | TypeScript | `apps/server/package.json` |
-| `@frick/web` | TypeScript | `apps/web/package.json` |
-| `@frick/cli` | TypeScript | `apps/cli/package.json` |
+| `@fricken/protocol` | TypeScript | `packages/protocol/package.json` |
+| `@fricken/core` | TypeScript | `packages/core/package.json` |
+| `@fricken/react` | TypeScript | `packages/react/package.json` |
+| `@fricken/design` | TypeScript | `packages/design/package.json` |
+| `@fricken/design-web` | TypeScript | `packages/design-web/package.json` |
+| `@fricken/devtools` | TypeScript | `packages/devtools/package.json` |
+| `@fricken/agent-kit` | TypeScript | `packages/agent-kit/package.json` |
+| `@fricken/mcp` | TypeScript | `packages/mcp/package.json` |
+| `@fricken/server` | TypeScript | `apps/server/package.json` |
+| `@fricken/web` | TypeScript | `apps/web/package.json` |
+| `@fricken/cli` | TypeScript | `apps/cli/package.json` |
 | `Frick` (Swift) | Swift | git tag (`swift-vX.Y.Z`) — `Package.swift` has no version field |
 | `FrickDesign` (Swift) | Swift | git tag (`swift-design-vX.Y.Z`) |
 | `dev.frick:frick` | Android (Kotlin) | `apps/android/frick/build.gradle.kts` (`version = "X.Y.Z"`) |
@@ -36,22 +36,22 @@ A new framework version **does not** imply a new schema revision. A release that
 
 Future Rust crates would carry their version in `Cargo.toml` under `[package].version`. The root `package.json` never declares a framework version — the field is pinned to `0.0.0` and is private.
 
-Packages are independent. A patch release of `@frick/server` does not force a release of `@frick/protocol`.
+Packages are independent. A patch release of `@fricken/server` does not force a release of `@fricken/protocol`.
 
 ## Wire compatibility
 
-The wire contract is governed by `schemaRevision` in `@frick/protocol`, not by package versions. Two rules:
+The wire contract is governed by `schemaRevision` in `@fricken/protocol`, not by package versions. Two rules:
 
-1. **Decoupled bumps.** A framework version may keep the existing `schemaRevision` if the wire format did not change. Conversely, a `schemaRevision` bump always travels with at least a minor bump of `@frick/protocol`.
+1. **Decoupled bumps.** A framework version may keep the existing `schemaRevision` if the wire format did not change. Conversely, a `schemaRevision` bump always travels with at least a minor bump of `@fricken/protocol`.
 2. **Capability negotiation.** Clients and servers advertise capabilities during the hello handshake (see `packages/protocol/src/capabilities.ts`). Capability flags allow additive changes within the same revision.
 
 ## Compatibility windows
 
-The server tolerates clients from the **last two minor versions** of the same major. For example, with `@frick/server@1.4.x`:
+The server tolerates clients from the **last two minor versions** of the same major. For example, with `@fricken/server@1.4.x`:
 
-- `@frick/core@1.4.*` — fully supported (current).
-- `@frick/core@1.3.*` — fully supported (previous minor).
-- `@frick/core@1.2.*` — connections rejected with an `auth.versionUnsupported` envelope.
+- `@fricken/core@1.4.*` — fully supported (current).
+- `@fricken/core@1.3.*` — fully supported (previous minor).
+- `@fricken/core@1.2.*` — connections rejected with an `auth.versionUnsupported` envelope.
 
 Major boundaries are hard: a `2.x` server refuses any `1.x` client unless capability negotiation explicitly opts in.
 
@@ -74,45 +74,45 @@ Deprecations must be listed under the `Deprecated` section of `CHANGELOG.md` for
 
 These are the exports an application author may depend on. Breaking changes require a major bump.
 
-- `@frick/protocol`:
+- `@fricken/protocol`:
   - `FrickSchema`, `FrickErrorEnvelope`, `FrickEnvelope`
   - `FrameKind` and the discriminated `Frame` union
   - `schemaRevision`, capability descriptors, hello-handshake types
   - generated native artifacts (Swift/Kotlin constants and types)
-- `@frick/core`:
+- `@fricken/core`:
   - `FrickClient`, `connectSync`, `upsertObject`, `subscribeStream`, `subscribeProjection`
   - error envelope decoding helpers
-- `@frick/react`:
+- `@fricken/react`:
   - `useProjection`, `useFrickClient`
-- `@frick/design`:
+- `@fricken/design`:
   - design token definition, resolver, validation, and generator exports
-- `@frick/design-web`:
+- `@fricken/design-web`:
   - exported React design primitives and generated CSS token contract
-- `@frick/devtools`:
+- `@fricken/devtools`:
   - `FrickDevtools` React component and documented props
-- `@frick/agent-kit`:
+- `@fricken/agent-kit`:
   - installer CLI, package manifest, Frick skills, subagent profiles, adapter manifests, and Cursor rules
-- `@frick/mcp`:
+- `@fricken/mcp`:
   - stdio MCP server, read-only runtime tools/resources/prompts, client config helper, and CLI launch helpers
-- `@frick/server`:
+- `@fricken/server`:
   - `createServer`, `FrickStore` constructor, runtime config types
   - HTTP route mounts under `/_frick/*` (admin routes excluded from compat — see below)
   - registered handler/projection/job/policy/blob/notification interfaces
-- `@frick/cli`:
+- `@fricken/cli`:
   - documented commands (`init`, `schema`, `migrate`, `doctor`, `inspect`, `reset`, `tenants`, `verify`, `lint`, `backup`, `restore`, `dashboard`, `mcp`, scaffolders)
 
 ### Unstable / internal
 
 Anything under these paths may change in any release, including patches. Do not import from these paths in application code.
 
-- `@frick/server`:
+- `@fricken/server`:
   - `apps/server/src/storage/*` — SQLite adapters and migration internals
   - `apps/server/src/sync/*` internals other than the documented gateway entry point
   - `apps/server/src/devtools/*` — DevTools event stream is for the inspector, not authoring
   - all admin routes under `/_frick/admin/*` — versioned independently and gated behind `FRICK_ADMIN_TOKEN`
-- `@frick/protocol`:
+- `@fricken/protocol`:
   - `packages/protocol/scripts/*` — generator scripts and fixture tooling
-- `@frick/core`:
+- `@fricken/core`:
   - any module path containing `/internal/`
 
 If you need something internal to be stable, file an issue and we will decide whether to promote it.

@@ -1,10 +1,10 @@
-# `@frick/devtools`
+# `@fricken/devtools`
 
 An embeddable React panel for inspecting a running Frick app in development. Mount it inside a `<FrickProvider>` tree and you get a floating console that surfaces connection status, the mutation queue, and the live `/_frick/inspect/devtools/events` feed (HTTP requests, sync frames, push deliveries, jobs).
 
 ```tsx
-import { FrickProvider } from "@frick/react";
-import { FrickDevtools } from "@frick/devtools";
+import { FrickProvider } from "@fricken/react";
+import { FrickDevtools } from "@fricken/devtools";
 
 function App() {
   return (

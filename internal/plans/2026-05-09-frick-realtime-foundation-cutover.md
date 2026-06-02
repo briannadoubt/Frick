@@ -1345,7 +1345,7 @@ Replace or extend `apps/server/tests/server.test.ts` with:
 import { WebSocket } from "ws";
 import { afterEach, describe, expect, it } from "vitest";
 import { createFrickServer } from "../src/server.js";
-import { FrameKind, decodeFrame, encodeFrame, foundationSchema, type FrickFrame } from "@frick/protocol";
+import { FrameKind, decodeFrame, encodeFrame, foundationSchema, type FrickFrame } from "@fricken/protocol";
 
 let app: Awaited<ReturnType<typeof startServer>> | undefined;
 
@@ -1537,7 +1537,7 @@ Replace `packages/core/tests/runtime.test.ts` with:
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { FrameKind, foundationSchema } from "@frick/protocol";
+import { FrameKind, foundationSchema } from "@fricken/protocol";
 import { FrickClient, MemoryFrickCache } from "../src/index.js";
 
 describe("foundation runtime", () => {
@@ -1591,7 +1591,7 @@ Expected: fail because runtime still exposes query/mutate prototype APIs.
 Create `packages/core/src/cache.ts`:
 
 ```ts
-import type { FrickSchema, PlainObject, StreamEventInput } from "@frick/protocol";
+import type { FrickSchema, PlainObject, StreamEventInput } from "@fricken/protocol";
 
 export interface PendingAppend {
   requestId: string;
@@ -1640,7 +1640,7 @@ client.clearPresence(name, key): Promise<void>
 client.sendSignal(name, key, value): Promise<void>
 ```
 
-Use canonical frames from `@frick/protocol`. On connect, send `Hello` with schema hash and known cursors. On `Ack`, remove the matching pending append. On `StreamPage` and `Delta`, update cache and subscribers.
+Use canonical frames from `@fricken/protocol`. On connect, send `Hello` with schema hash and known cursors. On `Ack`, remove the matching pending append. On `StreamPage` and `Delta`, update cache and subscribers.
 
 - [ ] **Step 6: Export runtime API**
 
@@ -1712,7 +1712,7 @@ Run:
 
 ```bash
 pnpm typecheck
-pnpm --filter @frick/web build
+pnpm --filter @fricken/web build
 ```
 
 Expected: both pass.
@@ -1885,8 +1885,8 @@ Ensure these scripts still exist and point at the foundation stack:
 {
   "scripts": {
     "schema:generate": "tsx packages/protocol/scripts/generate-native-artifacts.ts",
-    "server": "pnpm --filter @frick/server dev",
-    "web": "pnpm --filter @frick/web dev",
+    "server": "pnpm --filter @fricken/server dev",
+    "web": "pnpm --filter @fricken/web dev",
     "tilt": "tilt up",
     "swift:test": "pnpm schema:generate && swift test --package-path packages/swift",
     "ios:build": "pnpm schema:generate && cd apps/ios && xcodebuild -project FrickDemo.xcodeproj -scheme FrickDemo -destination 'platform=iOS Simulator,name=iPhone 17' build",
@@ -1921,7 +1921,7 @@ Run:
 ```bash
 pnpm test
 pnpm typecheck
-pnpm --filter @frick/web build
+pnpm --filter @fricken/web build
 ```
 
 Expected: pass.
@@ -1967,7 +1967,7 @@ Run:
 ```bash
 pnpm test
 pnpm typecheck
-pnpm --filter @frick/web build
+pnpm --filter @fricken/web build
 pnpm swift:test
 pnpm ios:build
 pnpm android:build
@@ -1981,7 +1981,7 @@ Run in foreground terminals or managed screen sessions:
 
 ```bash
 pnpm server
-pnpm --filter @frick/web dev
+pnpm --filter @fricken/web dev
 ```
 
 Expected:

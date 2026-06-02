@@ -1,11 +1,11 @@
-# @frick/design-web
+# @fricken/design-web
 
-React design primitives and workspace shell components for Frick web apps, built on tokens generated from [`@frick/design`](../design).
+React design primitives and workspace shell components for Frick web apps, built on tokens generated from [`@fricken/design`](../design).
 
 ## Install
 
 ```sh
-pnpm add @frick/design-web react
+pnpm add @fricken/design-web react
 ```
 
 ## What's in here
@@ -16,14 +16,14 @@ pnpm add @frick/design-web react
 - Data components for surface chrome
 - The `WorkspaceShell` adaptive layout, `WorkspaceListItem`, `MessageList`, navigation primitives — used by the Frick demo web app
 
-Components are unopinionated about routing and data — they're shape-only React primitives. Wire them to your app via [`@frick/react`](../react)'s hooks.
+Components are unopinionated about routing and data — they're shape-only React primitives. Wire them to your app via [`@fricken/react`](../react)'s hooks.
 
 ## Runtime design context
 
 Wrap your app in `FrickDesignProvider` and switch any axis — `mode`, `density`, `brand`, `iconPack` — at runtime without a reload. The provider applies the matching `data-frick-*` attributes that select the generated token block in `tokens.css`, so every resolved color, metric, and component updates live.
 
 ```tsx
-import { FrickDesignProvider } from "@frick/design-web";
+import { FrickDesignProvider } from "@fricken/design-web";
 
 <FrickDesignProvider mode="system" density="regular" brand="frick" iconPack="native">
   {children}
@@ -33,7 +33,7 @@ import { FrickDesignProvider } from "@frick/design-web";
 Axes can be **controlled** (pass the prop) or **uncontrolled** (seed with `defaultMode` / `defaultDensity` / `defaultBrand` / `defaultIconPack` and switch via the setters on the context):
 
 ```tsx
-import { useDesignContext } from "@frick/design-web";
+import { useDesignContext } from "@fricken/design-web";
 
 function ThemeToggle() {
   const { mode, setMode } = useDesignContext();

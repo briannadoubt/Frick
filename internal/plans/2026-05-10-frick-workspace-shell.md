@@ -750,7 +750,7 @@ Add a test to `apps/web/src/chat-foundation.test.ts` or a new `apps/web/src/work
 ```tsx
 import { describe, expect, test } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { WorkspaceShell } from "@frick/design-web";
+import { WorkspaceShell } from "@fricken/design-web";
 
 describe("web workspace shell integration contract", () => {
   test("renders chat as a workspace destination with collection and inspector", () => {
@@ -791,7 +791,7 @@ Expected before Task 1 is complete: fail. Expected after Task 1: pass.
 Change the design import in `apps/web/src/App.tsx`:
 
 ```tsx
-import { Avatar, ChatBubble, FrickDesignProvider, MessageList, WorkspaceShell } from "@frick/design-web";
+import { Avatar, ChatBubble, FrickDesignProvider, MessageList, WorkspaceShell } from "@fricken/design-web";
 ```
 
 Add destination state in `ChatWorkspace`:

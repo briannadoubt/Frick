@@ -77,7 +77,7 @@ describe("frick dev", () => {
 Run:
 
 ```bash
-pnpm --filter @frick/cli test -- tests/cli.test.ts
+pnpm --filter @fricken/cli test -- tests/cli.test.ts
 ```
 
 Expected: FAIL because `dev` is not registered.
@@ -130,7 +130,7 @@ Register it in `apps/cli/src/index.ts`.
 Run:
 
 ```bash
-pnpm --filter @frick/cli test -- tests/cli.test.ts
+pnpm --filter @fricken/cli test -- tests/cli.test.ts
 pnpm typecheck
 ```
 
@@ -218,7 +218,7 @@ In `apps/server/src/server.ts`, after protected principal resolution and before 
 Run:
 
 ```bash
-pnpm --filter @frick/server exec vitest run tests/analytics-events.test.ts tests/platform-events-runtime.test.ts tests/platform-events-routes.test.ts
+pnpm --filter @fricken/server exec vitest run tests/analytics-events.test.ts tests/platform-events-runtime.test.ts tests/platform-events-routes.test.ts
 pnpm typecheck
 ```
 
@@ -306,8 +306,8 @@ Export it from `packages/react/src/index.tsx`.
 Run:
 
 ```bash
-pnpm --filter @frick/core test -- tests/analytics.test.ts tests/runtime.test.ts
-pnpm --filter @frick/react test -- src/index.test.tsx
+pnpm --filter @fricken/core test -- tests/analytics.test.ts tests/runtime.test.ts
+pnpm --filter @fricken/react test -- src/index.test.tsx
 pnpm typecheck
 ```
 

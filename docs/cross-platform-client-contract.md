@@ -239,7 +239,7 @@ Schema field definitions may also carry an optional `sensitivity` classification
 Framework sharing is HTTP-based and object-record scoped. The shared wire
 types are `FrickInvitation`, `FrickGrant`, and `FrickSharingPermission`
 (`"read"` or `"write"`). TypeScript exports these shapes from
-`@frick/protocol`; Swift exposes `FrickInvitation`, `FrickGrant`, and
+`@fricken/protocol`; Swift exposes `FrickInvitation`, `FrickGrant`, and
 `FrickClient.createInvitation(...)`, `acceptInvitation(token:)`,
 `listGrants(...)`, and `revokeGrant(grantId:)`. Android/Kotlin DTO/runtime
 helpers for these routes have not landed yet.

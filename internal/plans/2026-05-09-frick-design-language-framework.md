@@ -23,7 +23,7 @@ Modify existing integration points:
 
 - `package.json`: add design scripts and include design packages in typecheck.
 - `pnpm-workspace.yaml`: current `packages/*` pattern already covers new TS packages.
-- `apps/web/package.json`, `apps/web/src/App.tsx`, `apps/web/src/styles.css`: consume `@frick/design-web` and remove local design primitives.
+- `apps/web/package.json`, `apps/web/src/App.tsx`, `apps/web/src/styles.css`: consume `@fricken/design-web` and remove local design primitives.
 - `apps/ios/project.yml`, `apps/ios/FrickDemo/ContentView.swift`: add the local Swift design package and consume `FrickDesign`.
 - `apps/android/settings.gradle.kts`, `apps/android/app/build.gradle.kts`, `apps/android/app/src/main/java/dev/frick/demo/MainActivity.kt`: add `:design` and consume `dev.frick.design`.
 - `README.md`: document `pnpm design:check`, `pnpm design:generate`, and runtime theme/density controls.
@@ -31,7 +31,7 @@ Modify existing integration points:
 Implementation boundaries:
 
 - `packages/design` must not import React, Swift, Android, or app code.
-- `packages/design-web` must not import `@frick/react`; demo apps compose data hooks with design components.
+- `packages/design-web` must not import `@fricken/react`; demo apps compose data hooks with design components.
 - `packages/design-swift` must not import `FrickSwift`; demo apps compose data clients with design components.
 - `apps/android/design` must not depend on `:frick`; demo apps compose data clients with design components.
 
@@ -60,7 +60,7 @@ Create `packages/design/package.json`:
 
 ```json
 {
-  "name": "@frick/design",
+  "name": "@fricken/design",
   "version": "0.0.0",
   "type": "module",
   "exports": {
@@ -107,7 +107,7 @@ Create `packages/design-web/package.json`:
 
 ```json
 {
-  "name": "@frick/design-web",
+  "name": "@fricken/design-web",
   "version": "0.0.0",
   "type": "module",
   "exports": {
@@ -115,7 +115,7 @@ Create `packages/design-web/package.json`:
     "./tokens.css": "./src/generated/tokens.css"
   },
   "dependencies": {
-    "@frick/design": "workspace:*",
+    "@fricken/design": "workspace:*",
     "lucide-react": "^0.556.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
@@ -272,10 +272,10 @@ In `package.json`, update scripts to include the design build:
     "test": "vitest run",
     "typecheck": "tsc -b packages/protocol packages/core packages/react packages/design packages/design-web apps/server apps/web",
     "schema:generate": "tsx packages/protocol/scripts/generate-native-artifacts.ts",
-    "design:check": "pnpm --filter @frick/design check",
-    "design:generate": "pnpm --filter @frick/design generate",
-    "server": "pnpm --filter @frick/server dev",
-    "web": "pnpm --filter @frick/web dev",
+    "design:check": "pnpm --filter @fricken/design check",
+    "design:generate": "pnpm --filter @fricken/design generate",
+    "server": "pnpm --filter @fricken/server dev",
+    "web": "pnpm --filter @fricken/web dev",
     "tilt": "tilt up",
     "ios:generate": "pnpm schema:generate && pnpm design:generate && cd apps/ios && xcodegen generate",
     "ios:build": "pnpm schema:generate && pnpm design:generate && cd apps/ios && xcodebuild -project FrickDemo.xcodeproj -scheme FrickDemo -destination 'platform=iOS Simulator,name=iPhone 17' build",
@@ -415,7 +415,7 @@ describe("Frick design resolver", () => {
 Run:
 
 ```bash
-pnpm --filter @frick/design test -- tests/resolver.test.ts
+pnpm --filter @fricken/design test -- tests/resolver.test.ts
 ```
 
 Expected: FAIL because model and resolver files do not exist.
@@ -864,7 +864,7 @@ function isTokenTree(value: unknown): value is TokenTree {
 Run:
 
 ```bash
-pnpm --filter @frick/design test -- tests/resolver.test.ts
+pnpm --filter @fricken/design test -- tests/resolver.test.ts
 ```
 
 Expected: PASS.
@@ -963,7 +963,7 @@ describe("Frick design validation", () => {
 Run:
 
 ```bash
-pnpm --filter @frick/design test -- tests/validate.test.ts
+pnpm --filter @fricken/design test -- tests/validate.test.ts
 ```
 
 Expected: FAIL because `validate.ts` does not exist.
@@ -1318,7 +1318,7 @@ Run:
 ```bash
 pnpm design:check
 pnpm design:generate
-pnpm --filter @frick/design test
+pnpm --filter @fricken/design test
 ```
 
 Expected: all PASS and generated files are written.
@@ -1713,7 +1713,7 @@ describe("design web components", () => {
 Run:
 
 ```bash
-pnpm --filter @frick/design-web exec vitest run src/components.test.tsx
+pnpm --filter @fricken/design-web exec vitest run src/components.test.tsx
 ```
 
 Expected: PASS.
@@ -1723,7 +1723,7 @@ Expected: PASS.
 In `apps/web/package.json`, add:
 
 ```json
-"@frick/design-web": "workspace:*"
+"@fricken/design-web": "workspace:*"
 ```
 
 Keep existing dependencies.
@@ -2983,7 +2983,7 @@ fun FrickPieChart(values: List<Float>, modifier: Modifier = Modifier) {
 Run:
 
 ```bash
-pnpm --filter @frick/design-web exec vitest run src/components.test.tsx src/data-components.test.tsx
+pnpm --filter @fricken/design-web exec vitest run src/components.test.tsx src/data-components.test.tsx
 swift test --package-path packages/design-swift
 cd apps/android && JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=/opt/homebrew/share/android-commandlinetools ANDROID_SDK_ROOT=/opt/homebrew/share/android-commandlinetools PATH=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home/bin:/opt/homebrew/share/android-commandlinetools/platform-tools:/opt/homebrew/share/android-commandlinetools/emulator:$PATH ./gradlew :design:testDebugUnitTest :design:lintDebug :design:assembleDebug
 ```
@@ -3022,7 +3022,7 @@ import {
   FrickStatusChip,
   FrickSurface,
   FrickTextField,
-} from "@frick/design-web";
+} from "@fricken/design-web";
 ```
 
 - [ ] **Step 2: Wrap the app in design provider**
@@ -3348,7 +3348,7 @@ Run:
 
 ```bash
 pnpm typecheck
-pnpm --filter @frick/web build
+pnpm --filter @fricken/web build
 ```
 
 Expected: PASS.
@@ -3578,7 +3578,7 @@ pnpm design:check
 pnpm design:generate
 pnpm test
 pnpm typecheck
-pnpm --filter @frick/web build
+pnpm --filter @fricken/web build
 pnpm swift:test
 pnpm ios:build
 pnpm android:build
