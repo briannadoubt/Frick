@@ -22,7 +22,7 @@ export type FrickGrantLookup = (args: {
   recordType: string;
   recordId: string;
   required: FrickSharingPermission;
-}) => boolean;
+}) => Promise<boolean>;
 
 /**
  * Cascade variant of {@link FrickGrantLookup} used by stream + projection
@@ -46,7 +46,7 @@ export type FrickCascadeGrantLookup = (args: {
   granteeUserId: string;
   /** The stream's `streamId` or the projection's `key`. */
   recordId: string;
-}) => boolean;
+}) => Promise<boolean>;
 
 export interface Principal {
   userId: string;
@@ -355,15 +355,15 @@ export function applyPolicyHooks(
   return baseline;
 }
 
-function decideWithHooks(
+async function decideWithHooks(
   input: FrickPolicyInput,
   memberships: MembershipReader,
   hooks: readonly FrickPolicyHook[] | undefined,
   grantLookup?: FrickGrantLookup,
   cascadeGrantLookup?: FrickCascadeGrantLookup,
-): FrickDecision {
+): Promise<FrickDecision> {
   const afterHooks = applyPolicyHooks(decide(input, memberships), input, hooks);
-  const afterObjectGrants = relaxWithGrants(afterHooks, input, grantLookup);
+  const afterObjectGrants = await relaxWithGrants(afterHooks, input, grantLookup);
   return relaxWithCascadeGrants(afterObjectGrants, input, cascadeGrantLookup);
 }
 
@@ -382,11 +382,11 @@ function decideWithHooks(
  * a host that doesn't ship the sharing tables), or when there's no
  * principal to attribute the grant to.
  */
-function relaxWithGrants(
+async function relaxWithGrants(
   decision: FrickDecision,
   input: FrickPolicyInput,
   grantLookup: FrickGrantLookup | undefined,
-): FrickDecision {
+): Promise<FrickDecision> {
   if (decision.allow || !grantLookup) {
     return decision;
   }
@@ -409,7 +409,7 @@ function relaxWithGrants(
   }
   const required: FrickSharingPermission =
     input.action === "object.write" ? "write" : "read";
-  const allowed = grantLookup({
+  const allowed = await grantLookup({
     tenantId: principal.tenantId,
     granteeUserId: principal.userId,
     recordType: name,
@@ -445,11 +445,11 @@ function relaxWithGrants(
  * `unauthenticated` / `notMember` / `schema*` (out of scope for sharing),
  * when no cascade lookup is provided, or when there is no principal.
  */
-function relaxWithCascadeGrants(
+async function relaxWithCascadeGrants(
   decision: FrickDecision,
   input: FrickPolicyInput,
   cascadeGrantLookup: FrickCascadeGrantLookup | undefined,
-): FrickDecision {
+): Promise<FrickDecision> {
   if (decision.allow || !cascadeGrantLookup) {
     return decision;
   }
@@ -477,7 +477,7 @@ function relaxWithCascadeGrants(
   if ((kind !== "stream" && kind !== "projection") || !key) {
     return decision;
   }
-  const allowed = cascadeGrantLookup({
+  const allowed = await cascadeGrantLookup({
     tenantId: principal.tenantId,
     granteeUserId: principal.userId,
     recordId: key,
@@ -512,7 +512,7 @@ export function principalFromUserId(
   };
 }
 
-export function assertCanSubscribe(
+export async function assertCanSubscribe(
   principal: Principal,
   kind: string,
   name: string,
@@ -520,9 +520,9 @@ export function assertCanSubscribe(
   memberships: MembershipReader,
   hooks?: readonly FrickPolicyHook[],
   cascadeGrantLookup?: FrickCascadeGrantLookup,
-): void {
+): Promise<void> {
   if (kind === "projection") {
-    const decision = decideWithHooks(
+    const decision = await decideWithHooks(
       {
         principal,
         action: "projection.read",
@@ -539,7 +539,7 @@ export function assertCanSubscribe(
     return;
   }
   if (kind === "signal") {
-    const decision = decideWithHooks(
+    const decision = await decideWithHooks(
       {
         principal,
         action: "signal.read",
@@ -554,7 +554,7 @@ export function assertCanSubscribe(
     return;
   }
   if (kind === "presence") {
-    const decision = decideWithHooks(
+    const decision = await decideWithHooks(
       {
         principal,
         action: "presence.read",
@@ -571,7 +571,7 @@ export function assertCanSubscribe(
   if (kind !== "stream") {
     return;
   }
-  const decision = decideWithHooks(
+  const decision = await decideWithHooks(
     { principal, action: "stream.read", resource: { kind: "stream", name, ...(key !== undefined ? { key } : {}) } },
     memberships,
     hooks,
@@ -583,7 +583,7 @@ export function assertCanSubscribe(
   }
 }
 
-export function assertCanAppend(
+export async function assertCanAppend(
   principal: Principal,
   stream: string,
   key: string,
@@ -591,8 +591,8 @@ export function assertCanAppend(
   event?: string,
   payload?: Record<string, unknown>,
   hooks?: readonly FrickPolicyHook[],
-): void {
-  const decision = decideWithHooks(
+): Promise<void> {
+  const decision = await decideWithHooks(
     { principal, action: "stream.append", resource: { kind: "stream", name: stream, key } },
     memberships,
     hooks,
@@ -605,7 +605,7 @@ export function assertCanAppend(
   void payload;
 }
 
-export function assertCanWriteObject(
+export async function assertCanWriteObject(
   principal: Principal,
   objectType: string,
   objectId: string,
@@ -613,8 +613,8 @@ export function assertCanWriteObject(
   hooks?: readonly FrickPolicyHook[],
   value?: Record<string, unknown>,
   grantLookup?: FrickGrantLookup,
-): void {
-  const decision = decideWithHooks(
+): Promise<void> {
+  const decision = await decideWithHooks(
     {
       principal,
       action: "object.write",
@@ -641,15 +641,15 @@ export function assertCanWriteObject(
  * Storage-side reads (e.g. tenant-scoped list endpoints) don't go through
  * here — they already inherit tenant isolation at the SQL layer.
  */
-export function assertCanReadObject(
+export async function assertCanReadObject(
   principal: Principal,
   objectType: string,
   objectId: string,
   memberships: MembershipReader,
   hooks?: readonly FrickPolicyHook[],
   grantLookup?: FrickGrantLookup,
-): void {
-  const decision = decideWithHooks(
+): Promise<void> {
+  const decision = await decideWithHooks(
     {
       principal,
       action: "object.read",
@@ -689,14 +689,14 @@ export function assertCanReadObject(
  * Tenant scoping is enforced by the caller before this runs; the `memberships`
  * reader is accepted for signature parity with the other object-authz helpers.
  */
-export function canSubscriberReadObjectRecord(
+export async function canSubscriberReadObjectRecord(
   principal: Principal,
   objectType: string,
   objectId: string,
   memberships: MembershipReader,
   hooks?: readonly FrickPolicyHook[],
   grantLookup?: FrickGrantLookup,
-): boolean {
+): Promise<boolean> {
   void memberships;
   const input: FrickPolicyInput = {
     principal,
@@ -704,18 +704,18 @@ export function canSubscriberReadObjectRecord(
     resource: { kind: "object", name: objectType, key: objectId, tenantId: principal.tenantId },
   };
   const afterHooks = applyPolicyHooks(ALLOW, input, hooks);
-  return relaxWithGrants(afterHooks, input, grantLookup).allow;
+  return (await relaxWithGrants(afterHooks, input, grantLookup)).allow;
 }
 
-export function assertCanWritePresence(
+export async function assertCanWritePresence(
   principal: Principal,
   presence: string,
   key: string,
   memberships: MembershipReader,
   hooks?: readonly FrickPolicyHook[],
   value?: Record<string, unknown>,
-): void {
-  const decision = decideWithHooks(
+): Promise<void> {
+  const decision = await decideWithHooks(
     {
       principal,
       action: "presence.write",
@@ -822,14 +822,14 @@ function explicitSearchPolicyAllow(
       );
 }
 
-export function assertCanReadSignal(
+export async function assertCanReadSignal(
   principal: Principal,
   signal: string,
   key: string,
   memberships: MembershipReader,
   hooks?: readonly FrickPolicyHook[],
-): void {
-  const decision = decideWithHooks(
+): Promise<void> {
+  const decision = await decideWithHooks(
     { principal, action: "signal.read", resource: { kind: "signal", name: signal, key } },
     memberships,
     hooks,
@@ -839,17 +839,17 @@ export function assertCanReadSignal(
   }
 }
 
-export function assertCanSignal(
+export async function assertCanSignal(
   principal: Principal,
   signal: string,
   key: string,
   memberships?: MembershipReader,
   hooks?: readonly FrickPolicyHook[],
-): void {
+): Promise<void> {
   if (!memberships) {
     return;
   }
-  const decision = decideWithHooks(
+  const decision = await decideWithHooks(
     { principal, action: "signal.send", resource: { kind: "signal", name: signal, key } },
     memberships,
     hooks,
@@ -859,12 +859,12 @@ export function assertCanSignal(
   }
 }
 
-export function assertCanReadBlob(
+export async function assertCanReadBlob(
   principal: Principal,
   ownerId: string,
   hooks?: readonly FrickPolicyHook[],
-): void {
-  const decision = decideWithHooks(
+): Promise<void> {
+  const decision = await decideWithHooks(
     { principal, action: "blob.read", resource: { kind: "blob", ownerId } },
     NULL_MEMBERSHIP,
     hooks,
@@ -874,12 +874,12 @@ export function assertCanReadBlob(
   }
 }
 
-export function assertBlobOwnership(
+export async function assertBlobOwnership(
   principal: Principal,
   ownerId: string,
   hooks?: readonly FrickPolicyHook[],
-): void {
-  const decision = decideWithHooks(
+): Promise<void> {
+  const decision = await decideWithHooks(
     { principal, action: "blob.write", resource: { kind: "blob", ownerId } },
     NULL_MEMBERSHIP,
     hooks,
