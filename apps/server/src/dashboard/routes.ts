@@ -27,7 +27,7 @@ export interface DashboardRouteInput {
   readonly store: FrickStore;
   readonly platformEvents: PlatformEventPipeline;
   readonly analyticsEvents: AnalyticsEventStore;
-  readonly authenticate: () => Principal | Error;
+  readonly authenticate: () => Promise<Principal | Error>;
   readonly sendJson: (status: number, body: unknown) => void;
   readonly sendError: (error: unknown, requestId: string) => void;
 }
@@ -84,7 +84,7 @@ export async function handleDashboardRoute(input: DashboardRouteInput): Promise<
 
   if (relativePath === "/api/metadata") {
     setDashboardHeaders(input.response);
-    const principal = input.authenticate();
+    const principal = await input.authenticate();
     if (principal instanceof Error) {
       input.sendError(principal, "dashboard_unauthorized");
       return true;
@@ -100,7 +100,7 @@ export async function handleDashboardRoute(input: DashboardRouteInput): Promise<
 
   if (relativePath === "/api/analytics/summary") {
     setDashboardHeaders(input.response);
-    const principal = input.authenticate();
+    const principal = await input.authenticate();
     if (principal instanceof Error) {
       input.sendError(principal, "dashboard_unauthorized");
       return true;
@@ -117,7 +117,7 @@ export async function handleDashboardRoute(input: DashboardRouteInput): Promise<
 
   if (relativePath === "/api/accounts") {
     setDashboardHeaders(input.response);
-    const principal = input.authenticate();
+    const principal = await input.authenticate();
     if (principal instanceof Error) {
       input.sendError(principal, "dashboard_unauthorized");
       return true;
@@ -135,7 +135,7 @@ export async function handleDashboardRoute(input: DashboardRouteInput): Promise<
 
   if (relativePath === "/api/tenants") {
     setDashboardHeaders(input.response);
-    const principal = input.authenticate();
+    const principal = await input.authenticate();
     if (principal instanceof Error) {
       input.sendError(principal, "dashboard_unauthorized");
       return true;
@@ -152,7 +152,7 @@ export async function handleDashboardRoute(input: DashboardRouteInput): Promise<
 
   if (relativePath === "/api/tenant-settings") {
     setDashboardHeaders(input.response);
-    const principal = input.authenticate();
+    const principal = await input.authenticate();
     if (principal instanceof Error) {
       input.sendError(principal, "dashboard_unauthorized");
       return true;
@@ -169,7 +169,7 @@ export async function handleDashboardRoute(input: DashboardRouteInput): Promise<
 
   if (relativePath === "/api/blobs") {
     setDashboardHeaders(input.response);
-    const principal = input.authenticate();
+    const principal = await input.authenticate();
     if (principal instanceof Error) {
       input.sendError(principal, "dashboard_unauthorized");
       return true;
@@ -189,7 +189,7 @@ export async function handleDashboardRoute(input: DashboardRouteInput): Promise<
 
   if (relativePath === "/api/jobs") {
     setDashboardHeaders(input.response);
-    const principal = input.authenticate();
+    const principal = await input.authenticate();
     if (principal instanceof Error) {
       input.sendError(principal, "dashboard_unauthorized");
       return true;
@@ -212,7 +212,7 @@ export async function handleDashboardRoute(input: DashboardRouteInput): Promise<
   const objectDataType = parseObjectDataPath(relativePath);
   if (objectDataType !== undefined) {
     setDashboardHeaders(input.response);
-    const principal = input.authenticate();
+    const principal = await input.authenticate();
     if (principal instanceof Error) {
       input.sendError(principal, "dashboard_unauthorized");
       return true;
@@ -237,7 +237,7 @@ export async function handleDashboardRoute(input: DashboardRouteInput): Promise<
 
   if (relativePath === "/api/platform-events/health") {
     setDashboardHeaders(input.response);
-    const principal = input.authenticate();
+    const principal = await input.authenticate();
     if (principal instanceof Error) {
       input.sendError(principal, "dashboard_unauthorized");
       return true;
