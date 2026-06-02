@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { decode, encode } from "@msgpack/msgpack";
 import type { PlainObject } from "@frick/protocol";
+import type { SqlDriver } from "./sql-driver.js";
 
 /**
  * Lifecycle states for a background job row.
@@ -112,7 +112,7 @@ export function jobBackoffMs(attemptCount: number): number {
 }
 
 export class JobStore {
-  constructor(private readonly db: DatabaseSync) {}
+  constructor(private readonly sql: SqlDriver) {}
 
   /**
    * Insert a new job, or — when `idempotencyKey` is set and a row already
@@ -122,21 +122,21 @@ export class JobStore {
    * row, NOT a fresh ready row. Callers that want to retry a completed job
    * should pick a new idempotency key.
    */
-  enqueue(input: EnqueueInput): JobRow;
+  async enqueue(input: EnqueueInput): Promise<JobRow>;
   /** @deprecated Legacy 3-arg form retained for the round-1 single-tenant facade. */
-  enqueue(tenantId: string, jobType: string, value: PlainObject): JobRow;
-  enqueue(
+  async enqueue(tenantId: string, jobType: string, value: PlainObject): Promise<JobRow>;
+  async enqueue(
     a: EnqueueInput | string,
     b?: string,
     c?: PlainObject,
-  ): JobRow {
+  ): Promise<JobRow> {
     const input: EnqueueInput =
       typeof a === "string"
         ? { tenantId: a, jobType: b as string, payload: c as PlainObject }
         : a;
 
     if (input.idempotencyKey !== undefined) {
-      const existing = this.findByIdempotencyKey(
+      const existing = await this.findByIdempotencyKey(
         input.tenantId,
         input.jobType,
         input.idempotencyKey,
@@ -149,14 +149,12 @@ export class JobStore {
     const maxAttempts = input.maxAttempts ?? 5;
     const packed = Buffer.from(encode(input.payload));
 
-    const result = this.db
-      .prepare(
-        `INSERT INTO jobs (
+    const result = await this.sql.run(
+      `INSERT INTO jobs (
             tenant_id, job_type, packed, status, created_at,
             available_at, max_attempts, attempt_count, idempotency_key
           ) VALUES (?, ?, ?, 'ready', ?, ?, ?, 0, ?)`,
-      )
-      .run(
+      [
         input.tenantId,
         input.jobType,
         packed,
@@ -164,10 +162,11 @@ export class JobStore {
         availableAt,
         maxAttempts,
         input.idempotencyKey ?? null,
-      );
+      ],
+    );
 
     const id = Number(result.lastInsertRowid);
-    const row = this.getById(id);
+    const row = await this.getById(id);
     if (!row) {
       throw new Error(`jobs.enqueue: inserted row ${id} not found`);
     }
@@ -185,7 +184,7 @@ export class JobStore {
    * attempt_count += 1) is applied in the same statement; callers don't see
    * a window where a row is selected but not yet marked running.
    */
-  claim(workerId: string, jobType?: string, limit: number = 10): JobRow[] {
+  async claim(workerId: string, jobType?: string, limit: number = 10): Promise<JobRow[]> {
     const now = new Date().toISOString();
     const params: Array<string | number> = [now, workerId, now];
     let typeClause = "";
@@ -196,9 +195,8 @@ export class JobStore {
     params.push(limit);
 
     // SQLite's `UPDATE ... RETURNING` lands in node:sqlite via .all().
-    const rows = this.db
-      .prepare(
-        `UPDATE jobs SET
+    const rows = await this.sql.all<RawJobRow>(
+      `UPDATE jobs SET
             status = 'running',
             claimed_at = ?,
             claimed_by = ?,
@@ -210,8 +208,8 @@ export class JobStore {
             LIMIT ?
           )
           RETURNING *`,
-      )
-      .all(...params) as unknown as RawJobRow[];
+      params,
+    );
 
     return rows.map((row) => mapRow(row));
   }
@@ -220,26 +218,24 @@ export class JobStore {
    * Mark a job completed. Idempotent — re-completing an already-completed job
    * is a no-op. Re-completing a dead-lettered job is rejected (caller error).
    */
-  complete(jobId: number, result?: unknown): void {
+  async complete(jobId: number, result?: unknown): Promise<void> {
     const now = new Date().toISOString();
     if (result !== undefined) {
       // Stash the result in `packed` so operators can inspect it. We
       // intentionally overwrite the payload rather than adding another
       // column — terminal state means the input is no longer interesting.
-      this.db
-        .prepare(
-          `UPDATE jobs SET status = 'completed', completed_at = ?, packed = ?
+      await this.sql.run(
+        `UPDATE jobs SET status = 'completed', completed_at = ?, packed = ?
             WHERE id = ? AND status != 'dead_lettered'`,
-        )
-        .run(now, Buffer.from(encode(result as PlainObject)), jobId);
+        [now, Buffer.from(encode(result as PlainObject)), jobId],
+      );
       return;
     }
-    this.db
-      .prepare(
-        `UPDATE jobs SET status = 'completed', completed_at = ?
+    await this.sql.run(
+      `UPDATE jobs SET status = 'completed', completed_at = ?
           WHERE id = ? AND status != 'dead_lettered'`,
-      )
-      .run(now, jobId);
+      [now, jobId],
+    );
   }
 
   /**
@@ -250,20 +246,19 @@ export class JobStore {
    * `attempt_count` was already incremented by `claim`, so the budget check
    * compares the current `attempt_count` (post-claim) against `max_attempts`.
    */
-  fail(
+  async fail(
     jobId: number,
     errorCode: string,
     errorMessage: string,
     retryable: boolean,
-  ): void {
-    const row = this.getById(jobId);
+  ): Promise<void> {
+    const row = await this.getById(jobId);
     if (!row) return;
     const now = new Date().toISOString();
     if (retryable && row.attemptCount < row.maxAttempts) {
       const nextAvailable = new Date(Date.now() + jobBackoffMs(row.attemptCount)).toISOString();
-      this.db
-        .prepare(
-          `UPDATE jobs SET
+      await this.sql.run(
+        `UPDATE jobs SET
               status = 'ready',
               available_at = ?,
               failed_at = ?,
@@ -272,24 +267,23 @@ export class JobStore {
               claimed_at = NULL,
               claimed_by = NULL
             WHERE id = ?`,
-        )
-        .run(nextAvailable, now, errorCode, errorMessage, jobId);
+        [nextAvailable, now, errorCode, errorMessage, jobId],
+      );
       return;
     }
-    this.db
-      .prepare(
-        `UPDATE jobs SET
+    await this.sql.run(
+      `UPDATE jobs SET
             status = 'dead_lettered',
             dead_lettered_at = ?,
             failed_at = ?,
             last_error_code = ?,
             last_error_message = ?
           WHERE id = ?`,
-      )
-      .run(now, now, errorCode, errorMessage, jobId);
+      [now, now, errorCode, errorMessage, jobId],
+    );
   }
 
-  list(filter: ListJobsFilter = {}): JobRow[] {
+  async list(filter: ListJobsFilter = {}): Promise<JobRow[]> {
     const where: string[] = [];
     const params: Array<string | number> = [];
     if (filter.tenantId !== undefined) {
@@ -307,26 +301,26 @@ export class JobStore {
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
     const limit = filter.limit ?? 100;
     params.push(limit);
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM jobs ${whereSql}
+    const rows = await this.sql.all<RawJobRow>(
+      `SELECT * FROM jobs ${whereSql}
           ORDER BY id DESC
           LIMIT ?`,
-      )
-      .all(...params) as unknown as RawJobRow[];
+      params,
+    );
     return rows.map((row) => mapRow(row));
   }
 
-  getById(jobId: number, tenantId?: string): JobRow | undefined {
+  async getById(jobId: number, tenantId?: string): Promise<JobRow | undefined> {
     const params: Array<string | number> = [jobId];
     let where = "id = ?";
     if (tenantId !== undefined) {
       where += " AND tenant_id = ?";
       params.push(tenantId);
     }
-    const row = this.db
-      .prepare(`SELECT * FROM jobs WHERE ${where} LIMIT 1`)
-      .get(...params) as unknown as RawJobRow | undefined;
+    const row = await this.sql.get<RawJobRow>(
+      `SELECT * FROM jobs WHERE ${where} LIMIT 1`,
+      params,
+    );
     return row ? mapRow(row) : undefined;
   }
 
@@ -336,7 +330,7 @@ export class JobStore {
    * a dead-lettered or ready-after-retry row both qualify). Surface used by
    * `/_frick/inspect/jobs`.
    */
-  countsByStatus(): JobCounts {
+  async countsByStatus(): Promise<JobCounts> {
     const counts: JobCounts = {
       ready: 0,
       running: 0,
@@ -344,18 +338,23 @@ export class JobStore {
       dead_lettered: 0,
       failed: 0,
     };
-    const rows = this.db
-      .prepare(`SELECT status, COUNT(*) AS count FROM jobs GROUP BY status`)
-      .all() as Array<{ status: string; count: number }>;
+    const rows = await this.sql.all<{ status: string; count: number }>(
+      `SELECT status, COUNT(*) AS count FROM jobs GROUP BY status`,
+    );
     for (const row of rows) {
-      if (row.status === "ready" || row.status === "running" || row.status === "completed" || row.status === "dead_lettered") {
+      if (
+        row.status === "ready" ||
+        row.status === "running" ||
+        row.status === "completed" ||
+        row.status === "dead_lettered"
+      ) {
         counts[row.status] = Number(row.count);
       }
     }
-    const failed = this.db
-      .prepare(`SELECT COUNT(*) AS count FROM jobs WHERE last_error_code IS NOT NULL`)
-      .get() as { count: number };
-    counts.failed = Number(failed.count);
+    const failed = await this.sql.get<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM jobs WHERE last_error_code IS NOT NULL`,
+    );
+    counts.failed = Number(failed!.count);
     return counts;
   }
 
@@ -365,25 +364,24 @@ export class JobStore {
    * recorded — preserved so old call sites compile while the worker uses the
    * new lifecycle.
    */
-  next(tenantId: string, type: string): StoredJob | undefined {
-    const claimed = this.claim(`legacy:${tenantId}`, type, 1);
+  async next(tenantId: string, type: string): Promise<StoredJob | undefined> {
+    const claimed = await this.claim(`legacy:${tenantId}`, type, 1);
     const row = claimed[0];
     if (!row) return undefined;
     return { id: row.id, name: row.jobType, value: row.payload };
   }
 
-  private findByIdempotencyKey(
+  private async findByIdempotencyKey(
     tenantId: string,
     jobType: string,
     idempotencyKey: string,
-  ): JobRow | undefined {
-    const row = this.db
-      .prepare(
-        `SELECT * FROM jobs
+  ): Promise<JobRow | undefined> {
+    const row = await this.sql.get<RawJobRow>(
+      `SELECT * FROM jobs
           WHERE tenant_id = ? AND job_type = ? AND idempotency_key = ?
           LIMIT 1`,
-      )
-      .get(tenantId, jobType, idempotencyKey) as RawJobRow | undefined;
+      [tenantId, jobType, idempotencyKey],
+    );
     return row ? mapRow(row) : undefined;
   }
 }

@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { decode, encode } from "@msgpack/msgpack";
 import {
   packObjectRecord,
@@ -10,6 +9,7 @@ import {
 } from "@frick/protocol";
 import { DEFAULT_TENANT_ID } from "../tenant.js";
 import { FrickObjectVersionConflictError } from "./object-errors.js";
+import type { SqlDriver } from "./sql-driver.js";
 
 interface ObjectRow {
   packed: Uint8Array;
@@ -45,7 +45,7 @@ export interface ObjectUpsertArgs {
 
 export class ObjectStore {
   constructor(
-    private readonly db: DatabaseSync,
+    private readonly sql: SqlDriver,
     private readonly schema: FrickSchema,
   ) {}
 
@@ -55,14 +55,14 @@ export class ObjectStore {
    * existing call sites (projections, seeds, dev-login) continue to work
    * without churn.
    */
-  upsert(
+  async upsert(
     tenantId: string,
     type: string,
     id: string,
     value: PlainObject,
     version: number,
-  ): void {
-    this.#writeRow(tenantId, type, id, value, version);
+  ): Promise<void> {
+    await this.#writeRow(tenantId, type, id, value, version);
   }
 
   /**
@@ -71,17 +71,13 @@ export class ObjectStore {
    * concurrent updates cannot both observe the same "currentVersion" and
    * succeed.
    */
-  upsertWithPolicy(args: ObjectUpsertArgs): ObjectUpsertResult {
+  async upsertWithPolicy(args: ObjectUpsertArgs): Promise<ObjectUpsertResult> {
     const mergePolicy = args.mergePolicy ?? "lastWriteWins";
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const current = this.db
-        .prepare(
-          "SELECT version FROM objects WHERE tenant_id = ? AND object_type = ? AND object_id = ?",
-        )
-        .get(args.tenantId, args.objectType, args.objectId) as
-        | ObjectVersionRow
-        | undefined;
+    return this.sql.transaction(async (tx) => {
+      const current = await tx.get<ObjectVersionRow>(
+        "SELECT version FROM objects WHERE tenant_id = ? AND object_type = ? AND object_id = ?",
+        [args.tenantId, args.objectType, args.objectId],
+      );
       const previousVersion = current ? Number(current.version) : 0;
       const exists = current !== undefined;
 
@@ -114,31 +110,23 @@ export class ObjectStore {
             : args.expectedVersion + 1
           : previousVersion + 1;
 
-      this.#writeRow(
+      await this.#writeRowTx(
+        tx,
         args.tenantId,
         args.objectType,
         args.objectId,
         args.value,
         nextVersion,
       );
-      this.db.exec("COMMIT");
       return { previousVersion, nextVersion, created: !exists };
-    } catch (error) {
-      try {
-        this.db.exec("ROLLBACK");
-      } catch {
-        // Swallow — surface the original cause.
-      }
-      throw error;
-    }
+    });
   }
 
-  read(tenantId: string, type: string, id: string): PlainObject | undefined {
-    const row = this.db
-      .prepare(
-        "SELECT packed FROM objects WHERE tenant_id = ? AND object_type = ? AND object_id = ?",
-      )
-      .get(tenantId, type, id) as ObjectRow | undefined;
+  async read(tenantId: string, type: string, id: string): Promise<PlainObject | undefined> {
+    const row = await this.sql.get<ObjectRow>(
+      "SELECT packed FROM objects WHERE tenant_id = ? AND object_type = ? AND object_id = ?",
+      [tenantId, type, id],
+    );
     if (!row) {
       return undefined;
     }
@@ -150,12 +138,11 @@ export class ObjectStore {
    * Exposed so the HTTP layer can populate ETag headers without a second
    * unpack.
    */
-  readVersion(tenantId: string, type: string, id: string): number {
-    const row = this.db
-      .prepare(
-        "SELECT version FROM objects WHERE tenant_id = ? AND object_type = ? AND object_id = ?",
-      )
-      .get(tenantId, type, id) as ObjectVersionRow | undefined;
+  async readVersion(tenantId: string, type: string, id: string): Promise<number> {
+    const row = await this.sql.get<ObjectVersionRow>(
+      "SELECT version FROM objects WHERE tenant_id = ? AND object_type = ? AND object_id = ?",
+      [tenantId, type, id],
+    );
     return row ? Number(row.version) : 0;
   }
 
@@ -165,50 +152,53 @@ export class ObjectStore {
    * does not soft-delete — once removed, the row is gone, and a follow-up
    * upsert with the same id starts at version 1 again.
    */
-  delete(tenantId: string, type: string, id: string): boolean {
-    const result = this.db
-      .prepare(
-        "DELETE FROM objects WHERE tenant_id = ? AND object_type = ? AND object_id = ?",
-      )
-      .run(tenantId, type, id);
+  async delete(tenantId: string, type: string, id: string): Promise<boolean> {
+    const result = await this.sql.run(
+      "DELETE FROM objects WHERE tenant_id = ? AND object_type = ? AND object_id = ?",
+      [tenantId, type, id],
+    );
     return result.changes > 0;
   }
 
-  list(tenantId: string, type: string): PlainObject[] {
-    const rows = this.db
-      .prepare(
-        "SELECT packed FROM objects WHERE tenant_id = ? AND object_type = ? ORDER BY object_id ASC",
-      )
-      .all(tenantId, type) as unknown as ObjectRow[];
-    return rows.map((row) => unpackObjectRecord(this.schema, decode(row.packed) as PackedRecord).value);
+  async list(tenantId: string, type: string): Promise<PlainObject[]> {
+    const rows = await this.sql.all<ObjectRow>(
+      "SELECT packed FROM objects WHERE tenant_id = ? AND object_type = ? ORDER BY object_id ASC",
+      [tenantId, type],
+    );
+    return rows.map((row) =>
+      unpackObjectRecord(this.schema, decode(row.packed) as PackedRecord).value,
+    );
   }
 
-  #writeRow(
+  async #writeRow(
     tenantId: string,
     type: string,
     id: string,
     value: PlainObject,
     version: number,
-  ): void {
+  ): Promise<void> {
+    await this.#writeRowTx(this.sql, tenantId, type, id, value, version);
+  }
+
+  async #writeRowTx(
+    tx: SqlDriver,
+    tenantId: string,
+    type: string,
+    id: string,
+    value: PlainObject,
+    version: number,
+  ): Promise<void> {
     const packed = packObjectRecord(this.schema, type, id, withoutRecordId(value));
-    this.db
-      .prepare(
-        `INSERT INTO objects
+    await tx.run(
+      `INSERT INTO objects
           (tenant_id, object_type, object_id, version, packed, updated_at)
           VALUES (?, ?, ?, ?, ?, ?)
           ON CONFLICT(tenant_id, object_type, object_id) DO UPDATE SET
             version = excluded.version,
             packed = excluded.packed,
             updated_at = excluded.updated_at`,
-      )
-      .run(
-        tenantId,
-        type,
-        id,
-        version,
-        Buffer.from(encode(packed)),
-        new Date().toISOString(),
-      );
+      [tenantId, type, id, version, Buffer.from(encode(packed)), new Date().toISOString()],
+    );
   }
 }
 

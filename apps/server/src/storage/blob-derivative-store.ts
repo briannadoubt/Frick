@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { SqlDriver } from "./sql-driver.js";
 
 /**
  * Storage for blob derivatives — child blobs produced by the blob processor
@@ -65,24 +65,22 @@ export function derivativeStorageKey(
 }
 
 export class BlobDerivativeStore {
-  constructor(private readonly db: DatabaseSync) {}
+  constructor(private readonly sql: SqlDriver) {}
 
   /**
    * Insert (or replace) a derivative row. Replacement happens on the
    * (tenant, parent, derivative) primary key — re-running a processor for the
    * same parent simply overwrites the previous derivative.
    */
-  record(input: RecordDerivativeInput): DerivativeRow {
+  async record(input: RecordDerivativeInput): Promise<DerivativeRow> {
     const now = new Date().toISOString();
     const metadataJson = input.metadata ? JSON.stringify(input.metadata) : null;
-    this.db
-      .prepare(
-        `INSERT OR REPLACE INTO blob_derivatives
+    await this.sql.run(
+      `INSERT OR REPLACE INTO blob_derivatives
           (parent_blob_id, derivative_id, tenant_id, processor_id, mime_type,
            byte_length, content_hash, storage_key, content, metadata, created_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
+      [
         input.parentBlobId,
         input.derivativeId,
         input.tenantId,
@@ -94,7 +92,8 @@ export class BlobDerivativeStore {
         input.content,
         metadataJson,
         now,
-      );
+      ],
+    );
     return {
       parentBlobId: input.parentBlobId,
       derivativeId: input.derivativeId,
@@ -109,31 +108,27 @@ export class BlobDerivativeStore {
     };
   }
 
-  listForParent(parentBlobId: string, tenantId: string): DerivativeRow[] {
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM blob_derivatives
+  async listForParent(parentBlobId: string, tenantId: string): Promise<DerivativeRow[]> {
+    const rows = await this.sql.all<RawDerivativeRow>(
+      `SELECT * FROM blob_derivatives
           WHERE tenant_id = ? AND parent_blob_id = ?
           ORDER BY derivative_id ASC`,
-      )
-      .all(tenantId, parentBlobId) as unknown as RawDerivativeRow[];
+      [tenantId, parentBlobId],
+    );
     return rows.map(mapRow);
   }
 
-  read(
+  async read(
     parentBlobId: string,
     derivativeId: string,
     tenantId: string,
-  ): { row: DerivativeRow; bytes: Buffer } | undefined {
-    const row = this.db
-      .prepare(
-        `SELECT * FROM blob_derivatives
+  ): Promise<{ row: DerivativeRow; bytes: Buffer } | undefined> {
+    const row = await this.sql.get<RawDerivativeRow & { content: Uint8Array | null }>(
+      `SELECT * FROM blob_derivatives
           WHERE tenant_id = ? AND parent_blob_id = ? AND derivative_id = ?
           LIMIT 1`,
-      )
-      .get(tenantId, parentBlobId, derivativeId) as
-        | (RawDerivativeRow & { content: Uint8Array | null })
-        | undefined;
+      [tenantId, parentBlobId, derivativeId],
+    );
     if (!row) return undefined;
     const mapped = mapRow(row);
     const bytes = row.content ? Buffer.from(row.content) : Buffer.alloc(0);

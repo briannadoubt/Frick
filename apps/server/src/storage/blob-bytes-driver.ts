@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import type { SqlDriver } from "./sql-driver.js";
 
 /**
  * Blob-bytes storage seam (FR-53). This mirrors the durable-storage driver
@@ -50,6 +51,12 @@ interface BlobContentRow {
  * the historical behavior preserved verbatim: every SQL statement matches what
  * `BlobStore` issued before the seam was introduced, so the `sqlite` driver is
  * a pure refactor with no behavioral change.
+ *
+ * The blob-bytes driver is intentionally sync (it implements the pre-existing
+ * `BlobBytesDriver` sync interface used by external filesystem and S3 adapters).
+ * It receives the raw `DatabaseSync` handle so it can stay synchronous — this is
+ * safe because `BlobStore` calls these methods from async contexts but the SQLite
+ * driver's `async` wrappers are trivially synchronous underneath anyway.
  */
 export class SqliteBlobBytesDriver implements BlobBytesDriver {
   constructor(private readonly db: DatabaseSync) {}
@@ -192,13 +199,17 @@ export class FilesystemBlobBytesDriver implements BlobBytesDriver {
 }
 
 /**
- * Build the configured blob-bytes driver. SQLite is the default and needs only
- * the shared DB handle. The filesystem driver requires a non-empty storage
- * path and validates it (writable directory) at construction.
+ * Build the configured blob-bytes driver. SQLite is the default and needs the
+ * raw `DatabaseSync` handle (the bytes driver is synchronous). The filesystem
+ * driver requires a non-empty storage path and validates it (writable directory)
+ * at construction.
+ *
+ * Accepts either a raw `DatabaseSync` or a `SqlDriver` (from which the raw
+ * handle is extracted via `rawDb` when it is a `SqliteSqlDriver`).
  */
 export function createBlobBytesDriver(options: {
   driver: FrickBlobDriver;
-  db: DatabaseSync;
+  db: DatabaseSync | SqlDriver;
   blobStoragePath?: string | undefined;
 }): BlobBytesDriver {
   if (options.driver === "filesystem") {
@@ -210,7 +221,17 @@ export function createBlobBytesDriver(options: {
     }
     return new FilesystemBlobBytesDriver(path);
   }
-  return new SqliteBlobBytesDriver(options.db);
+  // Unwrap SqliteSqlDriver → DatabaseSync if needed.
+  const rawDb =
+    options.db instanceof DatabaseSync
+      ? options.db
+      : (options.db as { rawDb?: DatabaseSync }).rawDb;
+  if (!rawDb) {
+    throw new FrickBlobStorageError(
+      "SqliteBlobBytesDriver requires a DatabaseSync handle; the provided SqlDriver does not expose rawDb",
+    );
+  }
+  return new SqliteBlobBytesDriver(rawDb);
 }
 
 /**
