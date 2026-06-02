@@ -4,7 +4,7 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/bri/Frick.git",
+    "url": "git+https://github.com/briannadoubt/Frick.git",
     "directory": "apps/cli"
   },
   "bin": {
