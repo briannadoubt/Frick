@@ -14,6 +14,8 @@ Frick is a pre-1.0 fullstack realtime framework. The repo contains the canonical
 - Install: `pnpm install`
 - Main TS tests: `pnpm test`
 - Typecheck: `pnpm typecheck`
+- Postgres migration-runner tests: `pnpm test:pg` (requires
+  `FRICK_DATABASE_URL`; CI runs this against Postgres 16)
 - Regenerate protocol artifacts: `pnpm schema:generate`
 - Regenerate design artifacts: `pnpm design:generate`
 - Generated drift check: `pnpm verify:generated`
@@ -30,7 +32,7 @@ Frick is a pre-1.0 fullstack realtime framework. The repo contains the canonical
 - Treat `apps/rangercrm-server` as a private product-schema integration harness, not a public example or framework API surface.
 - Keep `apps/dev-dashboard` static and framework-owned. Standalone mode is local-only; mounted mode is served by the Frick server at `/_frick/dashboard` and should read only documented dashboard/inspection APIs, not create a second operational API.
 - When editing AI guidance, update the matching Agent Kit surfaces under `packages/agent-kit/skills`, `packages/agent-kit/agents`, adapter-specific rules/agents, and `packages/agent-kit/manifest.json` when the guidance applies to scaffolded apps.
-- Preserve tenant isolation, schema compatibility checks, structured error envelopes, and cross-SDK parity when changing sync or storage paths.
+- Preserve tenant isolation, schema compatibility checks, structured error envelopes, and cross-SDK parity when changing sync or storage paths. Standalone Postgres schema/migration support exists, but `createFrickServer` still uses SQLite-backed stores; keep SQLite behavior intact unless a ticket explicitly targets the Postgres adapter.
 - Server route/storage internals under `apps/server/src/*` are not public API unless documented in `docs/framework-boundaries.md` or exported from `apps/server/src/index.ts`.
 - The worktree may contain unrelated user or automation edits. Inspect diffs before editing and do not revert changes you did not make.
 

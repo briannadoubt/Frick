@@ -7,7 +7,10 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
 - Schema identity fields (`schemaId`, `schemaVersion`, `schemaRevision`, `schemaHash`) and generated Swift/Kotlin/TypeScript artifacts.
 - Shared structured error envelopes across HTTP, WebSocket nacks, and SDK error types.
 - MessagePack WebSocket frames for Hello/HelloAck, subscribe, append, signal, presence, object upsert, snapshot, delta, projection delta, ack, and nack.
-- SQLite-backed server persistence, migrations, health/ready/inspect/admin routes, backup/restore, metrics, request logging, CORS enforcement, and admin bearer auth.
+- SQLite-backed server persistence, migrations, health/ready/inspect/admin
+  routes, backup/restore, metrics, request logging, CORS enforcement, and admin
+  bearer auth. A standalone Postgres migration runner and schema parity tests
+  exist, but the server runtime still constructs SQLite-backed stores.
 - Documented server extension points for app-owned HTTP routes, durable job
   handlers, recurring job schedules, search indexes, blob processors, push
   adapters, policy hooks, multi-app URL/schema routing, and cluster-bus fan-out.
@@ -20,7 +23,9 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
   single-use invitation tokens, recipients can accept them into durable
   read/write grants, owners can list and revoke grants, and active grants
   relax `object.read` / `object.write` authorization decisions within the
-  same tenant.
+  same tenant. Grantees can leave a share, object subscriptions filter
+  snapshots and live deltas per record, and read grants cascade narrowly to the
+  stream/projection rows keyed by the shared record id.
 - Fricken Dashboard, served locally by `frick dashboard` and mountable at
   `/_frick/dashboard`, for inspecting health, readiness, schema identity,
   schema resources, tenant-visible schema object rows, metrics, jobs,
@@ -31,7 +36,7 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
   tenant ledger rows, sanitized tenant settings summaries, sanitized account
   rows, sanitized background-job rows, and blob metadata/derivative summary
   rows through authenticated dashboard APIs.
-- TypeScript `@frick/core` runtime and `@frick/react` hooks for objects, streams, projections, presence, signals, auth, blobs, search, realtime wrappers, drafts, and background sync.
+- TypeScript `@fricken/core` runtime and `@fricken/react` hooks for objects, streams, projections, presence, signals, auth, blobs, search, realtime wrappers, drafts, and background sync.
 - First-class platform events for framework telemetry, job lifecycle events,
   and authenticated product analytics ingestion through TypeScript, Swift, and
   Android/Kotlin clients. React route analytics is enabled by default after a
@@ -58,11 +63,14 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
 
 ## Known Limitations
 
-- The CLI is still private to the monorepo. Development uses `pnpm cli <command>`; publishing a standalone npm CLI remains release work.
+- The CLI has a standalone-buildable `@fricken/cli` package with a `frick` bin
+  and publish metadata. Repository development still uses `pnpm cli <command>`;
+  the npm publish workflow does not yet include `apps/cli`, so publishing the
+  CLI remains release work.
 - The default deploy image builds the canonical monorepo server runtime.
   Published-package and scaffolded-app image recipes are still follow-up
   release work.
-- `@frick/server` has an import-safe package entrypoint and documented export
+- `@fricken/server` has an import-safe package entrypoint and documented export
   map for the baseline server, telemetry, project, migration/reset, cluster
   bus, and production push-adapter surfaces. Deep route/storage imports remain
   internal.
@@ -70,22 +78,26 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
   storage, configured handlers, projection registries, job workers, and
   processors are still shared at the server level.
 - Sharing is scoped to individual object records and same-tenant principals.
-  It does not cascade to child records, streams, projections, search results,
-  blobs, jobs, or arbitrary app routes. Grantees cannot currently revoke their
-  own access as a separate "leave share" flow; only the grant owner can revoke.
-- Identity-provider sessions use a fixed 30-day lifetime today and the
-  provider routes, including email password reset endpoints, do not yet share
-  the built-in auth attempt limiter. Apple, Google, generic OIDC issuers
-  (`identityProviders.oidc`, with direct-`jwksUri` or discovery-resolved key
-  sets), and email/password are supported; SAML and arbitrary non-OIDC OAuth
-  provider routing remain unimplemented.
-- Blob bytes are stored in SQLite today. `FRICK_BLOB_STORAGE_PATH` is parsed for a future filesystem driver but is not the active blob-byte store.
-- Web Push registration validation and adapter code exist, but the documented
-  public push-adapter exports and CLI credential provisioning currently cover
-  APNs and FCM only.
-- Outbound email is a documented `@frick/server` surface (the
+  It cascades read access only to the stream/projection rows keyed by the
+  shared record id. It does not cascade to child records, blobs, jobs, search
+  results, or arbitrary app routes.
+- Identity-provider sessions honor the single configured
+  `FRICK_SESSION_TTL_SECONDS` lifetime, and Apple/Google/OIDC verify routes plus
+  email password-reset routes share the built-in auth-attempt limiter. Apple,
+  Google, generic OIDC issuers (`identityProviders.oidc`, with direct
+  `jwksUri` or discovery-resolved key sets), and email/password are supported;
+  SAML and arbitrary non-OIDC OAuth provider routing remain unimplemented.
+- Blob bytes default to SQLite but can use the local filesystem with
+  `FRICK_BLOB_DRIVER=filesystem` and a writable `FRICK_BLOB_STORAGE_PATH`.
+  Blob metadata remains in SQLite. Object-storage/S3 drivers, derivative
+  offloading, and richer lifecycle policies remain follow-up work.
+- APNs, FCM, and Web Push all have documented push-adapter exports and
+  `frick tenants set-push` credential workflows. Web Push encrypts payloads per
+  RFC 8291 when browser subscription keys are present; multi-key credential
+  rotation remains follow-up work.
+- Outbound email is a documented `@fricken/server` surface (the
   `FrickEmailAdapter` interface, `createFrickEmailRouter`, the Resend reference
-  adapter at `@frick/server/email/resend-adapter`, and the in-memory test
+  adapter at `@fricken/server/email/resend-adapter`, and the in-memory test
   adapter), wired into the password-reset and first-sign-in welcome flows via
   `identityProviders.email.outbound`. Only the Resend reference adapter ships
   in-tree; SES/Postmark/SMTP providers are implemented out-of-tree against the

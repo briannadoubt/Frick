@@ -22,7 +22,7 @@ runbook.
 ## Web demo security headers
 
 The Vite dev and preview servers attach the demo app's CSP and browser
-security headers automatically. `pnpm --filter @frick/web build` also
+security headers automatically. `pnpm --filter @fricken/web build` also
 emits those strict preview headers to `apps/web/dist/_headers`, which
 static hosts such as Netlify and Cloudflare Pages can apply at the site
 root. Set `VITE_FRICK_HTTP` and, when the WebSocket endpoint differs from
@@ -55,9 +55,9 @@ All variables are optional. Defaults match the runtime mode.
 | `FRICK_PORT`                | `4099`                      | `4099`                                | Integer in `[0, 65535]`. `0` asks the kernel to allocate a port.     |
 | `FRICK_PUBLIC_URL`          | unset                       | unset                                 | Externally-reachable URL; surfaced in the startup log when set.      |
 | `FRICK_ALLOWED_ORIGINS`     | `["*"]`                     | `[]`                                  | Comma-separated allowlist. Entries may be `*` (allow all), an exact origin (`https://app.example.com`), or a subdomain wildcard (`https://*.example.com`, which matches any subdomain but not the apex `example.com`). Enforced for HTTP preflight and WebSocket upgrades; same-origin/server-to-server requests omit `Origin`. Malformed patterns are rejected at startup. |
-| `FRICK_DB_DRIVER`           | `sqlite`                    | `sqlite`                              | Durable-storage driver. One of `sqlite` or `postgres`. `sqlite` is the only implemented driver; selecting `postgres` fails fast at startup with a "not yet implemented (FR-22)" error. |
+| `FRICK_DB_DRIVER`           | `sqlite`                    | `sqlite`                              | Durable-storage driver selector. One of `sqlite` or `postgres`. `postgres` requires `FRICK_DATABASE_URL`, but the server runtime still constructs the SQLite-backed stores; Postgres currently covers the standalone migration/schema runner while runtime store ports are in progress. |
 | `FRICK_DB_PATH`             | `./frick.sqlite`            | `./frick.sqlite`                      | SQLite path (used by the `sqlite` driver). `":memory:"` is rejected in production. |
-| `FRICK_DATABASE_URL`        | unset                       | unset                                 | Connection string reserved for the future `postgres` driver (FR-22). Ignored by the `sqlite` driver. |
+| `FRICK_DATABASE_URL`        | unset                       | unset                                 | Postgres connection string for the standalone Postgres migration/schema runner. Required when `FRICK_DB_DRIVER=postgres`; ignored by the `sqlite` runtime store. |
 | `FRICK_BLOB_DRIVER`         | `sqlite`                    | `sqlite`                              | Blob-bytes storage driver. One of `sqlite` or `filesystem`. `sqlite` keeps blob bytes in the SQLite `blob_content` table; `filesystem` stores them under `FRICK_BLOB_STORAGE_PATH` in tenant-isolated, id-keyed files. Blob metadata always stays in SQLite. Selecting `filesystem` without a writable `FRICK_BLOB_STORAGE_PATH` fails fast at startup. |
 | `FRICK_BLOB_STORAGE_PATH`   | `./frick-blobs/`            | `./frick-blobs/`                      | Filesystem root for blob bytes. Used by the `filesystem` blob driver; inert under the default `sqlite` driver. Must be a writable directory when `FRICK_BLOB_DRIVER=filesystem`. |
 | `FRICK_LOG_LEVEL`           | `info`                      | `info`                                | One of `debug`, `info`, `warn`, `error`.                             |
@@ -344,11 +344,13 @@ same tenant.
   revoked row.
 
 Active grants participate in the framework authorization path for
-`object.read` and `object.write` only. A `"write"` grant satisfies reads and
-writes; a `"read"` grant satisfies reads only. Grants never cross tenant
-boundaries and do not cascade to child records, streams, blobs, jobs,
-projections, search indexes, or custom app routes unless the app builds those
-semantics on top.
+`object.read` and `object.write`. A `"write"` grant satisfies reads and writes;
+a `"read"` grant satisfies reads only. Grants never cross tenant boundaries.
+For reads, the framework also applies a narrow cascade to derived primitives
+whose key is the granted record id: the stream whose `streamId` equals the
+record id and projection rows whose subscribe/read `key` equals the record id.
+The cascade never relaxes stream appends, whole-projection subscribes without a
+key, child records, blobs, jobs, search indexes, or custom app routes.
 
 Object **subscriptions** are authorized per record on the same pipeline (FR-116).
 The initial snapshot and every live `object.read` delta are filtered for each
@@ -479,7 +481,7 @@ convention: the framework defines the `FrickEmailAdapter` interface, apps
 register an implementation, and the framework's identity flows dispatch through
 it. Credential-bearing provider SDKs stay out of the core bundle.
 
-Public exports from `@frick/server`:
+Public exports from `@fricken/server`:
 
 - `FrickEmailAdapter`, `FrickEmailMessage`, `FrickEmailDelivery`, and
   `FrickEmailContext` — the adapter interface and its message/result shapes. An
@@ -490,8 +492,8 @@ Public exports from `@frick/server`:
   defaults to `RESEND_API_KEY`. HTTP failures map to structured codes
   (`email.unauthorized`, `email.rateLimited`, `email.serverError`,
   `email.invalidRequest`, `email.networkError`) rather than throwing. Also
-  importable from the `@frick/server/email/resend-adapter` subpath, matching
-  `@frick/server/push/apns-adapter`.
+  importable from the `@fricken/server/email/resend-adapter` subpath, matching
+  `@fricken/server/push/apns-adapter`.
 - `createFrickTestEmailAdapter()` — an in-memory adapter that records every
   send and always succeeds. Use it in tests to assert what the framework
   dispatched.
@@ -505,8 +507,8 @@ Wire it into the email/password identity flows via
 `identityProviders.email.outbound`:
 
 ```ts
-import { createFrickServer } from "@frick/server";
-import { createFrickResendEmailAdapter } from "@frick/server/email/resend-adapter";
+import { createFrickServer } from "@fricken/server";
+import { createFrickResendEmailAdapter } from "@fricken/server/email/resend-adapter";
 
 createFrickServer({
   identityProviders: {
@@ -929,9 +931,10 @@ pending write), so ordering is not contractual and convergence is unaffected.
 
 The framework ships a portable dump/restore format. Use it for offline
 migrations, pre-deploy snapshots, and copying data between environments.
-The format is independent of the underlying driver — today only SQLite
-is supported, but a future Postgres adapter will produce dumps the same
-shape.
+The format is independent of the underlying driver. SQLite is the active
+runtime store today; the standalone Postgres schema/migration runner is in
+place, and the Postgres store adapter will produce dumps in the same shape once
+the runtime store port lands.
 
 ### Format
 
@@ -1082,7 +1085,7 @@ unset, or `400` when required fields are missing.
 4. Register the adapter at server boot:
 
 ```ts
-import { createFrickApnsAdapter } from "@frick/server";
+import { createFrickApnsAdapter } from "@fricken/server";
 
 const server = createFrickServer({
   push: {
@@ -1130,9 +1133,10 @@ Content-Type: application/json
   CORS by browser convention. Allowlist entries support `*` (allow all),
   exact origins, and single subdomain wildcards (`<scheme>://*.<host>`);
   regex, path/port patterns, and multi-segment wildcards are not supported.
-- The CLI exists in the monorepo as `pnpm cli <command>` and can be built
-  as `frick`, but it is still private and imports server internals directly.
-  Publishing a standalone npm CLI remains a release-surface follow-up.
+- The CLI exists in the monorepo as `pnpm cli <command>` and can be built as
+  the standalone `frick` bin from `@fricken/cli`. The npm publish workflow still
+  excludes `apps/cli`, so publishing the CLI remains a release-surface
+  follow-up.
 - Blob bytes default to SQLite (`FRICK_BLOB_DRIVER=sqlite`, the `blob_content`
   table). Set `FRICK_BLOB_DRIVER=filesystem` with a writable
   `FRICK_BLOB_STORAGE_PATH` to store blob bytes on the local filesystem instead;

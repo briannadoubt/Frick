@@ -22,8 +22,9 @@ Companion docs:
     design-token outputs before checking for drift
   - Use `pnpm verify:release --skip-mobile` only when the host lacks
     Swift / Android toolchains (e.g. Linux CI)
-- [ ] `pnpm frick verify` exits 0 (re-runs the generated-artifact gate
-  via the published CLI; useful as a spot check that the CLI still works)
+- [ ] `pnpm --filter @fricken/cli build && pnpm exec frick verify` exits 0
+  (re-runs the generated-artifact gate through the built CLI bin; useful as a
+  spot check that the CLI still works)
 - [ ] `pnpm release:dry-run` exits 0
   - Runs `pnpm pack --json` per publishable package with lifecycle scripts
     disabled by config, then flags
@@ -34,13 +35,13 @@ Companion docs:
 
 ## Bump
 
-- [ ] `pnpm exec tsx scripts/bump-version.ts --package @frick/protocol --release <type>`
-- [ ] Repeat for each affected package (`@frick/core`, `@frick/react`,
-  `@frick/design`, `@frick/design-web`, `@frick/devtools`,
-  `@frick/agent-kit`, `@frick/mcp`)
-  - `@frick/cli`, `@frick/server`, and `@frick/web` remain private workspace
-    packages and are excluded from npm publishing until deliberately made
-    public.
+- [ ] `pnpm exec tsx scripts/bump-version.ts --package @fricken/protocol --release <type>`
+- [ ] Repeat for each affected package (`@fricken/core`, `@fricken/react`,
+  `@fricken/design`, `@fricken/design-web`, `@fricken/devtools`,
+  `@fricken/agent-kit`, `@fricken/mcp`)
+  - `@fricken/cli` is standalone-buildable but still excluded from the npm
+    publish workflow until the CLI release slice deliberately adds it.
+  - `@fricken/server` and `@fricken/web` remain private workspace packages.
 - [ ] `pnpm changelog --output CHANGELOG.md` — then manually move the
   `Unreleased` entries under the new version heading
 - [ ] Commit: `chore(release): vX.Y.Z`
@@ -57,9 +58,9 @@ Companion docs:
     changelog ranges; independently versioned npm packages do not have to use
     `X.Y.Z` unless that package is being bumped to the same version.
   - Before the first automated npm release, configure npm trusted publishing
-    for each public package in npm (`@frick/protocol`, `@frick/core`,
-    `@frick/design`, `@frick/react`, `@frick/design-web`,
-    `@frick/devtools`, `@frick/agent-kit`, `@frick/mcp`) to trust this
+    for each public package in npm (`@fricken/protocol`, `@fricken/core`,
+    `@fricken/design`, `@fricken/react`, `@fricken/design-web`,
+    `@fricken/devtools`, `@fricken/agent-kit`, `@fricken/mcp`) to trust this
     repository and workflow filename (`publish-npm.yml`).
   - Confirm each package's npm metadata uses the repository URL
     `git+https://github.com/<owner>/<repo>.git` for the repository running
@@ -69,14 +70,14 @@ Companion docs:
 - [ ] Confirm the workflow publishes or explicitly skips each package version
   in dependency order:
   ```
-  @frick/protocol
-  @frick/core
-  @frick/design
-  @frick/react
-  @frick/design-web
-  @frick/devtools
-  @frick/agent-kit
-  @frick/mcp
+  @fricken/protocol
+  @fricken/core
+  @fricken/design
+  @fricken/react
+  @fricken/design-web
+  @fricken/devtools
+  @fricken/agent-kit
+  @fricken/mcp
   ```
 - [ ] Swift: tagging is the publish step. SPM consumers pin to the
   `framework-vX.Y.Z` tag; there is no separate Swift registry push.
@@ -94,13 +95,13 @@ Companion docs:
   ```
   mkdir /tmp/test && cd /tmp/test
   npm init -y
-  pnpm add @frick/protocol@X.Y.Z @frick/core@X.Y.Z @frick/react@X.Y.Z
-  pnpm add @frick/design@X.Y.Z @frick/design-web@X.Y.Z @frick/devtools@X.Y.Z
-  pnpm add @frick/agent-kit@X.Y.Z @frick/mcp@X.Y.Z
+  pnpm add @fricken/protocol@X.Y.Z @fricken/core@X.Y.Z @fricken/react@X.Y.Z
+  pnpm add @fricken/design@X.Y.Z @fricken/design-web@X.Y.Z @fricken/devtools@X.Y.Z
+  pnpm add @fricken/agent-kit@X.Y.Z @fricken/mcp@X.Y.Z
   node --input-type=module -e 'await Promise.all([
-    import("@frick/protocol"), import("@frick/core"), import("@frick/react"),
-    import("@frick/design"), import("@frick/design-web"), import("@frick/devtools"),
-    import("@frick/agent-kit"), import("@frick/mcp")
+    import("@fricken/protocol"), import("@fricken/core"), import("@fricken/react"),
+    import("@fricken/design"), import("@fricken/design-web"), import("@fricken/devtools"),
+    import("@fricken/agent-kit"), import("@fricken/mcp")
   ])'
   ```
   Use the exact versions the workflow published; omit packages that were
@@ -111,7 +112,7 @@ Companion docs:
 
 If a published version breaks consumers:
 
-1. `npm deprecate @frick/<pkg>@X.Y.Z "use X.Y.(Z-1)"` for each broken
+1. `npm deprecate @fricken/<pkg>@X.Y.Z "use X.Y.(Z-1)"` for each broken
    package (do **not** unpublish — npm's 72-hour window has consumer
    side-effects).
 2. Re-cut a patch release from `main` with the fix.

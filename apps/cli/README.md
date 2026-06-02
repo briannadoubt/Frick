@@ -1,13 +1,14 @@
-# @frick/cli
+# @fricken/cli
 
 The `frick` operational CLI. A thin wrapper around framework module functions
 (`loadFrickConfig`, the migration runner, `FrickStore`, the tenants ledger,
 `resetFrickDatabase`) exposed as a single binary.
 
-The CLI is internal-use only — it ships inside the monorepo and still reaches
-into some server internals for operational commands. Scaffolded apps import the
-framework through the `@frick/server` package entrypoint; publishing `frick` to
-npm remains a future slice.
+The CLI now has a standalone-buildable package (`@fricken/cli`) and `frick` bin
+metadata. Repository development still invokes it through `pnpm cli`; the npm
+publish workflow does not yet ship `apps/cli`, so publishing `frick` for
+external installs remains a future release slice. Scaffolded apps import the
+framework through the `@fricken/server` package entrypoint.
 
 ## Invocation
 
@@ -24,7 +25,7 @@ pnpm cli deploy --profile compose --dry-run
 pnpm cli backup --tenant-id _default --output ./backup.ndjson
 ```
 
-After `pnpm --filter @frick/cli build`:
+After `pnpm --filter @fricken/cli build`:
 
 ```
 pnpm exec frick <command> [args]

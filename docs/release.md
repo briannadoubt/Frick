@@ -22,10 +22,10 @@ All commands run from the repo root.
 ### Bump a TypeScript package
 
 ```sh
-pnpm exec tsx scripts/bump-version.ts --package @frick/protocol --release minor
+pnpm exec tsx scripts/bump-version.ts --package @fricken/protocol --release minor
 ```
 
-This rewrites `packages/protocol/package.json` and creates a commit named `chore(release): @frick/protocol@<version>`. Pass `--no-commit` if you want to stage other changes alongside.
+This rewrites `packages/protocol/package.json` and creates a commit named `chore(release): @fricken/protocol@<version>`. Pass `--no-commit` if you want to stage other changes alongside.
 
 Valid packages match the `name` field in any workspace `package.json`. Valid release types are `major`, `minor`, `patch` (see `docs/versioning.md`).
 
@@ -67,8 +67,8 @@ After the version-bump commit lands on `main`:
 
 ```sh
 git tag framework-v1.4.0
-git tag @frick/protocol@1.4.0   # per-package tags optional but recommended
-git push origin framework-v1.4.0 @frick/protocol@1.4.0
+git tag @fricken/protocol@1.4.0   # per-package tags optional but recommended
+git push origin framework-v1.4.0 @fricken/protocol@1.4.0
 ```
 
 The `framework-v*` tag is what `scripts/changelog.ts` keys on for the next release. Keep tagging it on every release that ships any TS package so the next changelog has a clean cutover.
@@ -83,7 +83,12 @@ TypeScript packages publish from `.github/workflows/publish-npm.yml` when a `fra
 - runs the same TypeScript/generated-artifact/pack hygiene gates as CI, and
 - packs each missing package with `pnpm pack` so workspace dependencies are rewritten, then publishes that tarball with `npm publish --provenance`.
 
-Before the first automated npm release, configure npm trusted publishing for each public package (`@frick/protocol`, `@frick/core`, `@frick/design`, `@frick/react`, `@frick/design-web`, `@frick/devtools`, `@frick/agent-kit`, `@frick/mcp`) to trust this repository and workflow path:
+Before the first automated npm release, configure npm trusted publishing for
+each package currently included in the npm workflow (`@fricken/protocol`,
+`@fricken/core`, `@fricken/design`, `@fricken/react`, `@fricken/design-web`,
+`@fricken/devtools`, `@fricken/agent-kit`, `@fricken/mcp`) to trust this repository
+and workflow path. `@fricken/cli` has publish metadata and a `frick` bin, but it
+is not yet in the npm workflow package list.
 
 ```text
 publish-npm.yml
@@ -100,7 +105,7 @@ npm's trusted-publisher form asks for the workflow filename, not the full `.gith
 - [ ] `CHANGELOG.md` has a header for the version you are about to tag.
 - [ ] Every package being shipped has the intended bumped version; Android `build.gradle.kts` versions still match their `android-v*` tags.
 - [ ] npm trusted publishing is configured for every public TypeScript package being shipped.
-- [ ] If `schemaRevision` was bumped, `@frick/protocol` got at least a minor bump and every other TS package that imports protocol types was rebuilt at least once.
+- [ ] If `schemaRevision` was bumped, `@fricken/protocol` got at least a minor bump and every other TS package that imports protocol types was rebuilt at least once.
 - [ ] Deprecated APIs being removed in this release were marked deprecated at least one full minor ago.
 
 ## Rolling back

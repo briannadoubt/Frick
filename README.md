@@ -12,7 +12,10 @@ pnpm install                  # if you passed --no-install
 pnpm dev                      # boots the scaffolded Frick server
 ```
 
-`pnpm cli init` is the development invocation; once published the same command will be `pnpm exec frick init my-app`. See [`apps/cli/README.md`](./apps/cli/README.md) for the full CLI surface.
+`pnpm cli init` is the development invocation. The CLI package now builds a
+standalone `frick` bin (`pnpm --filter @fricken/cli build`, then `pnpm exec frick
+...` inside the workspace), but publishing that bin to npm is still release
+work. See [`apps/cli/README.md`](./apps/cli/README.md) for the full CLI surface.
 
 To explore the repo itself instead of scaffolding a fresh app:
 
@@ -47,7 +50,10 @@ pnpm cli dev --profile redpanda --dry-run  # print the Redpanda/Kafka local prof
 - **TypeScript 5.9+** across `packages/protocol`, `packages/core`, `packages/react`, and the apps.
 - **Swift 5.10+ / Xcode 16+** for `packages/swift` and `apps/ios/FrickDemo` (optional).
 - **JDK 17 + Android SDK 37 (AGP 9.2.x, Kotlin 2.3.x)** for `apps/android/frick` and `apps/android/app` (optional).
-- **SQLite** (via `node:sqlite` on the server, system SQLite on iOS/Android) for durable and cache storage.
+- **SQLite** (via `node:sqlite` on the server, system SQLite on iOS/Android)
+  for the active durable and cache stores. A standalone Postgres
+  schema/migration runner exists while the runtime store port is under active
+  development.
 
 The TypeScript stack is required; Swift and Android tooling are only needed if you're working on the native client SDKs or demo apps.
 

@@ -187,14 +187,18 @@ cause duplicate side effects, or floods the server with distinct
 - The append path is idempotent on `(requestId, replicaId)`: a duplicate
   submission returns the original `event` without re-emitting deltas. This
   is verified by the `does not fan out idempotent HTTP append retries` test.
-- Idempotency rows live alongside the event row in the stream store; they
-  are never garbage-collected today, so the table grows unbounded.
+- Idempotency has a bounded replay window (`FRICK_IDEMPOTENCY_REPLAY_WINDOW_MS`,
+  default 24h). A retry outside the window is treated as a fresh request and
+  rewrites the idempotency key to the new event.
+- Idempotency rows live alongside the event row in the stream store. Lookup is
+  bounded by the replay window, but durable pruning/retention of old rows is
+  still a production-hardening follow-up.
 
 **Known gaps.**
 
 - No rate limit on appends, so the second attack vector (distinct
   requestIds) is unmitigated.
-- No replay-window bound — `requestId` is honoured indefinitely.
+- No durable pruning of old idempotency rows yet.
 
 ---
 
@@ -237,7 +241,7 @@ the server can no longer interpret, or vice versa.
   the handshake.
 
 - The framework supports OPTIONAL detached signing of generated schema
-  artefacts. `signSchemaArtifact` / `verifySchemaArtifact` (`@frick/protocol`)
+  artefacts. `signSchemaArtifact` / `verifySchemaArtifact` (`@fricken/protocol`)
   use Ed25519 (`node:crypto`) to sign a canonical representation of the schema
   identity — `schemaId` + `schemaHash` + `schemaRevision` + a manifest of the
   emitted artifact files and their SHA-256 digests. When
@@ -321,7 +325,7 @@ one user's local push-registration state into the next login.
   demo app. Preview builds use a no-`unsafe-inline` / no-`unsafe-eval`
   policy; the dev server keeps the `script-src`, `style-src`, and local
   `connect-src` allowances Vite needs for React refresh and HMR.
-- `pnpm --filter @frick/web build` emits the same strict preview header set
+- `pnpm --filter @fricken/web build` emits the same strict preview header set
   to `dist/_headers` for static hosts that honor root `_headers` files.
 - The demo keeps live auth sessions in memory only. Startup and sign-in purge
   any legacy `sessionStorage` / `localStorage` bearer tokens instead of
