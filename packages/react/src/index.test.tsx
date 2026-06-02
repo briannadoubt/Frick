@@ -12,8 +12,8 @@ import {
   useProjection,
   useProjectionRows,
 } from "./index.js";
-import { FrickClient, type BrowserAnalyticsWindow } from "@frick/core";
-import { foundationSchema } from "@frick/protocol";
+import { FrickClient, type BrowserAnalyticsWindow } from "@fricken/core";
+import { foundationSchema } from "@fricken/protocol";
 
 describe("resolveHttpEndpoint", () => {
   test("maps the default websocket sync URL to the HTTP origin", () => {

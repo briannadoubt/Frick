@@ -15,13 +15,13 @@ import {
   type BrowserAnalyticsTrackingOptions,
   type FrickSession,
   type SyncStatus,
-} from "@frick/core";
+} from "@fricken/core";
 import {
   foundationSchema,
   type FrickSchema,
   type PlainObject,
   type StreamEventInput,
-} from "@frick/protocol";
+} from "@fricken/protocol";
 
 interface FrickContextValue {
   client: FrickClient;

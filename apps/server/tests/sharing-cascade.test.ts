@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { FrickSchema } from "@frick/protocol";
+import type { FrickSchema } from "@fricken/protocol";
 import { createFrickServer } from "../src/server.js";
 import {
   assertCanSubscribe,

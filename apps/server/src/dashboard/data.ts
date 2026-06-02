@@ -1,4 +1,4 @@
-import { redactRecords, type PlainObject } from "@frick/protocol";
+import { redactRecords, type PlainObject } from "@fricken/protocol";
 import type { Principal } from "../authz.js";
 import type { FrickStore } from "../store.js";
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { productTestSchema } from "@frick/protocol";
+import { productTestSchema } from "@fricken/protocol";
 import { createFrickAppRegistry } from "../src/apps/registry.js";
 import { buildDashboardMetadata } from "../src/dashboard/metadata.js";
 import { createFrickProjectModule } from "../src/platform/project.js";

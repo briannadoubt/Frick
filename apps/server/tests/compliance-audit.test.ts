@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { foundationSchema } from "@frick/protocol";
+import { foundationSchema } from "@fricken/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { createFrickServer } from "../src/server.js";
 import { AdminAuditStore } from "../src/storage/admin-audit-store.js";

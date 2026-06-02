@@ -1,4 +1,4 @@
-import type { FrickSchema } from "@frick/protocol";
+import type { FrickSchema } from "@fricken/protocol";
 
 // RangerCRM data model. Mirrors the legacy CoreData entities from
 // RangerCoreData14.xcdatamodeld. Field names use camelCase per Frick

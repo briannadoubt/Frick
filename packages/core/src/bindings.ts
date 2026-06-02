@@ -25,7 +25,7 @@
  * unchanged.
  */
 
-import type { FrickSchema, PlainObject, StreamEventInput } from "@frick/protocol";
+import type { FrickSchema, PlainObject, StreamEventInput } from "@fricken/protocol";
 import type { FrickClient } from "./runtime.js";
 import type { Signal } from "./subscriptions.js";
 
@@ -195,5 +195,5 @@ function createProjectionBinding<T extends object = PlainObject>(
 // Re-export `StreamEventInput` for ergonomic imports; `FrickClient` is
 // already re-exported by `runtime.ts` (as a class value), so don't shadow it
 // here with a type-only export — that prevents `new FrickClient(...)` at the
-// `@frick/core` boundary.
+// `@fricken/core` boundary.
 export type { StreamEventInput };

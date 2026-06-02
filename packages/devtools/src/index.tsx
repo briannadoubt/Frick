@@ -1,5 +1,5 @@
 /**
- * `@frick/devtools` — embeddable developer console for Frick apps.
+ * `@fricken/devtools` — embeddable developer console for Frick apps.
  *
  * Renders a floating panel that polls `/_frick/inspect/devtools/events`
  * (the server's existing devtools feed) and surfaces:
@@ -22,8 +22,8 @@
  */
 
 import { useEffect, useMemo, useState, type CSSProperties, type ReactElement } from "react";
-import { useFrick, useFrickHttpEndpoint, useSyncStatus } from "@frick/react";
-import type { FrickClient, SyncStatus } from "@frick/core";
+import { useFrick, useFrickHttpEndpoint, useSyncStatus } from "@fricken/react";
+import type { FrickClient, SyncStatus } from "@fricken/core";
 
 export interface DevtoolsEvent {
   readonly id: number;

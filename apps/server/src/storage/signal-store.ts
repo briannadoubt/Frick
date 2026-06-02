@@ -6,7 +6,7 @@ import {
   type FrickSchema,
   type PackedSignalEnvelope,
   type PlainObject,
-} from "@frick/protocol";
+} from "@fricken/protocol";
 
 interface SignalRow {
   id: number;

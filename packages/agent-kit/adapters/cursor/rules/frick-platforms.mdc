@@ -5,4 +5,4 @@ alwaysApply: false
 
 Clients consume the generated schema contract. Keep TypeScript, Swift, and Kotlin behavior aligned with `docs/cross-platform-client-contract.md`.
 
-Use `@frick/react` for React UI, `@frick/core` for UI-agnostic TypeScript runtime work, generated Swift/Kotlin DTOs for native clients, and generated design packages for platform tokens.
+Use `@fricken/react` for React UI, `@fricken/core` for UI-agnostic TypeScript runtime work, generated Swift/Kotlin DTOs for native clients, and generated design packages for platform tokens.

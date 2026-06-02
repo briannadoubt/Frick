@@ -7,7 +7,7 @@ import {
   foundationSchema,
   type FrickFrame,
   type HelloAckPayload,
-} from "@frick/protocol";
+} from "@fricken/protocol";
 import { createFrickServer } from "../src/server.js";
 import type { FrickPolicyHook } from "../src/authz.js";
 

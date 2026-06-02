@@ -23,16 +23,16 @@ importers:
 
   apps/cli:
     dependencies:
-      '@frick/agent-kit':
+      '@fricken/agent-kit':
         specifier: workspace:*
         version: link:../../packages/agent-kit
-      '@frick/mcp':
+      '@fricken/mcp':
         specifier: workspace:*
         version: link:../../packages/mcp
-      '@frick/protocol':
+      '@fricken/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
-      '@frick/server':
+      '@fricken/server':
         specifier: workspace:*
         version: link:../server
     devDependencies:
@@ -51,10 +51,10 @@ importers:
 
   apps/rangercrm-server:
     dependencies:
-      '@frick/protocol':
+      '@fricken/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
-      '@frick/server':
+      '@fricken/server':
         specifier: workspace:*
         version: link:../server
     devDependencies:
@@ -73,7 +73,7 @@ importers:
 
   apps/server:
     dependencies:
-      '@frick/protocol':
+      '@fricken/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
       '@msgpack/msgpack':
@@ -122,19 +122,19 @@ importers:
 
   apps/web:
     dependencies:
-      '@frick/core':
+      '@fricken/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@frick/design-web':
+      '@fricken/design-web':
         specifier: workspace:*
         version: link:../../packages/design-web
-      '@frick/devtools':
+      '@fricken/devtools':
         specifier: workspace:*
         version: link:../../packages/devtools
-      '@frick/protocol':
+      '@fricken/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
-      '@frick/react':
+      '@fricken/react':
         specifier: workspace:*
         version: link:../../packages/react
       '@vitejs/plugin-react':
@@ -177,7 +177,7 @@ importers:
 
   packages/core:
     dependencies:
-      '@frick/protocol':
+      '@fricken/protocol':
         specifier: workspace:*
         version: link:../protocol
       '@opentelemetry/api':
@@ -233,13 +233,13 @@ importers:
 
   packages/devtools:
     dependencies:
-      '@frick/core':
+      '@fricken/core':
         specifier: workspace:*
         version: link:../core
-      '@frick/protocol':
+      '@fricken/protocol':
         specifier: workspace:*
         version: link:../protocol
-      '@frick/react':
+      '@fricken/react':
         specifier: workspace:*
         version: link:../react
     devDependencies:
@@ -277,10 +277,10 @@ importers:
 
   packages/react:
     dependencies:
-      '@frick/core':
+      '@fricken/core':
         specifier: workspace:*
         version: link:../core
-      '@frick/protocol':
+      '@fricken/protocol':
         specifier: workspace:*
         version: link:../protocol
     devDependencies:

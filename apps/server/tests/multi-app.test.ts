@@ -8,7 +8,7 @@ import {
   foundationSchema,
   type FrickFrame,
   type FrickSchema,
-} from "@frick/protocol";
+} from "@fricken/protocol";
 
 import { createFrickServer } from "../src/server.js";
 import { FrickConfigError } from "../src/config.js";

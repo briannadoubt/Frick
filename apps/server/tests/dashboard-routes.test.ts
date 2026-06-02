@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { foundationSchema, productTestSchema, type FrickSchema } from "@frick/protocol";
+import { foundationSchema, productTestSchema, type FrickSchema } from "@fricken/protocol";
 import { createFrickServer } from "../src/server.js";
 import { createFrickProjectModule } from "../src/platform/project.js";
 

@@ -156,8 +156,8 @@ export interface EmailProviderConfig {
 export interface EmailOutboundConfig {
   /**
    * Adapter the framework dispatches through. Use
-   * `createFrickResendEmailAdapter()` (from `@frick/server` or
-   * `@frick/server/email/resend-adapter`) in production, or
+   * `createFrickResendEmailAdapter()` (from `@fricken/server` or
+   * `@fricken/server/email/resend-adapter`) in production, or
    * `createFrickTestEmailAdapter()` in tests.
    */
   adapter: FrickEmailAdapter;

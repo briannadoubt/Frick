@@ -1,5 +1,5 @@
 import { encode } from "@msgpack/msgpack";
-import { packStreamEvent } from "@frick/protocol";
+import { packStreamEvent } from "@fricken/protocol";
 import type { FrickStore } from "../store.js";
 
 /**

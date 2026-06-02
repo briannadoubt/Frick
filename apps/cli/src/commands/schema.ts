@@ -3,7 +3,7 @@
  * `frick schema generate` — convenience wrapper around `pnpm schema:generate`.
  */
 import { spawn } from "node:child_process";
-import { foundationSchema, validateSchema } from "@frick/protocol";
+import { foundationSchema, validateSchema } from "@fricken/protocol";
 import type { ParsedArgs } from "../argv.js";
 import { CliUsageError, CliFailureError } from "../errors.js";
 import { emit, type OutputOptions } from "../output.js";

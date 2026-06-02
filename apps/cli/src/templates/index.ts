@@ -6,8 +6,8 @@
  * to the compiled JS — `tsc` already emits everything we need.
  *
  * Templates are versioned with the framework: `frick init` always produces a
- * layout compatible with the `@frick/server` version that ships in the same
- * monorepo cut. We do not promise forward compatibility with older `@frick/*`
+ * layout compatible with the `@fricken/server` version that ships in the same
+ * monorepo cut. We do not promise forward compatibility with older `@fricken/*`
  * releases.
  */
 export { renderPackageJson } from "./package.json.js";
@@ -22,6 +22,6 @@ export interface TemplateVariables {
   appName: string;
   /** Default port for the scaffolded server. */
   port: number;
-  /** Version string used for both the app and the `@frick/*` dependency pins. */
+  /** Version string used for both the app and the `@fricken/*` dependency pins. */
   version: string;
 }

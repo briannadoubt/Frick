@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - FrameKind
 
-/// Mirrors `FrameKind` from `@frick/protocol`. Values must stay in lock-step
+/// Mirrors `FrameKind` from `@fricken/protocol`. Values must stay in lock-step
 /// with `packages/protocol/src/frame.ts`.
 public enum FrickFrameKind: Int, Sendable {
     case hello = 0
@@ -466,7 +466,7 @@ public enum FrickMsgPackCodec {
     }
 }
 
-// MARK: - Capabilities (Swift mirrors of @frick/protocol)
+// MARK: - Capabilities (Swift mirrors of @fricken/protocol)
 
 public struct FrickClientCapabilities: Sendable, Equatable {
     public let platform: String

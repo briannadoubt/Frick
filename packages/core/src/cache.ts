@@ -1,4 +1,4 @@
-import type { FrickSchema, PlainObject, StreamEventInput } from "@frick/protocol";
+import type { FrickSchema, PlainObject, StreamEventInput } from "@fricken/protocol";
 import { objectKey, streamKey } from "./subscriptions.js";
 
 export interface PendingAppend {

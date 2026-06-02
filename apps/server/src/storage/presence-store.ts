@@ -6,7 +6,7 @@ import {
   type FrickSchema,
   type PackedPresenceRecord,
   type PlainObject,
-} from "@frick/protocol";
+} from "@fricken/protocol";
 
 interface PresenceRow {
   packed: Uint8Array;

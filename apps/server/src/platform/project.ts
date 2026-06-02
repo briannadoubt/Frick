@@ -1,4 +1,4 @@
-import { validateSchema, type FrickSchema } from "@frick/protocol";
+import { validateSchema, type FrickSchema } from "@fricken/protocol";
 import type { FrickAppDefinition } from "../apps/registry.js";
 import { FrickConfigError } from "../config.js";
 

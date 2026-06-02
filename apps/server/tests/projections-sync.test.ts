@@ -7,7 +7,7 @@ import {
   productTestSchema,
   type FrickFrame,
   type ProjectionDeltaPayload,
-} from "@frick/protocol";
+} from "@fricken/protocol";
 import { createFrickServer } from "../src/server.js";
 import type { FrickProjection } from "../src/projections/registry.js";
 

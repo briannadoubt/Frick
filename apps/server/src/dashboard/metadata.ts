@@ -1,4 +1,4 @@
-import type { FrickSchema } from "@frick/protocol";
+import type { FrickSchema } from "@fricken/protocol";
 import type { FrickAppRegistry } from "../apps/registry.js";
 import type { PlatformEventHealth } from "../platform-events/types.js";
 import type { FrickProjectModule } from "../platform/project.js";

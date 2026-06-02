@@ -1,4 +1,4 @@
-import { FrameKind, packSignalEnvelope, type SignalPayload } from "@frick/protocol";
+import { FrameKind, packSignalEnvelope, type SignalPayload } from "@fricken/protocol";
 import { sendFrame } from "./wire.js";
 import type { FrickStore } from "../store.js";
 import type { SubscriptionRegistry } from "./subscriptions.js";

@@ -21,7 +21,7 @@
  * already cope with out-of-order Delta frames via per-stream cursors.
  */
 
-import type { PlainObject, PackedStreamEvent } from "@frick/protocol";
+import type { PlainObject, PackedStreamEvent } from "@fricken/protocol";
 
 /** Stable identifier for a server instance. Defaults to a per-process UUID. */
 export type NodeId = string;

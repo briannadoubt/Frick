@@ -9,7 +9,7 @@ import {
   encodeFrame,
   foundationSchema,
   type FrickFrame,
-} from "@frick/protocol";
+} from "@fricken/protocol";
 import { createFrickServer } from "../src/server.js";
 
 let app: Awaited<ReturnType<typeof startServer>> | undefined;

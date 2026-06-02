@@ -15,7 +15,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Pool } from "pg";
-import { foundationSchema } from "@frick/protocol";
+import { foundationSchema } from "@fricken/protocol";
 import {
   runFrameworkMigrationsPostgres,
   listAppliedMigrationsPostgres,

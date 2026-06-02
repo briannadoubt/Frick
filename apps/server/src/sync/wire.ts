@@ -1,5 +1,5 @@
 import type { WebSocket } from "ws";
-import { encodeFrame, type FrickFrame } from "@frick/protocol";
+import { encodeFrame, type FrickFrame } from "@fricken/protocol";
 
 export interface SendFrameOptions {
   maxBufferedAmount?: number;

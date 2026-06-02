@@ -16,7 +16,7 @@ import {
   type PlainObject,
   type SchemaCompatibilityResult,
   type StreamEventInput,
-} from "@frick/protocol";
+} from "@fricken/protocol";
 import {
   MemoryFrickCache,
   type FrickCacheScope,

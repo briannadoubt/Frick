@@ -11,7 +11,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { IDBFactory } from "fake-indexeddb";
-import { foundationSchema } from "@frick/protocol";
+import { foundationSchema } from "@fricken/protocol";
 import { openIndexedDBFrickCache } from "../src/indexeddb-cache.js";
 
 let factory: IDBFactory;

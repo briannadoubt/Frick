@@ -22,7 +22,7 @@
  * brief flash of an event the server then rejects.
  */
 
-import type { FrickErrorEnvelope, PlainObject, StreamEventInput } from "@frick/protocol";
+import type { FrickErrorEnvelope, PlainObject, StreamEventInput } from "@fricken/protocol";
 
 /**
  * Surfaced from `useAppend` / `useUpsertObject` when an optimistic mutation

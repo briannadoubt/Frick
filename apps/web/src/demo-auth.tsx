@@ -23,7 +23,7 @@ import {
   signUp as signUpCore,
   type AuthSession,
 } from "./chat-foundation.js";
-import { useFrick, useFrickHttpEndpoint, useFrickSession } from "@frick/react";
+import { useFrick, useFrickHttpEndpoint, useFrickSession } from "@fricken/react";
 
 export function useSession(): AuthSession | undefined {
   // Re-uses the provider-tracked session. Cast: the runtime `FrickSession`

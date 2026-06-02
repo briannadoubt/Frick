@@ -3,7 +3,7 @@ import {
   redactRecord,
   type FieldSensitivity,
   type PlainObject,
-} from "@frick/protocol";
+} from "@fricken/protocol";
 import type { FrickStore } from "../store.js";
 import type { Principal } from "../authz.js";
 

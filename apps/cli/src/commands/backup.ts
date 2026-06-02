@@ -8,7 +8,7 @@
  * JSON record back.
  */
 import { createWriteStream } from "node:fs";
-import { dumpFrickDatabase } from "@frick/server";
+import { dumpFrickDatabase } from "@fricken/server";
 import type { ParsedArgs } from "../argv.js";
 import { requireString } from "../argv.js";
 import { contextFlagsFrom, loadConfig, openStore } from "../context.js";

@@ -1,5 +1,5 @@
 import type http from "node:http";
-import type { FrickSchema } from "@frick/protocol";
+import type { FrickSchema } from "@fricken/protocol";
 import type { StoredEvent } from "../storage/stream-store.js";
 
 export interface SseOpenInput {

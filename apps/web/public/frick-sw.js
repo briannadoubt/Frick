@@ -1,6 +1,6 @@
 // Frick Service Worker — handles background sync triggers + web push
 // receive. Registered by `apps/web/src/main.tsx` via the helper exported
-// from `@frick/core/push-web` (Phase 5d, follow-up commit).
+// from `@fricken/core/push-web` (Phase 5d, follow-up commit).
 //
 // Background Sync: when the browser fires a `sync` event tagged
 // `frick-pending-appends`, the worker posts a `frick:flush` message to

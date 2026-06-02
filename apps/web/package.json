@@ -1,5 +1,5 @@
 {
-  "name": "@frick/web",
+  "name": "@fricken/web",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -8,11 +8,11 @@
     "build": "vite build"
   },
   "dependencies": {
-    "@frick/core": "workspace:*",
-    "@frick/design-web": "workspace:*",
-    "@frick/devtools": "workspace:*",
-    "@frick/protocol": "workspace:*",
-    "@frick/react": "workspace:*",
+    "@fricken/core": "workspace:*",
+    "@fricken/design-web": "workspace:*",
+    "@fricken/devtools": "workspace:*",
+    "@fricken/protocol": "workspace:*",
+    "@fricken/react": "workspace:*",
     "@vitejs/plugin-react": "^5.1.1",
     "vite": "^7.2.4",
     "react": "^19.2.0",

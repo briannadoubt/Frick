@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { isFrickErrorEnvelope, productTestSchema } from "@frick/protocol";
+import { isFrickErrorEnvelope, productTestSchema } from "@fricken/protocol";
 import { createFrickServer } from "../src/server.js";
 import {
   decide,

@@ -1,7 +1,7 @@
 /**
  * Translate a WebSocket sync endpoint (e.g. `ws://127.0.0.1:4099`) into the
  * matching HTTP origin (`http://127.0.0.1:4099`). Used by
- * {@link FrickClient.loadOlder} and by the `@frick/react` provider to
+ * {@link FrickClient.loadOlder} and by the `@fricken/react` provider to
  * derive a default `httpEndpoint` when the consumer doesn't pass one.
  *
  * For WebSocket endpoints, strips path, search, and hash so the result is a

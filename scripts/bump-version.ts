@@ -4,11 +4,11 @@
  *
  * Usage:
  *   pnpm exec tsx scripts/bump-version.ts --package <name> --release <major|minor|patch>
- *   pnpm exec tsx scripts/bump-version.ts --package @frick/protocol --release minor
+ *   pnpm exec tsx scripts/bump-version.ts --package @fricken/protocol --release minor
  *   pnpm exec tsx scripts/bump-version.ts --package frick-swift --release patch --no-commit
  *
  * Supported package names:
- *   - TS packages by their package.json `name` field (e.g. @frick/protocol).
+ *   - TS packages by their package.json `name` field (e.g. @fricken/protocol).
  *   - Android modules: `android:frick`, `android:design` — edits build.gradle.kts.
  *   - Swift packages: `swift:frick`, `swift:design` — emits a tag suggestion only.
  *

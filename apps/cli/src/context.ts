@@ -2,10 +2,10 @@
  * Shared helpers for command handlers: turn `--db-path`/`--env` flags into a
  * loaded `FrickConfig` and (optionally) an opened `FrickStore`.
  *
- * The CLI consumes `@frick/server` through its published public entrypoint —
+ * The CLI consumes `@fricken/server` through its published public entrypoint —
  * it never reaches into the server's `src/` tree.
  */
-import { loadFrickConfig, FrickStore, type FrickConfig, type FrickEnv } from "@frick/server";
+import { loadFrickConfig, FrickStore, type FrickConfig, type FrickEnv } from "@fricken/server";
 import { requireString } from "./argv.js";
 
 export interface ContextFlags {

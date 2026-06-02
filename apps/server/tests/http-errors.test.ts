@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { foundationSchema, isFrickErrorEnvelope, type FrickErrorCode } from "@frick/protocol";
+import { foundationSchema, isFrickErrorEnvelope, type FrickErrorCode } from "@fricken/protocol";
 import { createFrickServer } from "../src/server.js";
 
 let app: Awaited<ReturnType<typeof startServer>> | undefined;

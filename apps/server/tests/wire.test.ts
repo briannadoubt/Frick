@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FrameKind, foundationSchema } from "@frick/protocol";
+import { FrameKind, foundationSchema } from "@fricken/protocol";
 import { sendFrame } from "../src/sync/wire.js";
 
 describe("sync wire outbound backpressure", () => {

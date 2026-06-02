@@ -12,7 +12,7 @@
  * idempotency strategy; the job worker owns retries and failure handling.
  */
 
-import type { PlainObject } from "@frick/protocol";
+import type { PlainObject } from "@fricken/protocol";
 import type { FrickLogger } from "../logger.js";
 import type { FrickStore } from "../store.js";
 

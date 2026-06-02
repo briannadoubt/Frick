@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { FrickInvitation, FrickSharingPermission } from "@frick/protocol";
+import type { FrickInvitation, FrickSharingPermission } from "@fricken/protocol";
 
 interface InvitationSqlRow {
   id: string;

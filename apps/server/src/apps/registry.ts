@@ -1,4 +1,4 @@
-import type { FrickSchema } from "@frick/protocol";
+import type { FrickSchema } from "@fricken/protocol";
 import { FrickConfigError } from "../config.js";
 
 /**

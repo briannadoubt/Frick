@@ -1,4 +1,4 @@
-import type { FrickSharingPermission } from "@frick/protocol";
+import type { FrickSharingPermission } from "@fricken/protocol";
 import { DEFAULT_TENANT_ID } from "./tenant.js";
 import type { FrickSearchIndexDefinition } from "./search/types.js";
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { productTestSchema } from "@frick/protocol";
+import { productTestSchema } from "@fricken/protocol";
 import { FrickStore } from "../src/store.js";
 
 describe("FrickStore.isObjectVisibleToUser — framework default", () => {

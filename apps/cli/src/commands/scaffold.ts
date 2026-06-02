@@ -184,7 +184,7 @@ async function scaffoldStream(parsed: ParsedArgs, out: OutputOptions): Promise<n
 function projectionFile(name: string): string {
   // The handler is intentionally minimal — apps fill in apply()/rebuild() once
   // they know which stream they're consuming. We deliberately do not import
-  // from @frick/server here because that would pin the scaffolded app to a
+  // from @fricken/server here because that would pin the scaffolded app to a
   // single server-internal API surface; the developer wires the types when
   // they implement the handler.
   return `/**

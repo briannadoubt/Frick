@@ -12,8 +12,8 @@
  *   - config: no error thrown from `loadFrickConfig`.
  */
 import { DatabaseSync } from "node:sqlite";
-import { foundationSchema, validateSchema } from "@frick/protocol";
-import { computeMigrationChecksum, FRAMEWORK_MIGRATIONS, listAppliedMigrations } from "@frick/server";
+import { foundationSchema, validateSchema } from "@fricken/protocol";
+import { computeMigrationChecksum, FRAMEWORK_MIGRATIONS, listAppliedMigrations } from "@fricken/server";
 import type { ParsedArgs } from "../argv.js";
 import { contextFlagsFrom, loadConfig } from "../context.js";
 import { emit, type OutputOptions } from "../output.js";

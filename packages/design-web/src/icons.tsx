@@ -63,7 +63,7 @@ export const icons = {
 
 /**
  * Native icon pack: platform-idiomatic glyphs (lucide on web). Matches the
- * `iconPack: "native"` resolution in `@frick/design`.
+ * `iconPack: "native"` resolution in `@fricken/design`.
  */
 export const nativeIcons: Record<FrickIconName, FrickIcon> = {
   send: icons.action.send,
@@ -110,7 +110,7 @@ function frickGlyph(paths: string): FrickIcon {
 /**
  * Frick fallback icon pack: brand-owned geometric glyphs used when the active
  * `iconPack` is not the native platform pack (mirrors the `fallback` family in
- * the `@frick/design` icon definitions). These are deliberately simple so the
+ * the `@fricken/design` icon definitions). These are deliberately simple so the
  * pack is fully self-contained and switchable at runtime.
  */
 export const frickIcons: Record<FrickIconName, FrickIcon> = {

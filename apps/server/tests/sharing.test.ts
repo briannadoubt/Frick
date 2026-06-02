@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { productTestSchema } from "@frick/protocol";
+import { productTestSchema } from "@fricken/protocol";
 import { createFrickServer } from "../src/server.js";
 import { ALLOW, deny, type FrickPolicyHook } from "../src/authz.js";
 

@@ -1,4 +1,4 @@
-import type { PlainObject } from "@frick/protocol";
+import type { PlainObject } from "@fricken/protocol";
 
 /**
  * The search subsystem is a pluggable full-text layer over framework-managed

@@ -8,7 +8,7 @@ import {
   unpackObjectRecord,
   type DeltaPayload,
   type FrickFrame,
-} from "@frick/protocol";
+} from "@fricken/protocol";
 import { createFrickServer } from "../src/server.js";
 
 // End-to-end coverage for FR-114 "Live-push server-originated object/stream

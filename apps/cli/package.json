@@ -1,5 +1,5 @@
 {
-  "name": "@frick/cli",
+  "name": "@fricken/cli",
   "version": "0.0.0",
   "type": "module",
   "repository": {
@@ -32,10 +32,10 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@frick/agent-kit": "workspace:*",
-    "@frick/mcp": "workspace:*",
-    "@frick/protocol": "workspace:*",
-    "@frick/server": "workspace:*"
+    "@fricken/agent-kit": "workspace:*",
+    "@fricken/mcp": "workspace:*",
+    "@fricken/protocol": "workspace:*",
+    "@fricken/server": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",

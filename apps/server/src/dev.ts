@@ -2,7 +2,7 @@
  * Dev entry: spins up a Frick server with the empty foundation schema and
  * default config. Used by `pnpm server` in the Frick monorepo. The package's
  * public barrel (`./index.ts`) is exports-only so that downstream apps can
- * `import { createFrickServer } from "@frick/server"` without triggering a
+ * `import { createFrickServer } from "@fricken/server"` without triggering a
  * side-effect listen.
  */
 import { createFrickServer } from "./server.js";

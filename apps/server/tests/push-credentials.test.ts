@@ -17,7 +17,7 @@ import {
   loadFcmCredentials,
 } from "../src/push/credentials.js";
 import { runFrameworkMigrations } from "../src/storage/migrations.js";
-import { foundationSchema } from "@frick/protocol";
+import { foundationSchema } from "@fricken/protocol";
 
 function freshKey(): string {
   return randomBytes(32).toString("base64");

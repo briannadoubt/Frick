@@ -25,7 +25,7 @@
  * "undefined"` and fall back to {@link MemoryFrickCache}.
  */
 
-import type { FrickSchema, PlainObject, StreamEventInput } from "@frick/protocol";
+import type { FrickSchema, PlainObject, StreamEventInput } from "@fricken/protocol";
 import {
   MemoryFrickCache,
   type CachedObject,

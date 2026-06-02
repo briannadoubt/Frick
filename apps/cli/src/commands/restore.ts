@@ -7,7 +7,7 @@
  * config unless `FRICK_RESTORE_ALLOW_PROD=1` is set in the environment.
  */
 import { createReadStream } from "node:fs";
-import { FrickRestoreRefusedError, restoreFrickDatabase } from "@frick/server";
+import { FrickRestoreRefusedError, restoreFrickDatabase } from "@fricken/server";
 import type { ParsedArgs } from "../argv.js";
 import { requireString } from "../argv.js";
 import { CliFailureError, CliRefusedError, CliUsageError } from "../errors.js";

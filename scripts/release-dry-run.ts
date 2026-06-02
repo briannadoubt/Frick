@@ -7,7 +7,7 @@
  * stdout and exits non-zero if any package has findings.
  *
  * "Publishable" = package.json is not `"private": true` AND name starts
- * with `@frick/`.
+ * with `@fricken/`.
  */
 import { execFileSync } from "node:child_process";
 import { gunzipSync } from "node:zlib";
@@ -51,14 +51,14 @@ const SUSPICIOUS_PATTERNS: { pattern: RegExp; reason: string }[] = [
  * see the rationale rather than just a silenced finding.
  */
 const INTENTIONAL_EXCEPTIONS: Record<string, Record<string, string>> = {
-  "@frick/protocol": {
+  "@fricken/protocol": {
     "fixtures/error-envelope.json": "cross-platform conformance fixture",
     "fixtures/foundation-schema.json": "cross-platform conformance fixture",
     "fixtures/hello-frame.json": "cross-platform conformance fixture",
     // Product-test-schema is the pre-cleanup chat-shaped schema we keep as
     // a non-trivial fixture so framework primitives (codecs, projections,
     // sync gateway, etc.) have something to exercise against. Apps that
-    // depend on @frick/protocol can also import it for their own
+    // depend on @fricken/protocol can also import it for their own
     // integration tests. Source lives under src/fixtures/.
     "dist/fixtures/product-test-schema.d.ts": "shipped test-fixture schema",
     "dist/fixtures/product-test-schema.js": "shipped test-fixture schema",
@@ -148,7 +148,7 @@ function isPublishable(pkgJsonPath: string): {
 } {
   const pkg = readPackageJson(pkgJsonPath);
   if (!pkg.name) return { publishable: false, reason: "no name" };
-  if (!pkg.name.startsWith("@frick/")) return { publishable: false, reason: "not scoped @frick/", name: pkg.name };
+  if (!pkg.name.startsWith("@fricken/")) return { publishable: false, reason: "not scoped @fricken/", name: pkg.name };
   if (pkg.private === true) return { publishable: false, reason: "private", name: pkg.name };
   return {
     publishable: true,

@@ -1,6 +1,6 @@
 import type { WebSocket } from "ws";
 import type { Principal } from "../authz.js";
-import type { SubscribePayload } from "@frick/protocol";
+import type { SubscribePayload } from "@fricken/protocol";
 
 export interface SyncClient {
   socket: WebSocket;

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { encode as msgpackEncode } from "@msgpack/msgpack";
-import { FrameKind, decodeFrame, encodeFrame, foundationSchema, type FrickFrame } from "@frick/protocol";
+import { FrameKind, decodeFrame, encodeFrame, foundationSchema, type FrickFrame } from "@fricken/protocol";
 import { createFrickServer } from "../src/server.js";
 import type {
   FrickHttpTelemetryRequest,

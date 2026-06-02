@@ -1,4 +1,4 @@
-import type { FrickErrorEnvelope, PlainObject } from "@frick/protocol";
+import type { FrickErrorEnvelope, PlainObject } from "@fricken/protocol";
 import {
   defaultClientTelemetryRuntime,
   finishClientTelemetrySpan,

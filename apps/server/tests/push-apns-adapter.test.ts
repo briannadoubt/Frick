@@ -17,7 +17,7 @@ import {
 import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { foundationSchema } from "@frick/protocol";
+import { foundationSchema } from "@fricken/protocol";
 import { runFrameworkMigrations } from "../src/storage/migrations.js";
 import { TenantSettingsStore } from "../src/storage/tenant-settings-store.js";
 import { saveApnsCredentials } from "../src/push/credentials.js";

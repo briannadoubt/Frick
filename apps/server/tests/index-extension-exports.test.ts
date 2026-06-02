@@ -21,7 +21,7 @@ import {
 // package index, so apps can author hooks/processors without indexing into
 // `ServerOptions[...]`. This test fails to compile if any export is dropped
 // or renamed, and the runtime assertions cover the value exports.
-describe("@frick/server index extension-authoring exports", () => {
+describe("@fricken/server index extension-authoring exports", () => {
   it("re-exports the authz value symbols", () => {
     expect(ALLOW).toEqual({ allow: true, reason: "allow" });
     expect(typeof deny).toBe("function");

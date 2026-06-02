@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { foundationSchema, validateSchema, type FrickSchema } from "@frick/protocol";
+import { foundationSchema, validateSchema, type FrickSchema } from "@fricken/protocol";
 import { createFrickServer } from "../src/server.js";
 
 /// A throwaway schema with a single "Note" object so the tests can write,

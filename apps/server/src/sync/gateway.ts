@@ -25,7 +25,7 @@ import {
   type SchemaCompatibilityResult,
   type SignalPayload,
   type SubscribePayload,
-} from "@frick/protocol";
+} from "@fricken/protocol";
 import {
   assertCanAppend,
   assertCanSignal,

@@ -1,4 +1,4 @@
-import type { FrickErrorEnvelope, PlainObject, StreamEventInput } from "@frick/protocol";
+import type { FrickErrorEnvelope, PlainObject, StreamEventInput } from "@fricken/protocol";
 
 export type User = PlainObject & {
   id: string;

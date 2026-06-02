@@ -15,7 +15,7 @@ import {
   type FrickErrorCode,
   type FrickSchema,
   type FrickSharingPermission,
-} from "@frick/protocol";
+} from "@fricken/protocol";
 import {
   AuthenticationError,
   AuthorizationError,
@@ -294,7 +294,7 @@ export interface ServerOptions {
    * registered before the default test adapter, so an app that wires its
    * own `platform: "test"` adapter overrides the framework default. The
    * built-in APNs, FCM, and Web Push reference adapters are exported from
-   * `@frick/server` and documented package subpaths.
+   * `@fricken/server` and documented package subpaths.
    */
   push?: {
     adapters?: FrickPushAdapter[];

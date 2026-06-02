@@ -6,7 +6,7 @@ import {
   encodeFrame,
   productTestSchema,
   type FrickFrame,
-} from "@frick/protocol";
+} from "@fricken/protocol";
 import { createFrickServer } from "../src/server.js";
 import { FrickStore } from "../src/store.js";
 

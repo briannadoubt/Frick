@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { foundationSchema } from "@frick/protocol";
+import { foundationSchema } from "@fricken/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { definePlatformEventPipelineConformance } from "./platform-events.conformance.js";
 import { SqlitePlatformEventPipeline } from "../src/platform-events/sqlite.js";

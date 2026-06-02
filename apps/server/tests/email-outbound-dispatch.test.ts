@@ -11,7 +11,7 @@
  *   - A throwing adapter does not fail the originating auth request.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { foundationSchema, validateSchema, type FrickSchema } from "@frick/protocol";
+import { foundationSchema, validateSchema, type FrickSchema } from "@fricken/protocol";
 import { createFrickServer } from "../src/server.js";
 import { createFrickTestEmailAdapter, type FrickTestEmailAdapter } from "../src/email/test-adapter.js";
 import type { EmailOutboundConfig } from "../src/auth/identity-routes.js";

@@ -22,7 +22,7 @@ import {
   useProjection,
   useSetPresence,
   useStream,
-} from "@frick/react";
+} from "@fricken/react";
 import type { ChatStreamEvent } from "./chat-foundation.js";
 
 /** Aggregated reactions for a single message, computed from MessageStream events. */
@@ -253,5 +253,5 @@ export function aggregateReactions(
 }
 
 // Re-export the consumer's hook (just `useFrick`) so this module is a
-// pure addition; consumers can import everything from `@frick/react`.
+// pure addition; consumers can import everything from `@fricken/react`.
 export { useFrick };

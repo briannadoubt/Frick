@@ -16,7 +16,7 @@ import {
   lintSchemaChange,
   type FrickLintResult,
   type FrickSchema,
-} from "@frick/protocol";
+} from "@fricken/protocol";
 import type { ParsedArgs } from "../argv.js";
 import { requireString } from "../argv.js";
 import { CliFailureError } from "../errors.js";

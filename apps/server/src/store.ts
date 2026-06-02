@@ -9,7 +9,7 @@ import {
   type FrickObjectMergePolicy,
   type FrickSchema,
   type PlainObject,
-} from "@frick/protocol";
+} from "@fricken/protocol";
 import { AccountStore, type StoredAccount } from "./storage/account-store.js";
 import { PasswordResetTokenStore } from "./storage/password-reset-store.js";
 import { AdminAuditStore } from "./storage/admin-audit-store.js";

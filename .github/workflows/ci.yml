@@ -58,7 +58,7 @@ jobs:
     # Exercises the Postgres schema + migration runner (FR-22) against a real
     # Postgres instead of skipping the live suite. Scoped to the pg-migrations
     # file only — porting the per-store implementations onto Postgres (so the
-    # full @frick/server suite can run here) is FR-23; widen the command then.
+    # full @fricken/server suite can run here) is FR-23; widen the command then.
     services:
       postgres:
         image: postgres:16

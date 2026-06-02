@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import type { FrickSchema } from "@frick/protocol";
+import type { FrickSchema } from "@fricken/protocol";
 import { createFrickServer } from "../src/server.js";
 
 const execFileAsync = promisify(execFile);
@@ -13,7 +13,7 @@ const packageRoot = resolve(repoRoot, "apps/server");
 const packageJsonPath = resolve(packageRoot, "package.json");
 const sourceIndexPath = resolve(packageRoot, "src/index.ts");
 
-describe("@frick/server package entry", () => {
+describe("@fricken/server package entry", () => {
   it("can be imported without starting a server listener", async () => {
     const { stdout } = await execFileAsync(
       "pnpm",

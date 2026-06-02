@@ -1,5 +1,5 @@
 {
-  "name": "@frick/agent-kit",
+  "name": "@fricken/agent-kit",
   "version": "0.0.0",
   "description": "Portable Frick plugin, skill, subagent, and Cursor rule pack for building fullstack realtime apps with agent help.",
   "pluginSurfaces": {
@@ -157,7 +157,7 @@
     {
       "id": "frick-web-react",
       "title": "React Web Client",
-      "summary": "Build browser clients with @frick/react, @frick/core, and design-web packages.",
+      "summary": "Build browser clients with @fricken/react, @fricken/core, and design-web packages.",
       "skill": "skills/frick-web-react/SKILL.md",
       "agents": {
         "codex": ["adapters/codex/agents/frick-web.toml"],

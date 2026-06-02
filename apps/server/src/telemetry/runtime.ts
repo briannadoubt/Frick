@@ -12,7 +12,7 @@ import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import { NodeSDK } from "@opentelemetry/sdk-node";
-import { FrameKind } from "@frick/protocol";
+import { FrameKind } from "@fricken/protocol";
 import type { FrickConfig } from "../config.js";
 import type { FrickLogger } from "../logger.js";
 

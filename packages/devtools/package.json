@@ -1,5 +1,5 @@
 {
-  "name": "@frick/devtools",
+  "name": "@fricken/devtools",
   "version": "0.1.0",
   "type": "module",
   "repository": {
@@ -25,9 +25,9 @@
     "provenance": true
   },
   "dependencies": {
-    "@frick/core": "workspace:*",
-    "@frick/protocol": "workspace:*",
-    "@frick/react": "workspace:*"
+    "@fricken/core": "workspace:*",
+    "@fricken/protocol": "workspace:*",
+    "@fricken/react": "workspace:*"
   },
   "peerDependencies": {
     "react": ">=18"

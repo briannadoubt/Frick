@@ -153,7 +153,7 @@ function parsePositiveIntegerEnv(value: string | undefined, varName: string): nu
 
 /**
  * Thrown when a runtime limit is exceeded. The wire shape always uses the
- * existing {@link import("@frick/protocol").FrickErrorEnvelope} — callers
+ * existing {@link import("@fricken/protocol").FrickErrorEnvelope} — callers
  * translate this error into the appropriate `rateLimit.exceeded`,
  * `blob.tooLarge`, `blob.quotaExceeded`, or `stream.appendRejected` envelope.
  */

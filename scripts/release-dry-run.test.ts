@@ -9,7 +9,7 @@ import {
 
 function packEntry(files: string[]): PackEntry {
   return {
-    name: "@frick/example",
+    name: "@fricken/example",
     version: "0.0.0",
     filename: "frick-example-0.0.0.tgz",
     files: files.map((path) => ({ path, size: 1 })),
@@ -19,43 +19,43 @@ function packEntry(files: string[]): PackEntry {
 describe("release dry-run package entrypoint checks", () => {
   test("flags workspace protocols in packed runtime dependency manifests", () => {
     const manifest: PackageJson = {
-      name: "@frick/example",
+      name: "@fricken/example",
       dependencies: {
-        "@frick/core": "workspace:*",
+        "@fricken/core": "workspace:*",
       },
       peerDependencies: {
-        "@frick/react": "workspace:^",
+        "@fricken/react": "workspace:^",
       },
       optionalDependencies: {
-        "@frick/native-cache": "workspace:../native-cache",
+        "@fricken/native-cache": "workspace:../native-cache",
       },
       devDependencies: {
-        "@frick/test-utils": "workspace:*",
+        "@fricken/test-utils": "workspace:*",
       },
     };
 
     expect(inspectPackedPackageManifest(manifest)).toEqual([
       {
-        package: "@frick/example",
+        package: "@fricken/example",
         kind: "workspace-protocol-dependency",
-        detail: "dependencies.@frick/core still uses workspace:*",
+        detail: "dependencies.@fricken/core still uses workspace:*",
       },
       {
-        package: "@frick/example",
+        package: "@fricken/example",
         kind: "workspace-protocol-dependency",
-        detail: "optionalDependencies.@frick/native-cache still uses workspace:../native-cache",
+        detail: "optionalDependencies.@fricken/native-cache still uses workspace:../native-cache",
       },
       {
-        package: "@frick/example",
+        package: "@fricken/example",
         kind: "workspace-protocol-dependency",
-        detail: "peerDependencies.@frick/react still uses workspace:^",
+        detail: "peerDependencies.@fricken/react still uses workspace:^",
       },
     ]);
   });
 
   test("flags source entrypoints and missing packed entrypoint targets", () => {
     const pkg: PackageJson = {
-      name: "@frick/example",
+      name: "@fricken/example",
       type: "module",
       main: "./src/index.ts",
       types: "./src/index.ts",
@@ -71,27 +71,27 @@ describe("release dry-run package entrypoint checks", () => {
 
     expect(inspectPackageEntrypoints(pkg, entry)).toEqual([
       {
-        package: "@frick/example",
+        package: "@fricken/example",
         kind: "typescript-source-entry",
         detail: "main points at ./src/index.ts",
       },
       {
-        package: "@frick/example",
+        package: "@fricken/example",
         kind: "typescript-source-entry",
         detail: "types points at ./src/index.ts",
       },
       {
-        package: "@frick/example",
+        package: "@fricken/example",
         kind: "typescript-source-entry",
         detail: "exports[.].import points at ./src/index.ts",
       },
       {
-        package: "@frick/example",
+        package: "@fricken/example",
         kind: "typescript-source-entry",
         detail: "exports[.].types points at ./src/index.ts",
       },
       {
-        package: "@frick/example",
+        package: "@fricken/example",
         kind: "missing-entrypoint",
         detail: "exports[./chat] points at ./dist/chat.js, but it is not packed",
       },
@@ -100,7 +100,7 @@ describe("release dry-run package entrypoint checks", () => {
 
   test("flags missing relative side-effect imports from packed JS entrypoints", () => {
     const pkg: PackageJson = {
-      name: "@frick/example",
+      name: "@fricken/example",
       type: "module",
       exports: {
         ".": {
@@ -119,7 +119,7 @@ describe("release dry-run package entrypoint checks", () => {
 
     expect(inspectPackedEntrypointSpecifiers(pkg, entry, contents)).toEqual([
       {
-        package: "@frick/example",
+        package: "@fricken/example",
         kind: "missing-entrypoint-reference",
         detail: "dist/index.js imports ./index.css, but dist/index.css is not packed",
       },
@@ -128,7 +128,7 @@ describe("release dry-run package entrypoint checks", () => {
 
   test("flags missing relative imports from files reached by entrypoints", () => {
     const pkg: PackageJson = {
-      name: "@frick/example",
+      name: "@fricken/example",
       type: "module",
       exports: {
         ".": {
@@ -144,7 +144,7 @@ describe("release dry-run package entrypoint checks", () => {
 
     expect(inspectPackedEntrypointSpecifiers(pkg, entry, contents)).toEqual([
       {
-        package: "@frick/example",
+        package: "@fricken/example",
         kind: "missing-entrypoint-reference",
         detail: "dist/widget.js imports ./widget.css, but dist/widget.css is not packed",
       },

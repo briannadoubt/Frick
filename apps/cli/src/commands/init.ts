@@ -19,8 +19,8 @@
  * schema.ts to confirm it validates.
  */
 import { spawn } from "node:child_process";
-import { installAgentKit, type AgentHarness, type InstallAgentKitReport } from "@frick/agent-kit";
-import { createMcpClientConfig } from "@frick/mcp";
+import { installAgentKit, type AgentHarness, type InstallAgentKitReport } from "@fricken/agent-kit";
+import { createMcpClientConfig } from "@fricken/mcp";
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
@@ -135,7 +135,7 @@ async function schemaCheckInProcess(directory: string, appName: string): Promise
   // validation runs when the developer first boots the scaffolded server;
   // here we just confirm the identity is present and sane.
   try {
-    const { validateSchema } = await import("@frick/protocol");
+    const { validateSchema } = await import("@fricken/protocol");
     validateSchema({
       name: appName,
       schemaId: appName,

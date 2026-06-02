@@ -3,7 +3,7 @@
  * surfaces. Default mode is read-only. `--print-config` emits a JSON client
  * config instead of starting stdio transport.
  */
-import { createMcpClientConfig, runFrickMcpStdio, type FrickMcpOptions } from "@frick/mcp";
+import { createMcpClientConfig, runFrickMcpStdio, type FrickMcpOptions } from "@fricken/mcp";
 import { requireBoolean, requireString, type ParsedArgs } from "../argv.js";
 import { CliUsageError, EXIT_OK } from "../errors.js";
 import { emit, type OutputOptions } from "../output.js";

@@ -12,8 +12,8 @@ export function renderPackageJson(vars: TemplateVariables): string {
       test: "vitest run",
     },
     dependencies: {
-      "@frick/protocol": "workspace:*",
-      "@frick/server": "workspace:*",
+      "@fricken/protocol": "workspace:*",
+      "@fricken/server": "workspace:*",
     },
     devDependencies: {
       "@types/node": "^24.10.0",

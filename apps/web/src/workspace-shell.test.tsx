@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { WorkspaceShell } from "@frick/design-web";
+import { WorkspaceShell } from "@fricken/design-web";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test } from "vitest";
 

@@ -7,7 +7,7 @@ import type { TemplateVariables } from "./index.js";
  */
 export function renderSmokeTestTs(_vars: TemplateVariables): string {
   return `import { describe, expect, it } from "vitest";
-import { createFrickServer } from "@frick/server";
+import { createFrickServer } from "@fricken/server";
 import { schema } from "../src/schema.js";
 
 describe("smoke", () => {

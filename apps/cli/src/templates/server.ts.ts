@@ -11,7 +11,7 @@ import type { TemplateVariables } from "./index.js";
  * lines without re-parsing the file.
  */
 export function renderServerTs(vars: TemplateVariables): string {
-  return `import { createFrickServer } from "@frick/server";
+  return `import { createFrickServer } from "@fricken/server";
 import { schema } from "./schema.js";
 
 // frick:projections:imports

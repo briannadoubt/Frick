@@ -1,4 +1,4 @@
-import { createFrickServer } from "@frick/server";
+import { createFrickServer } from "@fricken/server";
 import { schema } from "./schema.js";
 
 const port = Number(process.env.PORT ?? 4099);

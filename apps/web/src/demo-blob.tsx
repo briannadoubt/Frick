@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { uploadImageAttachment, type AttachmentMetadata } from "./chat-foundation.js";
-import { useFrick, useFrickHttpEndpoint, useFrickSession } from "@frick/react";
+import { useFrick, useFrickHttpEndpoint, useFrickSession } from "@fricken/react";
 
 export interface UploadOptions {
   /**

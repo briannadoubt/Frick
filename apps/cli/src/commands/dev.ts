@@ -73,7 +73,7 @@ function createDevPlan(profile: DevProfile): DevPlan {
       `FRICK_PLATFORM_EVENTS_KAFKA_BROKERS=${DEFAULT_BROKERS} FRICK_OTEL_ENABLED=true FRICK_OTEL_EXPORTER_OTLP_ENDPOINT=${DEFAULT_OTLP_ENDPOINT} pnpm server`,
       "pnpm web",
       "pnpm cli dashboard",
-      `FRICK_TEST_KAFKA_BROKERS=${DEFAULT_BROKERS} pnpm --filter @frick/server exec vitest run tests/platform-events-kafka.test.ts`,
+      `FRICK_TEST_KAFKA_BROKERS=${DEFAULT_BROKERS} pnpm --filter @fricken/server exec vitest run tests/platform-events-kafka.test.ts`,
     ],
   };
 }

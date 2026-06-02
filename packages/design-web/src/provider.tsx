@@ -12,7 +12,7 @@ import { frickTokens } from "./generated/tokens.js";
 /**
  * Runtime design context axes.
  *
- * These mirror the canonical `@frick/design` model. Each axis accepts the
+ * These mirror the canonical `@fricken/design` model. Each axis accepts the
  * well-known values plus any custom string, so apps can register their own
  * brands / icon packs without changing this package. Custom values fall back
  * to the package defaults at the CSS layer (see `tokens.css`).

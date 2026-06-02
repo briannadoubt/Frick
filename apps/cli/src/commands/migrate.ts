@@ -9,8 +9,8 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { FRAMEWORK_MIGRATIONS, listAppliedMigrations, runFrameworkMigrations } from "@frick/server";
-import { foundationSchema } from "@frick/protocol";
+import { FRAMEWORK_MIGRATIONS, listAppliedMigrations, runFrameworkMigrations } from "@fricken/server";
+import { foundationSchema } from "@fricken/protocol";
 import type { ParsedArgs } from "../argv.js";
 import { CliUsageError, CliRefusedError } from "../errors.js";
 import { contextFlagsFrom, loadConfig } from "../context.js";

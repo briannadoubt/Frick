@@ -4,7 +4,7 @@ import {
   isFrickErrorEnvelope,
   validateSchema,
   type FrickSchema,
-} from "@frick/protocol";
+} from "@fricken/protocol";
 import { createFrickServer } from "../src/server.js";
 import { FrickStore } from "../src/store.js";
 import { FrickObjectVersionConflictError } from "../src/storage/object-errors.js";

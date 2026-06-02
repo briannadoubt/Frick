@@ -20,8 +20,8 @@ import {
   useStream,
   useSyncStatus,
   useUpsertObject,
-} from "@frick/react";
-import { FrickDevtools } from "@frick/devtools";
+} from "@fricken/react";
+import { FrickDevtools } from "@fricken/devtools";
 import {
   Avatar,
   Button,
@@ -37,7 +37,7 @@ import {
   TextField,
   WorkspaceListItem,
   WorkspaceShell,
-} from "@frick/design-web";
+} from "@fricken/design-web";
 import { resolveInitialTheme, type ThemePreference } from "./theme.js";
 import {
   appendAttachmentMarker,
@@ -401,7 +401,7 @@ function ChatWorkspace({
   const upsertUser = useUpsertObject<User>("User");
   // Phase 3 shape: `useStream` returns `{ events, loadOlder, hasMore, loading }`.
   // Scrollback ("Load earlier") wires into the same `client.loadOlder`
-  // primitive that ships with `@frick/core`; events are prepended to the
+  // primitive that ships with `@fricken/core`; events are prepended to the
   // live tail and the hook keeps both in `events`.
   const {
     events: messages,
@@ -1411,7 +1411,7 @@ function VoiceMemoButton({
 }
 
 /**
- * Phase 4 — message reactions row using `useReactions` from `@frick/react`.
+ * Phase 4 — message reactions row using `useReactions` from `@fricken/react`.
  * Renders an emoji-count chip per distinct reaction; clicking the chip
  * toggles the active user's reaction via the hook's optimistic-append path.
  */

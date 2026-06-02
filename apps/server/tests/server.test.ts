@@ -12,7 +12,7 @@ import {
   unpackSignalEnvelope,
   type FrickFrame,
   type HelloAckPayload,
-} from "@frick/protocol";
+} from "@fricken/protocol";
 import { createFrickServer, defaultDatabasePath } from "../src/server.js";
 
 let app: Awaited<ReturnType<typeof startServer>> | undefined;

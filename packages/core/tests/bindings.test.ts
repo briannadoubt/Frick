@@ -14,7 +14,7 @@
  * client's in-memory state.
  */
 import { describe, expect, it } from "vitest";
-import { productTestSchema } from "@frick/protocol";
+import { productTestSchema } from "@fricken/protocol";
 import { bindSchema } from "../src/bindings.js";
 import { FrickClient } from "../src/runtime.js";
 

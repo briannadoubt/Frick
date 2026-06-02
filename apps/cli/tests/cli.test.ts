@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadWebPushCredentials, TenantSettingsStore } from "@frick/server";
+import { loadWebPushCredentials, TenantSettingsStore } from "@fricken/server";
 
 const execFileAsync = promisify(execFile);
 

@@ -7,7 +7,7 @@ import {
   type FrickSchema,
   type PackedRecord,
   type PlainObject,
-} from "@frick/protocol";
+} from "@fricken/protocol";
 import { DEFAULT_TENANT_ID } from "../tenant.js";
 import { FrickObjectVersionConflictError } from "./object-errors.js";
 

@@ -8,7 +8,7 @@ import {
   type PackedStreamEvent,
   type PlainObject,
   type StreamEventInput,
-} from "@frick/protocol";
+} from "@fricken/protocol";
 import type { IdempotencyCache } from "./idempotency-cache.js";
 
 export interface AppendInput {

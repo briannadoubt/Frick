@@ -12,7 +12,7 @@ import type { TemplateVariables } from "./index.js";
  * "scaffold" is a placeholder the runtime will not read.
  */
 export function renderSchemaTs(vars: TemplateVariables): string {
-  return `import type { FrickSchema } from "@frick/protocol";
+  return `import type { FrickSchema } from "@fricken/protocol";
 
 export const schema: FrickSchema = {
   name: ${JSON.stringify(vars.appName)},

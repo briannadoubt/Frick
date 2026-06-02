@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { foundationSchema } from "@frick/protocol";
+import { foundationSchema } from "@fricken/protocol";
 import {
   createFrickProjectModule,
   projectModuleToAppDefinition,

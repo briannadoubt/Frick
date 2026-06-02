@@ -7,7 +7,7 @@ import {
   encodeFrame,
   productTestSchema,
   packStreamEvent,
-} from "@frick/protocol";
+} from "@fricken/protocol";
 import {
   FrickCacheIncompatibleError,
   FrickClient,

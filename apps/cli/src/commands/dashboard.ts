@@ -96,7 +96,7 @@ async function resolveDashboardRoot(here: string): Promise<string> {
     }
   }
 
-  throw new CliUsageError("dashboard assets were not found; rebuild @frick/cli before running `frick dashboard`");
+  throw new CliUsageError("dashboard assets were not found; rebuild @fricken/cli before running `frick dashboard`");
 }
 
 function createDashboardServer(root: string): Server {

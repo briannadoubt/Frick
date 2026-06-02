@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
-import { foundationSchema } from "@frick/protocol";
+import { foundationSchema } from "@fricken/protocol";
 import { SseRegistry } from "../src/sync/sse.js";
 import type { StoredEvent } from "../src/storage/stream-store.js";
 

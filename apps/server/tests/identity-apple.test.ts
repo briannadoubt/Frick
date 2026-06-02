@@ -6,7 +6,7 @@ import {
   SignJWT,
   type KeyLike,
 } from "jose";
-import type { FrickSchema } from "@frick/protocol";
+import type { FrickSchema } from "@fricken/protocol";
 import { createFrickServer } from "../src/server.js";
 
 /**

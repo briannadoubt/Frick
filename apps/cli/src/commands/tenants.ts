@@ -14,7 +14,7 @@ import {
   saveApnsCredentials,
   saveFcmCredentials,
   saveWebPushCredentials,
-} from "@frick/server";
+} from "@fricken/server";
 import type { ParsedArgs } from "../argv.js";
 import { CliFailureError, CliUsageError } from "../errors.js";
 import { contextFlagsFrom, loadConfig, openStore } from "../context.js";

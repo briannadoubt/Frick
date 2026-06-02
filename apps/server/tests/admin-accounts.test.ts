@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { isFrickErrorEnvelope } from "@frick/protocol";
+import { isFrickErrorEnvelope } from "@fricken/protocol";
 import { createFrickServer } from "../src/server.js";
 
 const ADMIN_TOKEN = "test-admin-token-1234567890ABCDEF1234567890ABCDEF";

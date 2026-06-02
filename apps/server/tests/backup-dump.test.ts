@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { productTestSchema } from "@frick/protocol";
+import { productTestSchema } from "@fricken/protocol";
 import { dumpFrickDatabase, type FrickDumpHeader } from "../src/backup/dump.js";
 import { FrickStore } from "../src/store.js";
 

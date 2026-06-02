@@ -19,9 +19,9 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { PlainObject } from "@frick/protocol";
-import { FrickObjectConflictError } from "@frick/core";
-import { useFrick, useFrickSession, useObject } from "@frick/react";
+import type { PlainObject } from "@fricken/protocol";
+import { FrickObjectConflictError } from "@fricken/core";
+import { useFrick, useFrickSession, useObject } from "@fricken/react";
 
 /** Stable id convention used by all SDKs for `MessageDraft` rows. */
 export function draftId(userId: string, conversationId: string): string {

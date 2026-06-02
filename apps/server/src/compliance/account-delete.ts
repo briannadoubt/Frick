@@ -1,4 +1,4 @@
-import type { PlainObject } from "@frick/protocol";
+import type { PlainObject } from "@fricken/protocol";
 import type { FrickStore } from "../store.js";
 import type { Principal } from "../authz.js";
 import { DEFAULT_OWNER_FIELDS } from "./account-export.js";

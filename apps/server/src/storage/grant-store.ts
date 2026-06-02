@@ -3,7 +3,7 @@ import {
   frickSharingPermissionSatisfies,
   type FrickGrant,
   type FrickSharingPermission,
-} from "@frick/protocol";
+} from "@fricken/protocol";
 
 interface GrantSqlRow {
   id: string;

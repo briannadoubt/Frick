@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { decode, encode } from "@msgpack/msgpack";
-import type { PlainObject } from "@frick/protocol";
+import type { PlainObject } from "@fricken/protocol";
 
 /**
  * Lifecycle states for a background job row.
