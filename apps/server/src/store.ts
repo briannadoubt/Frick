@@ -588,7 +588,7 @@ export class FrickStore {
       this.idempotencyCache = new BoundedIdempotencyCache<CachedIdempotentEvent>(
         this.#idempotencyCacheCapacity,
       );
-      this.streams = new StreamStore(this.db, this.schema, this.idempotencyCache, {
+      this.streams = new StreamStore(this.#sqlDriver, this.schema, this.idempotencyCache, {
         replayWindowMs: this.#idempotencyReplayWindowMs,
       });
     }
@@ -1127,41 +1127,40 @@ export class FrickStore {
     return this.blobs.list(DEFAULT_TENANT_ID, ownerId);
   }
 
-  writeBlobContent(blobId: string, content: Uint8Array): void;
-  writeBlobContent(tenantId: string, blobId: string, content: Uint8Array): void;
-  writeBlobContent(a: string, b: string | Uint8Array, c?: Uint8Array): void {
+  writeBlobContent(blobId: string, content: Uint8Array): Promise<void>;
+  writeBlobContent(tenantId: string, blobId: string, content: Uint8Array): Promise<void>;
+  async writeBlobContent(a: string, b: string | Uint8Array, c?: Uint8Array): Promise<void> {
     if (c !== undefined) {
-      this.blobs.writeContent(a, b as string, c);
-      return;
+      return this.blobs.writeContent(a, b as string, c);
     }
-    this.blobs.writeContent(DEFAULT_TENANT_ID, a, b as Uint8Array);
+    return this.blobs.writeContent(DEFAULT_TENANT_ID, a, b as Uint8Array);
   }
 
-  readBlobContent(blobId: string): Uint8Array | undefined;
-  readBlobContent(tenantId: string, blobId: string): Uint8Array | undefined;
-  readBlobContent(a: string, b?: string): Uint8Array | undefined {
+  readBlobContent(blobId: string): Promise<Uint8Array | undefined>;
+  readBlobContent(tenantId: string, blobId: string): Promise<Uint8Array | undefined>;
+  async readBlobContent(a: string, b?: string): Promise<Uint8Array | undefined> {
     if (b !== undefined) {
       return this.blobs.readContent(a, b);
     }
     return this.blobs.readContent(DEFAULT_TENANT_ID, a);
   }
 
-  hasUser(userId: string): boolean;
-  hasUser(tenantId: string, userId: string): boolean;
-  hasUser(a: string, b?: string): boolean {
+  hasUser(userId: string): Promise<boolean>;
+  hasUser(tenantId: string, userId: string): Promise<boolean>;
+  async hasUser(a: string, b?: string): Promise<boolean> {
     if (b !== undefined) {
-      return this.accounts.readByIdentity(a, b) !== undefined;
+      return (await this.accounts.readByIdentity(a, b)) !== undefined;
     }
-    return this.accounts.readByIdentity(DEFAULT_TENANT_ID, a) !== undefined;
+    return (await this.accounts.readByIdentity(DEFAULT_TENANT_ID, a)) !== undefined;
   }
 
-  createAccountUser(input: {
+  async createAccountUser(input: {
     userId: string;
     handle: string;
     displayName: string;
     password: string;
     tenantId?: string;
-  }): StoredAccount {
+  }): Promise<StoredAccount> {
     const tenantId = input.tenantId ?? DEFAULT_TENANT_ID;
     return this.accounts.create({
       tenantId,
@@ -1172,42 +1171,42 @@ export class FrickStore {
     });
   }
 
-  verifyAccountPassword(identity: string, password: string): StoredAccount | undefined;
+  verifyAccountPassword(identity: string, password: string): Promise<StoredAccount | undefined>;
   verifyAccountPassword(
     tenantId: string,
     identity: string,
     password: string,
-  ): StoredAccount | undefined;
-  verifyAccountPassword(a: string, b: string, c?: string): StoredAccount | undefined {
+  ): Promise<StoredAccount | undefined>;
+  async verifyAccountPassword(a: string, b: string, c?: string): Promise<StoredAccount | undefined> {
     if (c !== undefined) {
       return this.accounts.verifyPassword(a, b, c);
     }
     return this.accounts.verifyPassword(DEFAULT_TENANT_ID, a, b);
   }
 
-  createSession(input: {
+  async createSession(input: {
     sessionToken: string;
     userId: string;
     deviceId: string;
     replicaId: string;
     expiresAt: string;
     tenantId?: string;
-  }): StoredSession {
+  }): Promise<StoredSession> {
     return this.sessions.create({
       ...input,
       tenantId: input.tenantId ?? DEFAULT_TENANT_ID,
     });
   }
 
-  readActiveSession(sessionToken: string): StoredSession | undefined {
+  async readActiveSession(sessionToken: string): Promise<StoredSession | undefined> {
     return this.sessions.readActive(sessionToken);
   }
 
-  readAnySession(sessionToken: string): StoredSession | undefined {
+  async readAnySession(sessionToken: string): Promise<StoredSession | undefined> {
     return this.sessions.readAny(sessionToken);
   }
 
-  deleteSession(sessionToken: string): boolean {
+  async deleteSession(sessionToken: string): Promise<boolean> {
     return this.sessions.delete(sessionToken);
   }
 
@@ -1218,7 +1217,7 @@ export class FrickStore {
    *
    * Scope optionally to a single tenant; omit `tenantId` to kill all.
    */
-  deleteSessionsForUser(userId: string, tenantId?: string): number {
+  async deleteSessionsForUser(userId: string, tenantId?: string): Promise<number> {
     return this.sessions.deleteForUser(userId, tenantId);
   }
 
@@ -1227,23 +1226,23 @@ export class FrickStore {
    * account-deletion flow ({@link deleteAccountData}). Returns true when a row
    * was removed, false when no `(tenantId, userId)` match existed — idempotent.
    */
-  deleteAccount(tenantId: string, userId: string): boolean {
+  async deleteAccount(tenantId: string, userId: string): Promise<boolean> {
     return this.accounts.delete(tenantId, userId);
   }
 
-  enqueueJob(type: string, value: PlainObject): void;
-  enqueueJob(tenantId: string, type: string, value: PlainObject): void;
-  enqueueJob(a: string, b: string | PlainObject, c?: PlainObject): void {
+  enqueueJob(type: string, value: PlainObject): Promise<void>;
+  enqueueJob(tenantId: string, type: string, value: PlainObject): Promise<void>;
+  async enqueueJob(a: string, b: string | PlainObject, c?: PlainObject): Promise<void> {
     if (c !== undefined) {
-      this.jobs.enqueue(a, b as string, c);
+      await this.jobs.enqueue(a, b as string, c);
       return;
     }
-    this.jobs.enqueue(DEFAULT_TENANT_ID, a, b as PlainObject);
+    await this.jobs.enqueue(DEFAULT_TENANT_ID, a, b as PlainObject);
   }
 
-  nextJob(type: string): StoredJob | undefined;
-  nextJob(tenantId: string, type: string): StoredJob | undefined;
-  nextJob(a: string, b?: string): StoredJob | undefined {
+  nextJob(type: string): Promise<StoredJob | undefined>;
+  nextJob(tenantId: string, type: string): Promise<StoredJob | undefined>;
+  async nextJob(a: string, b?: string): Promise<StoredJob | undefined> {
     if (b !== undefined) {
       return this.jobs.next(a, b);
     }

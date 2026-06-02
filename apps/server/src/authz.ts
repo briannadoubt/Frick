@@ -73,7 +73,7 @@ export interface Principal {
 }
 
 export interface MembershipReader {
-  hasUser(userId: string): boolean;
+  hasUser(userId: string): Promise<boolean>;
 }
 
 /**
@@ -87,7 +87,7 @@ export interface MembershipReader {
  */
 export function tenantMembershipReader(
   store: {
-    hasUser(tenantId: string, userId: string): boolean;
+    hasUser(tenantId: string, userId: string): Promise<boolean>;
   },
   tenantId: string,
 ): MembershipReader {
@@ -890,7 +890,7 @@ export function assertBlobOwnership(
 }
 
 const NULL_MEMBERSHIP: MembershipReader = {
-  hasUser: () => false,
+  hasUser: () => Promise.resolve(false),
 };
 
 function userIdFromReplica(replicaId: string): string {
