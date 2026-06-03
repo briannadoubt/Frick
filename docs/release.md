@@ -86,9 +86,10 @@ TypeScript packages publish from `.github/workflows/publish-npm.yml` when a `fra
 Before the first automated npm release, configure npm trusted publishing for
 each package currently included in the npm workflow (`@fricken/protocol`,
 `@fricken/core`, `@fricken/design`, `@fricken/react`, `@fricken/design-web`,
-`@fricken/devtools`, `@fricken/agent-kit`, `@fricken/mcp`) to trust this repository
-and workflow path. `@fricken/cli` has publish metadata and a `frick` bin, but it
-is not yet in the npm workflow package list.
+`@fricken/devtools`, `@fricken/agent-kit`, `@fricken/mcp`,
+`@fricken/server`) to trust this repository and workflow path. `@fricken/cli`
+has publish metadata and a `frick` bin, but it is not yet in the npm workflow
+package list.
 
 ```text
 publish-npm.yml

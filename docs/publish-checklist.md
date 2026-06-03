@@ -38,10 +38,10 @@ Companion docs:
 - [ ] `pnpm exec tsx scripts/bump-version.ts --package @fricken/protocol --release <type>`
 - [ ] Repeat for each affected package (`@fricken/core`, `@fricken/react`,
   `@fricken/design`, `@fricken/design-web`, `@fricken/devtools`,
-  `@fricken/agent-kit`, `@fricken/mcp`)
+  `@fricken/agent-kit`, `@fricken/mcp`, `@fricken/server`)
   - `@fricken/cli` is standalone-buildable but still excluded from the npm
     publish workflow until the CLI release slice deliberately adds it.
-  - `@fricken/server` and `@fricken/web` remain private workspace packages.
+  - `@fricken/web` remains a private workspace package.
 - [ ] `pnpm changelog --output CHANGELOG.md` — then manually move the
   `Unreleased` entries under the new version heading
 - [ ] Commit: `chore(release): vX.Y.Z`
@@ -60,8 +60,9 @@ Companion docs:
   - Before the first automated npm release, configure npm trusted publishing
     for each public package in npm (`@fricken/protocol`, `@fricken/core`,
     `@fricken/design`, `@fricken/react`, `@fricken/design-web`,
-    `@fricken/devtools`, `@fricken/agent-kit`, `@fricken/mcp`) to trust this
-    repository and workflow filename (`publish-npm.yml`).
+    `@fricken/devtools`, `@fricken/agent-kit`, `@fricken/mcp`,
+    `@fricken/server`) to trust this repository and workflow filename
+    (`publish-npm.yml`).
   - Confirm each package's npm metadata uses the repository URL
     `git+https://github.com/<owner>/<repo>.git` for the repository running
     the workflow and includes the package's workspace directory.
@@ -78,6 +79,7 @@ Companion docs:
   @fricken/devtools
   @fricken/agent-kit
   @fricken/mcp
+  @fricken/server
   ```
 - [ ] Swift: tagging is the publish step. SPM consumers pin to the
   `framework-vX.Y.Z` tag; there is no separate Swift registry push.
@@ -97,11 +99,11 @@ Companion docs:
   npm init -y
   pnpm add @fricken/protocol@X.Y.Z @fricken/core@X.Y.Z @fricken/react@X.Y.Z
   pnpm add @fricken/design@X.Y.Z @fricken/design-web@X.Y.Z @fricken/devtools@X.Y.Z
-  pnpm add @fricken/agent-kit@X.Y.Z @fricken/mcp@X.Y.Z
+  pnpm add @fricken/agent-kit@X.Y.Z @fricken/mcp@X.Y.Z @fricken/server@X.Y.Z
   node --input-type=module -e 'await Promise.all([
     import("@fricken/protocol"), import("@fricken/core"), import("@fricken/react"),
     import("@fricken/design"), import("@fricken/design-web"), import("@fricken/devtools"),
-    import("@fricken/agent-kit"), import("@fricken/mcp")
+    import("@fricken/agent-kit"), import("@fricken/mcp"), import("@fricken/server")
   ])'
   ```
   Use the exact versions the workflow published; omit packages that were
