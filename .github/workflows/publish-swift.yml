@@ -13,6 +13,14 @@ name: Publish Swift Package
 # To cut a release: tag a commit on `main` with `swift-vX.Y.Z` and push the tag.
 # The version applied to the mirror is the tag minus the `swift-v` prefix.
 on:
+  # Called in-run by release.yml (version passed in). Also fires on a
+  # manually-pushed swift-v* tag (by-hand fallback).
+  workflow_call:
+    inputs:
+      version:
+        description: "Release version (semver, no prefix)."
+        type: string
+        required: true
   push:
     tags:
       - 'swift-v*'
@@ -27,7 +35,7 @@ concurrency:
 jobs:
   publish:
     name: Mirror packages/swift to FrickSwift
-    if: ${{ startsWith(github.ref, 'refs/tags/swift-v') }}
+    if: ${{ startsWith(github.ref, 'refs/tags/swift-v') || github.ref == 'refs/heads/main' }}
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -36,6 +44,7 @@ jobs:
           fetch-depth: 0
 
       - name: Verify Swift release tag
+        if: ${{ startsWith(github.ref, 'refs/tags/swift-v') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -67,5 +76,8 @@ jobs:
           FRICK_SWIFT_MIRROR: https://x-access-token:${{ secrets.SWIFT_MIRROR_TOKEN }}@github.com/briannadoubt/FrickSwift.git
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#swift-v}"
+          version="${{ inputs.version }}"
+          if [[ -z "${version}" ]]; then
+            version="${GITHUB_REF_NAME#swift-v}"
+          fi
           scripts/publish-swift.sh "${version}"

@@ -1,9 +1,12 @@
 name: Publish npm Packages
 
-# Runs on `framework-vX.Y.Z` tag pushes after the release commit lands on
-# main. npm trusted publishing must be configured per package for this exact
-# workflow file in npm before the first release.
+# Publishes every @fricken/* package whose package.json version is not yet on
+# npm. Normally called in-run by release.yml on a chore(release): merge; also
+# fires on a manually-pushed `framework-vX.Y.Z` tag (by-hand fallback). Auth is
+# a single `NPM_TOKEN` automation-token secret, with `--provenance` (enabled by
+# the id-token permission below).
 on:
+  workflow_call: {}
   push:
     tags:
       - 'framework-v*'
@@ -19,13 +22,16 @@ concurrency:
 jobs:
   publish:
     name: Publish to npm with provenance
-    if: ${{ startsWith(github.ref, 'refs/tags/framework-v') }}
+    # Direct tag push (ref = refs/tags/framework-v*) or called by release.yml
+    # (ref = refs/heads/main).
+    if: ${{ startsWith(github.ref, 'refs/tags/framework-v') || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # actions/checkout@v4
 
       - name: Verify npm release tag
+        if: ${{ startsWith(github.ref, 'refs/tags/framework-v') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -55,20 +61,6 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-
-      - name: Verify npm supports trusted publishing
-        run: |
-          npm --version
-          node --input-type=module <<'NODE'
-          import { execFileSync } from "node:child_process";
-
-          const version = execFileSync("npm", ["--version"], { encoding: "utf8" }).trim();
-          const [major, minor, patch] = version.split(".").map(Number);
-          const ok = major > 11 || (major === 11 && (minor > 5 || (minor === 5 && patch >= 1)));
-          if (!ok) {
-            throw new Error(`npm ${version} does not support trusted publishing; need >= 11.5.1`);
-          }
-          NODE
 
       - run: pnpm install --frozen-lockfile --ignore-scripts
 
@@ -136,6 +128,9 @@ jobs:
         shell: bash
         env:
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
+          # Automation token from the NPM_TOKEN secret. setup-node wrote an
+          # .npmrc that reads NODE_AUTH_TOKEN for registry.npmjs.org auth.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           package_dirs=(

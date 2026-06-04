@@ -81,34 +81,63 @@ describe("release hardening", () => {
     const ci = read(".github/workflows/ci.yml");
     const publishAndroid = read(".github/workflows/publish-android.yml");
     const publishNpm = read(".github/workflows/publish-npm.yml");
-    const workflows = `${ci}\n${publishAndroid}\n${publishNpm}`;
+    const publishSwift = read(".github/workflows/publish-swift.yml");
+    const release = read(".github/workflows/release.yml");
+    const workflows = `${ci}\n${publishAndroid}\n${publishNpm}\n${publishSwift}\n${release}`;
 
-    expect(workflowActionUses(workflows).filter((use) => !/@[0-9a-f]{40}$/.test(use))).toEqual([]);
+    // Local reusable-workflow refs (./.github/workflows/*.yml) are version-
+    // controlled in-repo and not SHA-pinnable; only external actions must pin.
+    expect(
+      workflowActionUses(workflows).filter((use) => !use.startsWith("./") && !/@[0-9a-f]{40}$/.test(use)),
+    ).toEqual([]);
+    // Android publishing is never directly dispatchable; it runs from an
+    // android-v* tag (fallback) or as a reusable workflow called by release.yml.
     expect(publishAndroid).not.toContain("workflow_dispatch");
-    expect(publishAndroid).toContain("if: ${{ startsWith(github.ref, 'refs/tags/android-v') }}");
+    expect(publishAndroid).toContain("workflow_call");
+    expect(publishAndroid).toContain("startsWith(github.ref, 'refs/tags/android-v')");
     expect(publishAndroid).toContain("android-v${frickVersion}");
   });
 
-  test("npm publishing uses trusted provenance on framework version tags", () => {
+  test("npm publishing is provenance-signed and runs only via tag or release.yml", () => {
     const publishNpm = read(".github/workflows/publish-npm.yml");
 
+    // Not directly dispatchable; reachable via framework-v* tag (fallback) or
+    // as a reusable workflow called by release.yml.
     expect(publishNpm).not.toContain("workflow_dispatch");
+    expect(publishNpm).toContain("workflow_call");
     expect(publishNpm).toContain("tags:");
     expect(publishNpm).toContain("'framework-v*'");
     expect(publishNpm).toContain("id-token: write");
     expect(publishNpm).toContain("contents: read");
-    expect(publishNpm).not.toContain("NPM_TOKEN");
-    expect(publishNpm).not.toContain("NODE_AUTH_TOKEN");
+    // Auth is a single automation token sourced from the NPM_TOKEN secret.
+    expect(publishNpm).toContain("NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}");
     expect(publishNpm).toContain("version: 10.0.0");
     expect(publishNpm).toContain("pnpm install --frozen-lockfile --ignore-scripts");
     expect(publishNpm).toContain("semverPattern");
     expect(publishNpm).toContain("pnpm --dir \"${package_dir}\" pack");
     expect(publishNpm).toContain("Array.isArray(parsed) ? parsed[0] : parsed");
+    // Provenance attestation is still required on publish.
     expect(publishNpm).toContain('npm publish "${tarball}" --provenance --access public');
+    // The ancestor/tag guard still protects the manual tag-push fallback.
     expect(publishNpm).toContain("Verify npm release tag");
     expect(publishNpm).toContain("must point at a commit on origin/main");
     expect(publishNpm).toContain("publishConfig.provenance");
     expect(publishNpm).toContain("EXPECTED_REPOSITORY_URL");
+  });
+
+  test("release.yml orchestrates publishing on chore(release) commits without a tagging PAT", () => {
+    const release = read(".github/workflows/release.yml");
+
+    // Auto-fires only for release commits; manual dispatch always allowed.
+    expect(release).toContain("startsWith(github.event.head_commit.message, 'chore(release):')");
+    // Publishes in-run by calling the reusable publish workflows.
+    expect(release).toContain("uses: ./.github/workflows/publish-npm.yml");
+    expect(release).toContain("uses: ./.github/workflows/publish-swift.yml");
+    expect(release).toContain("uses: ./.github/workflows/publish-android.yml");
+    // Marker tags are pushed with the built-in token (no long-lived tagging PAT).
+    expect(release).not.toContain("RELEASE_TAG_TOKEN");
+    // Android lockstep is validated before any publish runs.
+    expect(release).toContain("!= release version");
   });
 
   test("publishable npm packages opt in to provenance metadata", () => {
