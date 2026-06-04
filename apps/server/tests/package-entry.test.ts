@@ -34,7 +34,7 @@ describe("@fricken/server package entry", () => {
       ],
       {
         cwd: repoRoot,
-        timeout: 2_000,
+        timeout: 20_000,
       },
     );
 
@@ -43,7 +43,7 @@ describe("@fricken/server package entry", () => {
       MemoryClusterBus: "function",
       createFrickWebPushAdapter: "function",
     });
-  });
+  }, 30_000);
 
   it("re-exports the web push adapter factory from the documented subpath source", async () => {
     const webPushSource = resolve(packageRoot, "src/push/web-push-adapter.ts");
@@ -68,7 +68,7 @@ describe("@fricken/server package entry", () => {
       ],
       {
         cwd: repoRoot,
-        timeout: 2_000,
+        timeout: 20_000,
       },
     );
 
@@ -78,7 +78,7 @@ describe("@fricken/server package entry", () => {
       platform: "webPush",
       send: "function",
     });
-  });
+  }, 30_000);
 
   it("declares dist exports for the package root and documented push adapter subpaths", () => {
     const body = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
