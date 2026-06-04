@@ -938,6 +938,13 @@ public final class FrickClient: Sendable {
     /// (response envelopes, sync Hello frame, `X-Frick-Schema-Hash` header)
     /// compare against the app's schema rather than the foundation default.
     public let schemaHash: String
+    /// Schema identity sent in the sync Hello handshake's client capabilities.
+    /// The server matches `schemaId` (and hash) on Hello, so an app with a
+    /// custom protocol schema MUST supply its own id/revision here or the
+    /// handshake is rejected ("Schema id mismatch") and no sync frames flow.
+    /// Default to the foundation schema's identity.
+    public let schemaId: String
+    public let schemaRevision: Int
     /// Schema descriptor the sync socket uses to decode packed Delta/Snapshot
     /// frames. Apps with a custom protocol schema inject their generated
     /// descriptor here so object/stream records decode into named fields;
@@ -958,6 +965,8 @@ public final class FrickClient: Sendable {
         telemetry: any FrickClientTelemetryRuntime = FrickNoopClientTelemetryRuntime(),
         requestIdFactory: @escaping @Sendable () -> String = { UUID().uuidString },
         schemaHash: String = FrickSchema.schemaHash,
+        schemaId: String = FrickSchema.schemaId,
+        schemaRevision: Int = FrickSchema.schemaRevision,
         syncDescriptor: FrickSchemaDescriptorValues = .foundation
     ) {
         Self.validateBaseURL(baseURL, allowInsecureLocalTransport: allowInsecureLocalTransport)
@@ -970,6 +979,8 @@ public final class FrickClient: Sendable {
         self.telemetry = telemetry
         self.requestIdFactory = requestIdFactory
         self.schemaHash = schemaHash
+        self.schemaId = schemaId
+        self.schemaRevision = schemaRevision
         self.syncDescriptor = syncDescriptor
     }
 
@@ -1066,7 +1077,11 @@ public final class FrickClient: Sendable {
         let socket = FrickSyncSocket(
             baseURL: baseURL ?? self.baseURL,
             sessionToken: session.sessionToken,
-            clientCapabilities: .defaultIOS(schemaHash: schemaHash),
+            clientCapabilities: .defaultIOS(
+                schemaId: schemaId,
+                schemaRevision: schemaRevision,
+                schemaHash: schemaHash
+            ),
             replicaId: replicaId,
             deviceId: session.deviceId,
             schemaHash: schemaHash,

@@ -486,13 +486,15 @@ public struct FrickClientCapabilities: Sendable, Equatable {
 
     public static func defaultIOS(
         sdkVersion: String = "0.1.0",
+        schemaId: String = FrickSchema.schemaId,
+        schemaRevision: Int = FrickSchema.schemaRevision,
         schemaHash: String = FrickSchema.schemaHash
     ) -> FrickClientCapabilities {
         FrickClientCapabilities(
             platform: "ios",
             sdkVersion: sdkVersion,
-            schemaId: FrickSchema.schemaId,
-            schemaRevision: FrickSchema.schemaRevision,
+            schemaId: schemaId,
+            schemaRevision: schemaRevision,
             schemaHash: schemaHash,
             transports: ["websocket"],
             encodings: ["msgpack"],
