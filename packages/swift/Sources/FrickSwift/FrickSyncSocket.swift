@@ -723,6 +723,47 @@ private struct PendingSocketAppend: Sendable {
 
 // MARK: - FrickSyncSocket
 
+/// Type/field id → name tables `FrickSyncSocket` uses to decode packed
+/// `Delta`/`Snapshot` frames into named-field records. Injected by the
+/// consuming app so an app-defined protocol schema can be decoded without
+/// baking app-specific types into the framework. Defaults to `.foundation`
+/// (the generated foundation tables), preserving prior behavior.
+public struct FrickSchemaDescriptorValues: Sendable {
+
+    public let objectNames: [Int: String]
+    public let objectFields: [Int: [Int: String]]
+    public let streamNames: [Int: String]
+    public let eventNames: [Int: String]
+    public let eventFields: [Int: [Int: String]]
+
+
+    public init(
+        objectNames: [Int: String],
+        objectFields: [Int: [Int: String]],
+        streamNames: [Int: String],
+        eventNames: [Int: String],
+        eventFields: [Int: [Int: String]]
+    ) {
+        self.objectNames = objectNames
+        self.objectFields = objectFields
+        self.streamNames = streamNames
+        self.eventNames = eventNames
+        self.eventFields = eventFields
+    }
+
+
+    /// The generated foundation schema tables (`FrickSchemaDescriptor`).
+    public static let foundation = FrickSchemaDescriptorValues(
+        objectNames: FrickSchemaDescriptor.objectNames,
+        objectFields: FrickSchemaDescriptor.objectFields,
+        streamNames: FrickSchemaDescriptor.streamNames,
+        eventNames: FrickSchemaDescriptor.eventNames,
+        eventFields: FrickSchemaDescriptor.eventFields
+    )
+
+}
+
+
 /// Persistent sync transport over WebSocket. Public API is async and
 /// Sendable-safe. Durability of pending appends across process restart is
 /// out of scope for this slice (in-memory queue only).
@@ -739,6 +780,7 @@ public actor FrickSyncSocket {
 
     private let factory: FrickWebSocketFactory
     private let sleepFor: @Sendable (UInt64) async throws -> Void
+    private let descriptor: FrickSchemaDescriptorValues
 
     private var task: FrickWebSocketTaskProtocol?
     private var receiveLoop: Task<Void, Never>?
@@ -771,7 +813,8 @@ public actor FrickSyncSocket {
         sleepFor: @escaping @Sendable (UInt64) async throws -> Void = { ns in
             try await Task.sleep(nanoseconds: ns)
         },
-        schemaHash: String = FrickSchema.schemaHash
+        schemaHash: String = FrickSchema.schemaHash,
+        descriptor: FrickSchemaDescriptorValues = .foundation
     ) {
         self.baseURL = baseURL
         self.sessionToken = sessionToken
@@ -781,6 +824,7 @@ public actor FrickSyncSocket {
         self.factory = factory
         self.sleepFor = sleepFor
         self.schemaHash = schemaHash
+        self.descriptor = descriptor
 
         // Defer construction of the AsyncThrowingStream until after self init so
         // we can capture the continuation.
@@ -1167,7 +1211,7 @@ public actor FrickSyncSocket {
         let objectArray = map["objects"]?.arrayValue ?? []
         var records: [FrickObjectRecord] = []
         for o in objectArray {
-            if let decoded = Self.decodePackedObjectRecord(o) {
+            if let decoded = decodePackedObjectRecord(o) {
                 records.append(decoded)
             }
         }
@@ -1180,7 +1224,7 @@ public actor FrickSyncSocket {
         let objectArray = map["objects"]?.arrayValue ?? []
         var objectRecords: [FrickObjectRecord] = []
         for o in objectArray {
-            if let decoded = Self.decodePackedObjectRecord(o) {
+            if let decoded = decodePackedObjectRecord(o) {
                 objectRecords.append(decoded)
             }
         }
@@ -1190,7 +1234,7 @@ public actor FrickSyncSocket {
         let eventArray = map["events"]?.arrayValue ?? []
         var streamEvents: [FrickStreamEvent] = []
         for e in eventArray {
-            if let decoded = Self.decodePackedStreamEvent(e) {
+            if let decoded = decodePackedStreamEvent(e) {
                 streamEvents.append(decoded)
                 continue
             }
@@ -1224,13 +1268,13 @@ public actor FrickSyncSocket {
     /// `[objectTypeId, recordId, packedFields]` into a `FrickObjectRecord`,
     /// resolving type and field ids via `FrickSchemaDescriptor`. Returns
     /// `nil` for malformed tuples or unknown object type ids.
-    private static func decodePackedObjectRecord(_ value: FrickMsgPackValue) -> FrickObjectRecord? {
+    private func decodePackedObjectRecord(_ value: FrickMsgPackValue) -> FrickObjectRecord? {
         guard let tuple = value.arrayValue, tuple.count >= 3 else { return nil }
         guard let typeId = tuple[0].intValue,
               let id = tuple[1].stringValue
         else { return nil }
-        guard let typeName = FrickSchemaDescriptor.objectNames[typeId] else { return nil }
-        let fieldTable = FrickSchemaDescriptor.objectFields[typeId] ?? [:]
+        guard let typeName = descriptor.objectNames[typeId] else { return nil }
+        let fieldTable = descriptor.objectFields[typeId] ?? [:]
         let packedFields = tuple[2].arrayValue ?? []
         var fields: [String: String] = [:]
         for entry in packedFields {
@@ -1248,7 +1292,7 @@ public actor FrickSyncSocket {
     /// into a `FrickStreamEvent`, resolving stream/event/field ids via
     /// `FrickSchemaDescriptor`. Returns `nil` for unrecognized tuple shapes —
     /// callers fall back to the legacy map decoder.
-    private static func decodePackedStreamEvent(_ value: FrickMsgPackValue) -> FrickStreamEvent? {
+    private func decodePackedStreamEvent(_ value: FrickMsgPackValue) -> FrickStreamEvent? {
         guard let tuple = value.arrayValue, tuple.count >= 6 else { return nil }
         guard let streamTypeId = tuple[0].intValue,
               let streamKey = tuple[1].stringValue,
@@ -1256,9 +1300,9 @@ public actor FrickSyncSocket {
               let eventId = tuple[3].stringValue,
               let eventTypeId = tuple[4].intValue
         else { return nil }
-        let streamName = FrickSchemaDescriptor.streamNames[streamTypeId] ?? "#\(streamTypeId)"
-        let eventName = FrickSchemaDescriptor.eventNames[eventTypeId] ?? "#\(eventTypeId)"
-        let fieldTable = FrickSchemaDescriptor.eventFields[eventTypeId] ?? [:]
+        let streamName = descriptor.streamNames[streamTypeId] ?? "#\(streamTypeId)"
+        let eventName = descriptor.eventNames[eventTypeId] ?? "#\(eventTypeId)"
+        let fieldTable = descriptor.eventFields[eventTypeId] ?? [:]
         let packedFields = tuple[5].arrayValue ?? []
         var payload: [String: String] = [:]
         for entry in packedFields {

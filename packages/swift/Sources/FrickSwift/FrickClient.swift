@@ -938,6 +938,11 @@ public final class FrickClient: Sendable {
     /// (response envelopes, sync Hello frame, `X-Frick-Schema-Hash` header)
     /// compare against the app's schema rather than the foundation default.
     public let schemaHash: String
+    /// Schema descriptor the sync socket uses to decode packed Delta/Snapshot
+    /// frames. Apps with a custom protocol schema inject their generated
+    /// descriptor here so object/stream records decode into named fields;
+    /// defaults to the generated foundation tables.
+    public let syncDescriptor: FrickSchemaDescriptorValues
     private let sessionStore = FrickSessionStore()
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -952,7 +957,8 @@ public final class FrickClient: Sendable {
         allowInsecureLocalTransport: Bool = FrickClient.defaultAllowsInsecureLocalTransport,
         telemetry: any FrickClientTelemetryRuntime = FrickNoopClientTelemetryRuntime(),
         requestIdFactory: @escaping @Sendable () -> String = { UUID().uuidString },
-        schemaHash: String = FrickSchema.schemaHash
+        schemaHash: String = FrickSchema.schemaHash,
+        syncDescriptor: FrickSchemaDescriptorValues = .foundation
     ) {
         Self.validateBaseURL(baseURL, allowInsecureLocalTransport: allowInsecureLocalTransport)
         self.baseURL = baseURL
@@ -964,6 +970,7 @@ public final class FrickClient: Sendable {
         self.telemetry = telemetry
         self.requestIdFactory = requestIdFactory
         self.schemaHash = schemaHash
+        self.syncDescriptor = syncDescriptor
     }
 
     public var currentSession: FrickSession? {
@@ -1062,7 +1069,8 @@ public final class FrickClient: Sendable {
             clientCapabilities: .defaultIOS(schemaHash: schemaHash),
             replicaId: replicaId,
             deviceId: session.deviceId,
-            schemaHash: schemaHash
+            schemaHash: schemaHash,
+            descriptor: syncDescriptor
         )
         Task { await socket.connect() }
         return socket

@@ -715,4 +715,65 @@ final class FrickSyncSocketTests: XCTestCase {
         await socket.close()
     }
 
+    /// RCRM-154: an INJECTED schema descriptor must let the socket decode
+    /// packed object Delta frames into named records. With the default empty
+    /// foundation descriptor the type id never resolves and the record is
+    /// dropped; with the app's descriptor it decodes. This is the mechanism
+    /// the realtime-sync fix depends on.
+    func testInjectedDescriptorDecodesObjectDelta() async throws {
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+
+        let descriptor = FrickSchemaDescriptorValues(
+            objectNames: [7: "Account"],
+            objectFields: [7: [1: "name"]],
+            streamNames: [:],
+            eventNames: [:],
+            eventFields: [:]
+        )
+        let socket = FrickSyncSocket(
+            baseURL: URL(string: "http://127.0.0.1:4099")!,
+            sessionToken: "token-1",
+            clientCapabilities: .defaultIOS(sdkVersion: "0.1.0-test"),
+            replicaId: "test-replica",
+            deviceId: "test-device",
+            factory: factory,
+            sleepFor: { _ in },
+            descriptor: descriptor
+        )
+
+        let received = expectation(description: "object delta decoded with injected descriptor")
+        let events = await socket.events
+        let listener = Task {
+            for try await event in events {
+                if case .objectsDelta(let records, _) = event,
+                   let first = records.first, first.type == "Account", first.id == "acc-1" {
+                    received.fulfill()
+                    return
+                }
+            }
+        }
+
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+        task.deliver(.data(helloAckFrame()))
+
+        // Packed object record tuple: [typeId, recordId, [[fieldId, value]]].
+        let delta = FrickMsgPackCodec.encodeFrame(FrickFrame(kind: .delta, payload: .map([
+            (.string("cursor"), .int(1)),
+            (.string("objects"), .array([
+                .array([.int(7), .string("acc-1"), .array([
+                    .array([.int(1), .string("Acme")]),
+                ])]),
+            ])),
+            (.string("events"), .array([])),
+        ])))
+        task.deliver(.data(delta))
+
+        await fulfillment(of: [received], timeout: 2)
+        listener.cancel()
+        await socket.close()
+    }
+
 }
