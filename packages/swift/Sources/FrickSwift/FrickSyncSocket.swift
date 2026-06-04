@@ -1433,7 +1433,12 @@ public actor FrickSyncSocket {
         updateStatus { $0.state = .reconnecting; $0.lastError = "\(error)" }
 
         reconnectAttempt += 1
-        let delayMs = min(30_000, Int(pow(2.0, Double(reconnectAttempt))) * 250)
+        // Exponential backoff capped at 30s. Cap the exponent BEFORE `pow` so a
+        // long-unreachable server can't grow `reconnectAttempt` unbounded and
+        // overflow `Int` in the `Double -> Int` conversion (a crash). 2^7 * 250ms
+        // already exceeds the 30s ceiling, so a small cap loses nothing.
+        let exponent = Double(min(reconnectAttempt, 7))
+        let delayMs = min(30_000, Int(pow(2.0, exponent)) * 250)
         let jitter = Int.random(in: 0...250)
         let delayNanos = UInt64((delayMs + jitter) * 1_000_000)
 

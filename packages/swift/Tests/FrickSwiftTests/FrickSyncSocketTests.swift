@@ -715,6 +715,31 @@ final class FrickSyncSocketTests: XCTestCase {
         await socket.close()
     }
 
+    /// Regression: the reconnect backoff must not overflow when the server is
+    /// unreachable for many attempts. Previously `Int(pow(2, reconnectAttempt))`
+    /// trapped (arithmetic overflow) once the attempt count climbed, crashing
+    /// the whole app any time the backend stayed down. Drive far past the old
+    /// overflow threshold; a trap would crash this test process.
+    func testReconnectBackoffSurvivesManyUnreachableAttempts() async throws {
+        let factory = MockWebSocketFactory()
+        let socket = makeSocket(factory: factory) { _ in /* no-op sleep */ }
+
+        await socket.connect()
+
+        for i in 1...80 {
+            _ = await waitForCondition { factory.producedTasks.count >= i }
+            if let task = factory.producedTasks.last {
+                _ = await waitForCondition { task.sentFrameCount >= 1 }
+                task.deliverError(URLError(.networkConnectionLost))
+            }
+        }
+
+        let reached = await waitForCondition { factory.producedTasks.count >= 80 }
+        XCTAssertTrue(reached, "socket should keep reconnecting without overflow (got \(factory.producedTasks.count) tasks)")
+
+        await socket.close()
+    }
+
     /// RCRM-154: an INJECTED schema descriptor must let the socket decode
     /// packed object Delta frames into named records. With the default empty
     /// foundation descriptor the type id never resolves and the record is
