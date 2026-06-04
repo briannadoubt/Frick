@@ -6,6 +6,10 @@ Each package version is independent — a release header documents which package
 
 ## Unreleased
 
+## 0.1.1 — 2026-06-04
+
+All published packages move in lockstep `0.1.0 → 0.1.1`: `@fricken/protocol`, `@fricken/core`, `@fricken/react`, `@fricken/design`, `@fricken/design-web`, `@fricken/devtools`, `@fricken/agent-kit`, `@fricken/mcp`, `@fricken/server`, the Swift package (`swift-v0.1.1`), and the Android SDK (`android-v0.1.1`, `frickVersion = 0.1.1`). `schemaRevision` is unchanged.
+
 ### Swift — product-schema sync resilience
 
 - **FrickSwift:** `FrickClient` now accepts the full app schema identity (`schemaId`, `schemaRevision`, `schemaHash`) plus an injected `FrickSchemaDescriptor`, and threads those values into sync Hello payloads, capability metadata, HTTP schema guards, and packed Snapshot/Delta decoding. Product-schema apps no longer have to rely on the foundation schema id/descriptor when decoding app-defined object or stream frames.
