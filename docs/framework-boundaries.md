@@ -24,9 +24,10 @@ Status: Contract baseline audit.
 - `apps/server`: Frick server runtime. Public baseline API is the
   `@fricken/server` package entrypoint: `createFrickServer`, documented server
   options, telemetry types, project/module helpers, reset/migration helpers,
-  job handler types, and the documented cluster bus. Production push adapters
-  are exported through documented package subpaths. Route and storage internals
-  remain private.
+  job handler types, the documented cluster bus, outbound email types/router
+  helpers, and test/reference email adapters. Production push and Resend email
+  adapters are exported through documented package subpaths. Route and storage
+  internals remain private.
 - Mounted dashboard routes under `/_frick/dashboard` and documented
   `/_frick/dashboard/api/*` responses are operator-facing surfaces. Internal
   route helper modules under `apps/server/src/dashboard/*` remain private
@@ -36,10 +37,11 @@ Status: Contract baseline audit.
 
 - Server storage implementations under `apps/server/src/storage/*`.
 - Server route handlers inside `apps/server/src/server.ts`.
-- Server outbound email helpers under `apps/server/src/email/*`. The test and
-  Resend adapters exist for framework development, but they are not exported
-  from `@fricken/server` today; apps should not deep-import them until a package
-  surface is documented.
+- Server email implementation details that are not exported from
+  `@fricken/server` or `@fricken/server/email/resend-adapter`. Apps should use
+  the exported `FrickEmailAdapter`, `createFrickEmailRouter`,
+  `createFrickTestEmailAdapter`, and Resend reference adapter instead of
+  deep-importing files from `apps/server/src/email/*`.
 - Sync gateway internals under `apps/server/src/sync/*`.
 - Protocol generator scripts under `packages/protocol/scripts/*`.
 - Design generator scripts under `packages/design/src/scripts/*`.

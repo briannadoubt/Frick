@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSYRJMER968H4JKK2JVXCY",
+  "ts": "2026-05-30T06:43:14.644Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2D",
+    "number": 57,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Orphaned-blob cleanup job",
+    "description": "Background job to GC blobs with no referencing object/record.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0X",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

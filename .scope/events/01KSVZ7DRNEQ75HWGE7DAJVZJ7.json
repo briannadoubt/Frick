@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSVZ7DRNEQ75HWGE7DAJVZJ7",
+  "ts": "2026-05-30T08:15:21.365Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2W",
+    "commentId": "01KT3SXZQJ8WP1PEHTK8C3DJF5",
+    "author": "claude",
+    "body": "Implemented on feat/grantee-leave-share (3cc14ba). New POST /share/grants/:id/leave (grantee-only self-revoke; owner DELETE untouched; tenant-isolated 404 for non-holders). @frick/server suite re-verified green (570). Unmerged."
+  }
+}

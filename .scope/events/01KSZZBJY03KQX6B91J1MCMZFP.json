@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSZZBJY03KQX6B91J1MCMZFP",
+  "ts": "2026-05-31T21:34:35.456Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ49",
+    "commentId": "01KT3SXZQJAMF49X59F36S52TQ",
+    "author": "claude",
+    "body": "Already on main: commit 2a679d5 (impl) + c6e4e88 (test fix). Commit/CHANGELOG mistakenly reference FR-116; this ticket is the accurate record."
+  }
+}

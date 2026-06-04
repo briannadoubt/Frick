@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSZQTTBKR55PM6SBT03R57",
+  "ts": "2026-05-30T06:43:46.650Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3C",
+    "number": 88,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Android FrickWorkspaceShell (Material 3 NavigationSuiteScaffold + adaptive panes)",
+    "description": "Adaptive nav + panes on Android; unbuilt today. [workspace-shell:31-35,92-106]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ14",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

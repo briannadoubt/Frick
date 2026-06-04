@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVS287K2CYJW0KA8CQJEPZ5",
+  "ts": "2026-05-30T06:27:40.403Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0Z",
+    "number": 11,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "Outbound email public surface: export FrickEmailAdapter + Resend reference, wire to auth flows",
+    "description": "Outbound email router/adapters (incl. a Resend adapter reading RESEND_API_KEY) live under apps/server/src/email/* for tests/framework work but are NOT exported from @frick/server or documented as an app surface (status.md:84-87; operations.md:839-847).\n\nScope: design + export a documented FrickEmailAdapter interface, ship the Resend reference adapter publicly, and wire it into identity password-reset + first-sign-in flows.\nSize: M.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

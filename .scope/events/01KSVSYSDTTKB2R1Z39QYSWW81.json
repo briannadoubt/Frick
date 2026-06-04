@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSYSDTTKB2R1Z39QYSWW81",
+  "ts": "2026-05-30T06:43:15.514Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2H",
+    "number": 61,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Multi-key push credential rotation (overlap window)",
+    "description": "Rotate keys without re-saving every tenant via a multi-key decryption window. [push-adapters.md:77]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0Y",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

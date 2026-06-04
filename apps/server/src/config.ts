@@ -4,12 +4,12 @@
  * Slice 6 expanded this beyond the original demo-auth/session knobs to cover
  * deployment-shaped settings: host, port, public URL, allowed origins, db and
  * blob storage paths, and log level. A storage-driver selector (`dbDriver`)
- * now lets a future Postgres driver be chosen; SQLite stays the default and the
- * only implemented driver, with `postgres` rejected at validation time until
- * FR-22 lands. A separate blob-bytes driver selector (`blobDriver`, FR-53) can
- * move blob bytes to the local filesystem under `FRICK_BLOB_STORAGE_PATH`;
- * SQLite stays the default. CORS enforcement itself still lands in a later
- * slice — this module just parses, validates, and exposes the values.
+ * accepts `postgres` when `FRICK_DATABASE_URL` is present for the standalone
+ * Postgres migration/schema runner; SQLite-backed stores remain the active
+ * server runtime until the store ports land. A separate blob-bytes driver
+ * selector (`blobDriver`) can move blob bytes to the local filesystem under
+ * `FRICK_BLOB_STORAGE_PATH`; SQLite stays the default. This module parses and
+ * validates the config consumed by runtime CORS, storage, and blob setup.
  */
 
 export type FrickEnv = "development" | "test" | "production";
@@ -87,16 +87,17 @@ export interface FrickConfig {
   allowedOrigins: string[];
   /**
    * Durable-storage driver. Defaults to `sqlite`. Selecting `postgres`
-   * requires `FRICK_DATABASE_URL` to be set; the migration runner (FR-22)
-   * will apply the Postgres schema on first boot.
+   * requires `FRICK_DATABASE_URL` and is currently used by the standalone
+   * Postgres migration/schema runner; runtime stores remain SQLite until the
+   * FR-23 store ports land.
    */
   dbDriver: FrickDbDriver;
   /** SQLite database path. Used by the `sqlite` driver. Tests pass `":memory:"`. */
   dbPath: string;
   /**
-   * Connection string for the future `postgres` driver (FR-22), parsed from
-   * `FRICK_DATABASE_URL`. Unused by the `sqlite` driver and `undefined` when
-   * the env var is unset.
+   * Connection string for the standalone Postgres migration/schema runner,
+   * parsed from `FRICK_DATABASE_URL`. Unused by the `sqlite` runtime store
+   * and `undefined` when the env var is unset.
    */
   databaseUrl: string | undefined;
   /**

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSY3C8S2S029FWKHFVYYYX",
+  "ts": "2026-05-30T06:42:52.936Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ28",
+    "number": 52,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Canonical CI build matrix + generated-artifact drift checks",
+    "description": "TS/Swift/Kotlin build+test matrix with schema/token/fixture drift detection. [hardening:1118-1154]",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0W",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

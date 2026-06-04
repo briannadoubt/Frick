@@ -12,6 +12,6 @@ Parity checklist:
 - Structured error envelopes parse wrapped and top-level HTTP shapes.
 - WebSocket Hello/HelloAck capability negotiation is equivalent.
 - Cache metadata compatibility and reset semantics match.
-- Object upserts, stream cursor behavior, presence auth, and diagnostics stay observable.
+- Object upserts, stream cursor behavior, presence auth, reconnect subscription replay, packed-frame decoding, and diagnostics stay observable.
 
 Run TypeScript tests plus Swift and Android checks when shared SDK semantics change.

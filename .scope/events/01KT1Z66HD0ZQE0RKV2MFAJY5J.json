@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KT1Z66HD0ZQE0RKV2MFAJY5J",
+  "ts": "2026-06-01T16:10:07.789Z",
+  "actor": "codex",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0Y",
+    "field": "description",
+    "value": "APNs, FCM, and Web Push are now all documented push-adapter surfaces. Web Push has the package subpath export, CLI VAPID provisioning (`frick tenants set-push --platform webpush`), PushSubscription validation, and RFC 8291 encrypted payloads when browser keys are present.\n\nRemaining gap: push credential rotation still requires re-saving every tenant credentials with the new key; there is no multi-key overlap/decryption window yet.\n\nTarget: zero-downtime multi-key push credential rotation while preserving the documented adapter/CLI surfaces."
+  }
+}

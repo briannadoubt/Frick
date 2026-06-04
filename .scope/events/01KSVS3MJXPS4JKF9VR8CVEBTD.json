@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVS3MJXPS4JKF9VR8CVEBTD",
+  "ts": "2026-05-30T06:28:25.821Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1C",
+    "number": 24,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Search parity: SQLite FTS5 -> Postgres tsvector",
+    "description": "Port apps/server/src/storage/search-store.ts (FTS5) to a Postgres full-text (tsvector/GIN) implementation behind the same search adapter interface, with rebuild support.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0R",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

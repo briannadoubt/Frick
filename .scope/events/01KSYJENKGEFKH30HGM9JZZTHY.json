@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSYJENKGEFKH30HGM9JZZTHY",
+  "ts": "2026-05-31T08:29:50.576Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ47",
+    "commentId": "01KT3SXZQJRH5QQC6HRXZ9213S",
+    "author": "claude",
+    "body": "Both children shipped (FR-114 server-originated live-push, FR-113 extension-type exports). Epic complete."
+  }
+}

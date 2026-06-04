@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KT1Z51P5TX5NSK7CAXZ5YRC8",
+  "ts": "2026-06-01T16:09:30.053Z",
+  "actor": "codex",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0R",
+    "field": "description",
+    "value": "Move Frick from \"one stateful node + SQLite volume\" to \"N stateless nodes behind a load balancer on a concurrent Postgres-compatible database with a real cluster bus.\" This is foundational pre-1.0 work for stateless container deploys and safe multi-node job/projection workers.\n\n## Current state\n\n- The live server runtime still constructs SQLite-backed `FrickStore` implementations via `node:sqlite` and `FRICK_DB_PATH`. Runtime store ports remain active work (FR-23 / FR-118+).\n- `FRICK_DB_DRIVER=postgres` and `FRICK_DATABASE_URL` are parsed, and the standalone Postgres schema/migration runner plus CI Postgres migration test exist (FR-22 / FR-26). This does not yet make `createFrickServer` use Postgres for object/stream/session/etc. stores.\n- Horizontal fan-out is partly built. `FrickClusterBus` is the stable contract carrying stream events, object upserts, signals, presence, and projection deltas with `originNodeId` loop guard and optional tenant filtering. Only the in-memory bus ships; production Redis/NATS remains unimplemented.\n\n## Remaining work\n\n1. Port every runtime `*Store` implementation behind the storage seam so the server can actually run on Postgres.\n2. Ship a production cluster bus (Redis first; NATS optional) with back-pressure, failure handling, and metrics.\n3. Add multi-node correctness for durable jobs/projections using Postgres locking patterns.\n4. Preserve backup/restore, search, blob metadata, and operational parity across SQLite and Postgres.\n\nOut of scope: multi-region bus federation and object-storage blob bytes drivers."
+  }
+}

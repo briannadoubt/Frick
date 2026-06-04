@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVS1AEYF3QCKPPJ8KJYC992",
+  "ts": "2026-05-30T06:27:09.918Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0T",
+    "number": 6,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "Multi-app & multi-tenant isolation: per-app storage partitioning, tenant admin",
+    "description": "Today multi-app servers route by URL prefix + WebSocket Hello schema id, but storage, configured handlers, projection registries, job workers, and processors are all shared at the server level (status.md; operations.md:727-730 \"V1 scopes app boundaries to URL routing and Hello handshake only — storage is server-shared\").\n\nScope:\n- Per-app storage partitioning (app_id column on relevant tables + read/write scoping) (operations.md:727-730).\n- Per-app handler/projection/job-worker registries instead of server-global.\n- Tenant administration: assignment is per-session/per-account today with no admin route for moving an account between tenants (threat-model.md:338-339).\n\nTarget: true app/tenant isolation so one server can host multiple apps/tenants without shared blast radius.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

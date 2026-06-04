@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSY21XVH8VWN950WRDSA0C",
+  "ts": "2026-05-30T06:42:51.581Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1X",
+    "number": 41,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Per-principal connection cap + throughput limiting",
+    "description": "Rate limit connections/throughput keyed by userId; only global caps exist today. [threat-model.md:309,314-315]",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0V",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

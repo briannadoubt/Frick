@@ -14,10 +14,11 @@ const PUBLIC_NPM_PACKAGE_DIRS = [
   "packages/devtools",
   "packages/agent-kit",
   "packages/mcp",
+  "apps/server",
 ];
 
-const PRIVATE_WORKSPACE_PACKAGE_DIRS = ["apps/cli", "apps/server", "apps/web"];
-const PUBLIC_REPOSITORY_URL = "git+https://github.com/bri/Frick.git";
+const PRIVATE_WORKSPACE_PACKAGE_DIRS = ["apps/cli", "apps/web"];
+const PUBLIC_REPOSITORY_URL = "git+https://github.com/briannadoubt/Frick.git";
 
 function workflowPackageDirs(workflow: string): string[] {
   const match = workflow.match(/package_dirs=\(\n(?<body>[\s\S]*?)\n\s*\)/);

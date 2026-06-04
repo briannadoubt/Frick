@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVS1AJD6BFJ6NASNY1KA9JT",
+  "ts": "2026-05-30T06:27:10.029Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0V",
+    "number": 7,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "Security & abuse hardening: rate limits, retention/pruning, replay bound, CORS patterns, artifact signing",
+    "description": "Production security/abuse follow-ups flagged across the threat model:\n\n- No per-principal connection cap or per-principal throughput limit; only global caps + auth-attempt limiter exist (threat-model.md:309, 314-315).\n- Idempotency cache + stream-store rows grow unbounded — no retention/pruning (threat-model.md:164-165, 310-311).\n- Replay window unbounded — requestId honored indefinitely (threat-model.md:168-170).\n- CORS is exact-string match only; no subdomain/pattern matching for many per-tenant origins (threat-model.md:251-252).\n- Schema artifacts are unsigned — a compromised build pipeline could ship a poisoned schema bundle; signing is deferred (threat-model.md:213-216).\n- Service principals (machine identities w/ scopes + audit) and broader abuse-event correlation (hardening spec §\"Security operations\").\n\nTarget: per-principal rate limiting, durable retention/pruning, bounded replay, pattern CORS, signed schema artifacts, service-principal model.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

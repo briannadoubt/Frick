@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVT0M7642WNJKWHYSNWGZT3",
+  "ts": "2026-05-30T06:44:15.718Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3Z",
+    "number": 107,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Region-aware failover + LB integration docs",
+    "description": "Operational guidance for cross-region failover.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ18",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

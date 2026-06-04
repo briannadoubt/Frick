@@ -39,7 +39,10 @@ service-account*.json
 .env.*
 !.env.example
 
-.scope/
+# Scope: commit the event log (.scope/events/), never the SQLite cache.
+.scope/scope.db
+.scope/scope.db-wal
+.scope/scope.db-shm
 
 # Optional detached schema signature (FR-45). Emitted only when
 # FRICK_SCHEMA_SIGNING_KEY is set during `pnpm schema:generate`; published as a

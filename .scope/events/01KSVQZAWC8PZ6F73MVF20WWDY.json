@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSVQZAWC8PZ6F73MVF20WWDY",
+  "ts": "2026-05-30T06:08:36.236Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0Q",
+    "commentId": "01KT3SXZQJKKXDX932ZX5YBEC4",
+    "author": "claude",
+    "body": "Merged to main in e0b7106 (Merge feat/auto-version-on-write). Verified passed."
+  }
+}

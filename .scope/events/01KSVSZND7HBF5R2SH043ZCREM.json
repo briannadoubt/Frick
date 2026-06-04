@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSZND7HBF5R2SH043ZCREM",
+  "ts": "2026-05-30T06:43:44.167Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2Z",
+    "number": 75,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Native sync telemetry — Android (OTel)",
+    "description": "Android sync-socket telemetry parity with Swift.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ12",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSY2CFN1MXMRDC5YCAXJT9",
+  "ts": "2026-05-30T06:42:51.919Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ20",
+    "number": 44,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Pattern/suffix/subdomain CORS origin matching",
+    "description": "Exact-string match only today; add wildcard/pattern matching for many per-tenant origins. [threat-model.md:251-252]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0V",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

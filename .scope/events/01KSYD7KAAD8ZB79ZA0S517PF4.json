@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSYD7KAAD8ZB79ZA0S517PF4",
+  "ts": "2026-05-31T06:58:35.978Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2E",
+    "commentId": "01KT3SXZQJMKJS86JP2D3JB5RT",
+    "author": "claude",
+    "body": "feat/web-push-export (ee4de14): exported web-push adapter via @frick/server/push/web-push-adapter subpath + frick tenants set-push --platform webpush VAPID provisioning. typecheck + 582 server + 40 CLI tests green. (Encrypted payloads remain FR-7.) Unmerged."
+  }
+}

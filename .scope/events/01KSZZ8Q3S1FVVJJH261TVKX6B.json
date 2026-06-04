@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KSZZ8Q3S1FVVJJH261TVKX6B",
+  "ts": "2026-05-31T21:33:01.433Z",
+  "actor": "migration",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1H",
+    "field": "branch",
+    "value": "feat/session-ttl-limiter-unify"
+  }
+}

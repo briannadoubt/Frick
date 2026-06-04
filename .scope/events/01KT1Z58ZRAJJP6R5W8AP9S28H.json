@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KT1Z58ZRAJJP6R5W8AP9S28H",
+  "ts": "2026-06-01T16:09:37.528Z",
+  "actor": "codex",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0S",
+    "field": "description",
+    "value": "Close the remaining production gaps in the identity/auth surface.\n\nBuilt today: Apple, Google, generic OIDC, email/password, email reset, first-sign-in hooks, sessions, demo auth, unified `FRICK_SESSION_TTL_SECONDS` across providers, and auth-attempt limiting on provider verify + email reset routes.\n\nRemaining gaps:\n\n- SAML provider routing and arbitrary non-OIDC OAuth provider routing. Generic OIDC issuers are implemented via `identityProviders.oidc`.\n- No server-side device binding; session rows carry deviceId/replicaId but those values originate from the client.\n- No refresh-token / short-access-token split; token lifetime is one configured session TTL.\n- No proactive session revocation API; operators still revoke by deleting rows directly in SQL.\n- Password hashing is `node:crypto.scrypt`; production target remains a configurable/pluggable hasher (Argon2/bcrypt) with a migration path.\n\nTarget: SAML/non-OIDC federation, device-bound tokens, refresh/access split, admin revocation API, and pluggable password hashing."
+  }
+}

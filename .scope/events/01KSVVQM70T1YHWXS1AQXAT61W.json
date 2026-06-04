@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KSVVQM70T1YHWXS1AQXAT61W",
+  "ts": "2026-05-30T07:14:17.952Z",
+  "actor": "migration",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ19",
+    "field": "branch",
+    "value": "feat/storage-driver-seam"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSXD3344B7DRP7XY5AA3VE0X",
+  "ts": "2026-05-30T21:36:53.892Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ40",
+    "number": 108,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "verify:generated regenerates stale doc/README files outside the drift gate",
+    "description": "Running pnpm verify:generated on main regenerates 7 doc/README files that are stale vs their generators but are NOT in the drift-check set (verify:generated exits 0): README.md, packages/core/README.md, docs/onboarding.md, docs/cross-platform-client-contract.md, docs/push-adapters.md, docs/status.md, packages/agent-kit/skills/frick-push-notifications/SKILL.md. Committed versions misdescribe current capabilities (e.g. push-adapters.md says Web Push isn't exported; core/README omits openIndexedDBFrickCache + session-scope compatibility). Fix: regenerate+commit these and/or add them to the verify:generated gate so CI catches staleness. Surfaced during the FR-21/43/72/94 merge.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0W",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

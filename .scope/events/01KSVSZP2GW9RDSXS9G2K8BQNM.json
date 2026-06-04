@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSZP2GW9RDSXS9G2K8BQNM",
+  "ts": "2026-05-30T06:43:44.848Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ34",
+    "number": 80,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Client SDK call helpers (createCall/joinCall/leaveCall/useCallState)",
+    "description": "Cross-platform call domain helpers + reactive state. [chat-video:329-338]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ13",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

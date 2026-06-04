@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVS2SCJBEG0X1JY3SEDR6P7",
+  "ts": "2026-05-30T06:27:57.970Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ16",
+    "number": 18,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "Performance benchmarking & load harness",
+    "description": "No benchmarking/load infra exists. From hardening spec (1220-1268): benchmarks for latency (HTTP, WS, append round-trip, catch-up, reconnect), throughput, memory/db/cache growth, codec speed (TS/Swift/Kotlin), projection rebuilds, job throughput; plus a load harness with synthetic data, configurable params, JSON output for trend tracking, and initial performance budgets. Size: M.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

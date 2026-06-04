@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KT0X07V3B1HK4GZEAPN36MG4",
+  "ts": "2026-06-01T06:12:40.931Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ4A",
+    "number": 118,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "FR-23a: Async storage seam + SQLite adapter (convert all stores/callers to async, SQLite-only)",
+    "description": "",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0R",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

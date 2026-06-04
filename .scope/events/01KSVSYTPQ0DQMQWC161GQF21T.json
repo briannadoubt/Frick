@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSYTPQ0DQMQWC161GQF21T",
+  "ts": "2026-05-30T06:43:16.823Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2S",
+    "number": 69,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Privacy-safe logging + audit events",
+    "description": "Never log message bodies/tokens/push tokens; audit auth/export/deletion/service access. [hardening:1185-1200]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ10",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

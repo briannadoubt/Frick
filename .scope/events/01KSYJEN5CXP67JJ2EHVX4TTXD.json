@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSYJEN5CXP67JJ2EHVX4TTXD",
+  "ts": "2026-05-31T08:29:50.124Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ46",
+    "commentId": "01KT3SXZQJ1D0TY7EVDGYVJND8",
+    "author": "claude",
+    "body": "Merged + pushed (origin/main @ e419ecf). Server-side store.upsertObject/upsertObjectWithPolicy/appendEvent now live-push to gateway subscribers. Key design: store emits a single write-change event; gateway is the SOLE broadcaster (removed redundant inline broadcasts) → exactly one tenant-scoped delta per subscriber, cluster-bus parity preserved. e2e tests incl. no-duplicate + cross-tenant isolation. Full suite 943 green."
+  }
+}

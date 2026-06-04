@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVS28B0N54QZQE1AS3N274A",
+  "ts": "2026-05-30T06:27:40.512Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ10",
+    "number": 12,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "Data privacy & lifecycle: export/deletion hooks, retention, PII classification, privacy-safe logging",
+    "description": "Implement the data-privacy lifecycle from the hardening spec (1185-1212): user/account export hooks, account-deletion hooks, retention policies, PII/sensitivity classification of fields (public/private/pii/secret/content), audit events for auth/export/deletion/service access, and privacy-safe logging (never log message bodies, tokens, or push tokens).\n\nPartially present (some audit logging exists), but export/deletion hooks, retention, and field sensitivity metadata are unbuilt. Size: M.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

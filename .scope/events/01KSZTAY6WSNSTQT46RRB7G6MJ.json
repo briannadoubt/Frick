@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KSZTAY6WSNSTQT46RRB7G6MJ",
+  "ts": "2026-05-31T20:06:51.356Z",
+  "actor": "migration",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2Q",
+    "field": "branch",
+    "value": "feat/account-deletion-hooks"
+  }
+}

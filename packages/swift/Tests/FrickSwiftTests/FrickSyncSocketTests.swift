@@ -669,4 +669,136 @@ final class FrickSyncSocketTests: XCTestCase {
         await socket.close()
     }
 
+    /// Regression test for RCRM-149: subscriptions must be replayed after a
+    /// reconnect. The server scopes subscriptions per-connection, so a
+    /// reconnected socket that doesn't re-send its subscribe frames looks
+    /// healthy but silently stops receiving deltas — the exact cause of the
+    /// observed unreliable cross-device sync. The initial subscribe frame is
+    /// consumed once (via `pending`) and is NOT re-sent on later reconnects
+    /// without `activeSubscriptions` replay. Pre-fix, the second task received
+    /// only a Hello; post-fix it also receives the object subscribe.
+    func testSubscriptionsReplayedOnReconnect() async throws {
+        let factory = MockWebSocketFactory()
+        let firstTask = MockWebSocketTask()
+        let secondTask = MockWebSocketTask()
+        factory.enqueue(firstTask)
+        factory.enqueue(secondTask)
+
+        let socket = makeSocket(factory: factory) { _ in /* no-op sleep */ }
+
+        await socket.connect()
+        _ = await waitForCondition { firstTask.sentFrameCount >= 1 } // Hello
+
+        // Subscribe on the live connection (Hello already sent → state connected).
+        try await socket.subscribeObject(type: "Account")
+        _ = await waitForCondition { firstTask.sentFrameCount >= 2 } // Hello + subscribe
+
+        // Drop the connection — the socket should reconnect on `secondTask`.
+        firstTask.deliverError(URLError(.networkConnectionLost))
+
+        // The reconnected task must receive BOTH a Hello and a replayed
+        // object subscribe for "Account".
+        let replayed = await waitForCondition {
+            let kinds = secondTask.allSentFrames()
+                .compactMap { try? FrickMsgPackCodec.decodeFrame($0).kind }
+            return kinds.contains(.hello) && kinds.contains(.subscribe)
+        }
+        XCTAssertTrue(replayed, "Reconnected task should receive Hello + replayed subscribe (sent \(secondTask.sentFrameCount))")
+
+        let subFrame = secondTask.allSentFrames()
+            .compactMap { try? FrickMsgPackCodec.decodeFrame($0) }
+            .first { $0.kind == .subscribe }
+        let subMap = try XCTUnwrap(subFrame?.payload.mapValue)
+        XCTAssertEqual(subMap["kind"]?.stringValue, "object")
+        XCTAssertEqual(subMap["name"]?.stringValue, "Account")
+
+        await socket.close()
+    }
+
+    /// Regression: the reconnect backoff must not overflow when the server is
+    /// unreachable for many attempts. Previously `Int(pow(2, reconnectAttempt))`
+    /// trapped (arithmetic overflow) once the attempt count climbed, crashing
+    /// the whole app any time the backend stayed down. Drive far past the old
+    /// overflow threshold; a trap would crash this test process.
+    func testReconnectBackoffSurvivesManyUnreachableAttempts() async throws {
+        let factory = MockWebSocketFactory()
+        let socket = makeSocket(factory: factory) { _ in /* no-op sleep */ }
+
+        await socket.connect()
+
+        for i in 1...80 {
+            _ = await waitForCondition { factory.producedTasks.count >= i }
+            if let task = factory.producedTasks.last {
+                _ = await waitForCondition { task.sentFrameCount >= 1 }
+                task.deliverError(URLError(.networkConnectionLost))
+            }
+        }
+
+        let reached = await waitForCondition { factory.producedTasks.count >= 80 }
+        XCTAssertTrue(reached, "socket should keep reconnecting without overflow (got \(factory.producedTasks.count) tasks)")
+
+        await socket.close()
+    }
+
+    /// RCRM-154: an INJECTED schema descriptor must let the socket decode
+    /// packed object Delta frames into named records. With the default empty
+    /// foundation descriptor the type id never resolves and the record is
+    /// dropped; with the app's descriptor it decodes. This is the mechanism
+    /// the realtime-sync fix depends on.
+    func testInjectedDescriptorDecodesObjectDelta() async throws {
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+
+        let descriptor = FrickSchemaDescriptorValues(
+            objectNames: [7: "Account"],
+            objectFields: [7: [1: "name"]],
+            streamNames: [:],
+            eventNames: [:],
+            eventFields: [:]
+        )
+        let socket = FrickSyncSocket(
+            baseURL: URL(string: "http://127.0.0.1:4099")!,
+            sessionToken: "token-1",
+            clientCapabilities: .defaultIOS(sdkVersion: "0.1.0-test"),
+            replicaId: "test-replica",
+            deviceId: "test-device",
+            factory: factory,
+            sleepFor: { _ in },
+            descriptor: descriptor
+        )
+
+        let received = expectation(description: "object delta decoded with injected descriptor")
+        let events = await socket.events
+        let listener = Task {
+            for try await event in events {
+                if case .objectsDelta(let records, _) = event,
+                   let first = records.first, first.type == "Account", first.id == "acc-1" {
+                    received.fulfill()
+                    return
+                }
+            }
+        }
+
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+        task.deliver(.data(helloAckFrame()))
+
+        // Packed object record tuple: [typeId, recordId, [[fieldId, value]]].
+        let delta = FrickMsgPackCodec.encodeFrame(FrickFrame(kind: .delta, payload: .map([
+            (.string("cursor"), .int(1)),
+            (.string("objects"), .array([
+                .array([.int(7), .string("acc-1"), .array([
+                    .array([.int(1), .string("Acme")]),
+                ])]),
+            ])),
+            (.string("events"), .array([])),
+        ])))
+        task.deliver(.data(delta))
+
+        await fulfillment(of: [received], timeout: 2)
+        listener.cancel()
+        await socket.close()
+    }
+
 }

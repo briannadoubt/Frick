@@ -486,13 +486,15 @@ public struct FrickClientCapabilities: Sendable, Equatable {
 
     public static func defaultIOS(
         sdkVersion: String = "0.1.0",
+        schemaId: String = FrickSchema.schemaId,
+        schemaRevision: Int = FrickSchema.schemaRevision,
         schemaHash: String = FrickSchema.schemaHash
     ) -> FrickClientCapabilities {
         FrickClientCapabilities(
             platform: "ios",
             sdkVersion: sdkVersion,
-            schemaId: FrickSchema.schemaId,
-            schemaRevision: FrickSchema.schemaRevision,
+            schemaId: schemaId,
+            schemaRevision: schemaRevision,
             schemaHash: schemaHash,
             transports: ["websocket"],
             encodings: ["msgpack"],
@@ -723,6 +725,47 @@ private struct PendingSocketAppend: Sendable {
 
 // MARK: - FrickSyncSocket
 
+/// Type/field id → name tables `FrickSyncSocket` uses to decode packed
+/// `Delta`/`Snapshot` frames into named-field records. Injected by the
+/// consuming app so an app-defined protocol schema can be decoded without
+/// baking app-specific types into the framework. Defaults to `.foundation`
+/// (the generated foundation tables), preserving prior behavior.
+public struct FrickSchemaDescriptorValues: Sendable {
+
+    public let objectNames: [Int: String]
+    public let objectFields: [Int: [Int: String]]
+    public let streamNames: [Int: String]
+    public let eventNames: [Int: String]
+    public let eventFields: [Int: [Int: String]]
+
+
+    public init(
+        objectNames: [Int: String],
+        objectFields: [Int: [Int: String]],
+        streamNames: [Int: String],
+        eventNames: [Int: String],
+        eventFields: [Int: [Int: String]]
+    ) {
+        self.objectNames = objectNames
+        self.objectFields = objectFields
+        self.streamNames = streamNames
+        self.eventNames = eventNames
+        self.eventFields = eventFields
+    }
+
+
+    /// The generated foundation schema tables (`FrickSchemaDescriptor`).
+    public static let foundation = FrickSchemaDescriptorValues(
+        objectNames: FrickSchemaDescriptor.objectNames,
+        objectFields: FrickSchemaDescriptor.objectFields,
+        streamNames: FrickSchemaDescriptor.streamNames,
+        eventNames: FrickSchemaDescriptor.eventNames,
+        eventFields: FrickSchemaDescriptor.eventFields
+    )
+
+}
+
+
 /// Persistent sync transport over WebSocket. Public API is async and
 /// Sendable-safe. Durability of pending appends across process restart is
 /// out of scope for this slice (in-memory queue only).
@@ -739,6 +782,7 @@ public actor FrickSyncSocket {
 
     private let factory: FrickWebSocketFactory
     private let sleepFor: @Sendable (UInt64) async throws -> Void
+    private let descriptor: FrickSchemaDescriptorValues
 
     private var task: FrickWebSocketTaskProtocol?
     private var receiveLoop: Task<Void, Never>?
@@ -747,6 +791,14 @@ public actor FrickSyncSocket {
     private var explicitlyClosed: Bool = false
     private var pending: [PendingSocketAppend] = []
     private var pendingResponders: [String: CheckedContinuation<Int?, Error>] = [:]
+
+    /// Subscribe frames keyed by a stable subscription identity, retained so
+    /// they can be replayed after a reconnect. The server tracks
+    /// subscriptions per-connection, so a reconnected socket that doesn't
+    /// re-send these looks healthy but silently receives no deltas. Unlike
+    /// `pending` (a consume-once outbound buffer that `flushPending()` drains
+    /// and clears), this map persists for the life of the socket.
+    private var activeSubscriptions: [String: FrickFrame] = [:]
 
     private var statusValue: FrickSyncStatus = .initial
     private var statusContinuations: [UUID: AsyncStream<FrickSyncStatus>.Continuation] = [:]
@@ -763,7 +815,8 @@ public actor FrickSyncSocket {
         sleepFor: @escaping @Sendable (UInt64) async throws -> Void = { ns in
             try await Task.sleep(nanoseconds: ns)
         },
-        schemaHash: String = FrickSchema.schemaHash
+        schemaHash: String = FrickSchema.schemaHash,
+        descriptor: FrickSchemaDescriptorValues = .foundation
     ) {
         self.baseURL = baseURL
         self.sessionToken = sessionToken
@@ -773,6 +826,7 @@ public actor FrickSyncSocket {
         self.factory = factory
         self.sleepFor = sleepFor
         self.schemaHash = schemaHash
+        self.descriptor = descriptor
 
         // Defer construction of the AsyncThrowingStream until after self init so
         // we can capture the continuation.
@@ -847,6 +901,8 @@ public actor FrickSyncSocket {
             (.string("name"), .string(stream)),
             (.string("key"), .string(key)),
         ]))
+        activeSubscriptions["stream:\(stream):\(key)"] = frame
+
         try await sendFrame(frame)
     }
 
@@ -861,6 +917,8 @@ public actor FrickSyncSocket {
             (.string("name"), .string(name)),
             (.string("key"), .string(key)),
         ]))
+        activeSubscriptions["presence:\(name):\(key)"] = frame
+
         try await sendFrame(frame)
     }
 
@@ -895,6 +953,8 @@ public actor FrickSyncSocket {
             (.string("kind"), .string("projection")),
             (.string("name"), .string(name)),
         ]))
+        activeSubscriptions["projection:\(name)"] = frame
+
         try await sendFrame(frame)
     }
 
@@ -911,6 +971,8 @@ public actor FrickSyncSocket {
             (.string("kind"), .string("object")),
             (.string("name"), .string(type)),
         ]))
+        activeSubscriptions["object:\(type)"] = frame
+
         try await sendFrame(frame)
     }
 
@@ -1039,6 +1101,21 @@ public actor FrickSyncSocket {
         }
 
         updateStatus { $0.state = .connected }
+
+        // Replay subscriptions so a reconnect restores live delivery. The
+        // server scopes subscriptions to the connection, so without this a
+        // reconnected socket looks healthy but never receives deltas again —
+        // the initial subscribe frame was consumed once via `pending` and is
+        // not buffered for subsequent reconnects.
+        for frame in activeSubscriptions.values {
+            do {
+                try await newTask.send(.data(FrickMsgPackCodec.encodeFrame(frame)))
+            } catch {
+                await handleDisconnect(error: error)
+                return
+            }
+        }
+
         await flushPending()
 
         // Start receive loop.
@@ -1136,7 +1213,7 @@ public actor FrickSyncSocket {
         let objectArray = map["objects"]?.arrayValue ?? []
         var records: [FrickObjectRecord] = []
         for o in objectArray {
-            if let decoded = Self.decodePackedObjectRecord(o) {
+            if let decoded = decodePackedObjectRecord(o) {
                 records.append(decoded)
             }
         }
@@ -1149,7 +1226,7 @@ public actor FrickSyncSocket {
         let objectArray = map["objects"]?.arrayValue ?? []
         var objectRecords: [FrickObjectRecord] = []
         for o in objectArray {
-            if let decoded = Self.decodePackedObjectRecord(o) {
+            if let decoded = decodePackedObjectRecord(o) {
                 objectRecords.append(decoded)
             }
         }
@@ -1159,7 +1236,7 @@ public actor FrickSyncSocket {
         let eventArray = map["events"]?.arrayValue ?? []
         var streamEvents: [FrickStreamEvent] = []
         for e in eventArray {
-            if let decoded = Self.decodePackedStreamEvent(e) {
+            if let decoded = decodePackedStreamEvent(e) {
                 streamEvents.append(decoded)
                 continue
             }
@@ -1193,13 +1270,13 @@ public actor FrickSyncSocket {
     /// `[objectTypeId, recordId, packedFields]` into a `FrickObjectRecord`,
     /// resolving type and field ids via `FrickSchemaDescriptor`. Returns
     /// `nil` for malformed tuples or unknown object type ids.
-    private static func decodePackedObjectRecord(_ value: FrickMsgPackValue) -> FrickObjectRecord? {
+    private func decodePackedObjectRecord(_ value: FrickMsgPackValue) -> FrickObjectRecord? {
         guard let tuple = value.arrayValue, tuple.count >= 3 else { return nil }
         guard let typeId = tuple[0].intValue,
               let id = tuple[1].stringValue
         else { return nil }
-        guard let typeName = FrickSchemaDescriptor.objectNames[typeId] else { return nil }
-        let fieldTable = FrickSchemaDescriptor.objectFields[typeId] ?? [:]
+        guard let typeName = descriptor.objectNames[typeId] else { return nil }
+        let fieldTable = descriptor.objectFields[typeId] ?? [:]
         let packedFields = tuple[2].arrayValue ?? []
         var fields: [String: String] = [:]
         for entry in packedFields {
@@ -1217,7 +1294,7 @@ public actor FrickSyncSocket {
     /// into a `FrickStreamEvent`, resolving stream/event/field ids via
     /// `FrickSchemaDescriptor`. Returns `nil` for unrecognized tuple shapes —
     /// callers fall back to the legacy map decoder.
-    private static func decodePackedStreamEvent(_ value: FrickMsgPackValue) -> FrickStreamEvent? {
+    private func decodePackedStreamEvent(_ value: FrickMsgPackValue) -> FrickStreamEvent? {
         guard let tuple = value.arrayValue, tuple.count >= 6 else { return nil }
         guard let streamTypeId = tuple[0].intValue,
               let streamKey = tuple[1].stringValue,
@@ -1225,9 +1302,9 @@ public actor FrickSyncSocket {
               let eventId = tuple[3].stringValue,
               let eventTypeId = tuple[4].intValue
         else { return nil }
-        let streamName = FrickSchemaDescriptor.streamNames[streamTypeId] ?? "#\(streamTypeId)"
-        let eventName = FrickSchemaDescriptor.eventNames[eventTypeId] ?? "#\(eventTypeId)"
-        let fieldTable = FrickSchemaDescriptor.eventFields[eventTypeId] ?? [:]
+        let streamName = descriptor.streamNames[streamTypeId] ?? "#\(streamTypeId)"
+        let eventName = descriptor.eventNames[eventTypeId] ?? "#\(eventTypeId)"
+        let fieldTable = descriptor.eventFields[eventTypeId] ?? [:]
         let packedFields = tuple[5].arrayValue ?? []
         var payload: [String: String] = [:]
         for entry in packedFields {
@@ -1356,7 +1433,12 @@ public actor FrickSyncSocket {
         updateStatus { $0.state = .reconnecting; $0.lastError = "\(error)" }
 
         reconnectAttempt += 1
-        let delayMs = min(30_000, Int(pow(2.0, Double(reconnectAttempt))) * 250)
+        // Exponential backoff capped at 30s. Cap the exponent BEFORE `pow` so a
+        // long-unreachable server can't grow `reconnectAttempt` unbounded and
+        // overflow `Int` in the `Double -> Int` conversion (a crash). 2^7 * 250ms
+        // already exceeds the 30s ceiling, so a small cap loses nothing.
+        let exponent = Double(min(reconnectAttempt, 7))
+        let delayMs = min(30_000, Int(pow(2.0, exponent)) * 250)
         let jitter = Int.random(in: 0...250)
         let delayNanos = UInt64((delayMs + jitter) * 1_000_000)
 

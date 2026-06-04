@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSZZBJQ1GHX9G8EN04VZJK67",
+  "ts": "2026-05-31T21:34:35.233Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ49",
+    "number": 117,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Stream cursor query API: /cursor head probe + ?since forward reads",
+    "description": "GET /streams/:type/:id/cursor returns {headSequence,count}; GET /streams/:type/:id?since=<seq> returns events after a cursor ascending. Backed by StreamStore.readAfter + headSequence. NOTE: this work was implemented and merged to main (commit 2a679d5, test repaired in c6e4e88) but was MISLABELED FR-116 in its commit/CHANGELOG. This ticket retroactively captures it accurately.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

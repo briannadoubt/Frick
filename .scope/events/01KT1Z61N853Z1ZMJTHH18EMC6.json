@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KT1Z61N853Z1ZMJTHH18EMC6",
+  "ts": "2026-06-01T16:10:02.792Z",
+  "actor": "codex",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0W",
+    "field": "description",
+    "value": "Make Frick publicly consumable across TypeScript, Swift, Android, and operational tooling.\n\nCurrent state:\n\n- Public npm workflow covers the framework packages under `packages/*` listed in `.github/workflows/publish-npm.yml`.\n- `@frick/cli` is standalone-buildable with a `frick` bin and publish metadata, but the npm workflow still excludes `apps/cli`.\n- Swift publishes from the `packages/swift` subtree to the standalone FrickSwift repository via tag workflow.\n- Android publish workflow is tag-gated for Maven artifacts.\n- Default deploy image builds the canonical monorepo server runtime; app-specific image recipes remain follow-up work.\n\nRemaining work: decide when to include `@frick/cli` in npm publishing, finish published-package/scaffolded-app image recipes, keep release policy/versioning/provenance docs current, and keep CI/generated-artifact drift gates covering TS/Swift/Kotlin."
+  }
+}

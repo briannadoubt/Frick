@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSYSQTJ9H7Y5CF0FEHDDBY",
+  "ts": "2026-05-30T06:43:15.834Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2J",
+    "number": 62,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Design + export FrickEmailAdapter interface",
+    "description": "Promote internal email router to a documented @frick/server app surface. [status.md:84-87]",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0Z",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

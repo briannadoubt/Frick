@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KT0X089TA7GSVXZHEX5S9SHP",
+  "ts": "2026-06-01T06:12:41.402Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ4E",
+    "number": 122,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "FR-23e: Postgres adapter — blobs (coordinate with FR-9); search deferred to FR-24",
+    "description": "",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0R",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

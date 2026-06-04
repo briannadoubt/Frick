@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSYS706J6JT81GWW2MRFNG",
+  "ts": "2026-05-30T06:43:15.296Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2F",
+    "number": 59,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "frick tenants set-push webpush VAPID provisioning",
+    "description": "CLI writes Web Push VAPID credentials per tenant. [push-adapters.md:13]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0Y",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

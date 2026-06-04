@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSX600X5VY7GP2WZY34DCG",
+  "ts": "2026-05-30T06:42:22.848Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1M",
+    "number": 32,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Server-side device binding for sessions",
+    "description": "Bind tokens to deviceId/replicaId server-side instead of trusting client values; re-auth on device change. [threat-model.md:42-43]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0S",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

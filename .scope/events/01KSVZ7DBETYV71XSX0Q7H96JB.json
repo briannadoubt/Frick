@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSVZ7DBETYV71XSX0Q7H96JB",
+  "ts": "2026-05-30T08:15:20.942Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ19",
+    "commentId": "01KT3SXZQJEAV3FMRP9QRKJ4D6",
+    "author": "claude",
+    "body": "Implemented on feat/storage-driver-seam (bdbb969) by worktree subagent. FrickDbDriver selector + FRICK_DB_DRIVER/FRICK_DATABASE_URL; sqlite default, postgres fails fast (->FR-22). typecheck + @frick/server suite green. Unmerged, awaiting review."
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSYTKBY1DRJJHW1365D7EG",
+  "ts": "2026-05-30T06:43:16.715Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2R",
+    "number": 68,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Configurable retention policies",
+    "description": "Retention windows for user-generated data; coordinates with FR-7 pruning.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ10",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

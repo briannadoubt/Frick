@@ -6,6 +6,12 @@ Each package version is independent — a release header documents which package
 
 ## Unreleased
 
+### Swift — product-schema sync resilience
+
+- **FrickSwift:** `FrickClient` now accepts the full app schema identity (`schemaId`, `schemaRevision`, `schemaHash`) plus an injected `FrickSchemaDescriptor`, and threads those values into sync Hello payloads, capability metadata, HTTP schema guards, and packed Snapshot/Delta decoding. Product-schema apps no longer have to rely on the foundation schema id/descriptor when decoding app-defined object or stream frames.
+- **FrickSwift:** `FrickSyncSocket` replays active subscriptions after reconnect and continues to buffer subscribe/upsert/presence/signal frames issued immediately after `connect()` until the WebSocket opens, preserving FIFO ordering behind Hello.
+- **FrickSwift:** `FrickClient.fetchObjects` now decodes rows individually and skips malformed rows with a log notice, so one incompatible or corrupt object row does not abort the entire fetch result.
+
 ### Server — sharing grants cascade to streams + projections
 
 - **`@fricken/server`:** A sharing grant on an object record now cascades READ access to the derived primitives keyed by that record's id, within the same tenant: the stream whose `streamId` equals the granted record id, and the projection rows whose subscribe/read `key` equals that id (FR-70). The cascade runs after the baseline policy + app hooks + object-record grant relaxation and only ever flips a deny to allow (never the reverse); it is strictly read-only (`stream.append` and writes are never relaxed), tenant-scoped, and fails closed when there is no resolvable row id (e.g. a whole-projection subscribe with no `key`). Revoking the grant restores the underlying deny. New `assertCanSubscribe` cascade parameter backed by `FrickCascadeGrantLookup` / `relaxWithCascadeGrants` in authz and `GrantStore.hasActiveGrantForRecordId`. See [`docs/threat-model.md`](docs/threat-model.md).
@@ -90,7 +96,7 @@ Each package version is independent — a release header documents which package
 
 ### Server — storage-driver selector
 
-- **`@fricken/server`:** Added a durable-storage driver selector to runtime config so a future Postgres driver can be chosen. `FRICK_DB_DRIVER` (`sqlite` | `postgres`, default `sqlite`) selects the driver, and `FRICK_DATABASE_URL` is parsed into config for future Postgres use. SQLite remains the default and the only implemented driver — `FRICK_DB_PATH` and the production `":memory:"` guard are unchanged. Selecting `FRICK_DB_DRIVER=postgres` fails fast at config validation with `postgres storage driver is not yet implemented (FR-22)`. No runtime behavior change for existing SQLite deployments. See [`docs/operations.md`](docs/operations.md) for the new env vars.
+- **`@fricken/server`:** Added a durable-storage driver selector to runtime config. `FRICK_DB_DRIVER` (`sqlite` | `postgres`, default `sqlite`) selects the driver, and `FRICK_DATABASE_URL` is parsed into config. SQLite remains the default active server runtime — `FRICK_DB_PATH` and the production `":memory:"` guard are unchanged. Selecting `FRICK_DB_DRIVER=postgres` now requires `FRICK_DATABASE_URL` and covers the standalone Postgres migration/schema runner while runtime store ports remain in progress. No runtime behavior change for existing SQLite deployments. See [`docs/operations.md`](docs/operations.md) for the env vars and current support boundary.
 
 ### Server — grantee leave-share / self-revocation
 

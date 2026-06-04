@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSZTCPJZAE4FY9ZK5835GDQ6",
+  "ts": "2026-05-31T20:07:49.087Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2M",
+    "commentId": "01KT3SXZQJ1774KNP9R712KYWE",
+    "author": "claude",
+    "body": "Already delivered by sibling work (FR-58 web-push export carried the set-push webpush VAPID CLI; FR-62 carried the Resend public export + reset/first-sign-in wiring). Verified present in code; marking done."
+  }
+}

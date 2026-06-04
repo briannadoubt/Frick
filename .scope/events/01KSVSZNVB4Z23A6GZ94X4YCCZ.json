@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSZNVB4Z23A6GZ94X4YCCZ",
+  "ts": "2026-05-30T06:43:44.619Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ32",
+    "number": 78,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "MediaPlaneAdapter interface + FakeMediaPlaneAdapter",
+    "description": "Define the media-plane boundary and a deterministic fake for tests. [chat-video:253-264]",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ13",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

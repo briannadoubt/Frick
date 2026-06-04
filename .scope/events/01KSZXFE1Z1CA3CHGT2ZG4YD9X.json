@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSZXFE1Z1CA3CHGT2ZG4YD9X",
+  "ts": "2026-05-31T21:01:44.383Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2Q",
+    "commentId": "01KT3SXZQJJT6N8D1H10ZYRS7T",
+    "author": "claude",
+    "body": "Merged + pushed. DELETE/POST /account self-service erase: removes account+sessions+owned objects (tenant/owner-scoped), onAccountDelete hook, admin-audit chain entry. Full suite 984 green."
+  }
+}

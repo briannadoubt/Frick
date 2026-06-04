@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSVZ7DHX2M3CHJF1HA5VXKNY",
+  "ts": "2026-05-30T08:15:21.149Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1Z",
+    "commentId": "01KT3SXZQJR46A0Z6YDR0MW1FG",
+    "author": "claude",
+    "body": "Implemented on fix/idempotency-replay-window (65217da). Subagent socket-died pre-commit; orchestrator finished it: added the behavioral test, which caught a real bug (beyond-window replay tripped the idempotency PK) -> fixed with an upsert; added docs + CHANGELOG. typecheck + full @frick/server suite (569) green. Unmerged."
+  }
+}

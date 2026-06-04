@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSYCPA38G3B6VDF7GPP8290X",
+  "ts": "2026-05-31T06:49:09.480Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1X",
+    "commentId": "01KT3SXZQJW55PMANCDB3MMNM1",
+    "author": "claude",
+    "body": "Merged into main (local) at 1c320a1. Full merged-main verification green: typecheck + 606 @frick/server tests + design-web tests + verify:generated (FR-108 whole-tree gate)."
+  }
+}

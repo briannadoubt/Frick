@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSY38RWN70X6Z46TH15ME2",
+  "ts": "2026-05-30T06:42:52.824Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ27",
+    "number": 51,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Published-package + scaffolded-app Docker image recipes",
+    "description": "Image build recipes for non-monorepo consumers. [status.md:62-64]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0W",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

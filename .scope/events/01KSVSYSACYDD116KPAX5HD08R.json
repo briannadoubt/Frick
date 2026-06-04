@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSYSACYDD116KPAX5HD08R",
+  "ts": "2026-05-30T06:43:15.404Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2G",
+    "number": 60,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Encrypted Web Push payloads (AES-128-GCM)",
+    "description": "Web Push sends an empty body today; add encrypted payload envelope. [push-adapters.md:62]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0Y",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSNACWQ3P8NYGX9178KQG2VX",
+  "ts": "2026-05-27T18:15:53.827Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0N",
+    "number": 1,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "Add sharing primitives: Invitation, Grant, ACL (FR-1)",
+    "description": "Add cross-user sharing to Frick. Currently Frick's authz model is ownership-only and policy hooks can only tighten — there's no mechanism for user A to grant user B access to a record. RangerCRM needs this to replace its CloudKit sharing (see ~/dev/RangerCRM/docs/cloudkit-sharing-migration-design.md, options A/B/C).\n\nChosen design: Option C-on-A from that doc — invitation tokens + persistent per-record grants. Token = one-shot sender→recipient invite. Grant = durable {recordId, recipientUserId, permission: \"read\"|\"write\"}. Receiver-side queries return records where ownerId == me OR me has a matching Grant.\n\nThis is the upstream blocker for RCRM-78/79/80/81. Once shipped here, RangerCRM iOS work can land.\n",
+    "status": "backlog",
+    "priority": "urgent",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

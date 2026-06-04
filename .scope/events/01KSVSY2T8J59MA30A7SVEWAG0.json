@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSY2T8J59MA30A7SVEWAG0",
+  "ts": "2026-05-30T06:42:52.360Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ23",
+    "number": 47,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Publish standalone npm CLI (extract public API, drop internal imports)",
+    "description": "CLI is monorepo-private and imports server internals directly; publish as a real package. [status.md:61-62; operations.md:837-840]",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0W",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

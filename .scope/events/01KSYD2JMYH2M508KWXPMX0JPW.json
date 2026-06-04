@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KSYD2JMYH2M508KWXPMX0JPW",
+  "ts": "2026-05-31T06:55:51.454Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ41",
+    "number": 109,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "Live projection delta-push over the sync gateway",
+    "description": "Apps cannot use server-computed projections as a LIVE data source. Two gaps, both server-only — the wire + TS client are ALREADY done:\n- FrameKind.ProjectionDelta exists: packages/protocol/src/frame.ts:34,158,165,191\n- @frick/core already SUBSCRIBES (packages/core/src/runtime.ts:463 & :886, #sendSubscribe({kind:'projection',name})) and already HANDLES incoming deltas (runtime.ts:707-708). useProjection() works client-side today.\n\nCURRENT SERVER STATE:\n- store.projections registry is created EMPTY (apps/server/src/server.ts:415 createFrickProjectionRegistry; attached :581) and only exposed over HTTP read (GET /projections/:name, list, rebuild — server.ts:938,1673,1683,3847+).\n- The registry already has a delta listener hook (apps/server/src/projections/registry.ts:209 setDeltaListener + ProjectionDeltaNotice) but NOTHING calls it.\n- ServerOptions has NO projections field, so apps can't register projections at all.\n- The gateway (apps/server/src/sync/gateway.ts) has NO 'projection' subscribe/broadcast handling.\n\nWORK:\nA) App registration: add ServerOptions.projections?: readonly FrickProjection[] (and/or accept via the project/apps module); register each into store.projections at boot.\nB) Gateway push: handle the client's existing 'projection' subscribe frame — track per-connection projection subscriptions (mirror the object/stream subscribe path), deliver an INITIAL SNAPSHOT (current projection rows) on subscribe, and wire store.projections.setDeltaListener(notice => fan a ProjectionDelta frame out to connections subscribed to notice.projection).\nC) Tenant-scope the fan-out (only same-tenant subscribers).\n\nFOLLOW-UP (separate ticket): Swift/Kotlin SDK parity for projection subscribe+apply.\n\nWHY: lets the server compute a view once (dashboard KPIs, WO queue, schedule board, tech utilization, customer LTV) and push deltas, instead of every client recomputing from raw objects. Unblocks aquarius-os AQ-23 / AQ-24.\n\nACCEPTANCE: app registers a projection; a @frick/core client calling client.projection(name) gets an initial snapshot then live tenant-scoped deltas as source objects/streams change; pnpm test + typecheck + verify:generated green; docs (docs/operations.md projections note) + CHANGELOG updated.",
+    "status": "todo",
+    "priority": "high",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "aquarius-os",
+      "unblock"
+    ]
+  }
+}

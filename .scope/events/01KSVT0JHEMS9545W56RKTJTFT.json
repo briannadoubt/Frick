@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVT0JHEMS9545W56RKTJTFT",
+  "ts": "2026-05-30T06:44:13.998Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3N",
+    "number": 97,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Latency benchmarks (HTTP/WS/append round-trip/catch-up/reconnect)",
+    "description": "Latency suite across the core paths. [hardening:1220-1235]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ16",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

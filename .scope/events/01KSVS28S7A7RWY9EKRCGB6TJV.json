@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVS28S7A7RWY9EKRCGB6TJV",
+  "ts": "2026-05-30T06:27:40.967Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ14",
+    "number": 16,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "WorkspaceShell cross-platform (web/iOS/Android) + demo cutover",
+    "description": "Implement the adaptive app shell from internal/specs/2026-05-10-frick-workspace-shell-design.md across all platforms; only stubs exist today.\n\n- Web WorkspaceShell: responsive compact (bottom bar + drawers) vs desktop (app rail + sidebar + content + inspector), semantic destination/collection/content/inspector slots, a11y (spec:25-44, 56-75, 135-136). Stub at packages/design-web/src/components.tsx.\n- SwiftUI FrickWorkspaceShell: TabView + .tabViewStyle(.sidebarAdaptable) + .inspector (NOT NavigationSplitView) (spec:25-29, 78-90, 140-142). Stub at packages/design-swift.\n- Android FrickWorkspaceShell: Material 3 NavigationSuiteScaffold + adaptive panes — unbuilt (spec:31-35, 92-106, 148-151).\n- Demo cutover: move the chat demo into a Chat destination; add Files/Calls/Admin placeholders (spec:111-132).\n\nSize: M/L.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

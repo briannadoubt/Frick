@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSYFPEEFANRAZW9V86RN9EXY",
+  "ts": "2026-05-31T07:41:39.663Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2P",
+    "commentId": "01KT3SXZQJ8G7EGW272XF2GBW4",
+    "author": "claude",
+    "body": "Merged + pushed (origin/main @ c627711). GET /account/export returns the principal's own tenant-scoped data (owner-field match), onAccountExport hook for app data, secret fields redacted via FR-65 sensitivity. Tests cover cross-principal/cross-tenant isolation + hook merge. Full suite 935 green."
+  }
+}

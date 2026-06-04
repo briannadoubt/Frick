@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KT0WJQGE51Q93EYFRD7NGSEQ",
+  "ts": "2026-06-01T06:05:18.222Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1A",
+    "commentId": "01KT3SXZQJHJP672W4VFK6CJKT",
+    "author": "claude",
+    "body": "Merged to main (c4fc05c) via fast-forward. Adversarial review caught a stale config.test.ts assertion (agent removed the 'postgres not yet implemented' guard but left the test asserting it); fixed + added a positive postgres+URL case. Combined server suite: 728 passed/20 skipped. NOTE: pg SQL is not exercised in CI yet (no Postgres service) — live-PG suite skips; FR-26 adds the CI service."
+  }
+}

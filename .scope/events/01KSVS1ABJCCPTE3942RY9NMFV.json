@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVS1ABJCCPTE3942RY9NMFV",
+  "ts": "2026-05-30T06:27:09.810Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0S",
+    "number": 5,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "Auth & identity hardening: OIDC/SAML, sessions, device binding, password hashing",
+    "description": "Close the production gaps in the identity/auth surface. Built today: Apple/Google/email-password providers, sessions, demo auth. Unbuilt/incomplete:\n\n- Generic OIDC / SAML / arbitrary OAuth provider routing (operations.md:274-275; threat-model.md:394; status.md \"Generic OIDC, SAML... remain unimplemented\").\n- Provider sessions use a fixed 30-day lifetime instead of FRICK_SESSION_TTL_SECONDS, and provider + password-reset routes don't share the built-in auth-attempt limiter (threat-model.md:378-379; status.md).\n- No server-side device binding — session row carries deviceId/replicaId but trusts client-supplied values (threat-model.md:42-43).\n- No refresh-token / short-access-token split; token lifetime is one knob (threat-model.md:44-45).\n- No proactive session revocation API — operators can only DELETE rows in SQL (threat-model.md:38-40).\n- Password hashing is node:crypto.scrypt; production target is a configurable/pluggable hasher (Argon2/bcrypt) with migration path (threat-model.md:344-349).\n\nTarget: unified session TTL + limiter across all providers, generic federation, device-bound tokens, refresh/access split, admin revocation API, pluggable password hashing.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

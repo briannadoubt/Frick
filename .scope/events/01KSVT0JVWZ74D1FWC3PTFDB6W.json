@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVT0JVWZ74D1FWC3PTFDB6W",
+  "ts": "2026-05-30T06:44:14.332Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3R",
+    "number": 100,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Performance budgets + CI trend tracking",
+    "description": "Initial budgets and trend tracking in CI. [hardening:1248-1258]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ16",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

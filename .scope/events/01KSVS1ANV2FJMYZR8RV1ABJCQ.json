@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVS1ANV2FJMYZR8RV1ABJCQ",
+  "ts": "2026-05-30T06:27:10.139Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0W",
+    "number": 8,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "Release engineering & distribution: standalone CLI, package publish, image recipes, CI matrix",
+    "description": "Make Frick publicly consumable (it is pre-1.0 and monorepo-private today).\n\n- CLI is private to the monorepo (pnpm cli <command>) and imports server internals directly; publish a standalone npm CLI (status.md:61-62; operations.md:837-840).\n- Default deploy image builds the canonical monorepo server; add published-package and scaffolded-app image recipes (status.md:62-64).\n- Release policy + multi-target distribution (npm / SwiftPM / Maven), version dimensions (framework/schema/protocol/artifact), support policy, provenance/signing (hardening spec:1053-1112).\n- Canonical CI build matrix + generated-artifact drift checks across TS/Swift/Kotlin (hardening spec:1118-1154).\n\nTarget: clean public packages, reproducible app images, documented release policy, drift-proof CI.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

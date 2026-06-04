@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSZP9N50XXC06GAX633CBD",
+  "ts": "2026-05-30T06:43:45.077Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ36",
+    "number": 82,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Call presence (mic/camera/screenshare/speaking/network quality)",
+    "description": "Wire presence to live WebRTC state. [chat-video:237-242,453]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ13",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

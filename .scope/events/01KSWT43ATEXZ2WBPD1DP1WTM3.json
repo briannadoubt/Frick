@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KSWT43ATEXZ2WBPD1DP1WTM3",
+  "ts": "2026-05-30T16:05:23.930Z",
+  "actor": "codex",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0Y",
+    "field": "description",
+    "value": "APNs + FCM are exported/documented; Web Push is partially public but still incomplete.\n\n- Web Push adapter validates PushSubscription JSON, is exported from the main @frick/server entrypoint, and can read VAPID credentials from tenant_settings.push.webPush.encrypted via the admin route. It still lacks a package subpath export and `frick tenants set-push --platform webPush` CLI provisioning (push-adapters.md; status.md).\n- Web Push deliberately sends an empty body — encrypted Web Push payloads (AES-128-GCM envelope) are follow-up (push-adapters.md).\n- Push credential rotation requires re-saving every tenant's credentials; no multi-key overlap/decryption window (push-adapters.md).\n\nTarget: documented Web Push subpath export + CLI provisioning, encrypted payloads, zero-downtime multi-key rotation.\n"
+  }
+}

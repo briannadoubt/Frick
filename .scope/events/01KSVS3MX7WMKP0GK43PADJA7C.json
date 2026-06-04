@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVS3MX7WMKP0GK43PADJA7C",
+  "ts": "2026-05-30T06:28:26.151Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1F",
+    "number": 27,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Ship production RedisClusterBus adapter",
+    "description": "Promote the docs/horizontal-scale.md Redis skeleton to a real, shippable FrickClusterBus adapter: pub/sub wiring, originNodeId loop guard, setSubscribedTenants wire filtering, back-pressure/bounded queue, failure handling, and metrics. Optionally a NATS variant.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0R",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

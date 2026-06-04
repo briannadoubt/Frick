@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KSZZBK59S8R42KCKKHX8Z7X7",
+  "ts": "2026-05-31T21:34:35.689Z",
+  "actor": "migration",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ48",
+    "field": "branch",
+    "value": "feat/per-record-subscription-authz"
+  }
+}

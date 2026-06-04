@@ -7,7 +7,7 @@ import {
 export function generateSwiftArtifact(schema: FrickSchema): string {
   const jsonSupport = schemaHasJsonFields(schema) ? [swiftJsonValueSupport(), ""] : [];
   const declarations = [
-    ...schema.objects.map((type) => swiftStruct(`${type.name}DTO`, objectFields(type.fields))),
+    ...schema.objects.map((type) => swiftStruct(`${type.name}DTO`, objectFields(type.fields), type.name)),
     ...schema.events.map((type) => swiftStruct(`${type.name}DTO`, type.fields)),
     ...schema.presences.map((type) => swiftStruct(`${type.name}DTO`, type.fields)),
     ...schema.signals.map((type) => swiftStruct(`${type.name}DTO`, type.fields)),
@@ -150,9 +150,9 @@ function kotlinSchemaDescriptor(schema: FrickSchema): string {
   ].join("\n");
 }
 
-function swiftStruct(name: string, fields: readonly FieldDef[]): string {
+function swiftStruct(name: string, fields: readonly FieldDef[], objectTypeName?: string): string {
   const properties = fields
-    .map((field) => `  public let ${swiftIdentifier(field.name)}: ${swiftType(field)}`)
+    .map((field) => `  public var ${swiftIdentifier(field.name)}: ${swiftType(field)}`)
     .join("\n");
   const parameters = fields
     .map((field) => `    ${swiftIdentifier(field.name)}: ${swiftType(field)}${field.required ? "" : " = nil"}`)
@@ -161,8 +161,18 @@ function swiftStruct(name: string, fields: readonly FieldDef[]): string {
     .map((field) => `    self.${swiftIdentifier(field.name)} = ${swiftIdentifier(field.name)}`)
     .join("\n");
 
+  // Object DTOs carry a stable `id`, so conform to Identifiable and expose a
+  // `frickType` constant (the schema object name) for callers that key off it.
+  const conformances = objectTypeName
+    ? "Codable, Equatable, Sendable, Identifiable"
+    : "Codable, Equatable, Sendable";
+  const frickType = objectTypeName
+    ? [`  public static let frickType = ${JSON.stringify(objectTypeName)}`, ""]
+    : [];
+
   return [
-    `public struct ${name}: Codable, Equatable, Sendable {`,
+    `public struct ${name}: ${conformances} {`,
+    ...frickType,
     properties,
     "",
     "  public init(",
@@ -199,9 +209,10 @@ function swiftType(field: FieldDef): string {
   const base =
     field.kind === "bool" ? "Bool"
       : field.kind === "int" ? "Int"
-        : field.kind === "bytes" ? "Data"
-          : field.kind === "json" ? "FrickJSONValue"
-          : "String";
+        : field.kind === "timestamp" ? "Date"
+          : field.kind === "bytes" ? "Data"
+            : field.kind === "json" ? "FrickJSONValue"
+            : "String";
   return field.required ? base : `${base}?`;
 }
 

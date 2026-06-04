@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSZNMB1VJ3TQZ7A7QENR7J",
+  "ts": "2026-05-30T06:43:44.395Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ31",
+    "number": 77,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "CLI: frick doctor / frick inspect diagnostics",
+    "description": "Surface the diagnostics snapshot via CLI. [hardening:1290-1311]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ12",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

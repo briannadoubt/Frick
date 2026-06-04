@@ -2,6 +2,19 @@
 
 Swift client for Frick (sync socket, client, SwiftUI streaming, push payloads).
 
+## Runtime notes
+
+- Product-schema apps should construct `FrickClient` with the app
+  `schemaId`, `schemaRevision`, `schemaHash`, and `FrickSchemaDescriptor`.
+  The identity feeds HTTP schema guards and sync Hello; the descriptor lets the
+  socket decode packed Snapshot/Delta frames whose type and field ids come from
+  the product schema rather than the foundation schema.
+- `FrickSyncSocket` buffers frames issued immediately after `connect()` until
+  the WebSocket opens, replays active subscriptions after reconnect, and
+  decodes packed object/stream frames through the configured schema descriptor.
+- `FrickClient.fetchObjects` decodes response rows individually and skips
+  malformed rows with a log notice instead of failing the entire fetch.
+
 ## Consuming this package
 
 This package is developed here, inside the [Frick monorepo](https://github.com/briannadoubt/Frick)

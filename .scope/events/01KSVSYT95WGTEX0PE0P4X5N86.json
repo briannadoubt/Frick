@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSYT95WGTEX0PE0P4X5N86",
+  "ts": "2026-05-30T06:43:16.389Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2N",
+    "number": 65,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Field sensitivity classification metadata (public/private/pii/secret/content)",
+    "description": "Classify schema fields to drive logging/diagnostics/export redaction. [hardening:1474-1484]",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ10",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

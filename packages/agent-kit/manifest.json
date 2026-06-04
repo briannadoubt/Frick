@@ -236,7 +236,7 @@
       },
       "cursorRules": ["adapters/cursor/rules/frick-debugging.mdc"],
       "docs": ["docs/cross-platform-client-contract.md", "docs/operations.md"],
-      "commands": ["pnpm server", "pnpm dashboard", "pnpm test"]
+      "commands": ["pnpm server", "pnpm cli dashboard", "pnpm test"]
     },
     {
       "id": "frick-cache-debugging",
@@ -292,7 +292,7 @@
       },
       "cursorRules": ["adapters/cursor/rules/frick-debugging.mdc"],
       "docs": ["docs/operations.md", "apps/cli/README.md"],
-      "commands": ["pnpm dashboard", "pnpm cli doctor", "pnpm cli inspect server", "pnpm cli backup --tenant-id _default --output ./backup.ndjson"]
+      "commands": ["pnpm cli dashboard", "pnpm cli doctor", "pnpm cli inspect server", "pnpm cli backup --tenant-id _default --output ./backup.ndjson"]
     },
     {
       "id": "frick-generated-artifacts",

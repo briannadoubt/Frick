@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSZMQXRSFBD3BTBSNPN9TR",
+  "ts": "2026-05-30T06:43:43.485Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2W",
+    "number": 72,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Grantee leave-share / self-revocation endpoint",
+    "description": "Only owners can revoke today; add a grantee-initiated leave flow. [threat-model.md:130]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

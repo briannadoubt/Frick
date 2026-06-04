@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSX5WF343Q2R46G5DXBZ3C",
+  "ts": "2026-05-30T06:42:22.735Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1K",
+    "number": 31,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "SAML provider routing (SP metadata, assertion validation, attribute mapping)",
+    "description": "Add SAML SP support reusing the federation plumbing from OIDC. [threat-model.md:394]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0S",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

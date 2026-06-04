@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSZNGTTJYTY2HR8880FE08",
+  "ts": "2026-05-30T06:43:44.282Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ30",
+    "number": 76,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Structured diagnostics data model",
+    "description": "Schema/subscriptions/cursors/pending appends/errors/conn state/cache metadata/sync time snapshot. [hardening:1275-1311]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ12",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

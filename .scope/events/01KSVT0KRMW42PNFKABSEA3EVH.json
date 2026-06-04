@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVT0KRMW42PNFKABSEA3EVH",
+  "ts": "2026-05-30T06:44:15.252Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3W",
+    "number": 104,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Accessibility + localization test suite",
+    "description": "Automated a11y/l10n coverage.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ17",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

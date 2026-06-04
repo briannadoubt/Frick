@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVS1AS93BKGHRGPYHGB0T4B",
+  "ts": "2026-05-30T06:27:10.249Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0X",
+    "number": 9,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "Blob storage: filesystem/object-storage driver, derivatives, quotas, lifecycle",
+    "description": "Blob bytes live in SQLite today; FRICK_BLOB_STORAGE_PATH is parsed but unused (operations.md:59; status.md). This was explicitly scoped OUT of FR-4.\n\nScope:\n- Filesystem blob driver (then object-storage/S3-compatible) wired through FRICK_BLOB_STORAGE_PATH, with multi-tenant isolation.\n- Blob processing pipeline: derivative extraction (thumbnails/transcodes), MIME/size validation, moderation hooks, orphan-cleanup jobs (hardening spec:666-706).\n- Per-user blob quota + quota-aware listing (reads assert ownership today, but there's no quota) (threat-model.md:191-192).\n\nTarget: durable external blob storage with derivatives, quotas, and lifecycle cleanup.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

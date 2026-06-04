@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSYDM846KCTPBRH6YXHZ905K",
+  "ts": "2026-05-31T07:05:30.502Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ40",
+    "commentId": "01KT3SXZQJGMG5KK78B04HAH7P",
+    "author": "claude",
+    "body": "Follow-up: updated scripts/security-hardening.test.ts to validate the new whole-tree gate contract (the old test asserted the removed path-allowlist literals). Merged + pushed; full suite green."
+  }
+}

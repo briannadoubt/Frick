@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSYD7JN2DMKH1SXF0R185PFC",
+  "ts": "2026-05-31T06:58:35.298Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ21",
+    "commentId": "01KT3SXZQJ648S58XEE2T0S2XX",
+    "author": "claude",
+    "body": "feat/schema-artifact-signing (3884369): optional Ed25519 signing of schema artifact (schemaId+hash+revision+manifest) + verify helper; opt-in via FRICK_SCHEMA_SIGNING_KEY so generate stays a no-op by default. typecheck + 66 protocol tests + verify:generated green. Unmerged."
+  }
+}

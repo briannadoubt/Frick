@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVS28NQ67F36H1R03XQ057N",
+  "ts": "2026-05-30T06:27:40.855Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ13",
+    "number": 15,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "Realtime calls (chat + video): WebRTC P2P, SFU adapter, call control plane, E2EE",
+    "description": "Entire media plane from internal/specs/2026-05-09-frick-chat-video-calls-design.md is unbuilt — schema fixtures (CallRoom, CallInvite, CallEventStream, WebRTCSignal) exist in packages/protocol but there is no runtime/client implementation.\n\nSub-areas:\n- P2P WebRTC one-to-one calls over the existing signal layer (spec:267-268, 435, 451).\n- MediaPlaneAdapter boundary + first SFU backend (LiveKit/mediasoup) for group calls, region-aware room allocation, TURN, reconnect (spec:253-268, 436, 452, 460).\n- Call control plane state machine (invite/ringing/join/leave) + server lifecycle + client SDK helpers (createCall/joinCall/leaveCall/useCallState) (spec:221-242, 329-338).\n- Call presence (mic/camera/screenshare/speaking/network quality) (spec:237-242, 453).\n- Optional E2EE via SFrame/MLS key epochs — explicitly deferred, design so it can be added (spec:51, 461).\n\nLarge; will need its own story breakdown. Size: L.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSYR8BD2G9WNNAF9P5XKKB",
+  "ts": "2026-05-30T06:43:14.315Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2A",
+    "number": 54,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Object-storage / S3-compatible blob driver",
+    "description": "Second blob driver targeting S3-compatible object storage behind the same interface.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0X",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

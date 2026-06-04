@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSY1CYAXEYRKF1WY74Z5K4",
+  "ts": "2026-05-30T06:42:50.910Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1V",
+    "number": 39,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Tenant admin API: move account between tenants",
+    "description": "Admin route to reassign an account's tenant; today assignment is per-session/account with no move path. [threat-model.md:338-339]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0T",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}
