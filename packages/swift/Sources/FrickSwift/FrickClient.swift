@@ -1,9 +1,28 @@
 import Foundation
 import SQLite3
+import os
 
 public struct FrickSchemaMismatchError: Error, Equatable, Sendable {
     public let expectedSchemaHash: String
     public let actualSchemaHash: String?
+}
+
+/// Lenient envelope for `GET /objects`: decodes the row array as raw JSON
+/// values so individual rows can be decoded into the typed `Object`
+/// one-by-one, tolerating rows the current DTO can't satisfy (RCRM-136)
+/// instead of aborting the whole fetch.
+struct ObjectsResponseLenient: Decodable {
+    let schemaHash: String?
+    let data: [FrickJSONValue]
+
+    func requireCompatibleSchema(expected: String) throws {
+        guard schemaHash == nil || schemaHash == expected else {
+            throw FrickSchemaMismatchError(
+                expectedSchemaHash: expected,
+                actualSchemaHash: schemaHash
+            )
+        }
+    }
 }
 
 public struct ObjectsResponse<Object: Decodable>: Decodable {
@@ -1542,16 +1561,36 @@ public final class FrickClient: Sendable {
         let url = queryURL(path: "/objects", args: ["type": type])
         let (data, response) = try await session.data(for: authenticatedRequest(url: url))
         try validate(response, data: data)
-        let decoded = try decoder.decode(ObjectsResponse<Object>.self, from: data)
-        try decoded.requireCompatibleSchema(expected: schemaHash)
+        let lenient = try decoder.decode(ObjectsResponseLenient.self, from: data)
+        try lenient.requireCompatibleSchema(expected: schemaHash)
         _ = try verifyCacheCompatibility()
-        for object in decoded.data {
-            if let id = extractId(from: object) {
-                try storage.saveObjectData(type: type, id: id, data: encoder.encode(object), version: 0)
+
+        // RCRM-136: decode rows individually so a single malformed row (e.g.
+        // an older-vintage row missing a now-required field) is skipped rather
+        // than aborting the entire fetch and blanking the list.
+        var objects: [Object] = []
+        objects.reserveCapacity(lenient.data.count)
+        var skipped = 0
+        for raw in lenient.data {
+            guard let elementData = try? encoder.encode(raw) else { skipped += 1; continue }
+            do {
+                let object = try decoder.decode(Object.self, from: elementData)
+                objects.append(object)
+                if let id = extractId(from: object) {
+                    try? storage.saveObjectData(type: type, id: id, data: elementData, version: 0)
+                }
+            } catch {
+                skipped += 1
             }
         }
-        return decoded.data
+        if skipped > 0 {
+            Self.fetchLog.notice("fetchObjects(\(type, privacy: .public)): \(objects.count) decoded, \(skipped) malformed row(s) skipped")
+        }
+
+        return objects
     }
+
+    private static let fetchLog = Logger(subsystem: "FrickSwift", category: "fetch")
 
     /// Write an object to the server via `POST /objects/:type/:id`. The
     /// server validates the value against the runtime schema, persists it
