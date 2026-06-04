@@ -8,10 +8,10 @@ name: Release (auto-tag)
 #   swift-v*      -> publish-swift.yml    (FrickSwift mirror)
 #   android-v*    -> publish-android.yml  (GitHub Packages)
 #
-# This keeps "stop before publish tags" honest: nothing publishes on merge.
-# An operator runs this workflow from the Actions tab (or `gh workflow run`)
-# when a release commit is on main, and CI does the rest — computing the
-# version, validating lockstep, and creating every platform tag in one go.
+# Fires automatically when a `chore(release):` commit lands on main, and can
+# also be run manually from the Actions tab (or `gh workflow run`). Either way
+# CI does the rest — computing the version, validating lockstep, and creating
+# every platform tag in one go.
 #
 # === REQUIRED ONE-TIME SETUP =================================================
 # Tags MUST be pushed with a PAT, NOT the default GITHUB_TOKEN. GitHub
@@ -23,12 +23,12 @@ name: Release (auto-tag)
 # Without it the checkout/push below cannot create release tags that trigger
 # downstream publishing.
 # ============================================================================
-#
-# To make releases fully automatic on merge later, add a `push: branches:
-# [main]` trigger and gate the job on the head commit message starting with
-# `chore(release):`. Left manual on purpose for now.
 
 on:
+  # Auto-fire when a release commit lands on main. The job is gated below on
+  # the head commit message so only `chore(release):` commits cut tags.
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       version:
@@ -62,8 +62,12 @@ concurrency:
 jobs:
   tag:
     name: Create + push release tags
-    # Only ever cut releases from main.
-    if: ${{ github.ref == 'refs/heads/main' }}
+    # Only cut releases from main, and only for release commits on push.
+    # workflow_dispatch always runs (operator chose to).
+    if: >-
+      ${{ github.ref == 'refs/heads/main' &&
+          (github.event_name == 'workflow_dispatch' ||
+           startsWith(github.event.head_commit.message, 'chore(release):')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -104,7 +108,7 @@ jobs:
           echo "Release version: ${version}"
 
       - name: Verify Android version is in lockstep
-        if: ${{ inputs.android }}
+        if: ${{ github.event_name == 'push' || inputs.android }}
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
@@ -120,10 +124,12 @@ jobs:
       - name: Create + push tags
         env:
           VERSION: ${{ steps.ver.outputs.version }}
-          DO_NPM: ${{ inputs.npm }}
-          DO_SWIFT: ${{ inputs.swift }}
-          DO_ANDROID: ${{ inputs.android }}
-          DRY_RUN: ${{ inputs.dry_run }}
+          # On push (auto release) inputs are empty, so default every platform
+          # on and dry-run off. On workflow_dispatch the operator's choices win.
+          DO_NPM: ${{ github.event_name == 'push' || inputs.npm }}
+          DO_SWIFT: ${{ github.event_name == 'push' || inputs.swift }}
+          DO_ANDROID: ${{ github.event_name == 'push' || inputs.android }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
