@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KT0WJQM4F7TTFXMSBFAQ54SA",
+  "ts": "2026-06-01T06:05:18.340Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ23",
+    "commentId": "01KT3SXZQJBKYAC6ZV8DJD44FD",
+    "author": "claude",
+    "body": "Merged to main (c4fc05c) via fast-forward. Review confirmed: zero deep-internal imports remain (grep clean), build OK, 40/40 tests pass. Symbols promoted to @frick/server public entrypoint. NOTE downstream FR-51: @frick/server itself is still private:true — must be made publishable before @frick/cli can publish."
+  }
+}

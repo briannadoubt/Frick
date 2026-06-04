@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVS28EFWWYCRHVE0K45VEKD",
+  "ts": "2026-05-30T06:27:40.623Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ11",
+    "number": 13,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "Sharing v2: cascade scoping + grantee leave-share",
+    "description": "Follow-up to FR-1 (object-record sharing, DONE). Grants are object-record scoped only and do not cascade to related rows, streams, projections, blobs, jobs, search results, or arbitrary app routes (threat-model.md:128-130; status.md:72-75). There is also no grantee \"leave share\" endpoint — only the grant owner can revoke (threat-model.md:130; status.md:75).\n\nScope: a cascade-scoping model so a shared object's streams/projections/search/blobs/jobs respect the grant, plus a grantee leave-share / self-revocation flow. Size: M/L.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

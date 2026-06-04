@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KT0X07YJVCGA7NP05TSNSB0X",
+  "ts": "2026-06-01T06:12:41.042Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ4B",
+    "number": 119,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "FR-23b: Postgres adapter — core data plane (object, stream, idempotency) + widen test:pg",
+    "description": "",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0R",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

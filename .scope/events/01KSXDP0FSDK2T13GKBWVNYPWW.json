@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSXDP0FSDK2T13GKBWVNYPWW",
+  "ts": "2026-05-30T21:47:13.785Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1X",
+    "commentId": "01KT3SXZQJ97NSQ5A4MFAM4R9S",
+    "author": "claude",
+    "body": "feat/per-principal-rate-limit (215cf42): per-(tenant,user) WS connection cap via FrickLimits + FRICK_MAX_CONNECTIONS_PER_PRINCIPAL; rateLimit.exceeded Nack+1013; global caps untouched. typecheck + 572 server tests green. Unmerged."
+  }
+}

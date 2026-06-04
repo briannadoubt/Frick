@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVS2SG08WTW4WCMZV04HZ5G",
+  "ts": "2026-05-30T06:27:58.080Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ17",
+    "number": 19,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "Accessibility & localization",
+    "description": "From hardening spec (1367-1419). Accessibility contract: accessible names for icons, keyboard nav (web), focus management (modals/drawers), dynamic type/text scaling (iOS/Android), color contrast, reduced motion, screen-reader labels. Localization hooks for reusable components and error-code messages. Partially addressed by the design system but no explicit a11y/l10n contract or tests yet. Size: M.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

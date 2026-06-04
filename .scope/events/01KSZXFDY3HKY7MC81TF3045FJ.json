@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KSZXFDY3HKY7MC81TF3045FJ",
+  "ts": "2026-05-31T21:01:44.259Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2Q",
+    "field": "status",
+    "value": "done"
+  }
+}

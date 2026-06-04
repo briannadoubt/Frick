@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVT0KZZARE15NAZS5ZAE81J",
+  "ts": "2026-05-30T06:44:15.487Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3X",
+    "number": 105,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Cross-region bus federation design + adapter",
+    "description": "Replicate fan-out across regions beyond the one-bus-per-server contract. [horizontal-scale:117]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ18",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

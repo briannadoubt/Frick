@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSZPM2DWMY8H21N1DG00X7",
+  "ts": "2026-05-30T06:43:45.410Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ39",
+    "number": 85,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "E2EE calls via SFrame/MLS key epochs (deferred design)",
+    "description": "Optional per-room E2EE; design so it can be added later. [chat-video:51,461]",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ13",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

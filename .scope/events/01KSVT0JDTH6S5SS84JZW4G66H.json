@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVT0JDTH6S5SS84JZW4G66H",
+  "ts": "2026-05-30T06:44:13.882Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3M",
+    "number": 96,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Load harness (synthetic data, configurable params, JSON output)",
+    "description": "Reusable harness driving synthetic load with machine-readable results. [hardening:1237-1246]",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ16",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

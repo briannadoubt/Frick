@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSYSYJYRE754ABQ10SD4KK",
+  "ts": "2026-05-30T06:43:16.050Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2M",
+    "number": 64,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Wire email into password-reset + first-sign-in flows",
+    "description": "Connect the public email surface to identity flows.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0Z",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

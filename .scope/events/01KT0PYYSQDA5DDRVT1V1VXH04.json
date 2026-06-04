@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KT0PYYSQDA5DDRVT1V1VXH04",
+  "ts": "2026-06-01T04:27:07.447Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ48",
+    "commentId": "01KT3SXZQJJNFMMVQS73P9BAB1",
+    "author": "claude",
+    "body": "Merged --no-ff (3a0ce10) + pushed to origin/main @ 3a0ce10. Per-record authz on object subscription snapshots + live deltas (canSubscriberReadObjectRecord + GrantStore.isEmpty short-circuit), filtered via the same decide()+relaxWithGrants pipeline as HTTP object reads. Coexists with FR-70 cascade. Merge dropped the obsolete util/server-harness.ts + the branch's stale streams-cursor.test.ts edits (superseded by the real FR-117 cursor work). Full suite green (1017 passed). Unblocks aquarius-os AQ-63."
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KT1Z5TFHQ5EE0SD3XN4Y8T9Y",
+  "ts": "2026-06-01T16:09:55.441Z",
+  "actor": "codex",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0V",
+    "field": "description",
+    "value": "Production security/abuse hardening tracked from the threat model.\n\nBuilt today: per-principal WebSocket connection cap, bounded `requestId` replay window, subdomain wildcard CORS allowlist entries, and schema artifact signing/client verification.\n\nRemaining gaps:\n\n- Per-principal throughput limiting beyond the connection cap.\n- Durable pruning/retention for old idempotency rows and other growth-prone runtime tables that are not already covered by existing platform-event retention.\n- Service principals: machine identities with scopes and audit.\n- Broader abuse-event correlation and operational alerting.\n\nTarget: complete rate limiting, durable retention/pruning, service-principal model, and abuse/security operations surfaces."
+  }
+}

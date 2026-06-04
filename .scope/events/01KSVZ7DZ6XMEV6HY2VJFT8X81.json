@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSVZ7DZ6XMEV6HY2VJFT8X81",
+  "ts": "2026-05-30T08:15:21.574Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3J",
+    "commentId": "01KT3SXZQJMJ9J2ZVDKCW16JEK",
+    "author": "claude",
+    "body": "Implemented on feat/design-token-validation (d8ff0df). 5 validation rules: off-scale spacing/radius, circular aliases, missing icon maps, WCAG contrast, raw-literal CSS linter (surfaced+fixed a real opacity literal). typecheck + @frick/design tests + design:generate + verify:generated green. Unmerged."
+  }
+}

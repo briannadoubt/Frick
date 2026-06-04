@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSYD7K3BJV6W8YHK1B1ERTZG",
+  "ts": "2026-05-31T06:58:35.755Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2N",
+    "commentId": "01KT3SXZQJCXXXEYT8CX96M6JB",
+    "author": "claude",
+    "body": "feat/field-sensitivity-classification (a0fc947): optional FieldDef.sensitivity (public|private|pii|secret|content, default private) + redaction helper wired into dashboard inspection; server-only metadata, zero generated-artifact drift. typecheck + protocol + 582 server + verify:generated green. Unmerged."
+  }
+}

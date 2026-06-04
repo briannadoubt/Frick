@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVR9V752NWZWDXS41Q378NZ",
+  "ts": "2026-05-30T06:14:20.645Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0R",
+    "number": 4,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "Postgres storage adapter + production horizontal scale",
+    "description": "Move Frick from \"one stateful node + SQLite volume\" to \"N stateless nodes behind a load balancer on a concurrent Postgres-compatible database with a real cluster bus.\" This is the foundational pre-1.0 work that unblocks stateless container deploys (Cloud Run / Fly-without-volume / Railway) and safe multi-node job/projection workers.\n\n## Current state\n\n- **Storage is single-writer SQLite** via `node:sqlite` at `FRICK_DB_PATH`. Every `*Store` under `apps/server/src/storage/` is SQLite-specific (search-store uses FTS5; blobs live in SQLite). Config only accepts a filesystem path (`FRICK_DB_PATH`), no connection string. Production mode hard-rejects `:memory:`.\n- **Horizontal fan-out is partly built.** `FrickClusterBus` (apps/server/src/cluster/bus.ts) is a stable contract carrying every fan-out shape (stream events, object upserts, signals, presence, projection deltas) with an `originNodeId` loop guard and optional `setSubscribedTenants` wire filtering. But only `MemoryClusterBus` ships. A production Redis/NATS bus is only a skeleton in docs/horizontal-scale.md, not an implemented adapter.\n\n## Goal\n\n1. A Postgres-compatible storage adapter behind the existing per-store seam, selectable via config, so N nodes share one concurrent database instead of a single SQLite file. (Storage interface was deliberately shaped for this — see internal/specs/2026-05-10-...-hardening-design.md:283,300 and 2026-05-09-...-chat-video-calls-design.md §6 \"Storage\" / §16.)\n2. A real, shippable production cluster bus (Redis first; NATS optional) with back-pressure, failure handling, and metrics — replacing the doc skeleton.\n3. Multi-node correctness for durable jobs and projections (no duplicate execution across nodes — Postgres advisory locks / SELECT ... FOR UPDATE SKIP LOCKED).\n4. Backup/restore (NDJSON) and search (FTS5 -> tsvector) parity on Postgres. (operations.md:639 already anticipates Postgres dump parity.)\n\n## Out of scope (track as follow-ups, not this epic)\n\n- Multi-region / multi-bus topologies (docs/horizontal-scale.md \"Known follow-ups\": one bus cluster per region for v1).\n- Object-storage blob driver (related but separable; FRICK_BLOB_STORAGE_PATH is parsed-but-unused today).\n\n## References\n\n- docs/horizontal-scale.md (cluster bus contract, fan-out matrix, Redis skeleton, operational notes)\n- internal/specs/2026-05-09-frick-chat-video-calls-design.md (§6 Storage tables, §16 \"Postgres production mode first vs evolve from SQLite\")\n- internal/specs/2026-05-10-frick-fullstack-framework-hardening-design.md:283,300,2636 (storage seam, Postgres deferred from first slice)\n- docs/operations.md:639 (future Postgres adapter dump parity)",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

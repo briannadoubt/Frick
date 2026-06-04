@@ -1,0 +1,24 @@
+{
+  "v": 1,
+  "id": "01KSYD368F4CQ4P3DBWJ3QS4ZF",
+  "ts": "2026-05-31T06:56:11.535Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ42",
+    "number": 110,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "ServerOptions.projections: app projection registration",
+    "description": "Add ServerOptions.projections?: readonly FrickProjection[] and register each into the store's projection registry at boot (alongside server.ts:415/:581). Today the registry is created empty and no app can populate it. Keep HTTP read (GET /projections/:name) working. Validate projection.sources reference real object/stream types in the active schema. Unit test: a registered projection's apply() runs on a matching object upsert and its read()/rows reflect the change.",
+    "status": "todo",
+    "priority": "high",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ41",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "aquarius-os"
+    ]
+  }
+}

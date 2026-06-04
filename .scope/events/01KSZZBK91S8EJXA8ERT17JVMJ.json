@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSZZBK91S8EJXA8ERT17JVMJ",
+  "ts": "2026-05-31T21:34:35.809Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ48",
+    "commentId": "01KT3SXZQJEADPFBS1NX99GDWE",
+    "author": "claude",
+    "body": "RE-OPENED: was wrongly marked done. The commit labeled 'FR-116' (2a679d5) was actually a stream cursor API — a different feature, now recorded under FR-117. The real FR-116 (per-record authz on object subscription snapshots/deltas) was NOT implemented. Implementing now."
+  }
+}

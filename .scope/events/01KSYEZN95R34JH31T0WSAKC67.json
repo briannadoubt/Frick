@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSYEZN95R34JH31T0WSAKC67",
+  "ts": "2026-05-31T07:29:12.997Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0S",
+    "commentId": "01KT3SXZQJ5DNXHHBQPYTM5JDX",
+    "author": "claude",
+    "body": "Moved to in_progress: starting FR-30 (generic OIDC provider routing) — high-value federated-SSO unlock."
+  }
+}

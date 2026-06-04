@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVT0JMW2JVXQ0VGT1KVMHSP",
+  "ts": "2026-05-30T06:44:14.108Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3P",
+    "number": 98,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Throughput + resource-growth benchmarks (memory/db/cache)",
+    "description": "Sustained throughput and growth tracking.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ16",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

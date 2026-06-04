@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSS0G5HMRE2SS795ZF0KS4D6",
+  "ts": "2026-05-29T04:39:53.140Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0Q",
+    "number": 3,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "installSession should clear cache against persisted metadata, not just in-memory session",
+    "description": "`FrickClient.installSession` clears the local cache only when `sessionStore.session?.userId` differs from the incoming session. That misses two real scenarios:\n\n1. **Sign-out then sign-in as a different user.** `signOut()` nils `sessionStore.session`, so the next `installSession` sees `previous == nil` and skips the clear, leaving cache metadata (and `local_objects` rows) from the previous user in place. `verifyCacheCompatibility` then throws `sessionScopeMismatch` on the next `fetchObjects`, silently failing every bootstrap.\n\n2. **Schema hash drift across launches.** The cached metadata can carry a stale `schemaHash` from an older client revision. Same outcome — `verifyCacheCompatibility` throws and bootstraps fail.\n\nObserved in RangerCRM's GoldenFlow e2e (RCRM-50):\n\n    cachedMetadata: userId=\"user-aed3cd1b…\", schemaHash=\"rangercrm-0.3.0\"\n    currentMetadata: userId=\"user-ac9ae9e8…\", schemaHash=\"rangercrm-0.8.0\"\n    reason: sessionScopeMismatch\n\nThe current commit says \"Frick's cache metadata is scoped to userId; reusing a cache row minted under user A while signed in as user B trips the schema / scope guard.\" Exactly — but the guard against that is `installSession`, and `installSession` doesn't check the persisted metadata. So the protection is incomplete.\n\n## Fix\n\nCompare against `storage.loadCacheMetadata()` instead of (or in addition to) `sessionStore.session`. Clear when persisted `userId` is non-nil and differs from the new session, OR when persisted `schemaHash` differs from the current client's `schemaHash`.\n\n    private func installSession(_ newSession: FrickSession) {\n        let cached = try? storage.loadCacheMetadata()\n        let userChanged = (cached?.userId).map { $0 != newSession.userId } ?? false\n        let schemaChanged = (cached?.schemaHash).map { $0 != schemaHash } ?? false\n        if userChanged || schemaChanged {\n            try? storage.clearCache()\n            try? storage.clearPendingAppends()\n        }\n        sessionStore.session = newSession\n    }\n\nThis makes \"sign in\" the canonical cache-validity checkpoint. Downstream, `verifyCacheCompatibility` calls in `fetchObjects` / `connectSync` become defense in depth rather than the only line.\n\n## Downstream impact\n\nUnblocks RangerCRM GoldenFlowTests step 8 (sign-out → sign-in persistence check) and any RCRM app where a user signs in as someone different than the previous run on the same install. No app-side changes required.\n",
+    "status": "backlog",
+    "priority": "urgent",
+    "parentId": null,
+    "branch": "feat/auto-version-on-write",
+    "prUrl": null,
+    "assignee": "claude",
+    "labels": []
+  }
+}

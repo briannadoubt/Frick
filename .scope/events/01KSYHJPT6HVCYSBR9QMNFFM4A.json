@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSYHJPT6HVCYSBR9QMNFFM4A",
+  "ts": "2026-05-31T08:14:34.310Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ47",
+    "number": 115,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "Sync gateway live-push completeness + extension-authoring exports",
+    "description": "Close the remaining 'server → live client' and extension-authoring gaps surfaced by the aquarius-os integration. Sibling to FR-109 (projection delta-push, done): same realtime fan-out machinery, broader surfaces. Children: FR-114 (server-originated object/stream writes must fan out to gateway subscribers, not just appear on cursor resync) and FR-113 (export the policy-hook + blob-processor authoring types from @frick/server so apps can write extensions without ServerOptions-indexing hacks).",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KSVVQMDYNZGHP9J0FY02T5JX",
+  "ts": "2026-05-30T07:14:18.174Z",
+  "actor": "migration",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2W",
+    "field": "branch",
+    "value": "feat/grantee-leave-share"
+  }
+}

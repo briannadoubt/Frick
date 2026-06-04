@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSZTCPT4NZBY400T0CJSCKYN",
+  "ts": "2026-05-31T20:07:49.316Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0Z",
+    "commentId": "01KT3SXZQJDFKZQQYK9ZE1CGA9",
+    "author": "claude",
+    "body": "All children done (FR-62 interface+Resend+wiring, FR-63 reference export, FR-64 flow wiring). Epic complete."
+  }
+}

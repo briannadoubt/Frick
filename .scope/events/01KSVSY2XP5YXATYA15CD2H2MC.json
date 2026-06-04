@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSY2XP5YXATYA15CD2H2MC",
+  "ts": "2026-05-30T06:42:52.470Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ24",
+    "number": 48,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "SwiftPM + Maven publish pipelines",
+    "description": "Distribution targets beyond npm for the Swift and Android SDKs. [hardening:1053-1112]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0W",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVS2SKDM6CTJAD7ETCSRS4W",
+  "ts": "2026-05-30T06:27:58.189Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ18",
+    "number": 20,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "Multi-region replication & cross-region bus topologies",
+    "description": "Explicitly out of scope for FR-4 v1. The cluster-bus contract is one bus per server; replicating across regions (\"write here, sync to the bus in that other region\") is deferred — current recommendation is one bus cluster per region with LB failover (horizontal-scale.md:117).\n\nScope (future): bus federation across regions, write-region routing, conflict handling, and region-aware failover beyond single-region N-node scale. Size: L. Depends on FR-4.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

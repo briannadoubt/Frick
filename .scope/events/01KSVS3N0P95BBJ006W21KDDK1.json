@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVS3N0P95BBJ006W21KDDK1",
+  "ts": "2026-05-30T06:28:26.262Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1G",
+    "number": 28,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Multi-node job/projection workers (no duplicate execution)",
+    "description": "Make durable job workers and projection processing safe across N nodes using Postgres advisory locks / SELECT ... FOR UPDATE SKIP LOCKED. Also lift projection delta fan-out from in-process to cross-process over the cluster bus (operations.md:630-632), and add cross-process/post-restart Kafka idempotency (operations.md:492-495).",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0R",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

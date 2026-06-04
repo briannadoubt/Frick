@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSY314WBDB7BTSGJ0Q72RZ",
+  "ts": "2026-05-30T06:42:52.580Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ25",
+    "number": 49,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Version dimensions + support/compatibility policy doc",
+    "description": "Document framework/schema/protocol/artifact versions and old-revision support policy. [hardening:1073-1090]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0W",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

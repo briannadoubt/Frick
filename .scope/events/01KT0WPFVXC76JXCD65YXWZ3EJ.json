@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KT0WPFVXC76JXCD65YXWZ3EJ",
+  "ts": "2026-06-01T06:07:21.469Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1E",
+    "field": "branch",
+    "value": "feat/fr26-ci-postgres-matrix"
+  }
+}

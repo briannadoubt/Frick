@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSZR2F6JPBNS5PZ6QQWVYR",
+  "ts": "2026-05-30T06:43:46.895Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3E",
+    "number": 90,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "WorkspaceShell responsive tests per platform",
+    "description": "Verify compact vs expanded layouts + inspector behavior. [workspace-shell:135-151]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ14",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

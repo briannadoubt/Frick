@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KSVVQMAG873CQCFRJHY2SS88",
+  "ts": "2026-05-30T07:14:18.064Z",
+  "actor": "migration",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1Z",
+    "field": "branch",
+    "value": "fix/idempotency-replay-window"
+  }
+}

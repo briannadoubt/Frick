@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSYJENCJMPANKANN0TBBAMH6",
+  "ts": "2026-05-31T08:29:50.354Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ45",
+    "commentId": "01KT3SXZQJAN5BVD02TYZ049CR",
+    "author": "claude",
+    "body": "Merged + pushed (origin/main @ 514dd64). Pure-additive: exported FrickPolicyHook/PolicyInput/Decision/DecisionReason/Action/Principal + deny/ALLOW, and the FrickBlobProcessor* types from @frick/server root. No more ServerOptions-indexing hacks for extension authors."
+  }
+}

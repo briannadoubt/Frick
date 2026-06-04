@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSYRF6RP4F8JKWXP0Z084C",
+  "ts": "2026-05-30T06:43:14.534Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2C",
+    "number": 56,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Per-user blob quota + quota-aware listing",
+    "description": "Reads assert ownership but there's no quota; add metering + quota enforcement. [threat-model.md:191-192]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0X",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

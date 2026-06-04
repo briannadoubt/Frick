@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSY2FYVTA1ZBJMF9834GMM",
+  "ts": "2026-05-30T06:42:52.030Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ21",
+    "number": 45,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Schema artifact signing + client verification",
+    "description": "Sign schema bundles/DTOs so native clients verify integrity independent of the build pipeline. [threat-model.md:213-216]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0V",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

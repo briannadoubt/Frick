@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSZQKKCVPR6VP0T45QV7RX",
+  "ts": "2026-05-30T06:43:46.419Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3A",
+    "number": 86,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Web WorkspaceShell (responsive compact/desktop + a11y)",
+    "description": "Compact bottom-bar+drawers vs desktop rail+sidebar+content+inspector; semantic slots. [workspace-shell:25-44,56-75]",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ14",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

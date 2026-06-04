@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVS3MFEKM56SBH7VMZTVQ99",
+  "ts": "2026-05-30T06:28:25.710Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1B",
+    "number": 23,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Port *Store implementations to the storage driver",
+    "description": "Make objects, streams, sessions, accounts, grants, invitations, jobs, presence, signals, idempotency, tenant/settings, audit, and reset stores driver-agnostic with a Postgres impl. Large — likely sub-split during execution.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0R",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

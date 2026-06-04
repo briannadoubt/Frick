@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KT0X0G5G6K9BVCAZ6R7706XF",
+  "ts": "2026-06-01T06:12:49.456Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1B",
+    "commentId": "01KT3SXZQJVH62B1ZKP7DKG3CP",
+    "author": "claude",
+    "body": "Sub-split into FR-118 (async seam + SQLite adapter, SQLite-only), FR-119 (PG core data plane), FR-120 (PG identity), FR-121 (PG tenant/admin/runtime), FR-122 (PG blobs). FR-119–122 blocked_by FR-118. Created under FR-4 since Scope nests stories only under epics. Starting FR-118."
+  }
+}

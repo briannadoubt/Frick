@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KT0WSJ2PYDTHH6PZY3NMKQCB",
+  "ts": "2026-06-01T06:09:02.038Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1E",
+    "commentId": "01KT3SXZQJYHD8XAPH0QG2CT9Q",
+    "author": "claude",
+    "body": "Merged to main (e49d63e) via fast-forward. Added ts-postgres CI job (postgres:16 service container) running the FR-22 migration runner against a live DB via FRICK_DATABASE_URL, plus a root test:pg script. Verified locally against postgres:16 in Docker: all 17 migrations apply, full pg-migrations suite 15/15 green — the translated SQL (tsvector/GENERATED/BYTEA) actually executes now, not just static parity. SCOPE NOTE: scoped to the migration-runner file only; the full @frick/server suite on Postgres stays blocked on FR-23 (per-store port). The FR-23 blocked_by relation on this ticket is for that wider matrix; the runner slice is delivered."
+  }
+}

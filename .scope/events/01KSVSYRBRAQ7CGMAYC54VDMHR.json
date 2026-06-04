@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSYRBRAQ7CGMAYC54VDMHR",
+  "ts": "2026-05-30T06:43:14.424Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2B",
+    "number": 55,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Blob processing pipeline: derivatives + MIME/size validation",
+    "description": "Thumbnail/transcode derivative extraction, MIME/size validation, moderation hooks as extensions. [hardening:666-706]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0X",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSZMVFQ9Z7P3XAN44CKPD3",
+  "ts": "2026-05-30T06:43:43.599Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2X",
+    "number": 73,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Authz tests for cascade + leave-share",
+    "description": "Cover cascade visibility and grantee revocation.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

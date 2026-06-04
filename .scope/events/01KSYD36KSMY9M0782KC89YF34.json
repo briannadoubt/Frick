@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KSYD36KSMY9M0782KC89YF34",
+  "ts": "2026-05-31T06:56:11.897Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ45",
+    "number": 113,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Export extension-authoring types from @frick/server index",
+    "description": "Apps that register policyHooks + blobProcessors via createFrickServer can't import the types to author them — they're referenced by ServerOptions but not exported from apps/server/src/index.ts, forcing workarounds like 'type Hook = NonNullable<ServerOptions[\"policyHooks\"]>[number]' and 'type Proc = NonNullable<ServerOptions[\"blobProcessors\"]>[number]'. Add to the package index (pure additive, no behavior change): from authz.ts — FrickPolicyHook, FrickPolicyInput, FrickDecision, FrickDecisionReason, FrickAction, Principal, deny, ALLOW; from blobs/processor.ts — FrickBlobProcessor, FrickBlobValidateContext, FrickBlobValidationResult, FrickBlobProcessContext, FrickBlobProcessResult, FrickBlobProcessorRegistry. CHANGELOG entry. Verified need: aquarius-os backend (AQ-28 policy hooks, AQ-53 blob processor) derived these via ServerOptions indexing.",
+    "status": "todo",
+    "priority": "medium",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "aquarius-os",
+      "dx"
+    ]
+  }
+}

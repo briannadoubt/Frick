@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSYTCHYT0E9ZR26049KBVT",
+  "ts": "2026-05-30T06:43:16.497Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2P",
+    "number": 66,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Account/user data export hooks",
+    "description": "App-extensible export of a principal's data. [hardening:1185-1200]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ10",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

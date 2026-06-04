@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSX5S1HYJDBVNN8SR9NT06",
+  "ts": "2026-05-30T06:42:22.625Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1J",
+    "number": 30,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Generic OIDC provider routing (discovery, JWKS, claim mapping)",
+    "description": "Add config-driven OIDC providers: discovery doc, JWKS verification, claim->User mapping, first-sign-in hook. [operations.md:274-275]",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0S",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KSYDQWCBYQVQTTW36Y6J6MTQ",
+  "ts": "2026-05-31T07:07:29.547Z",
+  "actor": "migration",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ43",
+    "field": "branch",
+    "value": "feat/projection-delta-push"
+  }
+}

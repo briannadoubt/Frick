@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSZMMCTGGGBS1G7125AJ5C",
+  "ts": "2026-05-30T06:43:43.372Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2V",
+    "number": 71,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Cascade grant scoping to search results, blobs, jobs",
+    "description": "Apply grant visibility to search/blob/job access for shared records. [status.md:72-75]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

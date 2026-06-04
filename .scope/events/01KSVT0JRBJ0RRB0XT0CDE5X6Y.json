@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVT0JRBJ0RRB0XT0CDE5X6Y",
+  "ts": "2026-05-30T06:44:14.219Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3Q",
+    "number": 99,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Codec speed benchmarks (TS/Swift/Kotlin)",
+    "description": "Encode/decode benchmarks per platform.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ16",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

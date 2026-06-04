@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KT0VW80J95RYGYS18T5GX6Y0",
+  "ts": "2026-06-01T05:53:01.458Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ23",
+    "field": "branch",
+    "value": "feat/fr47-standalone-cli"
+  }
+}

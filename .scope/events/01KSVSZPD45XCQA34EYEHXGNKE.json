@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSZPD45XCQA34EYEHXGNKE",
+  "ts": "2026-05-30T06:43:45.188Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ37",
+    "number": 83,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "SFU adapter (LiveKit or mediasoup) for group calls",
+    "description": "Group calls with region-aware room allocation, TURN, reconnect, media state sync. [chat-video:253-268,436,452]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ13",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

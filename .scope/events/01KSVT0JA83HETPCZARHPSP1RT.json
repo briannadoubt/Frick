@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVT0JA83HETPCZARHPSP1RT",
+  "ts": "2026-05-30T06:44:13.768Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3K",
+    "number": 95,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Runtime design context switching (mode/density/brand/icon-pack)",
+    "description": "Change resolved tokens/components/icons at runtime without restart. [design-language:84-121,314]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ15",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

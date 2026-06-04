@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KT0M8SGPY3PM7N43K3ETGE02",
+  "ts": "2026-06-01T03:40:03.990Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2C",
+    "commentId": "01KT3SXZQJRYYM77AJCDWM88KS",
+    "author": "claude",
+    "body": "Merged --no-ff (ae11ace) + pushed to origin/main @ 6441587. Per-principal blob byte quota + quota-aware listing. Full suite green (1012 passed)."
+  }
+}

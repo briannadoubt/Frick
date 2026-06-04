@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KT0M8SYN8ZRCYK4VBG6V0193",
+  "ts": "2026-06-01T03:40:04.437Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1H",
+    "commentId": "01KT3SXZQJKA7D6AMWN6WAG65D",
+    "author": "claude",
+    "body": "Merged --no-ff (6441587) + pushed to origin/main @ 6441587. Unified session TTL + auth-attempt limiter across all identity providers. Full suite green (1012 passed)."
+  }
+}

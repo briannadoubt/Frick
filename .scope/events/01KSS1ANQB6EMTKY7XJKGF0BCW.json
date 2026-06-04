@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSS1ANQB6EMTKY7XJKGF0BCW",
+  "ts": "2026-05-29T04:54:21.675Z",
+  "actor": "migration",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0P",
+    "commentId": "01KT3SXZQJ7DCNXJGYBTS39KMW",
+    "author": null,
+    "body": "Pushed as 1547151 on feat/auto-version-on-write (combined commit with FR-3)."
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KT0M8S2KQYSC40A68NX0SRGA",
+  "ts": "2026-06-01T03:40:03.539Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ49",
+    "commentId": "01KT3SXZQJ1YHK0ZY4KWZYP8PF",
+    "author": "claude",
+    "body": "CORRECTION: commit 2a679d5 (previously credited) implemented NOTHING — its only server.ts change was a doc comment, so main was RED. The cursor API was actually implemented in cbbeb72 (GET /streams/:type/:id/cursor -> {headSequence,count} via StreamStore.head/FrickStore.streamHead; ?since=<seq> forward reads via StreamStore.read; 400 stream.invalidCursor regenerated into core/swift/kotlin). Pushed to origin/main @ 6441587. Full suite green (1012 passed)."
+  }
+}

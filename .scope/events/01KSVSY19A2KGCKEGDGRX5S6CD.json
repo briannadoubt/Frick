@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSY19A2KGCKEGDGRX5S6CD",
+  "ts": "2026-05-30T06:42:50.794Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1T",
+    "number": 38,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Per-app handler/projection/job-worker registries",
+    "description": "De-share the server-global handler/projection/job registries into per-app instances. [status.md]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0T",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

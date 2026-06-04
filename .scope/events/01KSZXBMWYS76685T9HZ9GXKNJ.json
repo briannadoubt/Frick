@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSZXBMWYS76685T9HZ9GXKNJ",
+  "ts": "2026-05-31T20:59:40.318Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ48",
+    "commentId": "01KT3SXZQJJQ8YRCCXP0BZKPW4",
+    "author": "claude",
+    "body": "Merged + pushed to origin/main. GET /streams/:type/:id/cursor -> {headSequence,count}; ?since=<seq> forward reads; StreamStore.readAfter+headSequence. 7 cursor tests + existing ?before= preserved; full suite 950 green. Unblocks aquarius-os AQ-31."
+  }
+}

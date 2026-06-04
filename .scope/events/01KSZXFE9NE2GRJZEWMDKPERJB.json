@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSZXFE9NE2GRJZEWMDKPERJB",
+  "ts": "2026-05-31T21:01:44.629Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ29",
+    "commentId": "01KT3SXZQJEAESC724DE03PE77",
+    "author": "claude",
+    "body": "Merged + pushed. Filesystem blob-bytes driver behind FRICK_BLOB_DRIVER (sqlite default), tenant-isolated hashed paths, atomic writes; metadata stays in SQLite. Note: backup/restore + data-subject-export read bytes from SQLite directly, so fs-stored bytes need backup-integration follow-up (flag for FR-54). Full suite 984 green."
+  }
+}

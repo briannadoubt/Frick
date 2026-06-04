@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSNBV1FGHQ7JERX3RAG2Y757",
+  "ts": "2026-05-27T18:41:06.032Z",
+  "actor": "migration",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0N",
+    "commentId": "01KT3SXZQJKRMGE9K6KSPPDB6D",
+    "author": null,
+    "body": "Done — sharing primitives shipped on feat/sharing-primitives. Commits: bce9ccc, a6040ad, 2b1a266, 266aed6, a1731e4. 790 server tests + 53 Swift tests pass. Swift SDK adds: FrickClient.createInvitation / acceptInvitation / listGrants / revokeGrant (signatures + caveats in RangerCRM RCRM-82 integration brief)."
+  }
+}

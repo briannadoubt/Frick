@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KSRZ484X3QJNCXHKT15J738J",
+  "ts": "2026-05-29T04:15:54.013Z",
+  "actor": "migration",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0P",
+    "field": "branch",
+    "value": "feat/auto-version-on-write"
+  }
+}

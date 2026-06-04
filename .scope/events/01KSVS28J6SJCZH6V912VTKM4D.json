@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVS28J6SJCZH6V912VTKM4D",
+  "ts": "2026-05-30T06:27:40.742Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ12",
+    "number": 14,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "Observability completeness: native sync telemetry (Swift/Android) + diagnostics/devtools",
+    "description": "The TypeScript client emits WebSocket sync spans/metrics via OTel; Swift/Android expose dependency-light hooks for analytics track() only and do NOT bundle native OTel SDKs — native sync-socket telemetry is pending (status.md:55-56; authoring.md:366-369).\n\nAlso harden developer diagnostics/devtools (hardening spec:1275-1311): schema, subscriptions, cursors, pending appends, errors, connection state, cache metadata, sync time exposed via CLI (frick doctor/inspect) and client snapshots. Fricken Dashboard exists; the structured diagnostics data model + CLI tooling need completion. Size: M.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

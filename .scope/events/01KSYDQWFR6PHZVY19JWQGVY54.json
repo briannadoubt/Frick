@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSYDQWFR6PHZVY19JWQGVY54",
+  "ts": "2026-05-31T07:07:29.656Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ41",
+    "commentId": "01KT3SXZQJ90VE2CP0GD8W915W",
+    "author": "claude",
+    "body": "Prioritized. Implementing FR-110 (registration) + FR-111 (gateway subscribe/snapshot/tenant-scoped delta fan-out) together on feat/projection-delta-push (interdependent, both touch server.ts/gateway). FR-112 native-SDK parity deferred (backlog)."
+  }
+}

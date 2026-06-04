@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVS1AWRV9VQRW61E7R5T5YB",
+  "ts": "2026-05-30T06:27:10.360Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0Y",
+    "number": 10,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "Push notifications completeness: Web Push public surface, encrypted payloads, key rotation",
+    "description": "APNs + FCM are exported/documented; Web Push and rotation are incomplete.\n\n- Web Push adapter validates PushSubscription JSON but isn't exported via @frick/server, and `frick tenants set-push` doesn't write VAPID creds (push-adapters.md:13; status.md:81-83).\n- Web Push deliberately sends an empty body — encrypted Web Push payloads (AES-128-GCM envelope) are follow-up (push-adapters.md:62).\n- Push credential rotation requires re-saving every tenant's creds; no multi-key overlap/decryption window (push-adapters.md:77).\n\nTarget: documented Web Push adapter + CLI provisioning, encrypted payloads, zero-downtime multi-key rotation.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

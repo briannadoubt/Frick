@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KSYHJQKS5F3P1NN64SRCXWRG",
+  "ts": "2026-05-31T08:14:35.129Z",
+  "actor": "migration",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ45",
+    "field": "branch",
+    "value": "feat/export-extension-types"
+  }
+}

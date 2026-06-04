@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSYD7JWCMG4BDNZECSWWVQ9D",
+  "ts": "2026-05-31T06:58:35.532Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3K",
+    "commentId": "01KT3SXZQJHRH2Y7MQW2BYZE0R",
+    "author": "claude",
+    "body": "feat/design-runtime-context (9a66076): runtime DesignProvider/useDesignContext switching mode/density/brand/icon-pack live via the data-attribute CSS cascade; fixed a real default-context mismatch (was comfortable/lucide, now light/regular/frick/native). typecheck + 57 design tests + verify:generated green. Unmerged."
+  }
+}

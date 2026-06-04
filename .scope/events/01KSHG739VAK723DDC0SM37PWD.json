@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSHG739VAK723DDC0SM37PWD",
+  "ts": "2026-05-26T06:40:37.691Z",
+  "actor": "migration",
+  "kind": "workspace.init",
+  "payload": {
+    "key": "FR",
+    "name": "Frick",
+    "description": "Distributed actor server + Swift client",
+    "overview": ""
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSYC7YFTM8ZGY5823EQ44J03",
+  "ts": "2026-05-31T06:41:18.842Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ40",
+    "commentId": "01KT3SXZQJ43VQVZZYH3YQ9PVK",
+    "author": "claude",
+    "body": "Fixed in main (local) via 60a97bc. NOTE on root cause: the literal premise (verify:generated regenerating stale docs) was NOT reproducible — on clean main 'pnpm verify:generated' exits 0 with zero tracked changes, and no generator/lifecycle hook writes those 7 docs (grep-confirmed). The drift the worktree agents saw was a transient fresh-install/worktree artifact, not generated output. The real, fixable gap matching this bug's title: check-generated-artifacts.ts only diff-checked 9 hardcoded paths, so any generator output outside that list would evade CI. Fix broadens the gate to flag ANY generator-induced tracked-file drift (before/after snapshot of the whole tracked tree). Passes clean on main."
+  }
+}

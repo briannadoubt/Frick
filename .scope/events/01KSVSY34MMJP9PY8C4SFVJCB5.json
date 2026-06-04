@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSY34MMJP9PY8C4SFVJCB5",
+  "ts": "2026-05-30T06:42:52.692Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ26",
+    "number": 50,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Provenance + artifact signing (checksums, generator version)",
+    "description": "Supply-chain provenance for published packages; SLSA later. [hardening:1092-1101]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0W",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

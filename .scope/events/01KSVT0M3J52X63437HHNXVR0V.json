@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVT0M3J52X63437HHNXVR0V",
+  "ts": "2026-05-30T06:44:15.602Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3Y",
+    "number": 106,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Write-region routing + conflict handling",
+    "description": "Route writes to the home region and resolve cross-region conflicts.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ18",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

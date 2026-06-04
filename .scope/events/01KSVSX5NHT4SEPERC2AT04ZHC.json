@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSX5NHT4SEPERC2AT04ZHC",
+  "ts": "2026-05-30T06:42:22.513Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1H",
+    "number": 29,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Unify session TTL + auth-attempt limiter across all providers",
+    "description": "Replace the fixed 30-day provider session lifetime with FRICK_SESSION_TTL_SECONDS and route Apple/Google/email + password-reset through the built-in auth-attempt limiter. [threat-model.md:378-379]",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0S",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

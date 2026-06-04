@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSX6ACXQJX15GPM4CFY4AG",
+  "ts": "2026-05-30T06:42:23.180Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1Q",
+    "number": 35,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Pluggable/configurable password hashing (Argon2/bcrypt) + scrypt migration",
+    "description": "Make the password hasher configurable and migrate existing scrypt hashes lazily on next login. [threat-model.md:344-349]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0S",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSZQYEA6Y4SJMNNM23F8ZT",
+  "ts": "2026-05-30T06:43:46.766Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3D",
+    "number": 89,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Demo cutover to shell (Chat destination + Files/Calls/Admin placeholders)",
+    "description": "Move chat demo into shell across web/iOS/Android. [workspace-shell:111-132]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ14",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSX66XKJQZR1ZCMSRGMXYV",
+  "ts": "2026-05-30T06:42:23.069Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1P",
+    "number": 34,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Admin session revocation API + live disconnect",
+    "description": "Authenticated revocation route that deletes sessions and disconnects affected connected clients. [threat-model.md:38-40]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0S",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

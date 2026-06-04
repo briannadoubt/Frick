@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVS3MBW03RTKNQX6X9XB3AC",
+  "ts": "2026-05-30T06:28:25.596Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1A",
+    "number": 22,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Postgres schema + migration runner parity",
+    "description": "Port apps/server/src/storage/schema.ts and migrations.ts to run on Postgres (frick_migrations ledger, checksums, transactional apply). Match the SQLite schema shape.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0R",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

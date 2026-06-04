@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KT1Z6BY9HHP18KN87T7ZVGTN",
+  "ts": "2026-06-01T16:10:13.321Z",
+  "actor": "codex",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ11",
+    "field": "description",
+    "value": "Follow-up to FR-1 (object-record sharing).\n\nBuilt today: grantee leave-share/self-revocation (`POST /share/grants/:id/leave`) and a narrow read cascade from an object grant to derived primitives keyed by that record id: streams whose `streamId` equals the granted record id and projection rows whose subscribe/read `key` equals the record id. Object subscription snapshots/deltas are also filtered per record.\n\nRemaining gaps: cascade scoping does not cover child records, blobs, jobs, search results, arbitrary app routes, or richer collaborator/product semantics. Authz coverage for the remaining cascade surfaces is still tracked by the open child stories.\n\nTarget: complete the remaining share-derived visibility surfaces without broadening tenant boundaries or relaxing write access unexpectedly."
+  }
+}

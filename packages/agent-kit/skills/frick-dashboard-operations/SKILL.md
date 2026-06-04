@@ -16,4 +16,4 @@ Guidance:
 - Do not create a second operational API for dashboard-only behavior.
 - Preserve JSON output shapes for CLI commands so agents can parse them.
 
-Common commands: `pnpm cli doctor`, `pnpm cli inspect server`, `pnpm dashboard`, `pnpm cli migrate status`, `pnpm cli backup --tenant-id _default --output ./backup.ndjson`, and `pnpm cli dev --profile redpanda --dry-run`.
+Common commands: `pnpm cli doctor`, `pnpm cli inspect server`, `pnpm cli dashboard`, `pnpm cli migrate status`, `pnpm cli backup --tenant-id _default --output ./backup.ndjson`, and `pnpm cli dev --profile redpanda --dry-run`.

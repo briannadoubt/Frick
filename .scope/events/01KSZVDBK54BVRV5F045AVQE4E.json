@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KSZVDBK54BVRV5F045AVQE4E",
+  "ts": "2026-05-31T20:25:39.173Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ48",
+    "number": 116,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Per-record authz + grants on object subscriptions/snapshots",
+    "description": "Object SUBSCRIPTIONS (objects(type)) and their snapshots/deltas are NOT authorized per-record: the gateway delivers all tenant rows of a type to any subscriber, never calling decide()/relaxWithGrants per object. So an app cannot do per-record read visibility (e.g. a customer seeing ONLY their own Vessels/WorkOrders/Invoices) over live sync — a tightening-only policy hook that denies object.read would just break the whole subscription (or be ignored), and the grant mechanism (store.grants.create + relaxWithGrants) only applies to individual reads.\n\nWORK: in the sync delivery path (the object snapshot-on-subscribe + the live object-delta fan-out — NOT in apps/server/src/sync/gateway.ts where the object path doesn't live; find the object subscription delivery), filter each object row per subscriber by the same decide()+relaxWithGrants used for HTTP object reads, so denied rows are omitted from the snapshot and never fanned out. Tenant scoping already applies; this adds the per-record layer. Likely needs the principal on the connection (already present) + a per-object decide call.\n\nACCEPTANCE: with a policy hook denying object.read for a role + grants issued on that principal's own records, a subscriber receives ONLY granted rows in the initial snapshot AND in live deltas; other roles unaffected; pnpm test/typecheck/verify:generated green.\n\nFOUND VIA aquarius-os AQ-63 (per-record customer portal visibility). Sibling of FR-109 (projection push) / FR-114 (server-originated push) — the 'authorize the sync read path' gap.",
+    "status": "todo",
+    "priority": "high",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "aquarius-os",
+      "unblock"
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVS3MPAKQYQQH1Z4189EYS5",
+  "ts": "2026-05-30T06:28:25.930Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1D",
+    "number": 25,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Backup/restore (NDJSON) parity on Postgres",
+    "description": "Ensure frick backup/restore produce identical NDJSON dumps against the Postgres driver (operations.md:638-640 anticipates this). Verify round-trip + cross-driver restore (SQLite dump -> Postgres).",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0R",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSYFPE7FQG6V4FH9Z8XZER59",
+  "ts": "2026-05-31T07:41:39.439Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1J",
+    "commentId": "01KT3SXZQJE2V9QKFA8AC3CWFW",
+    "author": "claude",
+    "body": "Merged + pushed (origin/main @ f21fec6). Generic OIDC provider routing: identityProviders.oidc[], POST /auth/oidc/:providerId/verify, jose JWKS verification (direct or discovery doc), claim mapping, per-provider composite subject, session minted like Google. 21 offline tests; full suite 935 green."
+  }
+}

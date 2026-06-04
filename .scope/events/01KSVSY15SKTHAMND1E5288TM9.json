@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSY15SKTHAMND1E5288TM9",
+  "ts": "2026-05-30T06:42:50.681Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1S",
+    "number": 37,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Thread per-app scoping through read/write paths",
+    "description": "Filter all storage queries + writes by app_id; reject cross-app access. [operations.md:727-730]",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0T",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

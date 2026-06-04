@@ -21,7 +21,8 @@ Frick is a pre-1.0 fullstack realtime framework. The repo contains the canonical
 - Generated drift check: `pnpm verify:generated`
 - Server: `pnpm server` (`http://127.0.0.1:4099`)
 - Web demo: `pnpm web` (`http://127.0.0.1:5173`)
-- Local dashboard: `pnpm dashboard` (`http://127.0.0.1:4299`)
+- Local dashboard: `pnpm cli dashboard` (`http://127.0.0.1:4299`);
+  `pnpm dashboard` is a convenience alias.
 - Swift checks when touching `packages/swift` or `packages/design-swift`: `pnpm swift:test`
 - Android checks when touching `apps/android`: `pnpm android:build`
 

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSRZ42ETNZGAQYW8DPK6KMK0",
+  "ts": "2026-05-29T04:15:48.186Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0P",
+    "number": 2,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Auto-resolve expectedVersion on writeObject to standardize optimistic concurrency",
+    "description": "Today FrickClient.writeObject sends POST without an if-match header when the caller doesn't pass `expectedVersion`. Against types whose schema declares `mergePolicy: \"versionPrecondition\"` (the default for RangerCRM's entire schema), every UPDATE returns 409 storage.conflict. Apps that try to behave as last-write-wins — like RangerCRM's FrickAccountStore.upsert, which is explicitly documented as \"Last-write-wins (no optimistic-concurrency token)\" — silently fail on every edit.\n\nFramework already has the version. `FrickSQLiteStorage.local_objects` carries `version INTEGER NOT NULL` per (type, id), and writeObject already calls `storage.saveObjectData(... version: envelope.version)` after every successful write. The framework just doesn't read it back.\n\n## Proposal\n\n1. Add `func loadObjectVersion(type: String, id: String) throws -> Int?` to the `FrickStorage` protocol, with a `FrickSQLiteStorage` impl that does a single indexed lookup against `local_objects`.\n\n2. In `FrickClient.writeObject`, when the caller passes no `expectedVersion`, transparently resolve one from storage before building the request:\n   ```swift\n   let effectiveExpectedVersion: Int? = expectedVersion\n       ?? (try? storage.loadObjectVersion(type: type, id: id))\n   ```\n\n3. No new policy parameter; no breaking API change. Callers that already pass `expectedVersion` (planning their own optimistic-concurrency) are unaffected. Callers that pass nil (the vast majority — RangerCRM and every store like it) get correct expectedVersion automatically on update, eliminating the spurious 409s.\n\n## Behavior matrix after the change\n\n| Caller        | Object cached locally | Object exists on server | Today                        | After                          |\n|---------------|-----------------------|-------------------------|------------------------------|--------------------------------|\n| passes nil    | no                    | no                      | POST, 201 create             | unchanged                      |\n| passes nil    | no                    | yes                     | POST, **409 conflict**       | POST + if-match: (refetch)…    |\n| passes nil    | yes (we wrote it)     | yes (same version)      | POST, **409 conflict**       | POST + if-match: v, 200 update |\n| passes nil    | yes (stale)           | yes (newer)             | POST, **409 conflict**       | POST + if-match: stale, 409    |\n| passes value  | (anything)            | (anything)              | POST + if-match: v           | unchanged                      |\n\nThe \"cached-stale\" row stays a 409 — that's a true conflict another writer caused, and surfacing it lets the app decide whether to refetch-and-retry or merge. Frame \"we never read this object\" (row 2) the same way for now — it's rare, and the app can add a refetch loop on top if it wants the truly-zero-config experience.\n\n## Why no `onConflict` policy parameter\n\nConsidered adding `.fail` / `.clobber` with `.clobber` doing a refetch-and-retry. Rejected for v1: it conflates \"I want last-write-wins\" with \"I want auto-retry,\" and the right policy varies per app. With auto-resolve in place, apps that want clobber semantics can wrap upsert in a single trivial retry helper (or open a follow-up if a pattern emerges).\n\n## Downstream impact\n\nRangerCRM (`/Users/bri/dev/RangerCRM`): no app changes. Every Frick*Store.upsert immediately starts succeeding on edits. Unblocks RCRM-132/135 verification at the rename step (POST /objects/Account/<id> currently 409s).\n",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": "claude",
+    "labels": []
+  }
+}

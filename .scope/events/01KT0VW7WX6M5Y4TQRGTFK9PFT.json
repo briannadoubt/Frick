@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KT0VW7WX6M5Y4TQRGTFK9PFT",
+  "ts": "2026-06-01T05:53:01.341Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1A",
+    "field": "branch",
+    "value": "feat/fr22-postgres-schema-migrations"
+  }
+}

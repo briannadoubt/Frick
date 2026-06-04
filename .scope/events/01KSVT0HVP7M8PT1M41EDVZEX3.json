@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVT0HVP7M8PT1M41EDVZEX3",
+  "ts": "2026-05-30T06:44:13.302Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3F",
+    "number": 91,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "iOS (SwiftUI) component parity to Phase 1 set",
+    "description": "Bring design-swift to full Phase 1 component coverage. [design-language:151-244]",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ15",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSX63F6WBB8D1VBBGRMQRX",
+  "ts": "2026-05-30T06:42:22.959Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1N",
+    "number": 33,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Refresh-token / short-access-token split",
+    "description": "Introduce refresh + short-lived access tokens, a refresh endpoint, and client refresh logic. [threat-model.md:44-45]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0S",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

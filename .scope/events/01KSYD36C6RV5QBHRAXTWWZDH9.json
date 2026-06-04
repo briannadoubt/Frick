@@ -1,0 +1,24 @@
+{
+  "v": 1,
+  "id": "01KSYD36C6RV5QBHRAXTWWZDH9",
+  "ts": "2026-05-31T06:56:11.654Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ43",
+    "number": 111,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Gateway: projection subscribe + initial snapshot + delta fan-out",
+    "description": "In apps/server/src/sync/gateway.ts, handle the client's existing 'projection' subscribe frame (the TS client already sends it — runtime.ts:463/886). On subscribe: register per-connection interest (mirror object/stream subscription bookkeeping) and immediately deliver an initial snapshot of the projection's current rows as a ProjectionDelta frame (FrameKind 19). Then call store.projections.setDeltaListener(notice => …) ONCE at gateway init and fan each ProjectionDeltaNotice out to connections subscribed to notice.projection, TENANT-SCOPED (only notice.tenantId subscribers). Handle unsubscribe + connection close cleanup. Test: two clients in the same tenant subscribed to a projection both receive a delta after a source write; a different-tenant client does not.",
+    "status": "todo",
+    "priority": "high",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ41",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "aquarius-os"
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSYSV6FQ6AM77J59V4J1JQ",
+  "ts": "2026-05-30T06:43:15.942Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2K",
+    "number": 63,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Ship Resend reference adapter publicly",
+    "description": "Export the Resend adapter (RESEND_API_KEY) as the reference implementation. [operations.md:839-847]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0Z",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

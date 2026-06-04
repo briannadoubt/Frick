@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVT0KH8RYTVQY8BXQXJD2J6",
+  "ts": "2026-05-30T06:44:15.016Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3T",
+    "number": 102,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Dynamic type / text scaling (iOS/Android)",
+    "description": "Honor platform text-scaling settings.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ17",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

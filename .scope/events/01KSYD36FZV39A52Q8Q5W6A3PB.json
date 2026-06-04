@@ -1,0 +1,24 @@
+{
+  "v": 1,
+  "id": "01KSYD36FZV39A52Q8Q5W6A3PB",
+  "ts": "2026-05-31T06:56:11.775Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ44",
+    "number": 112,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Native SDK parity: Swift/Kotlin projection subscribe + delta apply",
+    "description": "Follow-up after the gateway push lands (FR-109). Mirror the TS client's projection subscribe + ProjectionDelta apply in packages/swift and apps/android/frick so native clients can consume live projections too. Regenerate DTOs (pnpm schema:generate) if the frame surface needs it; keep cross-SDK parity per docs/cross-platform-client-contract.md.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ41",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "aquarius-os"
+    ]
+  }
+}

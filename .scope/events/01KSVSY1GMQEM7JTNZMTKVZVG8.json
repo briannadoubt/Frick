@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSY1GMQEM7JTNZMTKVZVG8",
+  "ts": "2026-05-30T06:42:51.028Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1W",
+    "number": 40,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Cross-app / cross-tenant isolation test suite",
+    "description": "Prove no data/handler/job leakage across apps or tenants.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0T",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSY2KD9V5VDK6J2EAXM18G",
+  "ts": "2026-05-30T06:42:52.141Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ22",
+    "number": 46,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Service principals (machine identities, scopes, audit)",
+    "description": "Non-human principals with scoped permissions and audit events. [hardening spec: Security operations]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0V",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

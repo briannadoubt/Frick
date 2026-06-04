@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KSXD33BNXAXVWRBFPTZQAWX3",
+  "ts": "2026-05-30T21:36:54.133Z",
+  "actor": "migration",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2J",
+    "field": "branch",
+    "value": "feat/email-adapter-surface"
+  }
+}

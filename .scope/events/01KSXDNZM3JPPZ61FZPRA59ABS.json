@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KSXDNZM3JPPZ61FZPRA59ABS",
+  "ts": "2026-05-30T21:47:12.899Z",
+  "actor": "migration",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3H",
+    "field": "branch",
+    "value": "feat/design-web-components-fr93"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KSYEHP70D5G8B581VSV6Z3EF",
+  "ts": "2026-05-31T07:21:35.200Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ41",
+    "commentId": "01KT3SXZQJ9EVREFFCFE1VY08Q",
+    "author": "claude",
+    "body": "Done: merged to main + pushed (origin/main @ 65c5d4c). FR-110 (ServerOptions.projections registration + schema-source validation) + FR-111 (gateway projection subscribe -> initial tenant-scoped snapshot + live ProjectionDelta fan-out) shipped. Also fixed a latent bug: upsertObjectWithPolicy (the HTTP PUT /objects + WS ObjectUpsert path) now fires projection + search notifications (previously only the legacy positional method did). End-to-end WS test added; full suite 908 passed; verify:generated clean. No wire/@frick/core change needed. FR-112 (Swift/Kotlin parity) remains the deferred follow-up."
+  }
+}

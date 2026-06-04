@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVS2S942B0CHVZND93GMFSR",
+  "ts": "2026-05-30T06:27:57.860Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ15",
+    "number": 17,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "Design system: cross-platform component parity, token validation, runtime context switching",
+    "description": "From internal/specs/2026-05-09-frick-design-language-framework-design.md. Web has ~45 components (packages/design-web); iOS (packages/design-swift) and Android are partial/stubbed.\n\n- Complete the Phase 1 component set to parity across web (React/CSS), iOS (SwiftUI), Android (Compose): foundation, layout, controls, feedback, identity, communication, data display, date/time, charts (spec:151-244, 315-316).\n- Harden token validation (pnpm design:check): off-scale spacing/radius, invalid density, circular aliases, missing icon maps, contrast failures, raw literals; deterministic generated artifacts that fail builds when stale (spec:247-288).\n- Runtime design context switching — mode/density/brand/icon-pack changeable without restart (spec:84-121, 314).\n\nSize: L.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

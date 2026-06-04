@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KSZXFHTPM7HK6KDAJHGE5M8T",
+  "ts": "2026-05-31T21:01:48.246Z",
+  "actor": "migration",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3M",
+    "field": "branch",
+    "value": "feat/perf-load-harness"
+  }
+}

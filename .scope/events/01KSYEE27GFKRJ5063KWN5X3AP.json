@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KSYEE27GFKRJ5063KWN5X3AP",
+  "ts": "2026-05-31T07:19:36.432Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ46",
+    "number": 114,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Live-push server-originated object/stream writes to gateway subscribers",
+    "description": "Writes made SERVER-SIDE via store.upsertObject / store.appendEvent (from background jobs and app command routes — e.g. a recurring job generating a WorkOrder, or POST /api/workorder/:id/complete) persist to storage + update projections/search, but are NOT broadcast to already-subscribed sync-gateway connections. Connected clients only pick them up via the slower cursor-based catch-up resync (or a full page reload); CLIENT-originated mutations, by contrast, push instantly through the gateway. For the realtime promise, server-originated writes should fan out to subscribers the same way.\n\nREPRO: a @frick/core client subscribed to objects('WorkOrder'); call store.upsertObject(tenantId,'WorkOrder',id,value) from a job/route handler → the client does not receive a live update until it resyncs.\n\nLIKELY FIX: route server-side store mutations through the same broadcast path the gateway uses for client mutations, or have the store emit a change event the SyncGateway subscribes to and fans out (object delta + stream-append frames). Tenant-scope the fan-out.\n\nFOUND VIA aquarius-os: the recurring plan-heartbeat job and the generate-now / complete command routes all require a page refresh before the new WorkOrder / events appear in an open client. Closely related to FR-109 (projection delta-push) — same 'server → live client' fan-out gap, different surface (objects+streams vs projections).",
+    "status": "todo",
+    "priority": "high",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "aquarius-os",
+      "unblock"
+    ]
+  }
+}

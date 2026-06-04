@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVS3MSR2RG87T87X0JWCVJ4",
+  "ts": "2026-05-30T06:28:26.040Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1E",
+    "number": 26,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "CI test matrix on Postgres",
+    "description": "Run the @frick/server test suite against a real Postgres instance in CI (service container), in addition to SQLite. Gate the driver as supported only when green.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0R",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

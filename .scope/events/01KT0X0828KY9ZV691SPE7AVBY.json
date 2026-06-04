@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KT0X0828KY9ZV691SPE7AVBY",
+  "ts": "2026-06-01T06:12:41.160Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ4C",
+    "number": 120,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "FR-23c: Postgres adapter — identity (account, session, password-reset, grant, invitation)",
+    "description": "",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0R",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

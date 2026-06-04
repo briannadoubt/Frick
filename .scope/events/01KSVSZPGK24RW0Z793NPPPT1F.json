@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVSZPGK24RW0Z793NPPPT1F",
+  "ts": "2026-05-30T06:43:45.299Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ38",
+    "number": 84,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Call UI components (CallButton, call surface)",
+    "description": "Design-system call UI; depends on FR-17 components.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ13",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVT0J6K1ZMN5K8MHZ2WBD70",
+  "ts": "2026-05-30T06:44:13.651Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3J",
+    "number": 94,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Token validation hardening (off-scale, circular alias, contrast, drift)",
+    "description": "Expand pnpm design:check and fail builds on stale/invalid tokens. [design-language:247-288]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ15",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

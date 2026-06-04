@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KSVT0KMYFGVDCYV0N0R8SABD",
+  "ts": "2026-05-30T06:44:15.134Z",
+  "actor": "migration",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3V",
+    "number": 103,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Localization hooks (components + error-code messages)",
+    "description": "Localizable component labels and error codes. [hardening:1381-1391]",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ17",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

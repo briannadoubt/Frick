@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KT0M8SQKNNHM5PR7KBFGQEHA",
+  "ts": "2026-06-01T03:40:04.211Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2T",
+    "commentId": "01KT3SXZQJ9Y0CYHF4D8J72V0Y",
+    "author": "claude",
+    "body": "Merged --no-ff (ac49807) + pushed to origin/main @ 6441587. Cascade grants to streams/projections. Branch was committed non-green (missing FrickCascadeGrantLookup imports + test used nonexistent createSchema + harness port/userId bugs); repaired in 289d56f. Impl verified correct (keyless fails closed, cross-tenant 403). Full suite green (1012 passed)."
+  }
+}
