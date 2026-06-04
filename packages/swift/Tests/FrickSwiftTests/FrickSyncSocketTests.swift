@@ -669,4 +669,50 @@ final class FrickSyncSocketTests: XCTestCase {
         await socket.close()
     }
 
+    /// Regression test for RCRM-149: subscriptions must be replayed after a
+    /// reconnect. The server scopes subscriptions per-connection, so a
+    /// reconnected socket that doesn't re-send its subscribe frames looks
+    /// healthy but silently stops receiving deltas — the exact cause of the
+    /// observed unreliable cross-device sync. The initial subscribe frame is
+    /// consumed once (via `pending`) and is NOT re-sent on later reconnects
+    /// without `activeSubscriptions` replay. Pre-fix, the second task received
+    /// only a Hello; post-fix it also receives the object subscribe.
+    func testSubscriptionsReplayedOnReconnect() async throws {
+        let factory = MockWebSocketFactory()
+        let firstTask = MockWebSocketTask()
+        let secondTask = MockWebSocketTask()
+        factory.enqueue(firstTask)
+        factory.enqueue(secondTask)
+
+        let socket = makeSocket(factory: factory) { _ in /* no-op sleep */ }
+
+        await socket.connect()
+        _ = await waitForCondition { firstTask.sentFrameCount >= 1 } // Hello
+
+        // Subscribe on the live connection (Hello already sent → state connected).
+        try await socket.subscribeObject(type: "Account")
+        _ = await waitForCondition { firstTask.sentFrameCount >= 2 } // Hello + subscribe
+
+        // Drop the connection — the socket should reconnect on `secondTask`.
+        firstTask.deliverError(URLError(.networkConnectionLost))
+
+        // The reconnected task must receive BOTH a Hello and a replayed
+        // object subscribe for "Account".
+        let replayed = await waitForCondition {
+            let kinds = secondTask.allSentFrames()
+                .compactMap { try? FrickMsgPackCodec.decodeFrame($0).kind }
+            return kinds.contains(.hello) && kinds.contains(.subscribe)
+        }
+        XCTAssertTrue(replayed, "Reconnected task should receive Hello + replayed subscribe (sent \(secondTask.sentFrameCount))")
+
+        let subFrame = secondTask.allSentFrames()
+            .compactMap { try? FrickMsgPackCodec.decodeFrame($0) }
+            .first { $0.kind == .subscribe }
+        let subMap = try XCTUnwrap(subFrame?.payload.mapValue)
+        XCTAssertEqual(subMap["kind"]?.stringValue, "object")
+        XCTAssertEqual(subMap["name"]?.stringValue, "Account")
+
+        await socket.close()
+    }
+
 }

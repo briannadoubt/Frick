@@ -748,6 +748,14 @@ public actor FrickSyncSocket {
     private var pending: [PendingSocketAppend] = []
     private var pendingResponders: [String: CheckedContinuation<Int?, Error>] = [:]
 
+    /// Subscribe frames keyed by a stable subscription identity, retained so
+    /// they can be replayed after a reconnect. The server tracks
+    /// subscriptions per-connection, so a reconnected socket that doesn't
+    /// re-send these looks healthy but silently receives no deltas. Unlike
+    /// `pending` (a consume-once outbound buffer that `flushPending()` drains
+    /// and clears), this map persists for the life of the socket.
+    private var activeSubscriptions: [String: FrickFrame] = [:]
+
     private var statusValue: FrickSyncStatus = .initial
     private var statusContinuations: [UUID: AsyncStream<FrickSyncStatus>.Continuation] = [:]
     private var eventContinuation: AsyncThrowingStream<FrickInboundEvent, Error>.Continuation?
@@ -847,6 +855,8 @@ public actor FrickSyncSocket {
             (.string("name"), .string(stream)),
             (.string("key"), .string(key)),
         ]))
+        activeSubscriptions["stream:\(stream):\(key)"] = frame
+
         try await sendFrame(frame)
     }
 
@@ -861,6 +871,8 @@ public actor FrickSyncSocket {
             (.string("name"), .string(name)),
             (.string("key"), .string(key)),
         ]))
+        activeSubscriptions["presence:\(name):\(key)"] = frame
+
         try await sendFrame(frame)
     }
 
@@ -895,6 +907,8 @@ public actor FrickSyncSocket {
             (.string("kind"), .string("projection")),
             (.string("name"), .string(name)),
         ]))
+        activeSubscriptions["projection:\(name)"] = frame
+
         try await sendFrame(frame)
     }
 
@@ -911,6 +925,8 @@ public actor FrickSyncSocket {
             (.string("kind"), .string("object")),
             (.string("name"), .string(type)),
         ]))
+        activeSubscriptions["object:\(type)"] = frame
+
         try await sendFrame(frame)
     }
 
@@ -1039,6 +1055,21 @@ public actor FrickSyncSocket {
         }
 
         updateStatus { $0.state = .connected }
+
+        // Replay subscriptions so a reconnect restores live delivery. The
+        // server scopes subscriptions to the connection, so without this a
+        // reconnected socket looks healthy but never receives deltas again —
+        // the initial subscribe frame was consumed once via `pending` and is
+        // not buffered for subsequent reconnects.
+        for frame in activeSubscriptions.values {
+            do {
+                try await newTask.send(.data(FrickMsgPackCodec.encodeFrame(frame)))
+            } catch {
+                await handleDisconnect(error: error)
+                return
+            }
+        }
+
         await flushPending()
 
         // Start receive loop.
