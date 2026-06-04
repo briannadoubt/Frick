@@ -73,6 +73,20 @@ git push origin framework-v1.4.0 @fricken/protocol@1.4.0
 
 The `framework-v*` tag is what `scripts/changelog.ts` keys on for the next release. Keep tagging it on every release that ships any TS package so the next changelog has a clean cutover.
 
+## One-click tagging (CI auto-tag)
+
+Instead of hand-crafting the per-platform tags, run the **Release (auto-tag)** workflow (`.github/workflows/release-autotag.yml`) from the Actions tab (or `gh workflow run release-autotag.yml --ref main`) once the `chore(release): vX.Y.Z` commit is on `main`. It:
+
+- reads the release version from `packages/protocol/package.json` (or a `version` input),
+- validates that `apps/android/frick/build.gradle.kts` `frickVersion` is in lockstep,
+- creates and pushes `framework-v<version>`, `swift-v<version>`, and `android-v<version>` (each toggleable; `dry_run` logs without pushing), skipping any tag that already exists.
+
+Those tag pushes trigger the three publish workflows below.
+
+> **Required secret:** `RELEASE_TAG_TOKEN` — a PAT (classic `repo`, or fine-grained with Contents: read & write) for this repo. Tags pushed by the default `GITHUB_TOKEN` do **not** trigger downstream workflows, so without this secret the publish workflows will not fire. To go fully automatic on merge, add a `push: branches: [main]` trigger gated on a `chore(release):` head commit.
+
+You can still tag by hand with the commands in [Tag](#tag) if you prefer.
+
 ## Publishing
 
 TypeScript packages publish from `.github/workflows/publish-npm.yml` when a `framework-v*` tag is pushed. The workflow:
