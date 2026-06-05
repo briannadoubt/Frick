@@ -73,41 +73,53 @@ git push origin framework-v1.4.0 @fricken/protocol@1.4.0
 
 The `framework-v*` tag is what `scripts/changelog.ts` keys on for the next release. Keep tagging it on every release that ships any TS package so the next changelog has a clean cutover.
 
-## Automatic release (the normal path)
+## One-click tagging (CI auto-tag)
 
-Releases are cut by `.github/workflows/release.yml`. When a `chore(release): vX.Y.Z` commit lands on `main`, it runs automatically; you can also trigger it from the Actions tab or `gh workflow run release.yml --ref main` (with an optional `version` input). In one run it:
+Instead of hand-crafting the per-platform tags, run the **Release (auto-tag)** workflow (`.github/workflows/release-autotag.yml`) from the Actions tab (or `gh workflow run release-autotag.yml --ref main`) once the `chore(release): vX.Y.Z` commit is on `main`. It:
 
-- resolves the version from `packages/protocol/package.json` (or the `version` input) and validates it is strict SemVer,
-- verifies `apps/android/frick/build.gradle.kts` `frickVersion` is in lockstep,
-- **calls** the three publish workflows as reusable workflows (`publish-npm.yml`, `publish-swift.yml`, `publish-android.yml`) in the same run, then
-- pushes the marker tags `framework-v<version>`, `swift-v<version>`, `android-v<version>` (with the built-in token; skips any that already exist).
+- reads the release version from `packages/protocol/package.json` (or a `version` input),
+- validates that `apps/android/frick/build.gradle.kts` `frickVersion` is in lockstep,
+- creates and pushes `framework-v<version>`, `swift-v<version>`, and `android-v<version>` (each toggleable; `dry_run` logs without pushing), skipping any tag that already exists.
 
-Because publishing happens in-run, nothing depends on tag-push events — so there is **no tagging PAT**. The whole flow is therefore: bump versions → `chore(release):` commit → merge to `main` → it ships.
+Those tag pushes trigger the three publish workflows below.
 
-### One-time setup: two repository secrets
+> **Required secret:** `RELEASE_TAG_TOKEN` — a PAT (classic `repo`, or fine-grained with Contents: read & write) for this repo. Tags pushed by the default `GITHUB_TOKEN` do **not** trigger downstream workflows, so without this secret the publish workflows will not fire. To go fully automatic on merge, add a `push: branches: [main]` trigger gated on a `chore(release):` head commit.
 
-| Secret | Used by | Notes |
-| --- | --- | --- |
-| `NPM_TOKEN` | npm publish | npm **automation** token with publish rights to the `@fricken/*` packages. setup-node wires it into `.npmrc` as `NODE_AUTH_TOKEN`; publishes still attach `--provenance`. |
-| `SWIFT_MIRROR_TOKEN` | Swift mirror | PAT (classic `repo`, or fine-grained Contents: read & write) scoped to `briannadoubt/FrickSwift`. |
+You can still tag by hand with the commands in [Tag](#tag) if you prefer.
 
-Android publishes to GitHub Packages with the built-in `GITHUB_TOKEN` — no secret needed.
+## Publishing
 
-> Trade-off: this uses a single long-lived `NPM_TOKEN` instead of per-package OIDC trusted publishing, in exchange for zero per-package setup. Rotate the token periodically. To return to trusted publishing, restore the OIDC publish step in `publish-npm.yml` and the corresponding `security-hardening.test.ts` assertions.
+TypeScript packages publish from `.github/workflows/publish-npm.yml` when a `framework-v*` tag is pushed. The workflow:
 
-## Manual / fallback publishing
+- accepts only strict SemVer `framework-v<version>` tags that point at a commit on `origin/main`,
+- has `contents: read` and `id-token: write` permissions only,
+- uses pinned GitHub Actions,
+- runs the same TypeScript/generated-artifact/pack hygiene gates as CI, and
+- packs each missing package with `pnpm pack` so workspace dependencies are rewritten, then publishes that tarball with `npm publish --provenance`.
 
-Each publish workflow still fires on its own pushed tag, so you can publish a single platform by hand: push `framework-v<version>`, `swift-v<version>`, or `android-v<version>` (see [Tag](#tag)). The npm and Android workflows keep their SemVer + `origin/main` ancestor guards on that tag-push path.
+Before the first automated npm release, configure npm trusted publishing for
+each package currently included in the npm workflow (`@fricken/protocol`,
+`@fricken/core`, `@fricken/design`, `@fricken/react`, `@fricken/design-web`,
+`@fricken/devtools`, `@fricken/agent-kit`, `@fricken/mcp`,
+`@fricken/server`) to trust this repository and workflow path. `@fricken/cli`
+has publish metadata and a `frick` bin, but it is not yet in the npm workflow
+package list.
+
+```text
+publish-npm.yml
+```
+
+npm's trusted-publisher form asks for the workflow filename, not the full `.github/workflows/` path. Each public package manifest must include repository metadata for the GitHub repository running the workflow (`git+https://github.com/<owner>/<repo>.git`) plus its workspace directory; the workflow fails before publishing if it does not match. Do not use long-lived `NPM_TOKEN` or `NODE_AUTH_TOKEN` secrets for framework package publishing. For Swift, push the tag — SwiftPM consumers resolve from git. For Android, push the matching `android-v*` tag and let the Android publish workflow release the Maven artifact.
 
 ## Pre-publish sanity checklist
 
-- [ ] `pnpm test` passes locally on a clean checkout of the release commit.
+- [ ] `pnpm test` passes locally on a clean checkout of the tagged commit.
 - [ ] `pnpm typecheck` passes.
 - [ ] `pnpm verify:generated` reports no schema, fixture, or design-token drift.
 - [ ] `pnpm release:dry-run` passes.
-- [ ] `CHANGELOG.md` has a header for the version you are about to release.
-- [ ] Every package being shipped has the intended bumped version; Android `frickVersion` matches the release version.
-- [ ] `NPM_TOKEN` and `SWIFT_MIRROR_TOKEN` secrets exist.
+- [ ] `CHANGELOG.md` has a header for the version you are about to tag.
+- [ ] Every package being shipped has the intended bumped version; Android `build.gradle.kts` versions still match their `android-v*` tags.
+- [ ] npm trusted publishing is configured for every public TypeScript package being shipped.
 - [ ] If `schemaRevision` was bumped, `@fricken/protocol` got at least a minor bump and every other TS package that imports protocol types was rebuilt at least once.
 - [ ] Deprecated APIs being removed in this release were marked deprecated at least one full minor ago.
 
