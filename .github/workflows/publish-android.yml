@@ -48,9 +48,10 @@ jobs:
           fi
 
       - name: Install pnpm
+        # No `version:` here — it reads the pinned `packageManager` (pnpm@10.0.0)
+        # from package.json. Specifying a different value (e.g. `10`) trips
+        # ERR_PNPM_BAD_PM_VERSION ("Multiple versions of pnpm specified").
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # pnpm/action-setup@v4
-        with:
-          version: 10
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # actions/setup-node@v4
         with:

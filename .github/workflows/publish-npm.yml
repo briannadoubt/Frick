@@ -161,15 +161,10 @@ jobs:
             echo "Packing ${name}@${version}"
             pack_dir="$(mktemp -d)"
             pack_json="$(pnpm --dir "${package_dir}" pack --pack-destination "${pack_dir}" --json)"
-            tarball="$(PACK_JSON="${pack_json}" node --input-type=module <<'NODE'
-            const parsed = JSON.parse(process.env.PACK_JSON ?? "[]");
-            const entry = Array.isArray(parsed) ? parsed[0] : parsed;
-            if (!entry?.filename) {
-              throw new Error("pnpm pack did not return a tarball filename");
-            }
-            process.stdout.write(entry.filename);
-            NODE
-            )"
+            # node -e (not a heredoc): this runs inside the for-loop, and an
+            # indented `<<'NODE'` terminator is not recognized at column 0, so a
+            # heredoc here fails with "unexpected EOF" on bash 5.x.
+            tarball="$(PACK_JSON="${pack_json}" node -e 'const parsed = JSON.parse(process.env.PACK_JSON ?? "[]"); const entry = Array.isArray(parsed) ? parsed[0] : parsed; if (!entry?.filename) { throw new Error("pnpm pack did not return a tarball filename"); } process.stdout.write(entry.filename);')"
 
             echo "Publishing ${name}@${version}"
             npm publish "${tarball}" --provenance --access public

@@ -34,6 +34,11 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # actions/checkout@v4
         with:
           fetch-depth: 0
+          # Don't persist the built-in GITHUB_TOKEN as a github.com credential
+          # header — it would override the SWIFT_MIRROR_TOKEN embedded in the
+          # mirror push URL and the push would auth as github-actions[bot]
+          # (Permission denied / 403 to the FrickSwift repo).
+          persist-credentials: false
 
       - name: Verify Swift release tag
         shell: bash
