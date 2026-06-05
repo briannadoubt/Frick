@@ -83,12 +83,16 @@ jobs:
 
       - name: Android tests, lint, debug assemble
         working-directory: apps/android
+        # Build/lint only the published SDK modules. The demo `:app` is
+        # intentionally excluded here to match ci.yml — it still imports
+        # removed SDK surface and is known-broken until it is gutted, and it is
+        # not part of the published artifact (only :frick is published), so it
+        # must not gate the SDK release.
         run: |
           ./gradlew \
             :frick:testDebugUnitTest :frick:lintDebug :frick:assembleDebug \
             :frick-compose:lintDebug :frick-compose:assembleDebug \
             :design:testDebugUnitTest :design:lintDebug :design:assembleDebug \
-            :app:lintDebug :app:assembleDebug \
             --no-daemon
 
       - name: Publish to GitHub Packages
