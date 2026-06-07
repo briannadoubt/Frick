@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGBM5NG0T3J4XT1ABMHKBE6",
+  "ts": "2026-06-07T06:16:50.608Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTG6GQX3D64EHBZ8H2S80RC2",
+    "commentId": "01KTGBM5NG0T3J4XT1ABMHKBE5",
+    "author": "claude",
+    "body": "Shipped sniffImageFormat + imageBlobProcessor factory (DEFAULT_MAX_IMAGE_BYTES 10MiB) exported from @fricken/server index. 9 tests in image-blob-processor.test.ts; full server suite 752 green. Zavro/aquariusyacht can replace its local sniffImageFormat + imageBlobProcessor with the framework ones."
+  }
+}
