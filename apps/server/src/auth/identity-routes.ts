@@ -114,6 +114,42 @@ export interface IdentityProvidersConfig {
    * fully offline. Production code leaves this undefined.
    */
   oidcVerifyOverrides?: Record<string, Pick<VerifyOidcOptions, "jwksOverride" | "discoveryOverride">>;
+
+  /**
+   * Opt-in refresh-token / short-access-token split (FR-33). When set, every
+   * provider sign-in (apple/google/oidc/email) additionally mints a long-lived
+   * refresh token alongside the session, and the session itself is issued with
+   * the short {@link RefreshProviderConfig.accessTokenTtlSeconds} lifetime
+   * instead of the single configured session TTL. Clients exchange the refresh
+   * token at `POST /auth/refresh` for a fresh access token (a new session),
+   * optionally rotating the refresh token, and revoke it at
+   * `POST /auth/refresh/revoke`.
+   *
+   * Backward compatible: when omitted, sign-ins behave exactly as before (a
+   * single session token at the configured TTL, no refresh token, and the
+   * `/auth/refresh*` routes return 404).
+   */
+  refresh?: RefreshProviderConfig;
+}
+
+export interface RefreshProviderConfig {
+  /**
+   * Lifetime, in seconds, of the short-lived access token (session) minted on
+   * sign-in and at every refresh. Defaults to 900 (15 minutes).
+   */
+  accessTokenTtlSeconds?: number;
+  /**
+   * Lifetime, in seconds, of the long-lived refresh token. Defaults to
+   * 2,592,000 (30 days).
+   */
+  refreshTokenTtlSeconds?: number;
+  /**
+   * When true (the default), `POST /auth/refresh` rotates the refresh token —
+   * the presented token is revoked and a fresh one is returned alongside the
+   * new access token. When false, the presented refresh token is reused and
+   * only a new access token is returned.
+   */
+  rotateOnRefresh?: boolean;
 }
 
 export interface AppleProviderConfig {
@@ -325,6 +361,22 @@ export interface IdentityRouterOptions {
 /** Fallback TTL when no `sessionTtlSeconds` is supplied (legacy 30 days). */
 const FALLBACK_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 
+/** Default short access-token (session) lifetime when refresh is enabled. */
+const DEFAULT_ACCESS_TOKEN_TTL_SECONDS = 15 * 60; // 15 minutes
+/** Default long refresh-token lifetime when refresh is enabled. */
+const DEFAULT_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
+
+/**
+ * Refresh config resolved to concrete TTLs. Present only when the app opted
+ * into the FR-33 split via `identityProviders.refresh`; otherwise undefined and
+ * every sign-in keeps its legacy single-session behavior.
+ */
+interface ResolvedRefresh {
+  accessTokenTtlSeconds: number;
+  refreshTokenTtlSeconds: number;
+  rotateOnRefresh: boolean;
+}
+
 interface ResolvedUserObject {
   type: string;
   appleSubjectField: string;
@@ -411,6 +463,54 @@ export function createIdentityRouter(
   // configured `FRICK_SESSION_TTL_SECONDS`; only falls back to the legacy
   // 30-day value when a caller constructs the router without passing it.
   const sessionTtlSeconds = options.sessionTtlSeconds ?? FALLBACK_SESSION_TTL_SECONDS;
+
+  // FR-33: opt-in refresh / short-access-token split. Resolved once; when
+  // present, sign-ins mint a refresh token + short access session and the
+  // `/auth/refresh*` routes come online. When absent, everything below behaves
+  // exactly as it did before this ticket.
+  const refresh: ResolvedRefresh | undefined = options.config.refresh
+    ? {
+        accessTokenTtlSeconds:
+          options.config.refresh.accessTokenTtlSeconds ?? DEFAULT_ACCESS_TOKEN_TTL_SECONDS,
+        refreshTokenTtlSeconds:
+          options.config.refresh.refreshTokenTtlSeconds ?? DEFAULT_REFRESH_TOKEN_TTL_SECONDS,
+        rotateOnRefresh: options.config.refresh.rotateOnRefresh ?? true,
+      }
+    : undefined;
+
+  // Effective session (access-token) lifetime. With the refresh split enabled
+  // the session is the SHORT access token; otherwise it keeps the single
+  // configured session TTL.
+  const accessTtlSeconds = refresh ? refresh.accessTokenTtlSeconds : sessionTtlSeconds;
+
+  /**
+   * Build the JSON body for a successful sign-in. When the refresh split is
+   * enabled, mints a refresh token bound to the same `(tenant, user, device,
+   * replica)` as the session and attaches `refreshToken` /
+   * `refreshTokenExpiresAt` to the response. Without it, the body is identical
+   * to the pre-FR-33 shape.
+   */
+  async function buildSessionResponse(
+    session: MintedSession,
+    extra: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const body: Record<string, unknown> = {
+      session: toFrickSessionShape(session, options.store.schema.hash),
+      ...extra,
+    };
+    if (refresh) {
+      const issued = await options.store.refreshTokens.issue({
+        tenantId: session.tenantId,
+        userId: session.userId,
+        deviceId: session.deviceId,
+        replicaId: session.replicaId,
+        ttlSeconds: refresh.refreshTokenTtlSeconds,
+      });
+      body.refreshToken = issued.token;
+      body.refreshTokenExpiresAt = issued.expiresAt;
+    }
+    return body;
+  }
 
   // FR-29: shared auth-attempt throttle. Provider-verify and password-reset
   // endpoints run through the same limiter `/auth/login` uses, so an attacker
@@ -508,7 +608,7 @@ export function createIdentityRouter(
         await findPrimaryTenantForUser(options.store, existing.id as string);
       const session = await mintSession({
         store: options.store,
-        sessionTtlSeconds,
+        sessionTtlSeconds: accessTtlSeconds,
         userId: existing.id as string,
         tenantId: primaryTenantId,
         displayName: (existing[userObject.displayNameField] as string) ?? "Crate user",
@@ -520,11 +620,10 @@ export function createIdentityRouter(
         userId: existing.id,
         tenantId: primaryTenantId,
       });
-      sendJson(res, 200, {
-        session: toFrickSessionShape(session, options.store.schema.hash),
+      sendJson(res, 200, await buildSessionResponse(session, {
         user: existing,
         isNewUser: false,
-      });
+      }));
       return;
     }
 
@@ -568,7 +667,7 @@ export function createIdentityRouter(
 
     const session = await mintSession({
       store: options.store,
-      sessionTtlSeconds,
+      sessionTtlSeconds: accessTtlSeconds,
       userId,
       tenantId: hook.tenantId,
       displayName,
@@ -580,11 +679,10 @@ export function createIdentityRouter(
       userId,
       tenantId: hook.tenantId,
     });
-    sendJson(res, 200, {
-      session: toFrickSessionShape(session, options.store.schema.hash),
+    sendJson(res, 200, await buildSessionResponse(session, {
       user: { id: userId, ...userRow },
       isNewUser: true,
-    });
+    }));
   }
 
   async function handleGoogleVerify(
@@ -656,7 +754,7 @@ export function createIdentityRouter(
         await findPrimaryTenantForUser(options.store, existing.id as string);
       const session = await mintSession({
         store: options.store,
-        sessionTtlSeconds,
+        sessionTtlSeconds: accessTtlSeconds,
         userId: existing.id as string,
         tenantId: primaryTenantId,
         displayName: (existing[userObject.displayNameField] as string) ?? "Crate user",
@@ -668,11 +766,10 @@ export function createIdentityRouter(
         userId: existing.id,
         tenantId: primaryTenantId,
       });
-      sendJson(res, 200, {
-        session: toFrickSessionShape(session, options.store.schema.hash),
+      sendJson(res, 200, await buildSessionResponse(session, {
         user: existing,
         isNewUser: false,
-      });
+      }));
       return;
     }
 
@@ -720,7 +817,7 @@ export function createIdentityRouter(
 
     const session = await mintSession({
       store: options.store,
-      sessionTtlSeconds,
+      sessionTtlSeconds: accessTtlSeconds,
       userId,
       tenantId: hook.tenantId,
       displayName,
@@ -732,11 +829,10 @@ export function createIdentityRouter(
       userId,
       tenantId: hook.tenantId,
     });
-    sendJson(res, 200, {
-      session: toFrickSessionShape(session, options.store.schema.hash),
+    sendJson(res, 200, await buildSessionResponse(session, {
       user: { id: userId, ...userRow },
       isNewUser: true,
-    });
+    }));
   }
 
   async function handleOidcVerify(
@@ -824,7 +920,7 @@ export function createIdentityRouter(
         await findPrimaryTenantForUser(options.store, existing.id as string);
       const session = await mintSession({
         store: options.store,
-        sessionTtlSeconds,
+        sessionTtlSeconds: accessTtlSeconds,
         userId: existing.id as string,
         tenantId: primaryTenantId,
         displayName: (existing[userObject.displayNameField] as string) ?? "Crate user",
@@ -837,11 +933,10 @@ export function createIdentityRouter(
         userId: existing.id,
         tenantId: primaryTenantId,
       });
-      sendJson(res, 200, {
-        session: toFrickSessionShape(session, options.store.schema.hash),
+      sendJson(res, 200, await buildSessionResponse(session, {
         user: existing,
         isNewUser: false,
-      });
+      }));
       return;
     }
 
@@ -896,7 +991,7 @@ export function createIdentityRouter(
 
     const session = await mintSession({
       store: options.store,
-      sessionTtlSeconds,
+      sessionTtlSeconds: accessTtlSeconds,
       userId,
       tenantId: hook.tenantId,
       displayName,
@@ -909,11 +1004,10 @@ export function createIdentityRouter(
       userId,
       tenantId: hook.tenantId,
     });
-    sendJson(res, 200, {
-      session: toFrickSessionShape(session, options.store.schema.hash),
+    sendJson(res, 200, await buildSessionResponse(session, {
       user: { id: userId, ...userRow },
       isNewUser: true,
-    });
+    }));
   }
 
   async function handleEmailSignup(
@@ -1015,7 +1109,7 @@ export function createIdentityRouter(
 
     const session = await mintSession({
       store: options.store,
-      sessionTtlSeconds,
+      sessionTtlSeconds: accessTtlSeconds,
       userId,
       tenantId: hook.tenantId,
       displayName,
@@ -1038,11 +1132,10 @@ export function createIdentityRouter(
         log,
       });
     }
-    sendJson(res, 200, {
-      session: toFrickSessionShape(session, options.store.schema.hash),
+    sendJson(res, 200, await buildSessionResponse(session, {
       user: { id: userId, ...userRow },
       isNewUser: true,
-    });
+    }));
   }
 
   async function handleEmailLogin(
@@ -1098,7 +1191,7 @@ export function createIdentityRouter(
 
     const session = await mintSession({
       store: options.store,
-      sessionTtlSeconds,
+      sessionTtlSeconds: accessTtlSeconds,
       userId: user.id,
       tenantId: primaryTenantId,
       displayName: (user[userObject.displayNameField] as string) ?? email,
@@ -1109,11 +1202,10 @@ export function createIdentityRouter(
       userId: user.id,
       tenantId: primaryTenantId,
     });
-    sendJson(res, 200, {
-      session: toFrickSessionShape(session, options.store.schema.hash),
+    sendJson(res, 200, await buildSessionResponse(session, {
       user,
       isNewUser: false,
-    });
+    }));
   }
 
   async function handleAppleNotifications(
@@ -1213,6 +1305,9 @@ export function createIdentityRouter(
           [userObject.revokedAtField]: now,
         });
         const killed = await options.store.deleteSessionsForUser(userId);
+        // FR-33: also revoke any outstanding refresh tokens so a revoked user
+        // can't mint fresh access tokens after their sessions are wiped.
+        await options.store.refreshTokens.revokeForUser(userId);
         if (options.config.onRevoke) {
           try {
             await options.config.onRevoke({
@@ -1417,6 +1512,8 @@ export function createIdentityRouter(
     // Kill outstanding sessions on a successful reset — common pattern
     // to invalidate cookies/JWTs an attacker might have squirreled away.
     await options.store.deleteSessionsForUser(consumed.userId);
+    // FR-33: and any refresh tokens, so a reset fully cuts off prior credentials.
+    await options.store.refreshTokens.revokeForUser(consumed.userId);
     log.info("auth.email.password_reset_completed", {
       event: "auth.email.password_reset_completed",
       userId: consumed.userId,
@@ -1428,6 +1525,120 @@ export function createIdentityRouter(
       outcome: "allow",
       detail: { tenantId: consumed.tenantId },
     });
+    sendJson(res, 200, { ok: true });
+  }
+
+  // FR-33: exchange a valid refresh token for a fresh short-lived access token
+  // (a new session). Optionally rotates the refresh token (the default), in
+  // which case the presented token is revoked and a fresh one is returned.
+  async function handleRefresh(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    if (!refresh) {
+      sendJson(res, 404, { error: "refresh_not_configured" });
+      return;
+    }
+    // Throttle by IP — the refresh token isn't a stable per-user identifier we
+    // want to log, and a stolen token is the threat we're bounding here.
+    if (throttled({ req, res, route: "refresh", identifier: "" })) return;
+    let body: { refreshToken?: unknown };
+    try {
+      body = (await readJsonBody(req)) as typeof body;
+    } catch {
+      sendJson(res, 400, { error: "invalid_json" });
+      return;
+    }
+    const refreshToken = typeof body.refreshToken === "string" ? body.refreshToken : "";
+    if (!refreshToken) {
+      sendJson(res, 400, { error: "refreshToken required" });
+      return;
+    }
+
+    // Resolve (and optionally rotate) the refresh token. Rotation revokes the
+    // presented token and issues a fresh one atomically, so a replayed token is
+    // rejected on its second use.
+    let record: { tenantId: string; userId: string; deviceId: string; replicaId: string };
+    let nextRefreshToken: string | undefined;
+    let nextRefreshExpiresAt: string | undefined;
+    if (refresh.rotateOnRefresh) {
+      const rotated = await options.store.refreshTokens.rotate(
+        refreshToken,
+        refresh.refreshTokenTtlSeconds,
+      );
+      if (!rotated) {
+        sendJson(res, 401, { error: "invalid_refresh_token" });
+        return;
+      }
+      record = rotated;
+      nextRefreshToken = rotated.token;
+      nextRefreshExpiresAt = rotated.expiresAt;
+    } else {
+      const active = await options.store.refreshTokens.readActive(refreshToken);
+      if (!active) {
+        sendJson(res, 401, { error: "invalid_refresh_token" });
+        return;
+      }
+      record = active;
+    }
+
+    // Refuse to mint an access token for a user whose account no longer exists
+    // (e.g. deleted between issuance and refresh).
+    if (!(await options.store.hasUser(record.tenantId, record.userId))) {
+      sendJson(res, 401, { error: "invalid_refresh_token" });
+      return;
+    }
+
+    const session = await mintSession({
+      store: options.store,
+      sessionTtlSeconds: accessTtlSeconds,
+      userId: record.userId,
+      tenantId: record.tenantId,
+      displayName: record.userId,
+      deviceId: record.deviceId,
+      replicaId: record.replicaId,
+      skipAccountCreate: true,
+    });
+    log.info("auth.refresh.exchanged", {
+      event: "auth.refresh.exchanged",
+      userId: record.userId,
+      tenantId: record.tenantId,
+      rotated: refresh.rotateOnRefresh,
+    });
+    const responseBody: Record<string, unknown> = {
+      session: toFrickSessionShape(session, options.store.schema.hash),
+    };
+    if (nextRefreshToken && nextRefreshExpiresAt) {
+      responseBody.refreshToken = nextRefreshToken;
+      responseBody.refreshTokenExpiresAt = nextRefreshExpiresAt;
+    }
+    sendJson(res, 200, responseBody);
+  }
+
+  // FR-33: revoke a refresh token so it can no longer be exchanged. Idempotent
+  // — an unknown or already-revoked token still returns 200 so a client can't
+  // probe which tokens are live.
+  async function handleRefreshRevoke(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    if (!refresh) {
+      sendJson(res, 404, { error: "refresh_not_configured" });
+      return;
+    }
+    let body: { refreshToken?: unknown };
+    try {
+      body = (await readJsonBody(req)) as typeof body;
+    } catch {
+      sendJson(res, 400, { error: "invalid_json" });
+      return;
+    }
+    const refreshToken = typeof body.refreshToken === "string" ? body.refreshToken : "";
+    if (!refreshToken) {
+      sendJson(res, 400, { error: "refreshToken required" });
+      return;
+    }
+    await options.store.refreshTokens.revoke(refreshToken);
     sendJson(res, 200, { ok: true });
   }
 
@@ -1460,6 +1671,14 @@ export function createIdentityRouter(
       }
       if (req.method === "POST" && url.pathname === "/auth/google/verify") {
         await handleGoogleVerify(req, res);
+        return true;
+      }
+      if (req.method === "POST" && url.pathname === "/auth/refresh") {
+        await handleRefresh(req, res);
+        return true;
+      }
+      if (req.method === "POST" && url.pathname === "/auth/refresh/revoke") {
+        await handleRefreshRevoke(req, res);
         return true;
       }
       // Generic OIDC: /auth/oidc/:providerId/verify

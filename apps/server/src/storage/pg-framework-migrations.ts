@@ -615,6 +615,27 @@ export const FRAMEWORK_MIGRATIONS_PG: readonly FrameworkMigration[] = [
         ON grants (tenant_id, record_type, record_id, grantee_user_id);
     `,
   },
+  {
+    // FR-33: opt-in refresh tokens for the refresh/access-token split. See the
+    // SQLite migration for the full rationale.
+    id: "0018_refresh_tokens",
+    schemaRevision: 1,
+    description: "Opt-in refresh tokens (hashed) for the refresh/access-token split (FR-33).",
+    sql: `
+      CREATE TABLE IF NOT EXISTS auth_refresh_tokens (
+        token_hash TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        replica_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        revoked_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_refresh_tokens_by_user
+        ON auth_refresh_tokens (tenant_id, user_id, expires_at DESC);
+    `,
+  },
 ];
 
 /** Names of all framework tables the Postgres runner manages. Used by dev-reset. */
@@ -645,4 +666,5 @@ export const FRAMEWORK_TABLES_PG: readonly string[] = [
   "auth_password_reset_tokens",
   "invitations",
   "grants",
+  "auth_refresh_tokens",
 ];

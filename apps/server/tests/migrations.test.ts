@@ -71,6 +71,7 @@ describe("framework migration runner", () => {
       "0015_analytics_aggregates",
       "0016_password_reset_tokens",
       "0017_sharing",
+      "0018_refresh_tokens",
     ]);
     expect(result.applied[0]?.schemaRevision).toBe(1);
     expect(result.applied[0]?.checksum).toMatch(/^sha256-[0-9a-f]{64}$/);
@@ -95,6 +96,7 @@ describe("framework migration runner", () => {
       "0015_analytics_aggregates",
       "0016_password_reset_tokens",
       "0017_sharing",
+      "0018_refresh_tokens",
     ]);
 
     const tables = listTables(db);
@@ -116,10 +118,10 @@ describe("framework migration runner", () => {
       supportedSchemaRevision: foundationSchema.schemaRevision,
     });
 
-    expect(first.applied).toHaveLength(17);
+    expect(first.applied).toHaveLength(18);
     expect(second.applied).toHaveLength(0);
-    expect(second.alreadyApplied).toHaveLength(17);
-    expect(listAppliedMigrations(db)).toHaveLength(17);
+    expect(second.alreadyApplied).toHaveLength(18);
+    expect(listAppliedMigrations(db)).toHaveLength(18);
 
     db.close();
   });
@@ -258,6 +260,7 @@ describe("framework migration runner", () => {
       "0015_analytics_aggregates",
       "0016_password_reset_tokens",
       "0017_sharing",
+      "0018_refresh_tokens",
       "9000_test_extra",
     ]);
     expect(listTables(db)).toContain("test_extra");

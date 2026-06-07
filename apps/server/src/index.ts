@@ -202,6 +202,7 @@ export {
   type EmailWelcomeConfig,
   type PasswordResetRequest,
   type GoogleProviderConfig,
+  type RefreshProviderConfig,
   type UserObjectMapping,
   type OnFirstSignIn,
   type OnFirstSignInInput,

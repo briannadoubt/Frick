@@ -820,6 +820,30 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
         ON grants (tenant_id, record_type, record_id, grantee_user_id);
     `,
   },
+  {
+    // FR-33: opt-in refresh-token / short-access-token split. A refresh token
+    // is a long-lived opaque credential (only its SHA-256 hash is stored) that
+    // the client exchanges at POST /auth/refresh for a fresh short-lived access
+    // token (a regular auth_sessions row). `revoked_at` supports single-token
+    // and per-user revocation plus rotation (rotate = revoke old + issue new).
+    id: "0018_refresh_tokens",
+    schemaRevision: 1,
+    description: "Opt-in refresh tokens (hashed) for the refresh/access-token split (FR-33).",
+    sql: `
+      CREATE TABLE IF NOT EXISTS auth_refresh_tokens (
+        token_hash TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        replica_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        revoked_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_refresh_tokens_by_user
+        ON auth_refresh_tokens (tenant_id, user_id, expires_at DESC);
+    `,
+  },
 ];
 
 /** Names of all framework tables (and indexes) the runner manages. Used by the
@@ -853,6 +877,7 @@ export const FRAMEWORK_TABLES: readonly string[] = [
   "auth_password_reset_tokens",
   "invitations",
   "grants",
+  "auth_refresh_tokens",
 ];
 
 export interface MigrationRunResult {
