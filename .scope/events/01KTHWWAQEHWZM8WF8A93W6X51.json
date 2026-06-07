@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTHWWAQEHWZM8WF8A93W6X51",
+  "ts": "2026-06-07T20:37:38.158Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1G",
+    "commentId": "01KTHWWAQEHWZM8WF8A93W6X50",
+    "author": "claude",
+    "body": "DONE (commit bb19c3b): job + platform-event claim subqueries use FOR UPDATE SKIP LOCKED on Postgres so concurrent worker nodes take disjoint rows (SQLite omits it — single-connection serialization). Fixed a latent PG gap: JobStore.enqueue now INSERT…RETURNING id (lastInsertRowid was 0 on PG). Validated on real Postgres: tests/pg-job-claim-concurrency.test.ts — 8 concurrent claimers / 60 jobs, each claimed exactly once. Projections need no locking (idempotent per-tenant recomputation). Server suite 784 green."
+  }
+}
