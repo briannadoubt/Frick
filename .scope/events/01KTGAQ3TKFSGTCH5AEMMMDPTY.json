@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTGAQ3TKFSGTCH5AEMMMDPTY",
+  "ts": "2026-06-07T06:00:58.451Z",
+  "actor": "unknown",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTGAQ3TKFSGTCH5AEMMMDPTX",
+    "number": 144,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Native SDKs honor Delta.removed directly (drop rows without refetch)",
+    "description": "",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ47",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGAQ3Y3MV2ZC5ERN2YF955Q",
+  "ts": "2026-06-07T06:00:58.563Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTG9BWY3WPEVR56EHJ1E9XG8",
+    "commentId": "01KTGAQ3Y3MV2ZC5ERN2YF955P",
+    "author": "claude",
+    "body": "Follow-up filed for native SDKs to consume the new Delta.removed list directly instead of refetching on the tombstone record. RangerCRM should delete server/patches/@fricken+server+0.1.1.patch (delete fan-out portion) once it bumps to a build with FR-142."
+  }
+}

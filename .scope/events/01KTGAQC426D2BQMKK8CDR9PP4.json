@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTGAQC426D2BQMKK8CDR9PP4",
+  "ts": "2026-06-07T06:01:06.946Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTGAQ3TKFSGTCH5AEMMMDPTX",
+    "field": "description",
+    "value": "FR-142 made the server emit object deletes over the sync gateway as a Delta frame carrying BOTH a back-compat tombstone object record (the current Swift/Android SDKs refetch on any object delta and drop the now-absent row) AND a new optional `removed: { type, id }[]` list on DeltaPayload.\n\nThis story: have the Swift (FrickSyncSocket) and Kotlin SDKs consume `removed` directly — drop those (type,id) rows from the local cache and surface them to observers — instead of triggering a full refetch on the tombstone. Cheaper (no round-trip), and correct even when the deleted type isn't otherwise being refetched.\n\n- Decode the optional `removed` field from the Delta payload in each SDK's frame decoder.\n- Apply removals to the local object store + emit an objectsDelta/observation so SwiftUI/Compose drop the row.\n- Keep the tombstone-refetch path as fallback for servers that predate FR-142.\n- Tests per platform: subscribe, receive a Delta with `removed`, assert the row is dropped without a network refetch."
+  }
+}
