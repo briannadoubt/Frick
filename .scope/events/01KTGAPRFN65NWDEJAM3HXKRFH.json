@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGAPRFN65NWDEJAM3HXKRFH",
+  "ts": "2026-06-07T06:00:46.837Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTG9BWY3WPEVR56EHJ1E9XG8",
+    "commentId": "01KTGAPRFN65NWDEJAM3HXKRFG",
+    "author": "claude",
+    "body": "Shipped: store objectDelete write-event + gateway publishObjectDeletes (tombstone record for current SDK refetch + additive removed:{type,id}[] list on DeltaPayload), tenant-scoped, cluster-bus objectDeletes envelope for multi-node. New tests/object-delete-broadcast.test.ts (3 cases). Full server suite 731 green, protocol 79 green. Retires RangerCRM dist patch."
+  }
+}

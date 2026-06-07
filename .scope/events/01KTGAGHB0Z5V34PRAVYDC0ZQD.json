@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTGAGHB0Z5V34PRAVYDC0ZQD",
+  "ts": "2026-06-07T05:57:22.912Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTG9BWY3WPEVR56EHJ1E9XG8",
+    "field": "branch",
+    "value": "feat/fr142-broadcast-object-deletes"
+  }
+}
