@@ -1002,6 +1002,15 @@ When `adminEnabled` is on:
   A request naming neither target returns `400 sync.protocolError`. Audit-logged
   as `sessions.revoke`.
 
+Separately, **expired** `auth_sessions` rows are now swept automatically. They
+were always filtered out on read, but nothing deleted them, so the table grew
+unbounded. The store runs an expired-session prune once at startup and then on a
+15-minute background timer (alongside the `idempotency_keys`, `devtools_events`,
+and `platform_events` prune passes). A session is eligible the moment it expires;
+embedders can keep a forensics grace window via
+`createFrickServer({ expiredSessionRetentionGraceMs })` or disable the timer with
+`expiredSessionPruneIntervalMs: 0` (the one-shot at startup still runs).
+
 Both routes audit-log under `backup.dump` and `backup.restore`. These
 backup and restore audit writes are fail-closed: if the audit row cannot be
 recorded, the admin action is rejected instead of silently continuing.

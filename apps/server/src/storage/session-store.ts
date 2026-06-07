@@ -125,6 +125,21 @@ export class SessionStore {
       .prepare("DELETE FROM auth_sessions WHERE user_id = ?")
       .run(userId).changes as number;
   }
+
+  /**
+   * Delete sessions whose `expires_at` is at or before `cutoffIso`. Expired
+   * rows are already dead — `readActive` never returns them — but nothing
+   * removed them, so the table grew unbounded. A background retention pass
+   * sweeps them (FR-42). Returns the number of rows removed.
+   *
+   * `cutoffIso` is usually `now` (delete everything already expired); pass a
+   * timestamp in the past to keep a grace window of recently-expired rows.
+   */
+  pruneExpired(cutoffIso: string = new Date().toISOString()): number {
+    return this.db
+      .prepare("DELETE FROM auth_sessions WHERE expires_at <= ?")
+      .run(cutoffIso).changes as number;
+  }
 }
 
 function fromRow(row: SessionRow, sessionToken: string): StoredSession {

@@ -88,6 +88,14 @@ export const DEFAULT_IDEMPOTENCY_KEY_RETENTION_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_IDEMPOTENCY_KEY_MAX_ROWS = 100_000;
 /** Default interval between background prune passes: 15 minutes. */
 export const DEFAULT_IDEMPOTENCY_KEY_PRUNE_INTERVAL_MS = 15 * 60 * 1000;
+/** Default interval between background expired-session prune passes: 15 minutes. */
+export const DEFAULT_EXPIRED_SESSION_PRUNE_INTERVAL_MS = 15 * 60 * 1000;
+/**
+ * Default grace period kept before an expired session row is pruned: 0, i.e.
+ * a session is eligible the moment it expires (it is already unusable). Raise
+ * it to retain recently-expired rows for a window (e.g. forensics).
+ */
+export const DEFAULT_EXPIRED_SESSION_RETENTION_GRACE_MS = 0;
 /**
  * Default replay window for `requestId` idempotency: 24 hours. Enforced at
  * lookup time so a requestId whose record is older than the window is no longer
@@ -213,6 +221,18 @@ export interface StoreOptions {
    * disable the timer (prune still runs once at construction).
    */
   platformEventsPruneIntervalMs?: number;
+  /**
+   * Grace period kept before an expired `auth_sessions` row is pruned.
+   * Defaults to {@link DEFAULT_EXPIRED_SESSION_RETENTION_GRACE_MS} (0 — prune
+   * as soon as a session expires, since it is already unusable).
+   */
+  expiredSessionRetentionGraceMs?: number;
+  /**
+   * Interval between background expired-session prune passes. Defaults to
+   * {@link DEFAULT_EXPIRED_SESSION_PRUNE_INTERVAL_MS} (15 min). Set to `0` to
+   * disable the timer (prune still runs once at construction).
+   */
+  expiredSessionPruneIntervalMs?: number;
 }
 
 /**
@@ -309,6 +329,8 @@ export class FrickStore {
   #pruneTimer: ReturnType<typeof setInterval> | undefined;
   #devtoolsPruneTimer: ReturnType<typeof setInterval> | undefined;
   #platformEventsPruneTimer: ReturnType<typeof setInterval> | undefined;
+  #expiredSessionPruneTimer: ReturnType<typeof setInterval> | undefined;
+  #expiredSessionGraceMs = DEFAULT_EXPIRED_SESSION_RETENTION_GRACE_MS;
   #closed = false;
   /**
    * Single optional consumer of object-upsert / stream-append change events,
@@ -421,6 +443,22 @@ export class FrickStore {
       );
       this.#platformEventsPruneTimer.unref?.();
     }
+
+    // Expired-session retention. `auth_sessions` rows are filtered by expiry
+    // on read but were never deleted, so the table grew unbounded; sweep them
+    // on the same one-shot-at-boot-then-timer shape as the caches above (FR-42).
+    this.#expiredSessionGraceMs =
+      options.expiredSessionRetentionGraceMs ?? DEFAULT_EXPIRED_SESSION_RETENTION_GRACE_MS;
+    this.#safeExpiredSessionPrune();
+    const expiredSessionIntervalMs =
+      options.expiredSessionPruneIntervalMs ?? DEFAULT_EXPIRED_SESSION_PRUNE_INTERVAL_MS;
+    if (expiredSessionIntervalMs > 0) {
+      this.#expiredSessionPruneTimer = setInterval(
+        () => this.#safeExpiredSessionPrune(),
+        expiredSessionIntervalMs,
+      );
+      this.#expiredSessionPruneTimer.unref?.();
+    }
   }
 
   close(): void {
@@ -439,6 +477,10 @@ export class FrickStore {
     if (this.#platformEventsPruneTimer) {
       clearInterval(this.#platformEventsPruneTimer);
       this.#platformEventsPruneTimer = undefined;
+    }
+    if (this.#expiredSessionPruneTimer) {
+      clearInterval(this.#expiredSessionPruneTimer);
+      this.#expiredSessionPruneTimer = undefined;
     }
     this.#db.close();
   }
@@ -465,6 +507,22 @@ export class FrickStore {
       // eslint-disable-next-line no-console
       console.warn(
         `[frick] platform_events prune failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  #safeExpiredSessionPrune(): void {
+    if (this.#closed) return;
+    try {
+      const cutoffIso = new Date(Date.now() - this.#expiredSessionGraceMs).toISOString();
+      this.sessions.pruneExpired(cutoffIso);
+    } catch (error) {
+      // Never let a maintenance failure tear down the process.
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[frick] auth_sessions prune failed: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
