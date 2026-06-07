@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGP5ZB69G8W5N12V7BHEJ0E",
+  "ts": "2026-06-07T09:21:19.718Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1C",
+    "commentId": "01KTGP5ZB69G8W5N12V7BHEJ0D",
+    "author": "claude",
+    "body": "Scoped but not started: a Postgres tsvector search adapter first requires async-ifying the FrickSearchAdapter interface (upsert/delete/query are currently sync — they can't wrap async pg), which ripples through store.ts's write-path #notifySearch + the search HTTP route + erase + tests. Part of the same 'port the remaining SQLite-bound subsystems (search/devtools/platform-events/blob-bytes) to async + wire createFrickServer to run on PG' phase. The per-store-family adapters (FR-119-122) are done; this is the next phase."
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTGP3843PPCEGEQPGBQD8GVH",
+  "ts": "2026-06-07T09:19:50.403Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1C",
+    "field": "branch",
+    "value": "feat/fr24-pg-search"
+  }
+}
