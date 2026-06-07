@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJ76ZWF0ZV0SKTGMT61SZ4Z",
+  "ts": "2026-06-07T23:38:13.263Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1N",
+    "commentId": "01KTJ76ZWF0ZV0SKTGMT61SZ4Y",
+    "author": "claude",
+    "body": "Shipped opt-in refresh/access-token split. New auth_refresh_tokens table (migration 0018, SQLite+PG), RefreshTokenStore (store.refreshTokens), identityProviders.refresh config (accessTokenTtlSeconds/refreshTokenTtlSeconds/rotateOnRefresh). Sign-ins mint short access session + long refresh token; POST /auth/refresh exchanges+rotates, POST /auth/refresh/revoke revokes. Apple-revoke + password-reset also revoke refresh tokens. Fully backward compatible (routes 404 when unconfigured). typecheck clean; server vitest 826 passed (was 818) + new tests/refresh-tokens.test.ts (8 tests)."
+  }
+}
