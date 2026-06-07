@@ -11,6 +11,8 @@
     "typecheck": "tsc -b packages/protocol packages/core packages/react packages/devtools packages/design packages/design-web packages/agent-kit packages/mcp apps/server apps/web apps/cli bench",
     "cli": "pnpm build:packages && tsx apps/cli/src/index.ts",
     "load:harness": "pnpm build:packages && tsx bench/src/cli.ts",
+    "bench:latency": "pnpm build:packages && tsx bench/src/cli.ts latency",
+    "bench:throughput": "pnpm build:packages && tsx bench/src/cli.ts throughput",
     "schema:generate": "tsx packages/protocol/scripts/generate-native-artifacts.ts",
     "fixtures:generate": "tsx packages/protocol/scripts/generate-fixtures.ts",
     "verify:generated": "tsx scripts/check-generated-artifacts.ts",

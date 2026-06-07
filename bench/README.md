@@ -1,14 +1,27 @@
-# `@fricken/bench` — Load harness (FR-96)
+# `@fricken/bench` — Benchmarks (FR-96 / FR-97 / FR-98)
 
-A reusable synthetic load harness for Frick. It drives configurable load against
-a Frick server and emits a single machine-readable JSON result to stdout so CI
-and trend tooling can consume it. This is the foundation for the later benchmark
-stories (FR-97–100) — it is reusable, not a one-off.
+A reusable synthetic benchmark package for Frick. It drives configurable load
+against a Frick server and emits a single machine-readable JSON result to stdout
+so CI and trend tooling can consume it. This is the foundation for the
+performance-budget story (FR-100) — it is reusable, not a one-off.
 
-It is kept deliberately separate from the correctness tests: the harness only
-**measures** throughput/latency and never asserts product behavior.
+Three suites share one CLI and one server-spin-up path:
 
-## What it does
+| Subcommand | Story | What it measures | Script |
+| --- | --- | --- | --- |
+| `load` (default) | FR-96 | Synthetic per-user load: object upserts + stream appends | `pnpm load:harness` |
+| `latency` | FR-97 | p50/p90/p99 latency across the core paths | `pnpm bench:latency` |
+| `throughput` | FR-98 | Sustained ops/sec + resource growth (memory/db/cache) | `pnpm bench:throughput` |
+
+Every suite is kept deliberately separate from the correctness tests: the
+harnesses only **measure** and never assert product behavior. By default each
+spins up an in-process `createFrickServer` on an ephemeral port backed by an
+in-memory SQLite store; pass `--http-url URL --ws-url URL` (both required) to
+drive an already-running external server instead.
+
+## Load harness (FR-96)
+
+### What it does
 
 By default the harness:
 
@@ -23,7 +36,7 @@ By default the harness:
 
 Synthetic payloads are deterministic given `--seed`.
 
-## Running
+### Running
 
 ```bash
 # Defaults (10 users, 5 object writes + 20 appends each, subscribed):
@@ -52,7 +65,7 @@ pnpm load:harness --http-url http://127.0.0.1:8787 --ws-url ws://127.0.0.1:8787/
 Precedence is flag > env > default. Diagnostics go to stderr; stdout carries
 exactly one JSON object.
 
-## Output shape
+### Output shape
 
 ```jsonc
 {
@@ -71,10 +84,122 @@ exactly one JSON object.
 }
 ```
 
-## Programmatic use
+### Programmatic use
 
 ```ts
 import { runLoad, parseLoadConfig } from "@fricken/bench";
 
 const result = await runLoad({ users: 5, appendsPerUser: 10 });
+```
+
+## Latency suite (FR-97)
+
+Measures one latency sample per iteration across the core paths and emits JSON
+(`tool: "frick-latency-bench"`) with p50/p90/p99 per path:
+
+- **`httpRequest`** — an authenticated HTTP `GET /objects` round-trip.
+- **`wsAppend`** — WS stream append → durable `Ack` round-trip (correlated by `requestId`).
+- **`objectFanout`** — one client upserts a `Conversation`; a *second* subscribed
+  client receives the broadcast `Delta` (the write → fan-out path).
+- **`catchUp`** — `Subscribe` to a backfilled stream → first `StreamPage`
+  (subscribe → snapshot/page catch-up). A backlog is seeded over HTTP first.
+- **`reconnect`** — open a fresh WS, Hello-handshake, drain `HelloAck`.
+
+```bash
+# Defaults (50 iterations/path, 25-event catch-up backlog):
+pnpm bench:latency
+
+# Custom, pretty JSON:
+pnpm bench:latency --iterations 200 --catch-up-backlog 100 --pretty
+```
+
+### Flags (env fallbacks in parentheses)
+
+| Flag | Meaning | Env |
+| --- | --- | --- |
+| `--iterations N` | samples per path | `FRICK_LAT_ITERATIONS` |
+| `--catch-up-backlog N` | seeded backlog events for the catch-up path | `FRICK_LAT_CATCH_UP_BACKLOG` |
+| `--http-url URL` / `--ws-url URL` | drive an external server (both required) | `FRICK_LOAD_HTTP_URL` / `FRICK_LOAD_WS_URL` |
+| `--pretty` | indent the JSON output | — |
+
+### Output shape
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "tool": "frick-latency-bench",
+  "startedAt": "2026-06-07T00:00:00.000Z",
+  "config": { "iterations": 50, "catchUpBacklog": 25 },
+  "env": { "node": "v24.x", "platform": "darwin", "inProcessServer": true },
+  "totalDurationMs": 123.45,
+  "paths": {
+    "httpRequest":  { "count": 50, "errors": 0, "latencyMs": { "min": 0, "max": 0, "mean": 0, "p50": 0, "p90": 0, "p99": 0, "count": 50 } },
+    "wsAppend":     { "count": 50, "errors": 0, "latencyMs": { /* … */ } },
+    "objectFanout": { "count": 50, "errors": 0, "latencyMs": { /* … */ } },
+    "catchUp":      { "count": 50, "errors": 0, "latencyMs": { /* … */ } },
+    "reconnect":    { "count": 50, "errors": 0, "latencyMs": { /* … */ } }
+  },
+  "totalErrors": 0
+}
+```
+
+```ts
+import { runLatency } from "@fricken/bench";
+const result = await runLatency({ iterations: 100 });
+```
+
+## Throughput + resource-growth suite (FR-98)
+
+Drives a sustained append/upsert workload across N concurrent WS connections and
+emits JSON (`tool: "frick-throughput-bench"`) with completed ops/sec plus a
+`resources` section sampling process memory, SQLite db size + per-table row
+counts, and the idempotency-cache row count **before vs after**, with deltas.
+
+Resource growth requires the in-process `store`, so it is present only when the
+suite spins the server up itself (the default). Driving an external server with
+`--http-url`/`--ws-url` still measures throughput but omits `resources`.
+
+```bash
+# Defaults (8 connections, 100 ops each, 20% upserts, awaiting each ack):
+pnpm bench:throughput
+
+# Pipelined (don't await each ack) for a higher throughput number:
+pnpm bench:throughput --connections 16 --ops-per-connection 500 --no-await-acks --pretty
+```
+
+### Flags (env fallbacks in parentheses)
+
+| Flag | Meaning | Env |
+| --- | --- | --- |
+| `--connections N` | concurrent WS connections | `FRICK_TPUT_CONNECTIONS` |
+| `--ops-per-connection N` | ops issued per connection | `FRICK_TPUT_OPS_PER_CONNECTION` |
+| `--upsert-ratio F` | fraction of ops that are object upserts (0..1) | `FRICK_TPUT_UPSERT_RATIO` |
+| `--no-await-acks` | pipeline ops instead of awaiting each ack | `FRICK_TPUT_AWAIT_ACKS=0` |
+| `--seed N` | deterministic payload seed | `FRICK_LOAD_SEED` |
+| `--http-url URL` / `--ws-url URL` | drive an external server (growth omitted) | `FRICK_LOAD_HTTP_URL` / `FRICK_LOAD_WS_URL` |
+| `--pretty` | indent the JSON output | — |
+
+### Output shape
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "tool": "frick-throughput-bench",
+  "startedAt": "2026-06-07T00:00:00.000Z",
+  "config": { "connections": 8, "opsPerConnection": 100, "upsertRatio": 0.2, "awaitAcks": true, "seed": 1 },
+  "env": { "node": "v24.x", "platform": "darwin", "inProcessServer": true },
+  "durationMs": 456.78,
+  "ops": { "appends": 640, "upserts": 160, "total": 800, "errors": 0 },
+  "throughputPerSec": { "appends": 0, "upserts": 0, "total": 0 },
+  "resources": {
+    "before": { "memory": { "rss": 0, "heapUsed": 0, "external": 0 }, "dbBytes": 0, "rowCounts": { "stream_events": 0, "objects": 0, "idempotency_keys": 0 }, "idempotencyCacheRows": 0 },
+    "after":  { /* … */ },
+    "delta":  { "rssBytes": 0, "heapUsedBytes": 0, "dbBytes": 0, "rowCounts": { "stream_events": 640, "objects": 160, "idempotency_keys": 640 }, "idempotencyCacheRows": 640 }
+  }
+}
+```
+
+```ts
+import { runThroughput } from "@fricken/bench";
+const result = await runThroughput({ connections: 4, opsPerConnection: 200 });
 ```
