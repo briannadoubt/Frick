@@ -229,9 +229,9 @@ describe("FrickStore foundation storage", () => {
       payload: "{}",
     });
 
-    expect(await store.readPresence("TypingState", "conversation-general:user-ada:device-1")?.isTyping).toBe(true);
+    expect((await store.readPresence("TypingState", "conversation-general:user-ada:device-1"))?.isTyping).toBe(true);
     expect(await store.drainSignals("WebRTCSignal", "call-1")).toHaveLength(1);
-    expect(await store.readBlobMetadata("blob-1")?.mimeType).toBe("text/plain");
-    expect(await store.nextJob("PushNotificationJob")?.name).toBe("PushNotificationJob");
+    expect((await store.readBlobMetadata("blob-1"))?.mimeType).toBe("text/plain");
+    expect((await store.nextJob("PushNotificationJob"))?.name).toBe("PushNotificationJob");
   });
 });

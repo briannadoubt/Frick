@@ -126,7 +126,7 @@ describe("JobStore enqueue/claim/complete", () => {
     let claimed = (await store.jobs.claim("worker-a"))[0]!;
     expect(claimed.attemptCount).toBe(1);
     await store.jobs.fail(claimed.id, "test.retry", "first", true);
-    expect(await store.jobs.getById(row.id)?.status).toBe("ready");
+    expect((await store.jobs.getById(row.id))?.status).toBe("ready");
 
     // Reset available_at so we can claim again without waiting for backoff.
     await store.jobs.list({ status: "ready" }); // sanity
@@ -160,7 +160,7 @@ describe("JobStore enqueue/claim/complete", () => {
     // getById with a tenant filter only finds within that tenant.
     const aRow = (await store.jobs.list({ tenantId: "tenant-a" }))[0]!;
     expect(await store.jobs.getById(aRow.id, "tenant-b")).toBeUndefined();
-    expect(await store.jobs.getById(aRow.id, "tenant-a")?.id).toBe(aRow.id);
+    expect((await store.jobs.getById(aRow.id, "tenant-a"))?.id).toBe(aRow.id);
     store.close();
   });
 

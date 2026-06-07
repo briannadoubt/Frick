@@ -58,7 +58,7 @@ describe("runtime platform event publishers", () => {
     worker.start();
     const row = await store.jobs.enqueue({ tenantId: "_default", jobType: "ExampleJob", payload: {} });
 
-    await waitFor(() => (store!.jobs.getById(row.id)?.status === "completed" ? true : undefined));
+    await waitFor(async () => ((await store!.jobs.getById(row.id))?.status === "completed" ? true : undefined));
 
     const delivery = await waitForPlatformEvent(store.platformEvents, "job.completed");
     expect(delivery.event).toMatchObject({
@@ -99,7 +99,7 @@ describe("runtime platform event publishers", () => {
       maxAttempts: 2,
     });
 
-    await waitFor(() => (store!.jobs.getById(row.id)?.status === "ready" ? true : undefined));
+    await waitFor(async () => ((await store!.jobs.getById(row.id))?.status === "ready" ? true : undefined));
 
     const delivery = await waitForPlatformEvent(store.platformEvents, "job.failed");
     expect(delivery.event.payload).toMatchObject({
@@ -130,8 +130,8 @@ describe("runtime platform event publishers", () => {
     worker.start();
     const row = await store.jobs.enqueue({ tenantId: "_default", jobType: "DeadJob", payload: {} });
 
-    await waitFor(() =>
-      store!.jobs.getById(row.id)?.status === "dead_lettered" ? true : undefined,
+    await waitFor(async () =>
+      (await store!.jobs.getById(row.id))?.status === "dead_lettered" ? true : undefined,
     );
 
     const delivery = await waitForPlatformEvent(store.platformEvents, "job.dead_lettered");
@@ -165,7 +165,7 @@ describe("runtime platform event publishers", () => {
     });
     const row = await app.store.jobs.enqueue({ tenantId: "_default", jobType: "ServerJob", payload: {} });
 
-    await waitFor(() => (app!.store.jobs.getById(row.id)?.status === "completed" ? true : undefined));
+    await waitFor(async () => (app!.store.jobs.getById(row.id)?.status === "completed" ? true : undefined));
 
     const delivery = await waitForPlatformEvent(platformEvents, "job.completed");
     expect(delivery.event.payload).toMatchObject({
@@ -201,9 +201,9 @@ describe("runtime platform event publishers", () => {
     const first = await store.jobs.enqueue({ tenantId: "_default", jobType: "SafeJob", payload: {} });
     const second = await store.jobs.enqueue({ tenantId: "_default", jobType: "SafeJob", payload: {} });
 
-    await waitFor(() =>
-      store!.jobs.getById(first.id)?.status === "completed" &&
-      store!.jobs.getById(second.id)?.status === "completed"
+    await waitFor(async () =>
+      (await store!.jobs.getById(first.id))?.status === "completed" &&
+      (await store!.jobs.getById(second.id))?.status === "completed"
         ? true
         : undefined,
     );

@@ -50,8 +50,8 @@ describe("deriveSiblingSession", () => {
 
     // The derived token resolves to a live session in the new tenant; the
     // original is untouched.
-    expect(await store.readActiveSession(derived.sessionToken)?.tenantId).toBe("tenant-b");
-    expect(await store.readActiveSession("src-token")?.tenantId).toBe("tenant-a");
+    expect((await store.readActiveSession(derived.sessionToken))?.tenantId).toBe("tenant-b");
+    expect((await store.readActiveSession("src-token"))?.tenantId).toBe("tenant-a");
   });
 
   it("ensures the target tenant exists in the ledger by default", async () => {

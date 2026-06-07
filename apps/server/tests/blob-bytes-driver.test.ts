@@ -219,7 +219,7 @@ describe("FrickStore blob driver wiring", () => {
         .get("tenant-a", "blob-1");
       expect(row).toBeUndefined();
       // Metadata still lives in SQLite.
-      expect(await store.blobs.read("tenant-a", "blob-1")?.mimeType).toBe("text/plain");
+      expect((await store.blobs.read("tenant-a", "blob-1"))?.mimeType).toBe("text/plain");
     } finally {
       store.close();
     }
