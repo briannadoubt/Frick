@@ -65,7 +65,8 @@ final class FrickClientSessionSwapTests: XCTestCase {
 private func makeSwapTestClient(storage: FrickStorage) -> FrickClient {
     FrickClient(
         baseURL: URL(string: "http://frick.test")!,
-        storage: storage
+        storage: storage,
+        sessionPersistence: FrickInMemorySessionStore()
     )
 }
 

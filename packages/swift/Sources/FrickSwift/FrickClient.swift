@@ -970,6 +970,7 @@ public final class FrickClient: Sendable {
     /// defaults to the generated foundation tables.
     public let syncDescriptor: FrickSchemaDescriptorValues
     private let sessionStore = FrickSessionStore()
+    private let sessionPersistence: FrickSessionPersisting
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
@@ -980,6 +981,7 @@ public final class FrickClient: Sendable {
         streamReconnectDelayNanoseconds: UInt64 = 250_000_000,
         replicaId: String = "ios-demo",
         storage: FrickStorage = FrickSQLiteStorage.appStorage,
+        sessionPersistence: FrickSessionPersisting = FrickKeychainSessionStore(),
         allowInsecureLocalTransport: Bool = FrickClient.defaultAllowsInsecureLocalTransport,
         telemetry: any FrickClientTelemetryRuntime = FrickNoopClientTelemetryRuntime(),
         requestIdFactory: @escaping @Sendable () -> String = { UUID().uuidString },
@@ -995,12 +997,32 @@ public final class FrickClient: Sendable {
         self.streamReconnectDelayNanoseconds = streamReconnectDelayNanoseconds
         self.replicaId = replicaId
         self.storage = storage
+        self.sessionPersistence = sessionPersistence
         self.telemetry = telemetry
         self.requestIdFactory = requestIdFactory
         self.schemaHash = schemaHash
         self.schemaId = schemaId
         self.schemaRevision = schemaRevision
         self.syncDescriptor = syncDescriptor
+
+        restorePersistedSession()
+    }
+
+    /// Auto-restore a previously-persisted session on construction. Expired
+    /// sessions are dropped (and purged from the store) rather than installed,
+    /// so the app starts at its signed-out gate instead of firing requests
+    /// with a dead bearer. Unparseable expiry is treated as live — see
+    /// `FrickSession.isExpired`.
+    private func restorePersistedSession() {
+        guard let restored = try? sessionPersistence.load() else {
+            return
+        }
+
+        if restored.isExpired() {
+            try? sessionPersistence.clear()
+        } else {
+            installSession(restored)
+        }
     }
 
     public var currentSession: FrickSession? {
@@ -1080,6 +1102,7 @@ public final class FrickClient: Sendable {
             try? storage.clearPendingAppends()
         }
         sessionStore.session = newSession
+        try? sessionPersistence.save(newSession)
     }
 
     /// Open a sync WebSocket against `baseURL` (defaults to the client's
@@ -1113,6 +1136,7 @@ public final class FrickClient: Sendable {
     public func signOut() {
         try? storage.clearPendingAppends()
         sessionStore.session = nil
+        try? sessionPersistence.clear()
     }
 
     /// Server-side logout — POSTs to `/auth/logout` to invalidate the
@@ -1133,6 +1157,7 @@ public final class FrickClient: Sendable {
         }
         try? storage.clearPendingAppends()
         sessionStore.session = nil
+        try? sessionPersistence.clear()
     }
 
     /// Inject an externally-minted session into the client. Used when the
@@ -1142,8 +1167,11 @@ public final class FrickClient: Sendable {
     /// `connectSync` calls use this session.
     ///
     /// The session is treated identically to one produced by
-    /// `devLogin` / `signUp` / `login` — pass a previously-saved session
-    /// to restore across app launches once you wire up persistence.
+    /// `devLogin` / `signUp` / `login`, including persistence: installing it
+    /// writes it to the configured `sessionPersistence`. Manual restore is no
+    /// longer required for cross-launch persistence — the client auto-restores
+    /// from `sessionPersistence` on construction — but this stays available
+    /// for injecting a session minted outside the client.
     public func restoreSession(_ session: FrickSession) {
         installSession(session)
     }

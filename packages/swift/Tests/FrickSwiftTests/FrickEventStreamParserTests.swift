@@ -402,7 +402,8 @@ final class FrickEventStreamParserTests: XCTestCase {
             baseURL: URL(string: "http://frick.test")!,
             session: session,
             streamingSession: session,
-            storage: storage
+            storage: storage,
+            sessionPersistence: FrickInMemorySessionStore()
         )
 
         _ = try await client.devLogin(userId: "user-ada")
@@ -423,7 +424,8 @@ final class FrickEventStreamParserTests: XCTestCase {
             baseURL: URL(string: "http://frick.test")!,
             session: session,
             streamingSession: session,
-            storage: storage
+            storage: storage,
+            sessionPersistence: FrickInMemorySessionStore()
         )
 
         do {
@@ -493,7 +495,8 @@ final class FrickEventStreamParserTests: XCTestCase {
             baseURL: URL(string: "http://frick.test")!,
             session: session,
             streamingSession: session,
-            storage: try FrickSQLiteStorage(path: ":memory:")
+            storage: try FrickSQLiteStorage(path: ":memory:"),
+            sessionPersistence: FrickInMemorySessionStore()
         )
 
         let metadata = try await client.uploadBlobContent(
@@ -551,7 +554,8 @@ final class FrickEventStreamParserTests: XCTestCase {
             baseURL: URL(string: "http://frick.test")!,
             session: session,
             streamingSession: session,
-            storage: try FrickSQLiteStorage(path: ":memory:")
+            storage: try FrickSQLiteStorage(path: ":memory:"),
+            sessionPersistence: FrickInMemorySessionStore()
         )
 
         try await client.sendSignal(
@@ -742,7 +746,7 @@ final class FrickEventStreamParserTests: XCTestCase {
 
     func testVerifyCacheCompatibilityStampsMetadataOnFirstRun() async throws {
         let storage = try FrickSQLiteStorage(path: ":memory:")
-        let client = FrickClient(storage: storage)
+        let client = FrickClient(storage: storage, sessionPersistence: FrickInMemorySessionStore())
 
         let stamped = try client.verifyCacheCompatibility()
 
@@ -761,7 +765,7 @@ final class FrickEventStreamParserTests: XCTestCase {
             )
         )
         try storage.appendPendingAppend(PendingAppend(requestId: "request-1", body: Data("x".utf8)))
-        let client = FrickClient(storage: storage)
+        let client = FrickClient(storage: storage, sessionPersistence: FrickInMemorySessionStore())
 
         do {
             _ = try client.verifyCacheCompatibility()
@@ -784,7 +788,7 @@ final class FrickEventStreamParserTests: XCTestCase {
                 schemaHash: "old-hash"
             )
         )
-        let client = FrickClient(storage: storage)
+        let client = FrickClient(storage: storage, sessionPersistence: FrickInMemorySessionStore())
 
         do {
             _ = try client.verifyCacheCompatibility(minimumClientRevision: 5)
@@ -1085,6 +1089,7 @@ private func makeTestClient(
         session: session,
         streamingSession: session,
         storage: resolvedStorage,
+        sessionPersistence: FrickInMemorySessionStore(),
         telemetry: telemetry,
         requestIdFactory: requestIdFactory
     )
