@@ -8,6 +8,11 @@ import {
   type PlainObject,
 } from "@fricken/protocol";
 import { AccountStore, type StoredAccount } from "./storage/account-store.js";
+import {
+  createPasswordHasher,
+  type FrickPasswordHasher,
+  type FrickPasswordHasherId,
+} from "./storage/password-hasher.js";
 import { PasswordResetTokenStore } from "./storage/password-reset-store.js";
 import { AdminAuditStore } from "./storage/admin-audit-store.js";
 import { BlobStore, type BlobMetadata, type BlobMetadataInput } from "./storage/blob-store.js";
@@ -44,6 +49,20 @@ import {
 
 /** Default cadence for the opt-in per-stream retention sweep (FR-145). */
 const DEFAULT_STREAM_RETENTION_PRUNE_INTERVAL_MS = 15 * 60 * 1000;
+
+/**
+ * Resolve the {@link StoreOptions.passwordHasher} option into a concrete
+ * {@link FrickPasswordHasher}: a string id is mapped through
+ * {@link createPasswordHasher}; an already-built hasher is used as-is;
+ * `undefined` falls back to the Argon2id default.
+ */
+function resolvePasswordHasher(
+  selection: FrickPasswordHasherId | FrickPasswordHasher | undefined,
+): FrickPasswordHasher | undefined {
+  if (selection === undefined) return undefined;
+  if (typeof selection === "string") return createPasswordHasher(selection);
+  return selection;
+}
 import { BoundedIdempotencyCache } from "./storage/idempotency-cache.js";
 import type { AppliedMigrationRow } from "./storage/migrations.js";
 import { createNoopLogger, type FrickLogger } from "./logger.js";
@@ -126,6 +145,14 @@ export interface StoreOptions {
   dbUrl?: string | undefined;
   schema?: FrickSchema;
   seed?: boolean;
+  /**
+   * Password-hashing algorithm for new/updated account credentials (FR-35).
+   * Defaults to `"argon2"` (Argon2id). `"scrypt"` keeps the pre-FR-35
+   * behavior. Existing scrypt credentials always verify and are transparently
+   * re-hashed to the active algorithm on the next successful login. Pass a
+   * fully-built {@link FrickPasswordHasher} instead for custom parameters.
+   */
+  passwordHasher?: FrickPasswordHasherId | FrickPasswordHasher;
   /**
    * Blob-bytes storage driver (FR-53). `sqlite` (the default) keeps blob bytes
    * in the SQLite `blob_content` table; `filesystem` writes them under
@@ -436,7 +463,7 @@ export class FrickStore {
     this.blobProcessors = createFrickBlobProcessorRegistry();
     this.jobs = new JobStore(sql);
     this.sessions = new SessionStore(sql);
-    this.accounts = new AccountStore(sql);
+    this.accounts = new AccountStore(sql, resolvePasswordHasher(options.passwordHasher));
     this.passwordResetTokens = new PasswordResetTokenStore(sql);
     this.tenants = new TenantStore(sql);
     this.invitations = new InvitationStore(sql);

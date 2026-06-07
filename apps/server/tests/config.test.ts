@@ -21,6 +21,7 @@ describe("loadFrickConfig", () => {
       dbPath: "./frick.sqlite",
       databaseUrl: undefined,
       blobDriver: "sqlite",
+      passwordHasher: "argon2",
       blobStoragePath: "./frick-blobs/",
       logLevel: "info",
       inspectionEnabled: true,

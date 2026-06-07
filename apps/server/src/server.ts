@@ -489,6 +489,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     idempotencyReplayWindowMs: config.idempotencyReplayWindowMs,
     blobDriver: config.blobDriver,
     blobStoragePath: config.blobStoragePath,
+    passwordHasher: config.passwordHasher,
   });
   const platformEvents =
     options.platformEvents ??

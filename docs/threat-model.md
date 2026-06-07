@@ -487,14 +487,29 @@ cross-principal actor triggering a deletion.
 
 ---
 
-## Password storage (current state)
+## Password storage
 
-The framework hashes account passwords with Node's `crypto.scrypt` using a
-per-user salt. This is intentional and acceptable for the framework's
-current threat model (low-volume demo accounts), but it is not the
-production target — a future slice will introduce a configurable hash
-function and parameter set. This document captures the current algorithm
-so a deployment audit can flag it.
+The framework hashes account passwords through a pluggable
+`FrickPasswordHasher` (FR-35). The default is **Argon2id**
+(`@node-rs/argon2`, 19 MiB / t=2 / p=1); `scrypt` is retained for back-compat
+and for deployments that cannot run the native Argon2 binding. The active
+algorithm is selected via `FRICK_PASSWORD_HASHER` (`argon2` | `scrypt`) /
+`FrickConfig.passwordHasher` / `StoreOptions.passwordHasher`, defaulting to
+`argon2`.
+
+Stored hashes are **self-describing**: each carries an algorithm tag
+(`argon2$…`, `scrypt$N$r$p$keylen$salt$digest`) so `verify` can dispatch on
+the tag and migration can detect an older format. Pre-FR-35 rows used a
+separate `password_salt` column plus an untagged `crypto.scrypt` digest in
+`password_hash`; those are reconstructed as `legacy-scrypt$…` for
+verification.
+
+**Lazy migration:** on every successful login, if the stored hash is in an
+older/weaker format than the active hasher (legacy scrypt, or a weaker
+parameter set), the credential is transparently re-hashed and persisted. The
+salt is embedded in the new self-describing hash, so the legacy
+`password_salt` column is left empty for migrated/new rows. Re-hash failures
+never block the login.
 
 ---
 

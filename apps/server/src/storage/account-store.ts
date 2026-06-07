@@ -1,5 +1,9 @@
-import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import type { SqlDriver } from "./sql-driver.js";
+import {
+  createPasswordHasher,
+  toStoredHash,
+  type FrickPasswordHasher,
+} from "./password-hasher.js";
 
 export interface StoredAccount {
   tenantId: string;
@@ -28,19 +32,29 @@ interface AccountRow {
 }
 
 export class AccountStore {
-  constructor(private readonly sql: SqlDriver) {}
+  readonly #hasher: FrickPasswordHasher;
+  private readonly sql: SqlDriver;
+
+  constructor(sql: SqlDriver, hasher?: FrickPasswordHasher) {
+    this.sql = sql;
+    // Default to Argon2id for new/updated credentials (FR-35). The hasher is
+    // injected so deployments can pick scrypt for back-compat, and tests can
+    // pin a specific algorithm.
+    this.#hasher = hasher ?? createPasswordHasher();
+  }
 
   async create(input: CreateAccountInput): Promise<StoredAccount> {
     const now = new Date().toISOString();
-    const passwordSalt = randomBytes(16).toString("base64url");
-    const passwordHash = hashPassword(input.password, passwordSalt);
+    // New credentials store the self-describing hash in `password_hash`; the
+    // salt is embedded in that string, so `password_salt` is left empty.
+    const passwordHash = await this.#hasher.hash(input.password);
 
     try {
       await this.sql.run(
         `INSERT INTO auth_accounts
             (user_id, tenant_id, handle, display_name, password_salt, password_hash, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [input.userId, input.tenantId, input.handle, input.displayName, passwordSalt, passwordHash, now],
+        [input.userId, input.tenantId, input.handle, input.displayName, "", passwordHash, now],
       );
     } catch (error) {
       if (error instanceof Error && /constraint/i.test(error.message)) {
@@ -80,13 +94,12 @@ export class AccountStore {
    * updated (the account exists), false when no row matched.
    */
   async setPassword(tenantId: string, userId: string, newPassword: string): Promise<boolean> {
-    const passwordSalt = randomBytes(16).toString("base64url");
-    const passwordHash = hashPassword(newPassword, passwordSalt);
+    const passwordHash = await this.#hasher.hash(newPassword);
     const result = await this.sql.run(
       `UPDATE auth_accounts
            SET password_salt = ?, password_hash = ?
            WHERE tenant_id = ? AND user_id = ?`,
-      [passwordSalt, passwordHash, tenantId, userId],
+      ["", passwordHash, tenantId, userId],
     );
     return result.changes > 0;
   }
@@ -101,10 +114,29 @@ export class AccountStore {
       return undefined;
     }
 
-    const expected = Buffer.from(row.password_hash, "base64url");
-    const actual = Buffer.from(hashPassword(password, row.password_salt), "base64url");
-    if (expected.byteLength !== actual.byteLength || !timingSafeEqual(expected, actual)) {
+    // Reconstruct a self-describing stored string. Legacy rows carry the salt
+    // in `password_salt` and an untagged digest in `password_hash`; FR-35 rows
+    // carry the whole tagged hash in `password_hash` and an empty salt.
+    const stored = toStoredHash(row.password_hash, row.password_salt);
+    if (!(await this.#hasher.verify(password, stored))) {
       return undefined;
+    }
+
+    // Lazy migration: if the stored hash is in an older/weaker format than the
+    // active hasher, transparently re-hash and persist on this successful
+    // login. Failures here must not block the login, so they are swallowed.
+    if (this.#hasher.needsRehash(stored)) {
+      try {
+        const upgraded = await this.#hasher.hash(password);
+        await this.sql.run(
+          `UPDATE auth_accounts
+               SET password_salt = ?, password_hash = ?
+               WHERE tenant_id = ? AND user_id = ?`,
+          ["", upgraded, row.tenant_id, row.user_id],
+        );
+      } catch {
+        // Best-effort upgrade; the original hash still verifies next time.
+      }
     }
 
     return fromRow(row);
@@ -136,10 +168,6 @@ export class AccountStore {
       [tenantId, identity, identity],
     );
   }
-}
-
-function hashPassword(password: string, salt: string): string {
-  return scryptSync(password, salt, 32).toString("base64url");
 }
 
 function fromRow(row: AccountRow): StoredAccount {

@@ -51,6 +51,7 @@
   "dependencies": {
     "@fricken/protocol": "workspace:*",
     "@msgpack/msgpack": "^3.1.2",
+    "@node-rs/argon2": "^2.0.2",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/exporter-metrics-otlp-http": "^0.218.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.218.0",

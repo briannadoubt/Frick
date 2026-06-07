@@ -37,6 +37,15 @@ export type FrickDbDriver = "sqlite" | "postgres";
  */
 export type FrickBlobDriver = "sqlite" | "filesystem";
 
+/**
+ * Password-hashing algorithm selector (FR-35). `argon2` (Argon2id) is the
+ * default for new/updated credentials; `scrypt` keeps the pre-FR-35 behavior
+ * for deployments that cannot run the native Argon2 binding. Existing scrypt
+ * credentials always verify regardless of this setting and are transparently
+ * re-hashed to the active algorithm on the next successful login.
+ */
+export type FrickPasswordHasherId = "argon2" | "scrypt";
+
 export interface FrickConfig {
   /** Runtime environment. Drives defaults for the rest of the config. */
   env: FrickEnv;
@@ -107,6 +116,12 @@ export interface FrickConfig {
    * way. Selecting `filesystem` requires a writable `blobStoragePath`.
    */
   blobDriver: FrickBlobDriver;
+  /**
+   * Password-hashing algorithm for new and updated account credentials.
+   * Defaults to `argon2` (Argon2id); set `scrypt` for back-compat. Parsed
+   * from `FRICK_PASSWORD_HASHER`. See {@link FrickPasswordHasherId}.
+   */
+  passwordHasher: FrickPasswordHasherId;
   /**
    * Filesystem directory for blob bytes. Used by the `filesystem` blob driver
    * (FR-53); parsed but inert under the default `sqlite` driver.
@@ -216,6 +231,8 @@ const VALID_BLOB_DRIVERS: ReadonlySet<FrickBlobDriver> = new Set<FrickBlobDriver
   "sqlite",
   "filesystem",
 ]);
+const VALID_PASSWORD_HASHERS: ReadonlySet<FrickPasswordHasherId> =
+  new Set<FrickPasswordHasherId>(["argon2", "scrypt"]);
 
 /**
  * A single subdomain-wildcard allowlist entry: `<scheme>://*.<rest-of-host>`.
@@ -264,6 +281,8 @@ export function loadFrickConfig(
   const databaseUrl =
     "databaseUrl" in overrides ? overrides.databaseUrl : parseString(env.FRICK_DATABASE_URL);
   const blobDriver = overrides.blobDriver ?? parseBlobDriver(env.FRICK_BLOB_DRIVER);
+  const passwordHasher =
+    overrides.passwordHasher ?? parsePasswordHasher(env.FRICK_PASSWORD_HASHER);
   const blobStoragePath =
     overrides.blobStoragePath ?? parseString(env.FRICK_BLOB_STORAGE_PATH) ?? DEFAULT_BLOB_STORAGE_PATH;
   const logLevel = overrides.logLevel ?? parseLogLevel(env.FRICK_LOG_LEVEL, "info");
@@ -404,6 +423,7 @@ export function loadFrickConfig(
     dbPath,
     databaseUrl,
     blobDriver,
+    passwordHasher,
     blobStoragePath,
     logLevel,
     otelEnabled,
@@ -521,6 +541,18 @@ function parseBlobDriver(value: string | undefined): FrickBlobDriver {
   }
   throw new FrickConfigError(
     `FRICK_BLOB_DRIVER must be one of sqlite, filesystem (got ${JSON.stringify(value)})`,
+  );
+}
+
+function parsePasswordHasher(value: string | undefined): FrickPasswordHasherId {
+  if (value === undefined || value === "") {
+    return "argon2";
+  }
+  if (VALID_PASSWORD_HASHERS.has(value as FrickPasswordHasherId)) {
+    return value as FrickPasswordHasherId;
+  }
+  throw new FrickConfigError(
+    `FRICK_PASSWORD_HASHER must be one of argon2, scrypt (got ${JSON.stringify(value)})`,
   );
 }
 

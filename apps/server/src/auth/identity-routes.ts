@@ -506,7 +506,7 @@ export function createIdentityRouter(
       const primaryTenantId =
         (existing[userObject.primaryTenantField] as string | undefined) ??
         await findPrimaryTenantForUser(options.store, existing.id as string);
-      const session = mintSession({
+      const session = await mintSession({
         store: options.store,
         sessionTtlSeconds,
         userId: existing.id as string,
@@ -566,7 +566,7 @@ export function createIdentityRouter(
     };
     options.store.upsertObject(SYSTEM_TENANT, userObject.type, userId, userRow);
 
-    const session = mintSession({
+    const session = await mintSession({
       store: options.store,
       sessionTtlSeconds,
       userId,
@@ -654,7 +654,7 @@ export function createIdentityRouter(
       const primaryTenantId =
         (existing[userObject.primaryTenantField] as string | undefined) ??
         await findPrimaryTenantForUser(options.store, existing.id as string);
-      const session = mintSession({
+      const session = await mintSession({
         store: options.store,
         sessionTtlSeconds,
         userId: existing.id as string,
@@ -718,7 +718,7 @@ export function createIdentityRouter(
     };
     options.store.upsertObject(SYSTEM_TENANT, userObject.type, userId, userRow);
 
-    const session = mintSession({
+    const session = await mintSession({
       store: options.store,
       sessionTtlSeconds,
       userId,
@@ -822,7 +822,7 @@ export function createIdentityRouter(
       const primaryTenantId =
         (existing[userObject.primaryTenantField] as string | undefined) ??
         await findPrimaryTenantForUser(options.store, existing.id as string);
-      const session = mintSession({
+      const session = await mintSession({
         store: options.store,
         sessionTtlSeconds,
         userId: existing.id as string,
@@ -894,7 +894,7 @@ export function createIdentityRouter(
     };
     options.store.upsertObject(SYSTEM_TENANT, userObject.type, userId, userRow);
 
-    const session = mintSession({
+    const session = await mintSession({
       store: options.store,
       sessionTtlSeconds,
       userId,
@@ -996,7 +996,7 @@ export function createIdentityRouter(
       // Account creation also handles password hashing inside Frick's
       // accounts store. The handle is the email — Frick's UNIQUE
       // (tenant_id, handle) gives us a per-tenant uniqueness check.
-      options.store.createAccountUser({
+      await options.store.createAccountUser({
         tenantId: hook.tenantId,
         userId,
         handle: email,
@@ -1013,7 +1013,7 @@ export function createIdentityRouter(
       return;
     }
 
-    const session = mintSession({
+    const session = await mintSession({
       store: options.store,
       sessionTtlSeconds,
       userId,
@@ -1096,7 +1096,7 @@ export function createIdentityRouter(
       return;
     }
 
-    const session = mintSession({
+    const session = await mintSession({
       store: options.store,
       sessionTtlSeconds,
       userId: user.id,
@@ -1404,7 +1404,7 @@ export function createIdentityRouter(
       sendJson(res, 400, { error: "invalid_or_expired_token" });
       return;
     }
-    const ok = options.store.accounts.setPassword(
+    const ok = await options.store.accounts.setPassword(
       consumed.tenantId,
       consumed.userId,
       password,
@@ -1567,7 +1567,7 @@ interface MintedSession {
   expiresAt: string;
 }
 
-function mintSession(input: {
+async function mintSession(input: {
   store: FrickStore;
   userId: string;
   tenantId: string;
@@ -1587,9 +1587,11 @@ function mintSession(input: {
    * with a random throwaway.
    */
   skipAccountCreate?: boolean;
-}): MintedSession {
+}): Promise<MintedSession> {
   if (!input.skipAccountCreate && !input.store.hasUser(input.tenantId, input.userId)) {
-    input.store.createAccountUser({
+    // Password hashing is async now (FR-35: Argon2id), so await the create to
+    // ensure the row is persisted before the caller mints/uses the session.
+    await input.store.createAccountUser({
       tenantId: input.tenantId,
       userId: input.userId,
       handle: input.userId,
