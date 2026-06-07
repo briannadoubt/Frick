@@ -54,10 +54,10 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitFor<T>(predicate: () => T | undefined, timeoutMs = 2000): Promise<T> {
+async function waitFor<T>(predicate: () => T | undefined | Promise<T | undefined>, timeoutMs = 2000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const value = predicate();
+    const value = await predicate();
     if (value !== undefined && value !== null && value !== false) {
       return value as T;
     }
@@ -72,8 +72,8 @@ describe("devtools event feed", () => {
     const response = await fetch(`${app.httpUrl}/health`);
     expect(response.status).toBe(200);
 
-    const events = await waitFor(() => {
-      const list = app!.server.store.devtoolsEvents.list();
+    const events = await waitFor(async () => {
+      const list = await app!.server.store.devtoolsEvents.list();
       return list.some((row) => row.kind === "http.request") ? list : undefined;
     });
     const request = events.find(
@@ -108,7 +108,7 @@ describe("devtools event feed", () => {
       payload: {},
       maxAttempts: 1,
     });
-    await waitFor(() => standaloneStore!.jobs.getById(row.id)?.status === "dead_lettered");
+    await waitFor(async () => standaloneStore!.jobs.getById(row.id)?.status === "dead_lettered");
     const events = standaloneStore.devtoolsEvents.list({ kind: "job.failed" });
     expect(events.length).toBeGreaterThanOrEqual(0);
     // The single-attempt path goes straight to dead-letter so we check both
