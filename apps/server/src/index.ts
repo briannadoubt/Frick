@@ -188,6 +188,11 @@ export {
   type FrickStoreWriteEvent,
   type FrickStoreWriteListener,
 } from "./store.js";
+export type {
+  StreamRetentionPolicy,
+  StreamRetentionPolicies,
+  StreamRetentionPruneResult,
+} from "./storage/stream-store.js";
 export { createNoopLogger, type FrickLogger } from "./logger.js";
 export {
   type IdentityProvidersConfig,

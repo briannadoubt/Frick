@@ -57,6 +57,33 @@ export interface IdempotencyWindowOptions {
   now?: () => number;
 }
 
+/**
+ * Opt-in retention policy for a single stream type (FR-145). Streams are
+ * source-of-truth application data, so the durable stream-store keeps every
+ * event forever by default — a policy is required to prune anything.
+ *
+ * Cursor-safety is the operator's responsibility: set bounds comfortably larger
+ * than your slowest subscriber's catch-up window, since pruned events can no
+ * longer be replayed to a cursor that falls behind them.
+ */
+export interface StreamRetentionPolicy {
+  /** Delete events whose `created_at` is older than this many ms. */
+  maxAgeMs?: number;
+  /** Keep only the newest N events per `(tenant, stream, streamId)`. */
+  maxEvents?: number;
+}
+
+/**
+ * Map of stream type name → {@link StreamRetentionPolicy}. Stream types absent
+ * from the map are never pruned (the safe default).
+ */
+export type StreamRetentionPolicies = Record<string, StreamRetentionPolicy>;
+
+export interface StreamRetentionPruneResult {
+  prunedByAge: number;
+  prunedByCount: number;
+}
+
 interface IdempotencyRow {
   result_event_id: string;
   created_at: string;
@@ -324,5 +351,49 @@ export class StreamStore {
       [tenantId, stream, streamId],
     );
     return Number(row!.next_sequence);
+  }
+
+  /**
+   * Apply opt-in per-stream retention (FR-145). Only stream types present in
+   * `policies` are touched — everything else keeps its full history. For each
+   * policy, `maxAgeMs` drops events older than the cutoff and `maxEvents` keeps
+   * only the newest N per `(tenant, stream, streamId)`. Idempotent: re-running
+   * with the same data prunes nothing further.
+   */
+  async pruneRetention(
+    policies: StreamRetentionPolicies,
+    now: () => number = this.#now,
+  ): Promise<StreamRetentionPruneResult> {
+    let prunedByAge = 0;
+    let prunedByCount = 0;
+    for (const [streamType, policy] of Object.entries(policies)) {
+      if (policy.maxAgeMs !== undefined && policy.maxAgeMs > 0) {
+        const cutoff = new Date(now() - policy.maxAgeMs).toISOString();
+        const result = await this.sql.run(
+          "DELETE FROM stream_events WHERE stream_type = ? AND created_at < ?",
+          [streamType, cutoff],
+        );
+        prunedByAge += Number(result.changes ?? 0);
+      }
+      if (policy.maxEvents !== undefined && policy.maxEvents >= 0) {
+        // Keep only the newest `maxEvents` per stream_id: delete rows whose
+        // sequence is at or below (this stream_id's max sequence) - maxEvents.
+        // The correlated subquery is evaluated against the pre-delete snapshot
+        // on both SQLite and Postgres, so the per-stream max is stable.
+        const result = await this.sql.run(
+          `DELETE FROM stream_events
+              WHERE stream_type = ?
+                AND sequence <= (
+                  SELECT MAX(s2.sequence) FROM stream_events s2
+                  WHERE s2.tenant_id = stream_events.tenant_id
+                    AND s2.stream_type = stream_events.stream_type
+                    AND s2.stream_id = stream_events.stream_id
+                ) - ?`,
+          [streamType, policy.maxEvents],
+        );
+        prunedByCount += Number(result.changes ?? 0);
+      }
+    }
+    return { prunedByAge, prunedByCount };
   }
 }

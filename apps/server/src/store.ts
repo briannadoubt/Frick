@@ -39,7 +39,11 @@ import {
   type AppendResult,
   type CachedIdempotentEvent,
   type StoredEvent,
+  type StreamRetentionPolicies,
 } from "./storage/stream-store.js";
+
+/** Default cadence for the opt-in per-stream retention sweep (FR-145). */
+const DEFAULT_STREAM_RETENTION_PRUNE_INTERVAL_MS = 15 * 60 * 1000;
 import { BoundedIdempotencyCache } from "./storage/idempotency-cache.js";
 import type { AppliedMigrationRow } from "./storage/migrations.js";
 import { createNoopLogger, type FrickLogger } from "./logger.js";
@@ -229,6 +233,20 @@ export interface StoreOptions {
    */
   platformEventsPruneIntervalMs?: number;
   /**
+   * Opt-in per-stream retention policies (FR-145), keyed by stream type. Stream
+   * events are durable application data, so the stream-store keeps everything
+   * by default; only stream types named here are pruned. See
+   * {@link StreamRetentionPolicies}.
+   */
+  streamRetention?: StreamRetentionPolicies;
+  /**
+   * Interval between background stream-retention sweeps. Only runs when
+   * {@link StoreOptions.streamRetention} declares at least one policy. Defaults
+   * to {@link DEFAULT_STREAM_RETENTION_PRUNE_INTERVAL_MS} (15 min); `0` disables
+   * the timer (a sweep still runs once at construction / initialize).
+   */
+  streamRetentionPruneIntervalMs?: number;
+  /**
    * Grace period kept before an expired `auth_sessions` row is pruned.
    * Defaults to {@link DEFAULT_EXPIRED_SESSION_RETENTION_GRACE_MS} (0 — prune
    * as soon as a session expires, since it is already unusable).
@@ -353,6 +371,8 @@ export class FrickStore {
   #devtoolsPruneTimer: ReturnType<typeof setInterval> | undefined;
   #platformEventsPruneTimer: ReturnType<typeof setInterval> | undefined;
   #expiredSessionPruneTimer: ReturnType<typeof setInterval> | undefined;
+  #streamRetentionPruneTimer: ReturnType<typeof setInterval> | undefined;
+  #streamRetention: StreamRetentionPolicies | undefined;
   #expiredSessionGraceMs = DEFAULT_EXPIRED_SESSION_RETENTION_GRACE_MS;
   #closed = false;
   /**
@@ -483,6 +503,26 @@ export class FrickStore {
       this.#platformEventsPruneTimer.unref?.();
     }
 
+    // Opt-in per-stream retention (FR-145). Only armed when at least one policy
+    // is declared — stream events are durable application data, so the default
+    // is keep-forever.
+    this.#streamRetention =
+      options.streamRetention && Object.keys(options.streamRetention).length > 0
+        ? options.streamRetention
+        : undefined;
+    if (this.#streamRetention) {
+      this.#safeStreamRetentionPrune();
+      const streamRetentionIntervalMs =
+        options.streamRetentionPruneIntervalMs ?? DEFAULT_STREAM_RETENTION_PRUNE_INTERVAL_MS;
+      if (streamRetentionIntervalMs > 0) {
+        this.#streamRetentionPruneTimer = setInterval(
+          () => this.#safeStreamRetentionPrune(),
+          streamRetentionIntervalMs,
+        );
+        this.#streamRetentionPruneTimer.unref?.();
+      }
+    }
+
     // Expired-session retention. `auth_sessions` rows are filtered by expiry
     // on read but were never deleted, so the table grew unbounded; sweep them
     // on the same one-shot-at-boot-then-timer shape as the caches above (FR-42).
@@ -521,6 +561,7 @@ export class FrickStore {
     this.#safeDevToolsPrune();
     this.#safePlatformEventsPrune();
     this.#safeExpiredSessionPrune();
+    this.#safeStreamRetentionPrune();
   }
 
   close(): void {
@@ -543,6 +584,10 @@ export class FrickStore {
     if (this.#expiredSessionPruneTimer) {
       clearInterval(this.#expiredSessionPruneTimer);
       this.#expiredSessionPruneTimer = undefined;
+    }
+    if (this.#streamRetentionPruneTimer) {
+      clearInterval(this.#streamRetentionPruneTimer);
+      this.#streamRetentionPruneTimer = undefined;
     }
     // SQLite closes synchronously; the Postgres pool's end() is async — fire it
     // and don't block close() (callers that need to await teardown can await
@@ -568,6 +613,18 @@ export class FrickStore {
       // eslint-disable-next-line no-console
       console.warn(
         `[frick] platform_events prune failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    });
+  }
+
+  #safeStreamRetentionPrune(): void {
+    if (this.#closed || !this.#schemaReady || !this.#streamRetention) return;
+    void this.streams.pruneRetention(this.#streamRetention).catch((error) => {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[frick] stream retention prune failed: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
