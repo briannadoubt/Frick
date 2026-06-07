@@ -16,7 +16,7 @@ describe("FrickLimits", () => {
   });
 
   it("exposes the expected set of limit keys with numeric values", async () => {
-    const expectedKeys: ReadonlyArray<keyof typeof DEFAULT_FRICK_LIMITS> = [
+    const numericKeys: ReadonlyArray<keyof typeof DEFAULT_FRICK_LIMITS> = [
       "maxHttpBodyBytes",
       "maxStreamAppendPayloadBytes",
       "maxBlobBytes",
@@ -43,11 +43,21 @@ describe("FrickLimits", () => {
       "heartbeatIntervalSeconds",
       "heartbeatTimeoutSeconds",
     ];
-    expect(Object.keys(DEFAULT_FRICK_LIMITS).sort()).toEqual([...expectedKeys].sort());
-    for (const key of expectedKeys) {
+    // FR-32: opt-in server-side device binding is a boolean toggle, not a
+    // numeric limit, so it is asserted separately below.
+    const booleanKeys: ReadonlyArray<keyof typeof DEFAULT_FRICK_LIMITS> = ["bindSessionDevice"];
+    expect(Object.keys(DEFAULT_FRICK_LIMITS).sort()).toEqual(
+      [...numericKeys, ...booleanKeys].sort(),
+    );
+    for (const key of numericKeys) {
       expect(typeof DEFAULT_FRICK_LIMITS[key]).toBe("number");
     }
+    for (const key of booleanKeys) {
+      expect(typeof DEFAULT_FRICK_LIMITS[key]).toBe("boolean");
+    }
     expect(DEFAULT_FRICK_LIMITS.maxWebSocketFrameBytes).toBe(524_288);
+    // Device binding ships OFF by default to preserve client compatibility.
+    expect(DEFAULT_FRICK_LIMITS.bindSessionDevice).toBe(false);
   });
 
   it("merges partial overrides on top of defaults", async () => {
@@ -109,6 +119,23 @@ describe("FrickLimits", () => {
     expect(() => limitsFromEnv({ FRICK_MAX_CONNECTIONS_PER_PRINCIPAL: "0" })).toThrow(FrickConfigError);
     expect(() => limitsFromEnv({ FRICK_MAX_CONNECTIONS_PER_PRINCIPAL: "-3" })).toThrow(FrickConfigError);
     expect(() => limitsFromEnv({ FRICK_MAX_CONNECTIONS_PER_PRINCIPAL: "abc" })).toThrow(FrickConfigError);
+  });
+
+  it("reads the opt-in device-binding toggle from the environment (FR-32)", async () => {
+    // Unset → omitted, so the default (false) applies.
+    expect(limitsFromEnv({})).toEqual({});
+    expect(limitsFromEnv({ FRICK_BIND_SESSION_DEVICE: "" })).toEqual({});
+    for (const truthy of ["true", "1", "yes", "TRUE"]) {
+      expect(limitsFromEnv({ FRICK_BIND_SESSION_DEVICE: truthy })).toEqual({ bindSessionDevice: true });
+    }
+    for (const falsy of ["false", "0", "no", "FALSE"]) {
+      expect(limitsFromEnv({ FRICK_BIND_SESSION_DEVICE: falsy })).toEqual({ bindSessionDevice: false });
+    }
+  });
+
+  it("rejects a non-boolean device-binding env value (FR-32)", async () => {
+    expect(() => limitsFromEnv({ FRICK_BIND_SESSION_DEVICE: "maybe" })).toThrow(FrickConfigError);
+    expect(() => limitsFromEnv({ FRICK_BIND_SESSION_DEVICE: "2" })).toThrow(FrickConfigError);
   });
 
   it("carries limit metadata on FrickLimitError", async () => {

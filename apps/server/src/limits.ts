@@ -74,6 +74,15 @@ export interface FrickLimits {
   heartbeatIntervalSeconds: number;
   /** How long the server waits for any client frame before terminating, in seconds. */
   heartbeatTimeoutSeconds: number;
+  /**
+   * When true, the server enforces server-side device binding for sessions
+   * (FR-32): a Hello frame whose `deviceId`/`replicaId` differs from the
+   * `auth_sessions` row bound to the presented session token is rejected with
+   * an authentication error so the client re-authenticates. Defaults to
+   * `false` to preserve existing client behavior — operators opt in via
+   * `FRICK_BIND_SESSION_DEVICE`.
+   */
+  bindSessionDevice: boolean;
 }
 
 export const DEFAULT_FRICK_LIMITS: FrickLimits = Object.freeze({
@@ -103,6 +112,9 @@ export const DEFAULT_FRICK_LIMITS: FrickLimits = Object.freeze({
   signalTtlMaxSeconds: 120,
   heartbeatIntervalSeconds: 25,
   heartbeatTimeoutSeconds: 60,
+  // Server-side device binding is opt-in (FR-32) so existing clients keep
+  // working until an operator enables it.
+  bindSessionDevice: false,
 }) as FrickLimits;
 
 export function mergeLimits(overrides?: Partial<FrickLimits>): FrickLimits {
@@ -137,7 +149,30 @@ export function limitsFromEnv(env: NodeJS.ProcessEnv = process.env): Partial<Fri
   if (maxBlobBytesPerPrincipal !== undefined) {
     overrides.maxBlobBytesPerPrincipal = maxBlobBytesPerPrincipal;
   }
+  const bindSessionDevice = parseBooleanEnv(
+    env.FRICK_BIND_SESSION_DEVICE,
+    "FRICK_BIND_SESSION_DEVICE",
+  );
+  if (bindSessionDevice !== undefined) {
+    overrides.bindSessionDevice = bindSessionDevice;
+  }
   return overrides;
+}
+
+function parseBooleanEnv(value: string | undefined, varName: string): boolean | undefined {
+  if (value === undefined || value === "") {
+    return undefined;
+  }
+  const lowered = value.toLowerCase();
+  if (lowered === "true" || lowered === "1" || lowered === "yes") {
+    return true;
+  }
+  if (lowered === "false" || lowered === "0" || lowered === "no") {
+    return false;
+  }
+  throw new FrickConfigError(
+    `${varName} must be true/false/1/0/yes/no (got ${JSON.stringify(value)})`,
+  );
 }
 
 function parsePositiveIntegerEnv(value: string | undefined, varName: string): number | undefined {

@@ -944,7 +944,12 @@ export class SyncGateway {
 
     switch (frame[0]) {
       case FrameKind.Hello: {
-        if (!(await this.#authenticateHelloSession(client, frame[1].sessionToken))) {
+        if (
+          !(await this.#authenticateHelloSession(client, frame[1].sessionToken, {
+            deviceId: frame[1].deviceId,
+            replicaId: frame[1].replicaId,
+          }))
+        ) {
           return;
         }
 
@@ -1606,7 +1611,11 @@ export class SyncGateway {
     return principal;
   }
 
-  async #authenticateHelloSession(client: SyncClient, sessionToken: string | undefined): Promise<boolean> {
+  async #authenticateHelloSession(
+    client: SyncClient,
+    sessionToken: string | undefined,
+    helloDevice?: { deviceId: string; replicaId: string },
+  ): Promise<boolean> {
     if (!sessionToken) {
       return true;
     }
@@ -1616,6 +1625,20 @@ export class SyncGateway {
         code: "auth.unauthenticated",
         message: "Invalid session token",
         reason: "unauthenticated",
+      });
+      return false;
+    }
+    // Server-side device binding (FR-32, opt-in). The principal's
+    // `deviceId`/`replicaId` are derived from the `auth_sessions` ROW, not from
+    // the client. When binding is enabled, a Hello that presents a valid token
+    // from a *different* device (or replica) is rejected so the client is
+    // forced to re-authenticate and mint a session bound to its own device.
+    // Default-off keeps existing FrickSwift/web flows unchanged.
+    if (this.#limits.bindSessionDevice && helloDevice && !this.#helloMatchesBoundDevice(principal, helloDevice)) {
+      this.#sendHelloAuthNack(client, {
+        code: "auth.unauthenticated",
+        message: "Session is bound to a different device; re-authenticate",
+        reason: "sessionDeviceMismatch",
       });
       return false;
     }
@@ -1640,6 +1663,21 @@ export class SyncGateway {
 
     await this.#setClientSession(client, sessionToken, principal);
     return true;
+  }
+
+  /**
+   * FR-32: does the device claimed in the Hello frame match the device the
+   * session token is bound to? `principal` carries the bound `deviceId`/
+   * `replicaId` read from the `auth_sessions` row. Both must match.
+   */
+  #helloMatchesBoundDevice(
+    principal: Principal,
+    helloDevice: { deviceId: string; replicaId: string },
+  ): boolean {
+    return (
+      principal.deviceId === helloDevice.deviceId &&
+      principal.replicaId === helloDevice.replicaId
+    );
   }
 
   /**
@@ -1674,7 +1712,7 @@ export class SyncGateway {
     input: {
       code: "auth.unauthenticated" | "auth.forbidden";
       message: string;
-      reason: "unauthenticated" | "notAuthorizedForResource";
+      reason: "unauthenticated" | "notAuthorizedForResource" | "sessionDeviceMismatch";
     },
   ): void {
     const envelope = createFrickErrorEnvelope({

@@ -40,9 +40,22 @@ server.
 
 **Known gaps.**
 
-- No device-binding (e.g. token bound to a specific deviceId / replicaId at
-  the server side). The session row carries deviceId/replicaId but those
-  values came from the client at login.
+- Device-binding re-auth is **opt-in** (FR-32). The session row binds
+  `deviceId`/`replicaId` server-side at login, and the `Principal` is always
+  derived from that row — a client can never spoof another device's identity.
+  By default, however, a still-valid session token presented from a *different*
+  device during the WebSocket Hello handshake is still accepted (no re-auth on
+  device change), so a stolen token can be replayed from any device until it
+  expires or is revoked. Operators who want a stolen token to be rejected when
+  it surfaces on a new device can enable `FRICK_BIND_SESSION_DEVICE`
+  (`FrickLimits.bindSessionDevice`): the gateway then compares the Hello frame's
+  `deviceId`/`replicaId` against the session's bound values and rejects a
+  mismatch with `auth.unauthenticated` (`details.reason = "sessionDeviceMismatch"`),
+  closing the socket so the client re-authenticates. Default-off preserves
+  existing client behavior. Note this raises the bar but is not anti-spoofing on
+  its own: a thief who also captures the victim's `deviceId`/`replicaId` (both
+  client-chosen at login) can still present a matching Hello — it primarily
+  defends against casual token replay from an attacker's own device.
 - No refresh-token / short-access-token split. Token lifetime is one knob.
 - No per-principal throughput limiter on token-using HTTP endpoints, so an
   attacker who has the token is bounded by deployment-level controls rather
@@ -67,6 +80,12 @@ with `senderId: "user-grace"` posted from Ada's session.
   `policyHooks`; payload ownership checks are app/domain policy.
 - `assertBlobOwnership` requires the upload's `ownerId` to match the
   principal's `userId`, denying with `ownerMismatch`.
+- The WebSocket Hello frame's `replicaId`/`deviceId` are not used for
+  authorization once a session is bound — the `Principal`'s values always come
+  from the session row. When the opt-in `bindSessionDevice` toggle (see *Token
+  theft*, FR-32) is enabled they are additionally *checked* against the bound
+  session at the handshake, and a mismatch rejects the connection; they are
+  still never *trusted* as the source of identity.
 
 **Known gaps.**
 
