@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJ83ARXBSKCWYVVTZ2Q8WNA",
+  "ts": "2026-06-07T23:53:41.917Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3S",
+    "commentId": "01KTJ83ARXBSKCWYVVTZ2Q8WN9",
+    "author": "claude",
+    "body": "Shipped enforced a11y contract: contrast core + SEMANTIC_CONTRAST_PAIRS/checkContrastPairs in @fricken/design with a suite enforcing WCAG AA across all 12 themes (fixed real fails: mode-aware status tones, darkened frickenChat primary #3a5cbf, frickenChat inherits mode-aware chat bubble); frozen frickIconNames + isFrickIconName; :focus-visible ring tokens; prefers-reduced-motion block; SR role/name tests; docs/accessibility.md. Gate green: typecheck exit 0, design 48 passed, design-web 47 passed."
+  }
+}
