@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGNK37Z9RYZA7DNS97Z4F9F",
+  "ts": "2026-06-07T09:11:01.119Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ4C",
+    "commentId": "01KTGNK37Z9RYZA7DNS97Z4F9E",
+    "author": "claude",
+    "body": "Verified account/session/password-reset/grant/invitation stores on PgSqlDriver (5/5 conformance on real PG16). Two portability fixes: AccountStore COLLATE NOCASE -> LOWER(handle)=LOWER(?); GrantStore.isEmptyAsync EXISTS()===0 -> !present (SQLite int vs PG boolean). SQLite suite still 781 green. test:pg widened with pg-identity."
+  }
+}
