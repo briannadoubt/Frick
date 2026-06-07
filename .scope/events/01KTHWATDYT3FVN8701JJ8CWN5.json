@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTHWATDYT3FVN8701JJ8CWN5",
+  "ts": "2026-06-07T20:28:04.414Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1D",
+    "commentId": "01KTHWATDYT3FVN8701JJ8CWN4",
+    "author": "claude",
+    "body": "DONE: NDJSON backup/restore ported to the async SqlDriver — works on SQLite and Postgres (commit 44f3049). FrickStore.listAppliedMigrations async+portable + sqlDriver accessor; dump streams via the seam with dialect-aware table existence; restore uses SqlDriver.transaction + per-row SAVEPOINT (so a bad row doesn't poison the PG txn) + dialect-aware column introspection, dropping the SQLite-only PRAGMA foreign_keys (FK-safe via parent-first insert / child-first+cascade truncate). Validated end-to-end on real Postgres (dump→mutate→restore→verify) in createserver-postgres.test.ts. Server suite 781 green."
+  }
+}
