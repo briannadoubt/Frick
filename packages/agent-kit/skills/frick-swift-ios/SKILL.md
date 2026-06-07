@@ -14,6 +14,13 @@ Guidance:
 - Keep sign-in flows on the shared session installer path so a different `userId` clears framework cache state before the new session is installed.
 - Keep subscribe/upsert/presence/signal frames issued immediately after `connect()` buffered until the WebSocket opens, with FIFO ordering behind Hello.
 - Preserve reconnect subscription replay and tolerant `fetchObjects` row decoding; a reconnect should restore prior subscriptions, and one malformed object row should not poison the whole fetch.
+- Keep the default `FrickKeychainSessionStore` behavior intact: client
+  initialization auto-restores unexpired sessions, Frick auth calls and
+  `restoreSession(_:)` persist through the configured store, and `logout()`
+  clears it. Use `FrickInMemorySessionStore` for tests/previews.
+- Preserve `writeObject(... expectedVersion: nil)` auto-resolution from local
+  object versions. Explicit caller-provided versions still win; stale versions
+  should remain real `storage.conflict` errors.
 - Preserve the sharing helpers (`createInvitation`, `acceptInvitation`,
   `listGrants`, `revokeGrant`) as thin wrappers around the framework HTTP
   routes; app-specific collaborator semantics belong above the SDK.

@@ -175,6 +175,7 @@ Pending appends are preserved across compatible reloads. When an incompatible-ca
 | Destructive cache reset entry point | `cache.clear()` | `FrickClient.resetCache()` | `FrickClient.resetCache()` |
 | Authenticated product analytics tracking | `FrickClient.track(...)` | `FrickClient.track(...)` | `FrickClient.track(...)` |
 | Capability negotiation in handshake | ✓ (WebSocket) | ✓ (WebSocket) | ✓ (WebSocket) |
+| Object delete deltas carry `removed` ids | ✓ (wire type) | Back-compat tombstone/refetch path | Back-compat tombstone/refetch path |
 
 ## Product Analytics
 
@@ -228,11 +229,19 @@ telemetry should follow the TypeScript semantics when it lands. Android custom
 transports keep the original `post(path, body)` source contract; transports
 that want to forward `traceparent` can override `post(path, body, headers)`.
 
-## Object Upserts Over the Sync Socket
+## Object Mutations Over Sync
 
 Object upserts flow over the sync WebSocket via `FrameKind.ObjectUpsert`. The server honors the schema's `mergePolicy`: `lastWriteWins` accepts any write and increments the version, `versionPrecondition` requires `expectedVersion` to match the on-disk row and Nacks with `storage.conflict` otherwise. Successful upserts reply with an `Ack` carrying the new version. TypeScript exposes `FrickClient.upsertObject`, Swift exposes `FrickSyncSocket.upsertObject`, and Android exposes `FrickSyncSocket.upsertObject`; each queues or buffers writes while disconnected and flushes on reconnect. Swift also buffers subscribe, presence, signal, projection, and object-subscribe frames issued immediately after `connect()` until the underlying WebSocket is open, preserves FIFO order behind the Hello frame, and replays active subscriptions after reconnect.
 
 Swift's sync socket decodes packed `Snapshot`, `Delta`, and stream event frames through a `FrickSchemaDescriptor`. Foundation-schema clients can use the default generated descriptor; product-schema clients must inject the app descriptor through `FrickClient(schemaDescriptor:)` or `FrickSyncSocket(schemaDescriptor:)` so packed type and field ids resolve to the app's object/stream names.
+
+Server-originated object deletes fan out through the same sync gateway path as
+upserts. `DeltaPayload` may include an optional `removed: { type, id }[]` list
+alongside `objects`, and delete deltas also include back-compat tombstone
+records so older Swift/Android observers that refetch on object deltas still
+drop the row. Forward-looking SDKs should consume `removed` directly and remove
+the local `(type, id)` row without a full refetch; they must keep the tombstone
+path for servers that predate `removed`.
 
 Schema field definitions may also carry an optional `sensitivity` classification — `public | private | pii | secret | content` — that informs how the server treats field values in logs, diagnostics, and admin inspection (and, in future, export/deletion workflows). Like `mergePolicy`, `sensitivity` is **server-only** metadata: it is validated by `validateSchema`, defaults to `private` when omitted, and is intentionally *not* emitted into the generated Swift / Kotlin / TS client artifacts, so adding or changing it is wire-backwards-compatible and requires no artifact regeneration. The server's `redactRecord` helper masks `pii`/`secret`/`content` values by default; see [`docs/operations.md`](operations.md) for where this is applied.
 

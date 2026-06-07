@@ -59,7 +59,7 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
   no-op until the app installs an OTel provider. Swift and Android expose
   dependency-light telemetry hooks for analytics `track` calls only; they do
   not bundle native OTel SDKs, and native sync telemetry remains pending.
-- Swift and Android WebSocket sync transports with capability handshake, object subscriptions/upserts, presence, packed-frame decoding, cache compatibility, and cross-device draft helpers. Swift clients can pass app schema id/revision/hash and a `FrickSchemaDescriptor` into `FrickClient`, auto-clear framework cache state when sign-in swaps users, buffer frames issued immediately after `connect()` until the WebSocket opens, replay active subscriptions after reconnect, and skip malformed rows during `fetchObjects` instead of aborting the whole fetch.
+- Swift and Android WebSocket sync transports with capability handshake, object subscriptions/upserts, live delete tombstones, presence, packed-frame decoding, cache compatibility, and cross-device draft helpers. Swift clients can pass app schema id/revision/hash and a `FrickSchemaDescriptor` into `FrickClient`, auto-clear framework cache state when sign-in swaps users, buffer frames issued immediately after `connect()` until the WebSocket opens, replay active subscriptions after reconnect, skip malformed rows during `fetchObjects` instead of aborting the whole fetch, auto-restore sessions from the Keychain, and auto-resolve `expectedVersion` from cached object versions for HTTP writes.
 
 ## Known Limitations
 

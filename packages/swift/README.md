@@ -14,6 +14,16 @@ Swift client for Frick (sync socket, client, SwiftUI streaming, push payloads).
   decodes packed object/stream frames through the configured schema descriptor.
 - `FrickClient.fetchObjects` decodes response rows individually and skips
   malformed rows with a log notice instead of failing the entire fetch.
+- `FrickClient` defaults to `FrickKeychainSessionStore`, auto-restores a
+  saved unexpired session during initialization, persists sessions installed
+  through Frick auth calls or `restoreSession(_:)`, and clears the persisted
+  session on `logout()`. Tests and previews can inject
+  `FrickInMemorySessionStore`.
+- `FrickClient.writeObject(... expectedVersion: nil)` looks up the locally
+  cached object version and sends it as `if-match` when available, so schemas
+  using `versionPrecondition` can update rows after a prior fetch/write without
+  app code passing the version manually. Explicit `expectedVersion` values
+  still win, and stale local versions still surface as server conflicts.
 
 ## Consuming this package
 

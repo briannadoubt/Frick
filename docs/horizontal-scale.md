@@ -11,7 +11,7 @@ The framework already lets you run N nodes in front of one SQLite database (or t
 | Path | Single node | N nodes without bus | N nodes with bus |
 |---|---|---|---|
 | Stream events | Subscribers on the same node receive ✓ | Subscribers on **peer** nodes never see it ✗ | All subscribers receive ✓ |
-| Object upserts | Same ✓ | Peers see it only when they re-read ✗ | All subscribers receive ✓ |
+| Object upserts/deletes | Same ✓ | Peers see it only when they re-read ✗ | All subscribers receive ✓ |
 | Signals | Same ✓ | Same ✗ | All subscribers receive ✓ |
 | Presence deltas | Same ✓ | Same ✗ | All subscribers receive ✓ |
 | Projection deltas | Same ✓ | Same ✗ | All subscribers receive ✓ |
@@ -31,7 +31,7 @@ interface FrickClusterBus {
 }
 ```
 
-`ClusterEnvelope` is a tagged union carrying every framework-published fan-out shape (stream event, object upsert, signal, projection delta, presence delta). Each envelope is stamped with `originNodeId` so the receiving bus can filter self-publishes — that loop guard is the only ordering / dedup guarantee the contract requires.
+`ClusterEnvelope` is a tagged union carrying every framework-published fan-out shape (stream event, object upsert, object delete, signal, projection delta, presence delta). Each envelope is stamped with `originNodeId` so the receiving bus can filter self-publishes — that loop guard is the only ordering / dedup guarantee the contract requires.
 
 ## The default — `MemoryClusterBus`
 

@@ -30,20 +30,23 @@ server.
   on the next protected request, prompting clients to prompt re-login.
 - The session row records `lastSeenAt`, which an operator could mine for
   anomalous reuse, but the framework does not raise alerts on its own.
+- Operators can proactively revoke sessions through
+  `POST /_frick/admin/sessions/revoke`, either by single bearer token or by
+  `(userId, tenantId?)`. Matching live WebSockets are closed with policy code
+  `1008`, and the action is audit-logged.
 - The framework assumes transport is secure (TLS) and does not enforce it —
   the demo `http.createServer` listens on plain HTTP. Operators are expected
   to terminate TLS at a reverse proxy.
 
 **Known gaps.**
 
-- No proactive session revocation API; an operator can only delete the row
-  directly in SQL.
 - No device-binding (e.g. token bound to a specific deviceId / replicaId at
   the server side). The session row carries deviceId/replicaId but those
   values came from the client at login.
 - No refresh-token / short-access-token split. Token lifetime is one knob.
-- No rate limiting on token-using endpoints, so an attacker who has the token
-  has unbounded throughput. This is flagged as a slice-10 gap.
+- No per-principal throughput limiter on token-using HTTP endpoints, so an
+  attacker who has the token is bounded by deployment-level controls rather
+  than a framework request-rate quota.
 
 ---
 

@@ -898,21 +898,24 @@ projection's state from source data.
 
 ## Server-originated object and stream live push
 
-Object upserts and stream appends are live-pushed to already-subscribed sync
-clients **regardless of which caller drove the write**. Whether a write
-arrives as a client WebSocket `ObjectUpsert`/`Append` frame, an HTTP
-`PUT /objects/...` / append request, or a server-side caller invoking
-`store.upsertObject` / `store.upsertObjectWithPolicy` / `store.appendEvent`
+Object upserts, object deletes, and stream appends are live-pushed to
+already-subscribed sync clients **regardless of which caller drove the write**.
+Whether a write arrives as a client WebSocket `ObjectUpsert`/`Append` frame, an
+HTTP `PUT /objects/...` / `DELETE /objects/...` / append request, or a
+server-side caller invoking `store.upsertObject`,
+`store.upsertObjectWithPolicy`, `store.deleteObject`, or `store.appendEvent`
 directly (a background job or an app command route), the subscriber receives
 the same `Delta` frame.
 
 This is wired through a single broadcast funnel. The store fires a write-change
-notification on every successful object upsert and stream append; the sync
-gateway is the sole consumer of that notification and fans the change out to
-matching subscribers. The gateway no longer broadcasts inline from its frame
-handlers or the HTTP routes — so a single write produces exactly one delta per
-subscriber, never a duplicate. The broadcast carries the **stored** (post-merge)
-object state, which is the correct snapshot to replicate under any merge policy.
+notification on every successful object upsert, object delete, and stream
+append; the sync gateway is the sole consumer of that notification and fans the
+change out to matching subscribers. Delete deltas carry both a back-compat
+tombstone object record and `removed: [{ type, id }]`. The gateway no longer
+broadcasts inline from its frame handlers or the HTTP routes — so a single
+write produces exactly one delta per subscriber, never a duplicate. Upsert
+broadcasts carry the **stored** (post-merge) object state, which is the correct
+snapshot to replicate under any merge policy.
 
 Because the funnel reuses the same publish path as before, deltas remain
 tenant-scoped (a subscriber only sees writes in its own tenant) and, when a
