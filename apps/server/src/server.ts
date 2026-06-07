@@ -1957,7 +1957,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         const requestedOwnerId =
           url.searchParams.get("ownerId") ?? (principal.scope === "admin" ? undefined : principal.userId);
         if (principal.scope !== "admin" && requestedOwnerId !== undefined) {
-          assertCanReadBlob(principal, requestedOwnerId, policyHooks);
+          await assertCanReadBlob(principal, requestedOwnerId, policyHooks);
         }
         const responseBody: Record<string, unknown> = {
           schemaHash: store.schema.hash,
