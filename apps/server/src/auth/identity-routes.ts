@@ -1187,7 +1187,7 @@ export function createIdentityRouter(
           ...existing,
           [userObject.revokedAtField]: now,
         });
-        const killed = options.store.deleteSessionsForUser(userId);
+        const killed = await options.store.deleteSessionsForUser(userId);
         if (options.config.onRevoke) {
           try {
             await options.config.onRevoke({
@@ -1385,7 +1385,7 @@ export function createIdentityRouter(
     }
     // Kill outstanding sessions on a successful reset — common pattern
     // to invalidate cookies/JWTs an attacker might have squirreled away.
-    options.store.deleteSessionsForUser(consumed.userId);
+    await options.store.deleteSessionsForUser(consumed.userId);
     log.info("auth.email.password_reset_completed", {
       event: "auth.email.password_reset_completed",
       userId: consumed.userId,

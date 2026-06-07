@@ -2089,7 +2089,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         // processors can do that inside their handlers.
         for (const processor of matchingProcessors) {
           if (!processor.process) continue;
-          store.jobs.enqueue({
+          await store.jobs.enqueue({
             tenantId: principal.tenantId,
             jobType: BLOB_PROCESS_JOB_TYPE,
             payload: encodeBlobProcessPayload({
@@ -3935,7 +3935,7 @@ async function handleAdminRoute(
         outcome: "allow",
         detail: { tenantId },
       });
-      const row = store.jobs.enqueue({
+      const row = await store.jobs.enqueue({
         tenantId,
         jobType,
         payload,
