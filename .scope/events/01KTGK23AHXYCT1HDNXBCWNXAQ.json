@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGK23AHXYCT1HDNXBCWNXAQ",
+  "ts": "2026-06-07T08:26:46.993Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ4A",
+    "commentId": "01KTGK23AHXYCT1HDNXBCWNXAP",
+    "author": "claude",
+    "body": "DONE + merged to main (e272ef1). Landed the async SqlDriver storage seam from the parked worktree, finished the caller ripple (gateway frame handlers, server routes, dashboard, compliance, jobs, projections, CLI), added param normalization (boolean/undefined) to SqliteSqlDriver, made projection handlers async-capable, exported SqlDriver/SqliteSqlDriver from @fricken/server. Full repo suite green: 1074 passing, typecheck clean. Worktree removed. Caught + fixed THREE production auth-bypass bugs the async conversion surfaced: assertCanSubscribe (subscription authz), assertCanReadBlob (cross-owner blob list), verifyAccountPassword (wrong-password login). Unblocks FR-119 (Postgres adapter implements the same SqlDriver interface)."
+  }
+}
