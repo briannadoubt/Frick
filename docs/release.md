@@ -7,7 +7,9 @@ Frick has independent per-package versions. A release usually covers one or a fe
 ## Flow
 
 1. **PR opened** against `main` with the change.
-2. **CI green** — `pnpm test`, `pnpm typecheck`, native build matrices (Swift, Android), generated-artifact drift check for schema, fixtures, and design tokens.
+2. **CI green** — `pnpm test`, `pnpm typecheck`, `pnpm verify:generated`,
+   the Swift package check, the Android SDK/design module check, the Postgres
+   migration-runner suite, release dry-run, and end-to-end smoke test.
 3. **Bump version** for each package that changed. See the CLI commands below.
 4. **Regenerate the changelog** entry for the upcoming version.
 5. **Tag** the release in git.
@@ -109,7 +111,7 @@ package list.
 publish-npm.yml
 ```
 
-npm's trusted-publisher form asks for the workflow filename, not the full `.github/workflows/` path. Each public package manifest must include repository metadata for the GitHub repository running the workflow (`git+https://github.com/<owner>/<repo>.git`) plus its workspace directory; the workflow fails before publishing if it does not match. Do not use long-lived `NPM_TOKEN` or `NODE_AUTH_TOKEN` secrets for framework package publishing. For Swift, push the tag — SwiftPM consumers resolve from git. For Android, push the matching `android-v*` tag and let the Android publish workflow release the Maven artifact.
+npm's trusted-publisher form asks for the workflow filename, not the full `.github/workflows/` path. Each public package manifest must include repository metadata for the GitHub repository running the workflow (`git+https://github.com/<owner>/<repo>.git`) plus its workspace directory; the workflow fails before publishing if it does not match. Do not use long-lived `NPM_TOKEN` or `NODE_AUTH_TOKEN` secrets for framework package publishing. For Swift, push the `swift-v*` tag — the workflow mirrors `packages/swift` to the standalone `FrickSwift` repository and tags that mirror with the plain semver version. SwiftPM consumers depend on the mirror repository, not this monorepo. For Android, push the matching `android-v*` tag and let the Android publish workflow release the Maven artifact.
 
 ## Pre-publish sanity checklist
 

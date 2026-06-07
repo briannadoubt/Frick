@@ -42,7 +42,8 @@ This document is the shared implementation contract for agents working on this a
 - Schema and generated artifacts: `pnpm schema:generate && pnpm design:generate && pnpm verify:generated`
 - TypeScript: `pnpm test && pnpm typecheck`
 - Swift: `pnpm swift:test`
-- Android: `pnpm android:build`
+- Android framework modules: CI Gradle module set (`:frick`, `:frick-compose`,
+  `:design`); `pnpm android:build` for stricter local full-demo verification.
 
 ## Agent Worksplit
 

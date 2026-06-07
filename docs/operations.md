@@ -957,6 +957,11 @@ Every subsequent line is `{ "type": "<table>", "row": { ... } }`. The
 `row` shape matches the SQL column layout; binary columns are
 base64-encoded under a sibling `<col>_base64` key.
 
+When `FRICK_BLOB_DRIVER=filesystem` is selected, blob metadata is still dumped
+from SQLite but the blob byte files under `FRICK_BLOB_STORAGE_PATH` are not yet
+included in the NDJSON stream. Back up and restore that directory alongside the
+database until filesystem/object-storage byte export lands.
+
 The `tenantId` field is either a specific tenant (per-tenant dump) or
 `"all"` (whole-database dump). Per-tenant dumps filter rows where
 `tenant_id = <chosen>` and skip framework infra (admin audit log,
@@ -1143,8 +1148,10 @@ Content-Type: application/json
   bytes are written to tenant-isolated, id-keyed files so one tenant can never
   read another's. Blob metadata stays in SQLite under either driver. The
   filesystem driver fails fast at startup if the storage path is missing or not
-  writable. Object-storage (S3) and derivative offloading are separate
-  follow-ups (FR-54, FR-55).
+  writable. Filesystem blob byte files are not yet included in NDJSON backup /
+  restore or account export payloads, so operators must back up
+  `FRICK_BLOB_STORAGE_PATH` separately. Object-storage (S3), byte export, and
+  derivative offloading are separate follow-ups (FR-54, FR-55).
 - Outbound email ships the Resend reference adapter and an in-memory test
   adapter only (see "Outbound email"). Other providers (SES, Postmark, SMTP)
   are implemented out-of-tree against the exported `FrickEmailAdapter`

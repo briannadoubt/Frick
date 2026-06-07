@@ -24,7 +24,10 @@ Frick is a pre-1.0 fullstack realtime framework. The repo contains the canonical
 - Local dashboard: `pnpm cli dashboard` (`http://127.0.0.1:4299`);
   `pnpm dashboard` is a convenience alias.
 - Swift checks when touching `packages/swift` or `packages/design-swift`: `pnpm swift:test`
-- Android checks when touching `apps/android`: `pnpm android:build`
+- Android SDK/design checks when touching Android framework modules: generate
+  schema/design artifacts, then run the Gradle module set used by CI
+  (`:frick`, `:frick-compose`, `:design`). `pnpm android:build` is a stricter
+  local full-demo check and still includes `:app`.
 
 ## Project Constraints
 

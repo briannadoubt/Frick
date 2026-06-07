@@ -89,8 +89,10 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
   SAML and arbitrary non-OIDC OAuth provider routing remain unimplemented.
 - Blob bytes default to SQLite but can use the local filesystem with
   `FRICK_BLOB_DRIVER=filesystem` and a writable `FRICK_BLOB_STORAGE_PATH`.
-  Blob metadata remains in SQLite. Object-storage/S3 drivers, derivative
-  offloading, and richer lifecycle policies remain follow-up work.
+  Blob metadata remains in SQLite. Filesystem blob byte files are not yet part
+  of NDJSON backup/restore or account export payloads, so operators must back
+  up `FRICK_BLOB_STORAGE_PATH` separately. Object-storage/S3 drivers,
+  derivative offloading, and richer lifecycle policies remain follow-up work.
 - APNs, FCM, and Web Push all have documented push-adapter exports and
   `frick tenants set-push` credential workflows. Web Push encrypts payloads per
   RFC 8291 when browser subscription keys are present; multi-key credential
@@ -103,6 +105,10 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
   in-tree; SES/Postmark/SMTP providers are implemented out-of-tree against the
   same interface.
 - Swift and Android package publication is configured in source, but local verification still depends on the host having Xcode or Android SDK/JDK paths installed.
+- CI and Android publishing gate the framework Android modules
+  (`:frick`, `:frick-compose`, `:design`). The old demo `:app` remains in the
+  workspace and in the stricter local `pnpm android:build` script, but it is
+  excluded from CI/publish while it is rebuilt around the current SDK surface.
 - Internal specs and plans are historical. They explain why slices happened, not necessarily what is true now.
 
 ## Current Local Quality Gate
@@ -119,5 +125,5 @@ For native changes, also run the relevant native check:
 
 ```bash
 pnpm swift:test
-pnpm android:build
+pnpm android:build   # strict local check; CI/publish run the SDK/design module subset
 ```

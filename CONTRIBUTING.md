@@ -18,8 +18,13 @@ If you touched the Swift or Android client paths, also run the native checks. Th
 
 ```bash
 pnpm swift:test            # swift test for packages/swift and packages/design-swift
-pnpm android:build         # Gradle: unit tests + lint + assembleDebug for frick, design, app
+pnpm android:build         # strict local Android check, including the demo :app
 ```
+
+CI and the Android publish workflow currently gate the framework modules only:
+`:frick`, `:frick-compose`, and `:design`. The demo `apps/android/app` is still
+kept as a thin harness, but it is excluded from CI/publish until it is rebuilt
+around the current SDK surface.
 
 For ad-hoc iteration:
 
@@ -59,7 +64,7 @@ The body should focus on **why**, not what — the diff already shows what chang
 Every PR is expected to:
 
 - Pass `pnpm test`, `pnpm typecheck`, and `pnpm verify:generated` locally before review.
-- Include native verification in the PR description if the change touched Swift (`pnpm swift:test`) or Android (`pnpm android:build`) paths.
+- Include native verification in the PR description if the change touched Swift (`pnpm swift:test`) or Android paths. For Android framework modules, report the CI module set (`:frick`, `:frick-compose`, `:design`); use `pnpm android:build` when you also need the stricter local demo check.
 - Include or update relevant tests. Doc-only changes are exempt.
 - Update the relevant doc (`docs/operations.md`, `docs/authoring.md`, `docs/schema-author-tutorial.md`, etc.) when behavior or surface area changes.
 - Avoid hand-editing generated artifacts. Regenerate them with `pnpm schema:generate` / `pnpm fixtures:generate` and commit the result.

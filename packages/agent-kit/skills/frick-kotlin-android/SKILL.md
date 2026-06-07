@@ -13,4 +13,7 @@ Guidance:
 - Use Android design artifacts from the design module.
 - Keep Android demo app code thin; reusable behavior belongs in `apps/android/frick` or documented extension points.
 
-Run `pnpm android:build` when touching Android paths.
+When touching Android framework modules, generate schema/design artifacts and
+run the Gradle module set used by CI (`:frick`, `:frick-compose`, `:design`).
+Use `pnpm android:build` as the stricter local full-demo check; it still
+includes `:app`.

@@ -22,6 +22,9 @@ Companion docs:
     design-token outputs before checking for drift
   - Use `pnpm verify:release --skip-mobile` only when the host lacks
     Swift / Android toolchains (e.g. Linux CI)
+  - `android:build` is the stricter local Android script and includes the demo
+    `:app`; CI and Android publishing gate only the framework modules
+    (`:frick`, `:frick-compose`, `:design`) while the demo is being rebuilt.
 - [ ] `pnpm --filter @fricken/cli build && pnpm exec frick verify` exits 0
   (re-runs the generated-artifact gate through the built CLI bin; useful as a
   spot check that the CLI still works)
@@ -48,8 +51,11 @@ Companion docs:
 
 ## Tag and publish
 
-- [ ] `git tag framework-vX.Y.Z`
-- [ ] `git push origin main framework-vX.Y.Z`
+- [ ] Prefer the auto-tag workflow after the `chore(release): vX.Y.Z` commit
+  lands on `main`; it creates `framework-vX.Y.Z`, `swift-vX.Y.Z`, and
+  `android-vX.Y.Z` when the platform versions are in lockstep.
+- [ ] If tagging manually, push the relevant platform tags:
+  `framework-vX.Y.Z`, `swift-vX.Y.Z`, and/or `android-vX.Y.Z`.
 - [ ] Confirm the `Publish npm Packages` workflow starts for the
   `framework-vX.Y.Z` tag.
   - It must run from `.github/workflows/publish-npm.yml`, verify the tag is
@@ -81,8 +87,10 @@ Companion docs:
   @fricken/mcp
   @fricken/server
   ```
-- [ ] Swift: tagging is the publish step. SPM consumers pin to the
-  `framework-vX.Y.Z` tag; there is no separate Swift registry push.
+- [ ] Swift: pushing `swift-vX.Y.Z` mirrors `packages/swift` to the standalone
+  `FrickSwift` repository and creates the plain `X.Y.Z` tag there. SPM
+  consumers depend on `https://github.com/briannadoubt/FrickSwift.git`, not the
+  monorepo tag; there is no separate Swift registry push.
 - [ ] Android: bump `frickVersion` in `apps/android/frick/build.gradle.kts`,
   commit, push tag `android-vX.Y.Z`. The `Publish Android SDK` workflow
   verifies generated artifacts, runs Android tests/lint/debug builds, then

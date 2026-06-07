@@ -208,7 +208,11 @@
       },
       "cursorRules": ["adapters/cursor/rules/frick-platforms.mdc"],
       "docs": ["docs/cross-platform-client-contract.md", "docs/push-receive.md"],
-      "commands": ["pnpm android:build"]
+      "commands": [
+        "pnpm schema:generate && pnpm design:generate",
+        "cd apps/android && ./gradlew :frick:testDebugUnitTest :frick:lintDebug :frick:assembleDebug :frick-compose:lintDebug :frick-compose:assembleDebug :design:testDebugUnitTest :design:lintDebug :design:assembleDebug",
+        "pnpm android:build"
+      ]
     },
     {
       "id": "frick-design-tokens",
@@ -250,7 +254,13 @@
       },
       "cursorRules": ["adapters/cursor/rules/frick-debugging.mdc"],
       "docs": ["docs/cross-platform-client-contract.md"],
-      "commands": ["pnpm test", "pnpm swift:test", "pnpm android:build"]
+      "commands": [
+        "pnpm test",
+        "pnpm swift:test",
+        "pnpm schema:generate && pnpm design:generate",
+        "cd apps/android && ./gradlew :frick:testDebugUnitTest :frick:lintDebug :frick:assembleDebug :frick-compose:lintDebug :frick-compose:assembleDebug :design:testDebugUnitTest :design:lintDebug :design:assembleDebug",
+        "pnpm android:build"
+      ]
     },
     {
       "id": "frick-protocol-debugging",
@@ -278,7 +288,13 @@
       },
       "cursorRules": ["adapters/cursor/rules/frick-debugging.mdc", "adapters/cursor/rules/frick-platforms.mdc"],
       "docs": ["docs/push-adapters.md", "docs/push-receive.md", "docs/operations.md"],
-      "commands": ["pnpm test", "pnpm swift:test", "pnpm android:build"]
+      "commands": [
+        "pnpm test",
+        "pnpm swift:test",
+        "pnpm schema:generate && pnpm design:generate",
+        "cd apps/android && ./gradlew :frick:testDebugUnitTest :frick:lintDebug :frick:assembleDebug :frick-compose:lintDebug :frick-compose:assembleDebug :design:testDebugUnitTest :design:lintDebug :design:assembleDebug",
+        "pnpm android:build"
+      ]
     },
     {
       "id": "frick-dashboard-operations",
@@ -320,7 +336,13 @@
       },
       "cursorRules": ["adapters/cursor/rules/frick-quality.mdc"],
       "docs": ["docs/cross-platform-client-contract.md"],
-      "commands": ["pnpm test", "pnpm swift:test", "pnpm android:build"]
+      "commands": [
+        "pnpm test",
+        "pnpm swift:test",
+        "pnpm schema:generate && pnpm design:generate",
+        "cd apps/android && ./gradlew :frick:testDebugUnitTest :frick:lintDebug :frick:assembleDebug :frick-compose:lintDebug :frick-compose:assembleDebug :design:testDebugUnitTest :design:lintDebug :design:assembleDebug",
+        "pnpm android:build"
+      ]
     },
     {
       "id": "frick-testing",
