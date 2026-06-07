@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJ83R02X1VWDX9GW9FESY6R",
+  "ts": "2026-06-07T23:53:55.458Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3N",
+    "commentId": "01KTJ83R02X1VWDX9GW9FESY6Q",
+    "author": "claude",
+    "body": "Shipped latency suite in @fricken/bench (bench/src/latency.ts) on branch feat/fr97-98-benchmarks. runLatency / pnpm bench:latency measures p50/p90/p99 across HTTP request, WS append->ack round-trip, object-upsert->delta fan-out, catch-up (subscribe->StreamPage over a seeded backlog), and reconnect. Reuses the FR-96 harness's summarizeLatency + a new shared server-spin-up helper (bench/src/server-target.ts). Emits machine-readable JSON (tool: frick-latency-bench). Covered by apps/server/tests/bench-suites.test.ts (tiny end-to-end, asserts shape). Gate green: typecheck exit 0; server vitest 843 passed | 45 skipped."
+  }
+}

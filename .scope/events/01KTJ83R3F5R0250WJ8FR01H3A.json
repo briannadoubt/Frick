@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJ83R3F5R0250WJ8FR01H3A",
+  "ts": "2026-06-07T23:53:55.567Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3P",
+    "commentId": "01KTJ83R3F5R0250WJ8FR01H39",
+    "author": "claude",
+    "body": "Shipped throughput + resource-growth suite in @fricken/bench (bench/src/throughput.ts) on branch feat/fr97-98-benchmarks. runThroughput / pnpm bench:throughput drives a sustained append/upsert workload across N concurrent WS connections; emits ops/sec (appends/upserts/total) plus a resources section sampling process.memoryUsage (rss/heapUsed), SQLite db byte size + per-table row counts (stream_events/objects/idempotency_keys via store.rawDatabase()), and idempotency-cache rows before vs after, with deltas. Growth omitted for external --http-url/--ws-url targets (no store access). Covered by apps/server/tests/bench-suites.test.ts. Gate green: typecheck exit 0; server vitest 843 passed | 45 skipped."
+  }
+}
