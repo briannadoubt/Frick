@@ -237,7 +237,7 @@ describe("FrickJobWorker", () => {
     });
     // Let the worker pick the job up.
     await waitFor(async () => {
-      const rows = store!.jobs.list({ status: "running" });
+      const rows = await store!.jobs.list({ status: "running" });
       return rows.length > 0 ? rows : undefined;
     });
     await worker.stop();

@@ -76,7 +76,7 @@ describe("restoreFrickDatabase", () => {
         text: "alpha secret",
         fields: { senderId: "user-alpha" },
       });
-      source.tenantSettings.set("tenant-alpha", "retentionMs", 1234);
+      await source.tenantSettings.set("tenant-alpha", "retentionMs", 1234);
 
       const lines = await dumpToLines(source, "tenant-alpha");
       const target = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
@@ -90,7 +90,7 @@ describe("restoreFrickDatabase", () => {
         expect(report.rowCountsByType.search_indexes).toBe(1);
         expect(report.rowCountsByType.tenant_settings).toBe(1);
 
-        const derivative = target.blobDerivatives.read(
+        const derivative = await target.blobDerivatives.read(
           "blob-parent-alpha",
           "thumb",
           "tenant-alpha",
@@ -104,7 +104,7 @@ describe("restoreFrickDatabase", () => {
             limit: 10,
           }).total,
         ).toBe(1);
-        expect(target.tenantSettings.get("tenant-alpha", "retentionMs")).toBe(1234);
+        expect(await target.tenantSettings.get("tenant-alpha", "retentionMs")).toBe(1234);
       } finally {
         target.close();
       }
