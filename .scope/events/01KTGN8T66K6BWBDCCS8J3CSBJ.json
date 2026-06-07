@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGN8T66K6BWBDCCS8J3CSBJ",
+  "ts": "2026-06-07T09:05:24.166Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ4B",
+    "commentId": "01KTGN8T66K6BWBDCCS8J3CSBH",
+    "author": "claude",
+    "body": "Shipped PgSqlDriver over the FR-118 SqlDriver seam (?->$n, param normalization, BIGINT->number, rowCount->changes/RETURNING->lastInsertRowid, per-client transactions) + async createPgSqlDriver(). Verified against real Postgres 16: object/stream/idempotency stores run unmodified (their ON CONFLICT/RETURNING SQL is already dialect-neutral). Exported from @fricken/server; CI test:pg widened with the conformance suite. Full repo green (1077). Full createFrickServer-on-PG deferred to FR-121 (needs async construction + porting devtools/FTS/platform-events off rawDb)."
+  }
+}
