@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGEFQ3BV9XSAZZP5ZQZR5YY",
+  "ts": "2026-06-07T07:06:50.347Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1B",
+    "commentId": "01KTGEFQ3BV9XSAZZP5ZQZR5YX",
+    "author": "claude",
+    "body": "Cancelled: superseded by the FR-118–122 slice breakdown (FR-23a–e) under FR-4, which is the real plan of record. The active in-flight work is FR-118. History preserved per the no-delete guardrail."
+  }
+}
