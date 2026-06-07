@@ -98,8 +98,9 @@ export class TenantStore {
   async ensure(tenantId: string): Promise<void> {
     const createdAt = new Date().toISOString();
     await this.sql.run(
-      `INSERT OR IGNORE INTO tenants (tenant_id, display_name, created_at)
-          VALUES (?, NULL, ?)`,
+      `INSERT INTO tenants (tenant_id, display_name, created_at)
+          VALUES (?, NULL, ?)
+          ON CONFLICT DO NOTHING`,
       [tenantId, createdAt],
     );
   }

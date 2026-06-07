@@ -135,7 +135,8 @@ export class AdminAuditStore {
     const result = await this.sql.run(
       `INSERT INTO admin_audit_log
            (occurred_at, admin_token_fingerprint, action, target, outcome, detail, previous_hash, entry_hash)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           RETURNING id`,
       [
         occurredAt,
         input.adminTokenFingerprint,
