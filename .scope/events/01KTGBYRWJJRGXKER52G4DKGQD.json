@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTGBYRWJJRGXKER52G4DKGQD",
+  "ts": "2026-06-07T06:22:37.970Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTG6GQX7KA9FHJ6VSYSHB9RR",
+    "field": "branch",
+    "value": "feat/fr133-rbac-policy-hook-builder"
+  }
+}

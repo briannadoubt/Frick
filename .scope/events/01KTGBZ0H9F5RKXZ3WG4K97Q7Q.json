@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGBZ0H9F5RKXZ3WG4K97Q7Q",
+  "ts": "2026-06-07T06:22:45.801Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTG6GQX7KA9FHJ6VSYSHB9RR",
+    "commentId": "01KTGBZ0H9F5RKXZ3WG4K97Q7P",
+    "author": "claude",
+    "body": "Shipped makeRbacPolicyHook(matrix) from @fricken/server: role×action×resource-type matrix → tightening-only FrickPolicyHook. Rules: all/none/{allow}/{deny}; ungoverned pairs = no opinion. resolveRole stays app-supplied (no userId→role convention lifted). 6 tests; full server suite 766 green. aquariusyacht can replace domains/users/rbac.ts's hook plumbing (keep its WRITABLE_OBJECTS matrix data + roleForUserId)."
+  }
+}
