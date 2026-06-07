@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJ7G27H7ZFEQ7RSC5ZXEG2F",
+  "ts": "2026-06-07T23:43:10.577Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2R",
+    "field": "branch",
+    "value": "feat/fr68-configurable-retention"
+  }
+}

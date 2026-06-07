@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJ7JN3SEVK7QAAVV48FGMJP",
+  "ts": "2026-06-07T23:44:35.449Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3S",
+    "field": "branch",
+    "value": "feat/fr101-a11y-contract"
+  }
+}

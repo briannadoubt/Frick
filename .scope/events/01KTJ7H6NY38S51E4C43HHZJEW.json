@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJ7H6NY38S51E4C43HHZJEW",
+  "ts": "2026-06-07T23:43:47.902Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1M",
+    "field": "branch",
+    "value": "feat/fr32-device-binding"
+  }
+}
