@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGBB9XHMYW7DTE19198X1SF",
+  "ts": "2026-06-07T06:12:00.049Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1Y",
+    "commentId": "01KTGBB9XHMYW7DTE19198X1SE",
+    "author": "claude",
+    "body": "Retention now covers all growth-prone runtime cache/log tables: idempotency_keys + devtools_events + platform_events (pre-existing) and expired auth_sessions (this change — SessionStore.pruneExpired + boot/15min timer). Durable stream-store retention deliberately deferred to FR-145: stream events are source-of-truth data needing a per-stream policy (ephemeral/capped, cursor-safe), not a blanket prune. Closing FR-42 as the runtime-table retention goal; stream-store tracked separately."
+  }
+}

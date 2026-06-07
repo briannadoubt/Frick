@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTGBB9NZKB6S5Z6S3XBEYG10",
+  "ts": "2026-06-07T06:11:59.807Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTGBB9JDBTCJG35ENKK34ZXB",
+    "field": "description",
+    "value": "Split out of FR-42. FR-42 covered every growth-prone runtime *cache/log* table (idempotency_keys, devtools_events, platform_events, and now expired auth_sessions). The durable stream-store (the event log) was deliberately left out: stream events are source-of-truth application data, not a cache, so a blanket age/size prune would silently destroy history.\n\nThis story designs + ships a SAFE retention model for streams:\n- Opt-in per-stream retention policy (e.g. schema-declared maxAge / maxEvents, or 'ephemeral' streams) rather than a global blanket prune.\n- Respect subscriber cursors / snapshots so pruning never strands an in-flight catch-up.\n- Coordinate with backup/restore + Postgres parity (FR-25/FR-119).\n- Tests: retained streams keep history; ephemeral/capped streams prune; cursor-safe."
+  }
+}

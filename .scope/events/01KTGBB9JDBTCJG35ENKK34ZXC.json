@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTGBB9JDBTCJG35ENKK34ZXC",
+  "ts": "2026-06-07T06:11:59.693Z",
+  "actor": "unknown",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTGBB9JDBTCJG35ENKK34ZXB",
+    "number": 145,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Per-stream retention policy for the durable stream-store",
+    "description": "",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0R",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}
