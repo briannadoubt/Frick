@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { SqlDriver } from "../storage/sql-driver.js";
 import {
   normalizePlatformEventInput,
   type PlatformEventAckOptions,
@@ -76,14 +76,14 @@ interface ConsumerCountsRow extends DeliveryCountsRow {
 
 export class SqlitePlatformEventPipeline implements PlatformEventPipeline {
   readonly adapter = "sqlite" as const;
-  readonly #db: DatabaseSync;
+  readonly #sql: SqlDriver;
   readonly #retentionMs: number;
   readonly #maxRows: number;
   readonly #claimTimeoutMs: number;
   readonly #now: () => Date;
 
-  constructor(db: DatabaseSync, options: SqlitePlatformEventPipelineOptions) {
-    this.#db = db;
+  constructor(sql: SqlDriver, options: SqlitePlatformEventPipelineOptions) {
+    this.#sql = sql;
     this.#retentionMs = options.retentionMs;
     this.#maxRows = options.maxRows;
     this.#claimTimeoutMs = options.claimTimeoutMs ?? DEFAULT_PLATFORM_EVENTS_CLAIM_TIMEOUT_MS;
@@ -94,7 +94,7 @@ export class SqlitePlatformEventPipeline implements PlatformEventPipeline {
     const normalized = normalizePlatformEventInput(input, this.#now);
     const acceptedAt = this.#now().toISOString();
     if (normalized.idempotencyKey) {
-      const existing = this.#findByIdempotencyKey(
+      const existing = await this.#findByIdempotencyKey(
         normalized.tenantId,
         normalized.idempotencyKey,
       );
@@ -107,14 +107,16 @@ export class SqlitePlatformEventPipeline implements PlatformEventPipeline {
     const payloadJson = JSON.stringify(normalized.payload);
     const attributesJson = JSON.stringify(normalized.attributes);
     try {
-      const result = this.#db
-        .prepare(
-          `INSERT INTO platform_events (
+      // `RETURNING id` so the Postgres driver can surface the generated
+      // sequence via lastInsertRowid; harmless on SQLite, which also reports
+      // lastInsertRowid natively.
+      const result = await this.#sql.run(
+        `INSERT INTO platform_events (
               event_id, schema_version, accepted_at, occurred_at, family, name, source,
               tenant_id, account_id, subject_id, trace_id, idempotency_key, payload, attributes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            RETURNING id`,
+        [
           eventId,
           normalized.schemaVersion,
           acceptedAt,
@@ -129,7 +131,8 @@ export class SqlitePlatformEventPipeline implements PlatformEventPipeline {
           normalized.idempotencyKey,
           payloadJson,
           attributesJson,
-        );
+        ],
+      );
       return {
         id: eventId,
         sequence: Number(result.lastInsertRowid),
@@ -138,7 +141,7 @@ export class SqlitePlatformEventPipeline implements PlatformEventPipeline {
       };
     } catch (error) {
       if (normalized.idempotencyKey) {
-        const existing = this.#findByIdempotencyKey(
+        const existing = await this.#findByIdempotencyKey(
           normalized.tenantId,
           normalized.idempotencyKey,
         );
@@ -161,21 +164,23 @@ export class SqlitePlatformEventPipeline implements PlatformEventPipeline {
     const staleClaimedBefore = new Date(now.getTime() - this.#claimTimeoutMs).toISOString();
     const batchSize = clampBatchSize(options.batchSize);
 
-    this.#db.exec("BEGIN IMMEDIATE");
-    try {
-      this.#db
-        .prepare(
-          `INSERT OR IGNORE INTO platform_event_deliveries (
+    return this.#sql.transaction(async (tx) => {
+      // Materialize a pending delivery row for every event this consumer has
+      // not seen yet. `ON CONFLICT DO NOTHING` (portable across SQLite and
+      // Postgres) skips events already tracked for this consumer.
+      await tx.run(
+        `INSERT INTO platform_event_deliveries (
               consumer, event_id, status, attempt_count, available_at
             )
             SELECT ?, event_id, 'pending', 0, accepted_at
-              FROM platform_events`,
-        )
-        .run(name);
+              FROM platform_events
+              WHERE true
+            ON CONFLICT (consumer, event_id) DO NOTHING`,
+        [name],
+      );
 
-      const selected = this.#db
-        .prepare(
-          `SELECT d.event_id
+      const selected = await tx.all<{ event_id: string }>(
+        `SELECT d.event_id
             FROM platform_event_deliveries d
             JOIN platform_events e ON e.event_id = d.event_id
             WHERE d.consumer = ?
@@ -185,29 +190,26 @@ export class SqlitePlatformEventPipeline implements PlatformEventPipeline {
               )
             ORDER BY e.id ASC
             LIMIT ?`,
-        )
-        .all(name, availableAt, staleClaimedBefore, batchSize) as Array<{ event_id: string }>;
+        [name, availableAt, staleClaimedBefore, batchSize],
+      );
       const eventIds = selected.map((row) => row.event_id);
       if (eventIds.length === 0) {
-        this.#db.exec("COMMIT");
         return [];
       }
 
       const placeholders = sqlPlaceholders(eventIds.length);
-      this.#db
-        .prepare(
-          `UPDATE platform_event_deliveries
+      await tx.run(
+        `UPDATE platform_event_deliveries
             SET status = 'claimed',
                 attempt_count = attempt_count + 1,
                 claimed_at = ?
             WHERE consumer = ?
               AND event_id IN (${placeholders})`,
-        )
-        .run(claimedAt, name, ...eventIds);
+        [claimedAt, name, ...eventIds],
+      );
 
-      const rows = this.#db
-        .prepare(
-          `SELECT
+      const rows = await tx.all<DeliveryRow>(
+        `SELECT
               e.id, e.event_id, e.schema_version, e.accepted_at, e.occurred_at,
               e.family, e.name, e.source, e.tenant_id, e.account_id, e.subject_id,
               e.trace_id, e.idempotency_key, e.payload, e.attributes,
@@ -217,24 +219,15 @@ export class SqlitePlatformEventPipeline implements PlatformEventPipeline {
             WHERE d.consumer = ?
               AND e.event_id IN (${placeholders})
             ORDER BY e.id ASC`,
-        )
-        .all(name, ...eventIds) as unknown as DeliveryRow[];
-      const deliveries = rows.map((row) => ({
+        [name, ...eventIds],
+      );
+      return rows.map((row) => ({
         event: envelopeFromRow(row),
         consumer: row.consumer,
         attempt: Number(row.attempt_count),
         claimedAt: row.claimed_at ?? claimedAt,
       }));
-      this.#db.exec("COMMIT");
-      return deliveries;
-    } catch (error) {
-      try {
-        this.#db.exec("ROLLBACK");
-      } catch {
-        // Surface the original cause.
-      }
-      throw error;
-    }
+    });
   }
 
   async ack(
@@ -243,17 +236,16 @@ export class SqlitePlatformEventPipeline implements PlatformEventPipeline {
     options: PlatformEventAckOptions,
   ): Promise<void> {
     const name = normalizeConsumerName(consumer);
-    this.#db
-      .prepare(
-        `UPDATE platform_event_deliveries
+    await this.#sql.run(
+      `UPDATE platform_event_deliveries
           SET status = 'acked', acked_at = ?
           WHERE consumer = ?
             AND event_id = ?
             AND status = 'claimed'
             AND attempt_count = ?
             AND claimed_at = ?`,
-      )
-      .run(this.#now().toISOString(), name, eventId, options.attempt, options.claimedAt);
+      [this.#now().toISOString(), name, eventId, options.attempt, options.claimedAt],
+    );
   }
 
   async retry(
@@ -262,9 +254,8 @@ export class SqlitePlatformEventPipeline implements PlatformEventPipeline {
     options: PlatformEventRetryOptions,
   ): Promise<void> {
     const name = normalizeConsumerName(consumer);
-    this.#db
-      .prepare(
-        `UPDATE platform_event_deliveries
+    await this.#sql.run(
+      `UPDATE platform_event_deliveries
           SET status = 'retry',
               available_at = ?,
               claimed_at = NULL,
@@ -274,15 +265,15 @@ export class SqlitePlatformEventPipeline implements PlatformEventPipeline {
             AND status = 'claimed'
             AND attempt_count = ?
             AND claimed_at = ?`,
-      )
-      .run(
+      [
         options.availableAt ?? this.#now().toISOString(),
         options.error,
         name,
         eventId,
         options.attempt,
         options.claimedAt,
-      );
+      ],
+    );
   }
 
   async deadLetter(
@@ -291,9 +282,8 @@ export class SqlitePlatformEventPipeline implements PlatformEventPipeline {
     options: PlatformEventDeadLetterOptions,
   ): Promise<void> {
     const name = normalizeConsumerName(consumer);
-    this.#db
-      .prepare(
-        `UPDATE platform_event_deliveries
+    await this.#sql.run(
+      `UPDATE platform_event_deliveries
           SET status = 'dead_lettered',
               dead_lettered_at = ?,
               last_error = ?
@@ -302,34 +292,29 @@ export class SqlitePlatformEventPipeline implements PlatformEventPipeline {
             AND status = 'claimed'
             AND attempt_count = ?
             AND claimed_at = ?`,
-      )
-      .run(this.#now().toISOString(), options.error, name, eventId, options.attempt, options.claimedAt);
+      [this.#now().toISOString(), options.error, name, eventId, options.attempt, options.claimedAt],
+    );
   }
 
   async health(): Promise<PlatformEventHealth> {
-    const retained = this.#count("platform_events");
-    const unclaimed = this.#db
-      .prepare(
-        `SELECT COUNT(*) AS count
+    const retained = await this.#count("platform_events");
+    const unclaimed = (await this.#sql.get<CountRow>(
+      `SELECT COUNT(*) AS count
           FROM platform_events e
           WHERE NOT EXISTS (
             SELECT 1 FROM platform_event_deliveries d WHERE d.event_id = e.event_id
           )`,
-      )
-      .get() as unknown as CountRow;
-    const aggregate = this.#db
-      .prepare(
-        `SELECT
+    )) ?? { count: 0 };
+    const aggregate = (await this.#sql.get<DeliveryCountsRow>(
+      `SELECT
             SUM(CASE WHEN status IN ('pending', 'retry') THEN 1 ELSE 0 END) AS pending,
             SUM(CASE WHEN status = 'claimed' THEN 1 ELSE 0 END) AS claimed,
             SUM(CASE WHEN status = 'dead_lettered' THEN 1 ELSE 0 END) AS dead_lettered
           FROM platform_event_deliveries`,
-      )
-      .get() as unknown as DeliveryCountsRow;
+    )) ?? { pending: 0, claimed: 0, dead_lettered: 0 };
     const consumers = (
-      this.#db
-        .prepare(
-          `SELECT
+      await this.#sql.all<ConsumerCountsRow>(
+        `SELECT
               consumer AS name,
               SUM(CASE WHEN status IN ('pending', 'retry') THEN 1 ELSE 0 END) AS pending,
               SUM(CASE WHEN status = 'claimed' THEN 1 ELSE 0 END) AS claimed,
@@ -337,8 +322,7 @@ export class SqlitePlatformEventPipeline implements PlatformEventPipeline {
             FROM platform_event_deliveries
             GROUP BY consumer
             ORDER BY consumer ASC`,
-        )
-        .all() as unknown as ConsumerCountsRow[]
+      )
     ).map((row) => {
       const pending = Number(row.pending ?? 0);
       const claimed = Number(row.claimed ?? 0);
@@ -364,91 +348,82 @@ export class SqlitePlatformEventPipeline implements PlatformEventPipeline {
     };
   }
 
-  prune(options: SqlitePlatformEventsPruneOptions = {}): SqlitePlatformEventsPruneResult {
+  async prune(
+    options: SqlitePlatformEventsPruneOptions = {},
+  ): Promise<SqlitePlatformEventsPruneResult> {
     const retentionMs = options.retentionMs ?? this.#retentionMs;
     const maxRows = options.maxRows ?? this.#maxRows;
     const cutoffIso = new Date(this.#now().getTime() - retentionMs).toISOString();
-    let prunedByAge = 0;
-    let prunedByCap = 0;
 
-    this.#db.exec("BEGIN IMMEDIATE");
-    try {
-      this.#db
-        .prepare(
-          `DELETE FROM platform_event_deliveries
+    return this.#sql.transaction(async (tx) => {
+      await tx.run(
+        `DELETE FROM platform_event_deliveries
             WHERE event_id IN (
               SELECT event_id FROM platform_events WHERE occurred_at < ?
             )`,
-        )
-        .run(cutoffIso);
-      const ageResult = this.#db
-        .prepare("DELETE FROM platform_events WHERE occurred_at < ?")
-        .run(cutoffIso);
-      prunedByAge = Number(ageResult.changes ?? 0);
+        [cutoffIso],
+      );
+      const ageResult = await tx.run("DELETE FROM platform_events WHERE occurred_at < ?", [
+        cutoffIso,
+      ]);
+      const prunedByAge = Number(ageResult.changes ?? 0);
 
-      const remaining = this.#db
-        .prepare("SELECT COUNT(*) AS count FROM platform_events")
-        .get() as unknown as CountRow;
-      const overflow = Number(remaining.count) - maxRows;
+      let prunedByCap = 0;
+      const remaining = await tx.get<CountRow>("SELECT COUNT(*) AS count FROM platform_events");
+      const overflow = Number(remaining?.count ?? 0) - maxRows;
       if (overflow > 0) {
-        this.#db
-          .prepare(
-            `DELETE FROM platform_event_deliveries
+        await tx.run(
+          `DELETE FROM platform_event_deliveries
               WHERE event_id IN (
                 SELECT event_id FROM platform_events
                   ORDER BY id ASC
                   LIMIT ?
               )`,
-          )
-          .run(overflow);
-        const capResult = this.#db
-          .prepare(
-            `DELETE FROM platform_events
+          [overflow],
+        );
+        const capResult = await tx.run(
+          `DELETE FROM platform_events
               WHERE event_id IN (
                 SELECT event_id FROM platform_events
                   ORDER BY id ASC
                   LIMIT ?
               )`,
-          )
-          .run(overflow);
+          [overflow],
+        );
         prunedByCap = Number(capResult.changes ?? 0);
       }
-
-      this.#db.exec("COMMIT");
       return { prunedByAge, prunedByCap };
-    } catch (error) {
-      try {
-        this.#db.exec("ROLLBACK");
-      } catch {
-        // Surface the original cause.
-      }
-      throw error;
-    }
+    });
   }
 
   async close(): Promise<void> {
-    // The FrickStore owns the DatabaseSync handle. The adapter has no separate
-    // resource to close.
+    // The FrickStore owns the SqlDriver. The adapter has no separate resource
+    // to close.
   }
 
-  #findByIdempotencyKey(
+  async #findByIdempotencyKey(
     tenantId: string | null,
     idempotencyKey: string,
-  ): PlatformEventRow | undefined {
-    return this.#db
-      .prepare(
-        `SELECT *
-          FROM platform_events
-          WHERE idempotency_key = ?
-            AND tenant_id IS ?`,
-      )
-      .get(idempotencyKey, tenantId) as PlatformEventRow | undefined;
+  ): Promise<PlatformEventRow | undefined> {
+    // SQLite's `tenant_id IS ?` NULL-safe equality is not valid in Postgres
+    // (which spells it `IS NOT DISTINCT FROM`). Split on null instead so both
+    // backends run plain, portable predicates.
+    if (tenantId === null) {
+      return this.#sql.get<PlatformEventRow>(
+        `SELECT * FROM platform_events
+            WHERE idempotency_key = ? AND tenant_id IS NULL`,
+        [idempotencyKey],
+      );
+    }
+    return this.#sql.get<PlatformEventRow>(
+      `SELECT * FROM platform_events
+          WHERE idempotency_key = ? AND tenant_id = ?`,
+      [idempotencyKey, tenantId],
+    );
   }
 
-  #count(table: "platform_events" | "platform_event_deliveries"): number {
-    const row = this.#db
-      .prepare(`SELECT COUNT(*) AS count FROM ${table}`)
-      .get() as CountRow | undefined;
+  async #count(table: "platform_events" | "platform_event_deliveries"): Promise<number> {
+    const row = await this.#sql.get<CountRow>(`SELECT COUNT(*) AS count FROM ${table}`);
     return Number(row?.count ?? 0);
   }
 }

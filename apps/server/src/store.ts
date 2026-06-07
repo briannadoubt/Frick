@@ -412,7 +412,7 @@ export class FrickStore {
         options.devtoolsEventsRetentionMs ?? DEFAULT_DEVTOOLS_EVENTS_RETENTION_MS,
       maxRows: options.devtoolsEventsMaxRows ?? DEFAULT_DEVTOOLS_EVENTS_MAX_ROWS,
     });
-    this.platformEvents = new SqlitePlatformEventPipeline(rawDb, {
+    this.platformEvents = new SqlitePlatformEventPipeline(sql, {
       retentionMs:
         options.platformEventsRetentionMs ?? DEFAULT_PLATFORM_EVENTS_RETENTION_MS,
       maxRows: options.platformEventsMaxRows ?? DEFAULT_PLATFORM_EVENTS_MAX_ROWS,
@@ -517,16 +517,14 @@ export class FrickStore {
 
   #safePlatformEventsPrune(): void {
     if (this.#closed) return;
-    try {
-      this.platformEvents.prune();
-    } catch (error) {
+    void this.platformEvents.prune().catch((error) => {
       // eslint-disable-next-line no-console
       console.warn(
         `[frick] platform_events prune failed: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
-    }
+    });
   }
 
   async #safeExpiredSessionPrune(): Promise<void> {

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { definePlatformEventPipelineConformance } from "./platform-events.conformance.js";
 import { SqlitePlatformEventPipeline } from "../src/platform-events/sqlite.js";
 import { initializeStorage } from "../src/storage/schema.js";
+import { SqliteSqlDriver } from "../src/storage/sql-driver.js";
 import { FrickStore } from "../src/store.js";
 
 let db: DatabaseSync | undefined;
@@ -12,7 +13,7 @@ let store: FrickStore | undefined;
 function openPipeline(now = () => new Date("2026-05-17T00:00:00.000Z")) {
   db = new DatabaseSync(":memory:");
   initializeStorage(db, foundationSchema.schemaRevision);
-  return new SqlitePlatformEventPipeline(db, {
+  return new SqlitePlatformEventPipeline(new SqliteSqlDriver(db), {
     retentionMs: 60 * 60 * 1000,
     maxRows: 10_000,
     now,
@@ -70,7 +71,7 @@ describe("SQLite platform events", () => {
       source: "test",
     });
 
-    const result = pipeline.prune({ retentionMs: 60 * 60 * 1000, maxRows: 1 });
+    const result = await pipeline.prune({ retentionMs: 60 * 60 * 1000, maxRows: 1 });
 
     expect(result.prunedByAge).toBe(1);
     expect(result.prunedByCap).toBe(1);
