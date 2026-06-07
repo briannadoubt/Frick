@@ -28,6 +28,11 @@ export {
   type Principal,
 } from "./authz.js";
 export {
+  makeRbacPolicyHook,
+  type RbacMatrix,
+  type RbacResourceRule,
+} from "./authz/rbac.js";
+export {
   type FrickBlobProcessContext,
   type FrickBlobProcessResult,
   type FrickBlobProcessor,
