@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGP2DHP2N8342HZ37S15HX0",
+  "ts": "2026-06-07T09:19:23.190Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ4E",
+    "commentId": "01KTGP2DHP2N8342HZ37S15HWZ",
+    "author": "claude",
+    "body": "Verified blob metadata + derivative stores on PgSqlDriver (2/2 on PG16). Fix: blob_metadata + blob_derivatives INSERT OR REPLACE -> ON CONFLICT(pk) DO UPDATE (portable); BYTEA round-trips. Blob bytes stay the sync BlobBytesDriver seam (SQLite/filesystem) — PG uses filesystem bytes; a PG-native BYTEA bytes driver needs an async bytes interface (FR-9). SQLite blobs 32 green. Completes per-store-family slices FR-119-122."
+  }
+}
