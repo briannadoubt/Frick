@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTHWBADKYXQXJ88CVJ2302SS",
+  "ts": "2026-06-07T20:28:20.787Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1F",
+    "field": "branch",
+    "value": "feat/fr27-redis-cluster-bus"
+  }
+}

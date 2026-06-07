@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTHWMT6EV5PS12MP2BJCT76V",
+  "ts": "2026-06-07T20:33:31.854Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1F",
+    "commentId": "01KTHWMT6EV5PS12MP2BJCT76T",
+    "author": "claude",
+    "body": "DONE: shipped RedisClusterBus + createRedisClusterBus (commit d670dd5). FrickClusterBus over Redis pub/sub, msgpack-encoded, dedicated pub+sub connections, originNodeId loop guard + setSubscribedTenants parity with MemoryClusterBus, ioredis as a lazily-imported optional dep behind the small RedisBusClient surface. Validated against real Redis (tests/redis-cluster-bus.test.ts, gated on FRICK_REDIS_URL; fake-client unit coverage always runs). Server suite 784 green. Inject via createFrickServer({clusterBus})."
+  }
+}
