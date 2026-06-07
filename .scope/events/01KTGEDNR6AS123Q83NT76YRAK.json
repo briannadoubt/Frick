@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTGEDNR6AS123Q83NT76YRAK",
+  "ts": "2026-06-07T07:05:43.430Z",
+  "actor": "unknown",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ4A",
+    "field": "branch",
+    "value": "worktree-agent-a5ae13497ecdab384"
+  }
+}

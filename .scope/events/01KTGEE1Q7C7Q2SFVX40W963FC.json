@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGEE1Q7C7Q2SFVX40W963FC",
+  "ts": "2026-06-07T07:05:55.687Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1B",
+    "commentId": "01KTGEE1Q7C7Q2SFVX40W963FB",
+    "author": "claude",
+    "body": "Reality check (2026-06-07): in_progress but no branch and no activity since 2026-06-01. This story (\"Port *Store implementations to the storage driver\") was superseded by the FR-118–122 slice breakdown (FR-23a–e) under FR-4; the actual in-flight work is FR-118. FR-23 itself is not independently being worked. Consider closing/cancelling it in favor of the FR-118–122 slices, or keep it as the tracking umbrella — owner's call."
+  }
+}
