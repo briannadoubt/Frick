@@ -13,6 +13,7 @@ import {
   type TextareaHTMLAttributes,
 } from "react";
 import { FrickIconGlyph, type FrickIconName } from "./icons.js";
+import { resolveLabel, useComponentLabels } from "./labels.js";
 
 type Size = "xs" | "sm" | "md" | "lg";
 type Tone = "neutral" | "primary" | "success" | "warning" | "danger" | "info" | "muted";
@@ -133,6 +134,11 @@ export interface WorkspaceShellProps extends HTMLAttributes<HTMLDivElement> {
   navigationActions?: ReactNode;
   compactCollectionVisible?: boolean;
   onInspectorOpenChange?: (open: boolean) => void;
+  /**
+   * Override the inspector close button's label for this instance. When omitted,
+   * the label comes from {@link FrickLabelsProvider} (English default "Close").
+   */
+  closeInspectorLabel?: string;
 }
 
 export function WorkspaceShell({
@@ -148,10 +154,13 @@ export function WorkspaceShell({
   navigationActions,
   compactCollectionVisible = false,
   onInspectorOpenChange,
+  closeInspectorLabel,
   children,
   className,
   ...props
 }: WorkspaceShellProps) {
+  const labels = useComponentLabels();
+  const closeLabel = resolveLabel(closeInspectorLabel, labels.closeInspector);
   const hasCollection = Boolean(collection);
   const hasInspector = Boolean(inspector) && inspectorOpen;
 
@@ -197,8 +206,8 @@ export function WorkspaceShell({
         {inspector ? (
           <aside className="frick-workspace-shell__inspector" data-open={inspectorOpen}>
             <div className="frick-workspace-shell__inspector-actions">
-              <button type="button" onClick={() => onInspectorOpenChange?.(false)}>
-                Close
+              <button type="button" aria-label={closeLabel} onClick={() => onInspectorOpenChange?.(false)}>
+                {closeLabel}
               </button>
             </div>
             {inspector}

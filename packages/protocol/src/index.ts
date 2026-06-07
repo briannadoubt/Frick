@@ -15,6 +15,7 @@ export * from "./frame.js";
 export * from "./foundation.js";
 export * from "./fixtures/product-test-schema.js";
 export * from "./lint.js";
+export * from "./localization.js";
 export * from "./schema.js";
 export * from "./sensitivity.js";
 export * from "./sharing.js";
