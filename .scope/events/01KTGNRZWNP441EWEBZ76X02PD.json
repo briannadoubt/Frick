@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGNRZWNP441EWEBZ76X02PD",
+  "ts": "2026-06-07T09:14:14.293Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ4D",
+    "commentId": "01KTGNRZWNP441EWEBZ76X02PC",
+    "author": "claude",
+    "body": "Verified tenant/tenant-settings/admin-audit/push-registration stores on PgSqlDriver (4/4 conformance on real PG16). Fixes: TenantStore INSERT OR IGNORE -> ON CONFLICT DO NOTHING; AdminAuditStore lastInsertRowid -> RETURNING id. SQLite suite still 781 green. test:pg widened. NOTE: full createFrickServer-on-PG (async construction + porting SQLite-bound devtools/FTS/platform-events off rawDb) remains the horizontal-scale wiring beyond the per-store slices."
+  }
+}
