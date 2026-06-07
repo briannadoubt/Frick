@@ -62,7 +62,9 @@ export {
 } from "./jobs/registry.js";
 export {
   createFrickRecurringRegistry,
+  eachTenant,
   RECURRING_MIN_INTERVAL_MS,
+  type EachTenantOptions,
   type FrickRecurringJob,
   type FrickRecurringRegistry,
 } from "./jobs/recurring.js";

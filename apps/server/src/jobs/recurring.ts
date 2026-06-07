@@ -15,6 +15,7 @@
 import type { PlainObject } from "@fricken/protocol";
 import type { FrickLogger } from "../logger.js";
 import type { FrickStore } from "../store.js";
+import type { TenantRow } from "../storage/tenant-store.js";
 
 export const RECURRING_MIN_INTERVAL_MS = 60_000;
 
@@ -37,6 +38,44 @@ export interface FrickRecurringJob {
 
 export interface FrickRecurringRegistry {
   list(): readonly FrickRecurringJob[];
+}
+
+export interface EachTenantOptions {
+  /**
+   * Include archived tenants. Defaults to `false` — fan out to live tenants
+   * only, since an archived tenant has no active work.
+   */
+  includeArchived?: boolean;
+  /** Optional predicate to narrow the tenant set (e.g. only entitled tenants). */
+  filter?: (tenant: TenantRow) => boolean;
+  /** Optional per-tenant payload builder. Omit for an empty payload. */
+  payload?: (tenant: TenantRow) => PlainObject | undefined;
+}
+
+/**
+ * Build a {@link FrickRecurringJob.resolveTargets} that fans a recurring job
+ * out to every tenant in the ledger — one enqueue per tenant per tick (FR-132).
+ * The framework owns enumerating live tenants; the app supplies only an
+ * optional predicate / payload, not the fan-out loop.
+ *
+ * @example
+ *   { name: "billing.sweep", jobType: "billing.sweep", intervalMs: 3_600_000,
+ *     resolveTargets: eachTenant({ filter: (t) => isEntitled(t.tenantId) }) }
+ */
+export function eachTenant(
+  options: EachTenantOptions = {},
+): FrickRecurringJob["resolveTargets"] {
+  const { includeArchived = false, filter, payload } = options;
+  return ({ store }) => {
+    const tenants = store.tenants.list(includeArchived);
+    const selected = filter ? tenants.filter(filter) : tenants;
+    return selected.map((tenant) => {
+      const built = payload?.(tenant);
+      return built !== undefined
+        ? { tenantId: tenant.tenantId, payload: built }
+        : { tenantId: tenant.tenantId };
+    });
+  };
 }
 
 export interface RecurringSchedulerOptions {
