@@ -221,12 +221,20 @@ export {
 export {
   MemoryClusterBus,
   MemoryClusterChannel,
+  randomNodeId,
   type ClusterEnvelope,
   type ClusterEnvelopeHandler,
   type FrickClusterBus,
   type MemoryClusterBusOptions,
   type NodeId,
 } from "./cluster/bus.js";
+export {
+  RedisClusterBus,
+  createRedisClusterBus,
+  type CreateRedisClusterBusOptions,
+  type RedisBusClient,
+  type RedisClusterBusOptions,
+} from "./cluster/redis-bus.js";
 export {
   createFrickProjectModule,
   projectModuleToAppDefinition,

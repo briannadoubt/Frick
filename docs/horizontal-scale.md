@@ -50,60 +50,29 @@ const server = createFrickServer({
 
 ## Wiring a production bus
 
-A production adapter wraps Redis / NATS / Kafka / any pub-sub-shaped substrate. Skeleton:
-
-```ts
-import { createClient } from "redis";
-import type { ClusterEnvelope, ClusterEnvelopeHandler, FrickClusterBus, NodeId } from "@fricken/server";
-
-const CHANNEL = "frick.cluster";
-
-export class RedisClusterBus implements FrickClusterBus {
-  readonly nodeId: NodeId;
-  #pub: ReturnType<typeof createClient>;
-  #sub: ReturnType<typeof createClient>;
-  #handlers = new Set<ClusterEnvelopeHandler>();
-
-  static async create(url: string, nodeId?: NodeId): Promise<RedisClusterBus> {
-    const bus = new RedisClusterBus(nodeId);
-    bus.#pub = createClient({ url });
-    bus.#sub = bus.#pub.duplicate();
-    await Promise.all([bus.#pub.connect(), bus.#sub.connect()]);
-    await bus.#sub.subscribe(CHANNEL, (raw) => {
-      const envelope = JSON.parse(raw) as ClusterEnvelope;
-      if (envelope.originNodeId === bus.nodeId) return;
-      for (const h of bus.#handlers) {
-        try { h(envelope); } catch { /* isolate */ }
-      }
-    });
-    return bus;
-  }
-
-  private constructor(nodeId?: NodeId) {
-    this.nodeId = nodeId ?? crypto.randomUUID();
-  }
-
-  publish(envelope: ClusterEnvelope): void {
-    void this.#pub.publish(CHANNEL, JSON.stringify(envelope));
-  }
-
-  subscribe(handler: ClusterEnvelopeHandler): () => void {
-    this.#handlers.add(handler);
-    return () => this.#handlers.delete(handler);
-  }
-
-  async close(): Promise<void> {
-    await Promise.all([this.#sub.quit(), this.#pub.quit()]);
-  }
-}
-```
+`@fricken/server` ships a production `RedisClusterBus` (FR-27). It fans every
+envelope over a single Redis pub/sub channel, msgpack-encoded (binary-safe),
+with the same `originNodeId` loop guard and `setSubscribedTenants` filtering as
+the in-memory bus. It needs two connections (a Redis connection in subscribe
+mode can't also `PUBLISH`); the `createRedisClusterBus` factory wires both from
+an `ioredis` client (an optional dependency, imported lazily).
 
 Wiring at server boot:
 
 ```ts
-const bus = await RedisClusterBus.create(process.env.REDIS_URL!);
+import { createFrickServer, createRedisClusterBus } from "@fricken/server";
+
+const bus = await createRedisClusterBus({ url: process.env.FRICK_REDIS_URL! });
 const server = createFrickServer({ clusterBus: bus });
+// ... and on shutdown, await bus.close() (server.close() tears down the gateway,
+// not the bus you injected).
 ```
+
+To wrap a different substrate (NATS, Kafka) or a non-ioredis client, implement
+the `FrickClusterBus` interface directly, or construct `RedisClusterBus` with
+your own `publisher` / `subscriber` clients that satisfy the small
+`RedisBusClient` surface (`publish` / `subscribe` / `on("messageBuffer")` /
+`quit`).
 
 ## Operational notes
 

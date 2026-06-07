@@ -199,7 +199,7 @@ export class MemoryClusterBus implements FrickClusterBus {
   }
 }
 
-function randomNodeId(): NodeId {
+export function randomNodeId(): NodeId {
   // 64 bits of entropy, base36 — short enough to fit in log lines, long
   // enough to avoid collisions across a cluster.
   return Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);

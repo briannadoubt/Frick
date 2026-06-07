@@ -375,9 +375,11 @@ export interface ServerOptions {
    * gateway then runs in-process only, identical to the pre-Phase 7
    * behavior.
    *
-   * Bus contract: `apps/server/src/cluster/bus.ts`. The framework
-   * ships `MemoryClusterBus` for tests / single-node use; production
-   * adapters (e.g. RedisClusterBus) live out-of-tree.
+   * Bus contract: `apps/server/src/cluster/bus.ts`. The framework ships
+   * `MemoryClusterBus` for tests / single-node use and `RedisClusterBus`
+   * (FR-27) for production multi-node fan-out — build one with
+   * `await createRedisClusterBus({ url: process.env.FRICK_REDIS_URL })`
+   * and pass it here.
    */
   clusterBus?: FrickClusterBus;
   /**
