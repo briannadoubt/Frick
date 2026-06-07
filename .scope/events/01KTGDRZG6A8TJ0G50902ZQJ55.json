@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGDRZG6A8TJ0G50902ZQJ55",
+  "ts": "2026-06-07T06:54:25.286Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2D",
+    "commentId": "01KTGDRZG5KPM2ACG72SPK8MK7",
+    "author": "claude",
+    "body": "Design caution (not yet implemented): orphan detection must be conservative. Blobs are referenced by object fields of kind 'ref' whose ref ∈ schema.blobs (see protocol schema.ts:404). A GC that deletes any blob_metadata row not referenced by a declared blob-ref field would wrongly delete blobs whose ids apps store in UNTYPED string fields. Safe design: (a) opt-in only, (b) grace period (don't GC blobs newer than N), (c) optionally an app-supplied isReferenced(blobId) hook, (d) only consider declared blob-ref fields as the framework-known reference set and document the untyped-field caveat. Mirrors the FR-145 stream-retention 'source-of-truth, not a cache' concern."
+  }
+}

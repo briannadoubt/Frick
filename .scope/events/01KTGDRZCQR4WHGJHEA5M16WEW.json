@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGDRZCQR4WHGJHEA5M16WEW",
+  "ts": "2026-06-07T06:54:25.175Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1M",
+    "commentId": "01KTGDRZCQR4WHGJHEA5M16WEV",
+    "author": "claude",
+    "body": "Investigation (not yet implemented): the 'don't trust client values' half is effectively already true — gateway #principalFromActiveSessionToken builds the Principal's deviceId/replicaId from the auth_sessions ROW, not the client's Hello frame, so identity/authz never trusts client-supplied device values. Remaining gap is 're-auth on device change': at #authenticateHelloSession (gateway.ts:1584) the Hello frame's deviceId is NOT compared to the session's bound deviceId, so a token presented from a different device isn't rejected. Adding strict enforcement is a CLIENT-COMPAT behavior change — verify FrickSwift/web send the SAME deviceId at login and Hello before gating, and roll out behind an opt-in flag (telemetry-only first) to avoid breaking existing apps (RangerCRM etc.)."
+  }
+}
