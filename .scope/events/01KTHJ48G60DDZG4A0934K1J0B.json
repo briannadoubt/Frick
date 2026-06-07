@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTHJ48G60DDZG4A0934K1J0B",
+  "ts": "2026-06-07T17:29:43.686Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTHJ3SWTR2BAQS6ASYC9QHZA",
+    "field": "description",
+    "value": "FR-119–122 + FR-24 built the Postgres SqlDriver + all store adapters + PG search, but createSqlDriver() still THROWS for postgres — createFrickServer cannot actually run on PG yet. Four subsystems still read sql.rawDb (sync SQLite) in the FrickStore constructor and must be ported to the async SqlDriver (works on both backends):\n\n1. DevToolsEventStore — DONE (commit b9deb39): record/list/getById/summary/prune/rowCount async; emission fire-and-forget; prune does sequential sweeps (no cross-await txn).\n2. SqlitePlatformEventPipeline (apps/server/src/platform-events/sqlite.ts, 516 lines) — claim/deliver use raw BEGIN IMMEDIATE; port to SqlDriver.transaction. NOTE the seam's transaction() uses a #txDepth counter that treats concurrent transactions as NESTED (conflated), not serialized — safe for the serial worker loop, but do not rely on it for true concurrent isolation.\n3. AnalyticsEventStore (analytics/consumer.ts + summary.ts, ~575 lines) — port to async SqlDriver.\n4. Default search adapter selection — use createPgFtsSearchAdapter(sql) when driver=postgres, createSqliteFtsSearchAdapter(rawDb) otherwise.\n\nThen: keep the SQLite constructor sync (no 108-test ripple) but add async store.initialize() that runs PG framework migrations for the PG path, called from server.listen(); make createSqlDriver return the PG driver for postgres; driver-aware close(); add a createFrickServer-on-PG smoke test gated on FRICK_DATABASE_URL. Unblocks FR-25 (backup/restore parity)."
+  }
+}

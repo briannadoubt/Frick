@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTHJ48KPBDVVN05Y4TR54ASB",
+  "ts": "2026-06-07T17:29:43.798Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTHJ3SWTR2BAQS6ASYC9QHZA",
+    "commentId": "01KTHJ48KNE5825VNFNCZVANCB",
+    "author": "claude",
+    "body": "Increment 1/4 landed: DevToolsEventStore ported to async SqlDriver (commit b9deb39, full server suite 781 green). Remaining: platform-events, analytics, search-adapter selection, async PG init wiring + smoke test."
+  }
+}

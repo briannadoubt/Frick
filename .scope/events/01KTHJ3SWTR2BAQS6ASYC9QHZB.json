@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTHJ3SWTR2BAQS6ASYC9QHZB",
+  "ts": "2026-06-07T17:29:28.730Z",
+  "actor": "unknown",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTHJ3SWTR2BAQS6ASYC9QHZA",
+    "number": 146,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Keystone: createFrickServer runs on Postgres (wire adapters into server construction)",
+    "description": "",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0R",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}
