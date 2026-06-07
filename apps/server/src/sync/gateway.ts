@@ -182,6 +182,11 @@ export class SyncGateway {
 
   attach(): void {
     this.wss.on("connection", (socket, request) => {
+      void this.#handleConnection(socket, request);
+    });
+  }
+
+  async #handleConnection(socket: WebSocket, request: IncomingMessage): Promise<void> {
       socket.on("error", () => {
         // Protocol-level closes (for example ws maxPayload violations) are
         // expected to emit on the socket before the close event finishes the
@@ -196,7 +201,7 @@ export class SyncGateway {
         return;
       }
       const sessionToken = bearerTokenFromRequest(request);
-      const principal = sessionToken ? this.#principalFromSessionToken(sessionToken) : undefined;
+      const principal = sessionToken ? await this.#principalFromSessionToken(sessionToken) : undefined;
       const client: SyncClient = {
         socket,
         subscriptions: new Map(),
@@ -206,7 +211,7 @@ export class SyncGateway {
       // Resolve per-tenant limits once per connection; fall back to global
       // when no principal (e.g. pre-hello unauthenticated connect).
       const resolved = principal
-        ? resolveTenantLimits(principal.tenantId, this.store, this.#limits)
+        ? await resolveTenantLimits(principal.tenantId, this.store, this.#limits)
         : this.#limits;
       // Per-principal connection cap: when this connection authenticates at
       // connect (bearer token), reserve a slot before any other registration
@@ -279,8 +284,6 @@ export class SyncGateway {
             frameCounts: devtoolsCtx.frameCounts,
           },
         });
-      });
-    });
   }
 
   close(): void {
@@ -1578,21 +1581,21 @@ export class SyncGateway {
     }
   }
 
-  #principalFromSessionToken(token: string): Principal | undefined {
-    const principal = this.#principalFromActiveSessionToken(token);
+  async #principalFromSessionToken(token: string): Promise<Principal | undefined> {
+    const principal = await this.#principalFromActiveSessionToken(token);
     return principal instanceof AuthenticationError ? undefined : principal;
   }
 
-  #principalFromActiveSessionToken(token: string): Principal | AuthenticationError {
-    const session = this.store.readActiveSession(token);
+  async #principalFromActiveSessionToken(token: string): Promise<Principal | AuthenticationError> {
+    const session = await this.store.readActiveSession(token);
     if (!session) {
-      const stale = this.store.readAnySession(token);
+      const stale = await this.store.readAnySession(token);
       if (stale && Date.parse(stale.expiresAt) <= Date.now()) {
         return new SessionExpiredError();
       }
       return new AuthenticationError("Invalid or expired session token");
     }
-    if (!this.#isTenantActive(session.tenantId)) {
+    if (!await this.#isTenantActive(session.tenantId)) {
       return new AuthenticationError("Tenant is archived");
     }
     return {
@@ -1640,11 +1643,11 @@ export class SyncGateway {
   }
 
   #isPrincipalActive(principal: Principal): boolean {
-    return principal.scope === "admin" || this.#isTenantActive(principal.tenantId);
+    return principal.scope === "admin" || !principal.tenantId.startsWith("_archived_");
   }
 
-  #isTenantActive(tenantId: string): boolean {
-    return this.store.tenants.get(tenantId)?.archivedAt === undefined;
+  async #isTenantActive(tenantId: string): Promise<boolean> {
+    return (await this.store.tenants.get(tenantId))?.archivedAt === undefined;
   }
 }
 
