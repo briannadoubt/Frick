@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGDNTQF2QPESFP51ES1V1RV",
+  "ts": "2026-06-07T06:52:42.095Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTG6GQX2VYWEBVDB5DRZ6MVP",
+    "commentId": "01KTGDNTQF2QPESFP51ES1V1RT",
+    "author": "claude",
+    "body": "All children shipped this session: FR-128 (app-route kit), FR-129 (extension-author exports), FR-130 (image blob processor), FR-131 (sibling-session/tenant switch), FR-132 (per-tenant recurring fan-out), FR-133 (declarative RBAC builder), FR-134 (projection ergonomics). Reusable framework glue harvested from Zavro/aquariusyacht is now in @fricken/server."
+  }
+}

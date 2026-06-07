@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTGDNBPT8SZD58Q6J2HB4MT5",
+  "ts": "2026-06-07T06:52:26.714Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTG6GQX7KA9FHJ6VSYSHB9RT",
+    "field": "branch",
+    "value": "feat/fr134-projection-helpers"
+  }
+}

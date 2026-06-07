@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGDNHQARQS7QTQX20XTNP2H",
+  "ts": "2026-06-07T06:52:32.874Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTG6GQX7KA9FHJ6VSYSHB9RT",
+    "commentId": "01KTGDNHQ918TC13JVPNK1HRK7",
+    "author": "claude",
+    "body": "Shipped listProjectionObjects<T>, singleChange, projectionSourceObjectTypes from @fricken/server. 3 tests; full server suite 778 green. Closes the FR-127 app-author SDK epic (FR-128/129/130/131/132/133/134 all done)."
+  }
+}
