@@ -1,4 +1,11 @@
 export { createFrickServer, defaultDatabasePath, type FrickAppRoute, type ServerOptions } from "./server.js";
+// Multi-tenant active-tenant switch: re-mint a session into a sibling tenant.
+export {
+  SourceSessionNotActiveError,
+  deriveSiblingSession,
+  type DeriveSiblingSessionOptions,
+} from "./auth/session-derive.js";
+export type { CreateSessionInput, StoredSession } from "./storage/session-store.js";
 // App-route helper kit: the glue every `appRoutes` handler otherwise rewrites
 // (CORS, JSON I/O, :param matching, bearer→session principal auth).
 export {
