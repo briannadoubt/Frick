@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGPTCRTQ1PFYFYNTZZRSQ0B",
+  "ts": "2026-06-07T09:32:28.826Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1D",
+    "commentId": "01KTGPTCRTQ1PFYFYNTZZRSQ0A",
+    "author": "claude",
+    "body": "Blocked on the keystone: dump.ts/restore.ts are deeply SQLite-bound (store.rawDatabase() DatabaseSync, sqlite_master, PRAGMA table_info, PRAGMA foreign_keys, BEGIN IMMEDIATE) AND take a FrickStore — there's no PG-backed FrickStore to dump/restore against until createFrickServer runs on Postgres. Two prerequisites: (1) the keystone (async FrickStore construction + porting devtools/platform-events off rawDb so the server can run on PG), then (2) rewrite dump/restore to use the async SqlDriver with dialect-agnostic introspection (information_schema vs sqlite_master/PRAGMA) + driver.transaction. Recommend doing the keystone next; FR-25/FR-27/FR-28 all build on it."
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTGPRAR0NQNK432J91Q822VH",
+  "ts": "2026-06-07T09:31:21.216Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1D",
+    "field": "branch",
+    "value": "feat/fr25-pg-backup"
+  }
+}
