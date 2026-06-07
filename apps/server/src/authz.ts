@@ -859,19 +859,52 @@ export async function assertCanSignal(
   }
 }
 
+/**
+ * Blob read assertion. The baseline `blob.read` decision allows only the blob's
+ * owner (and admin); app policy hooks may tighten further. FR-71 adds cross-user
+ * sharing: a non-owner who holds an active, read-satisfying grant on the record
+ * whose id == `blobId` may read the blob. This mirrors the stream/projection
+ * cascade (FR-70) — a grant is issued against an object record id, and a blob
+ * stored under that same id surfaces to its grantee. The cascade is evaluated
+ * per request, so a revoked/left grant immediately removes blob access.
+ *
+ * Pass `blobId` + `cascadeGrantLookup` to enable the relaxation; omit them (or
+ * supply no lookup) to keep the strict owner-only behavior. The relaxation only
+ * flips an `ownerMismatch` deny to allow; `tenantMismatch` and policy-hook
+ * denies are never relaxed.
+ */
 export async function assertCanReadBlob(
   principal: Principal,
   ownerId: string,
   hooks?: readonly FrickPolicyHook[],
+  blobId?: string,
+  cascadeGrantLookup?: FrickCascadeGrantLookup,
 ): Promise<void> {
   const decision = await decideWithHooks(
     { principal, action: "blob.read", resource: { kind: "blob", ownerId } },
     NULL_MEMBERSHIP,
     hooks,
   );
-  if (!decision.allow) {
-    throw new AuthorizationError(decision);
+  if (decision.allow) {
+    return;
   }
+  // Only an owner-mismatch deny is eligible for sharing relaxation, and only
+  // when the caller supplied a blob id to tie back to a granted record.
+  if (
+    decision.reason === "ownerMismatch" &&
+    blobId !== undefined &&
+    cascadeGrantLookup !== undefined
+  ) {
+    const allowed = await cascadeGrantLookup({
+      tenantId: principal.tenantId,
+      granteeUserId: principal.userId,
+      recordId: blobId,
+    });
+    if (allowed) {
+      return;
+    }
+  }
+  throw new AuthorizationError(decision);
 }
 
 export async function assertBlobOwnership(

@@ -28,6 +28,7 @@ import {
   assertCanSignal,
   assertCanSubscribe,
   assertCanWriteObject,
+  canSubscriberReadObjectRecord,
   tenantMembershipReader,
   type FrickCascadeGrantLookup,
   type FrickGrantLookup,
@@ -2009,6 +2010,8 @@ export function createFrickServer(options: ServerOptions = {}) {
           principal,
           store,
           policyHooks,
+          grantLookup,
+          cascadeGrantLookup,
         );
         sendJson(response, 200, {
           schemaHash: store.schema.hash,
@@ -2190,7 +2193,13 @@ export function createFrickServer(options: ServerOptions = {}) {
           sendJson(response, 404, { error: "blob_content_not_found" });
           return;
         }
-        await assertCanReadBlob(principal, metadata.ownerId, policyHooks);
+        await assertCanReadBlob(
+          principal,
+          metadata.ownerId,
+          policyHooks,
+          metadata.blobId,
+          cascadeGrantLookup,
+        );
 
         response.writeHead(200, {
           "content-type": metadata.mimeType,
@@ -2219,7 +2228,13 @@ export function createFrickServer(options: ServerOptions = {}) {
           sendJson(response, 404, { error: "blob_not_found" });
           return;
         }
-        await assertCanReadBlob(principal, metadata.ownerId, policyHooks);
+        await assertCanReadBlob(
+          principal,
+          metadata.ownerId,
+          policyHooks,
+          metadata.blobId,
+          cascadeGrantLookup,
+        );
         const result = await store.blobDerivatives.read(
           derivativeContentRoute.blobId,
           derivativeContentRoute.derivativeId,
@@ -2252,7 +2267,13 @@ export function createFrickServer(options: ServerOptions = {}) {
           sendJson(response, 404, { error: "blob_not_found" });
           return;
         }
-        await assertCanReadBlob(principal, metadata.ownerId, policyHooks);
+        await assertCanReadBlob(
+          principal,
+          metadata.ownerId,
+          policyHooks,
+          metadata.blobId,
+          cascadeGrantLookup,
+        );
         const derivatives = await store.blobDerivatives.listForParent(
           derivativeListBlobId,
           principal.tenantId,
@@ -2272,7 +2293,13 @@ export function createFrickServer(options: ServerOptions = {}) {
           sendJson(response, 404, { error: "blob_not_found" });
           return;
         }
-        await assertCanReadBlob(principal, metadata.ownerId, policyHooks);
+        await assertCanReadBlob(
+          principal,
+          metadata.ownerId,
+          policyHooks,
+          metadata.blobId,
+          cascadeGrantLookup,
+        );
         sendJson(response, 200, metadata);
       } catch (error) {
         sendErrorWithMetrics(response, error, "blob_rejected");
@@ -4709,6 +4736,8 @@ async function filterSearchResultForPrincipal(
   principal: Principal,
   store: FrickStore,
   policyHooks?: readonly FrickPolicyHook[],
+  grantLookup?: FrickGrantLookup,
+  cascadeGrantLookup?: FrickCascadeGrantLookup,
 ): Promise<FrickSearchResult> {
   if (principal.scope === "admin") {
     const hits = result.hits.map(stripSearchSourceFields);
@@ -4718,11 +4747,32 @@ async function filterSearchResultForPrincipal(
     result.hits.map((hit) => {
       switch (def.source.kind) {
         case "object":
-          return isSearchObjectHitVisible(hit, def.source.type, principal, store);
+          return isSearchObjectHitVisible(
+            hit,
+            def.source.type,
+            principal,
+            store,
+            policyHooks,
+            grantLookup,
+          );
         case "stream":
-          return isSearchStreamHitVisible(hit, def.source.type, principal, store, policyHooks);
+          return isSearchStreamHitVisible(
+            hit,
+            def.source.type,
+            principal,
+            store,
+            policyHooks,
+            cascadeGrantLookup,
+          );
         case "projection":
-          return isSearchProjectionHitVisible(hit, def.source.name, principal, store, policyHooks);
+          return isSearchProjectionHitVisible(
+            hit,
+            def.source.name,
+            principal,
+            store,
+            policyHooks,
+            cascadeGrantLookup,
+          );
         default:
           return Promise.resolve(false);
       }
@@ -4739,14 +4789,32 @@ async function isSearchObjectHitVisible(
   type: string,
   principal: Principal,
   store: FrickStore,
+  policyHooks?: readonly FrickPolicyHook[],
+  grantLookup?: FrickGrantLookup,
 ): Promise<boolean> {
   const source = searchSourceFromHit(hit);
   const objectId =
     source.kind === "object" && source.type === type && source.id ? source.id : hit.docId;
   const object = await store.readObject(principal.tenantId, type, objectId);
-  return (
-    object !== undefined &&
-    store.isObjectVisibleToUser(principal.tenantId, type, object, principal.userId)
+  if (object === undefined) {
+    return false;
+  }
+  // Tenant-wide store visibility is the first cut (allow-all today). FR-71 then
+  // applies the same per-record read pipeline the object subscription/HTTP read
+  // paths use (FR-116): app policy hooks may tighten the allow to a deny, and a
+  // sharing grant on this record relaxes a remaining deny back to allow for its
+  // grantee — so a shared record surfaces through search exactly as it does
+  // through a direct read, and a revoked/left grant immediately hides it again.
+  if (!store.isObjectVisibleToUser(principal.tenantId, type, object, principal.userId)) {
+    return false;
+  }
+  return canSubscriberReadObjectRecord(
+    principal,
+    type,
+    objectId,
+    tenantMembershipReader(store, principal.tenantId),
+    policyHooks,
+    grantLookup,
   );
 }
 
@@ -4756,6 +4824,7 @@ async function isSearchStreamHitVisible(
   principal: Principal,
   store: FrickStore,
   policyHooks?: readonly FrickPolicyHook[],
+  cascadeGrantLookup?: FrickCascadeGrantLookup,
 ): Promise<boolean> {
   const source = searchSourceFromHit(hit);
   const streamId =
@@ -4770,6 +4839,9 @@ async function isSearchStreamHitVisible(
   }
 
   try {
+    // Same cascade lookup the stream subscribe/read paths use (FR-70): a grant
+    // on the object record whose id == streamId relaxes an owner-only deny so a
+    // grantee finds the shared record's stream events through search too.
     await assertCanSubscribe(
       principal,
       "stream",
@@ -4777,6 +4849,7 @@ async function isSearchStreamHitVisible(
       streamId,
       tenantMembershipReader(store, principal.tenantId),
       policyHooks,
+      cascadeGrantLookup,
     );
     return true;
   } catch (error) {
@@ -4791,11 +4864,29 @@ async function isSearchProjectionHitVisible(
   principal: Principal,
   store: FrickStore,
   policyHooks?: readonly FrickPolicyHook[],
+  cascadeGrantLookup?: FrickCascadeGrantLookup,
 ): Promise<boolean> {
   const source = searchSourceFromHit(hit);
   const key = source.kind === "projection" && source.type === projection ? source.id : undefined;
   if (!key) {
     return false;
+  }
+  // Projection hits stay deny-by-default for search: the `projection.read`
+  // baseline is tenant-wide allow, so `assertCanSubscribe` cannot fail closed on
+  // its own. We only surface a projection hit when an app policy hook proves
+  // visibility, OR — FR-71 — when the principal holds an active sharing grant on
+  // the record whose id == the projection key (the same cascade the projection
+  // subscribe path uses, FR-70). A revoked/left grant immediately removes the
+  // hit again because the lookup is evaluated per query.
+  if (cascadeGrantLookup) {
+    const cascaded = await cascadeGrantLookup({
+      tenantId: principal.tenantId,
+      granteeUserId: principal.userId,
+      recordId: key,
+    });
+    if (cascaded) {
+      return true;
+    }
   }
   if (!policyHooks || policyHooks.length === 0) {
     return false;
@@ -4808,6 +4899,7 @@ async function isSearchProjectionHitVisible(
       key,
       tenantMembershipReader(store, principal.tenantId),
       policyHooks,
+      cascadeGrantLookup,
     );
     return true;
   } catch (error) {
