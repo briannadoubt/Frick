@@ -9,8 +9,16 @@
  * 32 bytes).
  *
  * The encryption key is intentionally NOT loaded from the database — that
- * would defeat the purpose. Rotation: change the env var, re-`set` every
- * tenant's credentials. We do not (yet) support multi-key decryption.
+ * would defeat the purpose.
+ *
+ * Multi-key rotation (FR-61): `FRICK_PUSH_CRED_KEY` always names the *primary*
+ * key used for all new writes. To rotate without re-saving every tenant's
+ * credentials in one shot, list one or more *previous* keys in
+ * `FRICK_PUSH_CRED_KEY_PREVIOUS` (comma-separated, base64-encoded 32-byte
+ * values). During the overlap window a credential encrypted under any listed
+ * key still decrypts, while new writes use the primary. Retire a key by
+ * dropping it from `FRICK_PUSH_CRED_KEY_PREVIOUS` once every tenant has been
+ * re-saved under the new primary.
  *
  * If `FRICK_PUSH_CRED_KEY` is unset, the credentials module returns a
  * `PushCredentialsDisabled` error from every operation. That keeps a
@@ -82,8 +90,7 @@ const ENCRYPTION_ALGO = "aes-256-gcm";
 const IV_BYTES = 12;
 const TAG_BYTES = 16;
 
-function readEncryptionKey(env: NodeJS.ProcessEnv = process.env): Buffer | undefined {
-  const raw = env.FRICK_PUSH_CRED_KEY;
+function decodeKey(raw: string | undefined): Buffer | undefined {
   if (!raw) return undefined;
   let decoded: Buffer;
   try {
@@ -96,6 +103,35 @@ function readEncryptionKey(env: NodeJS.ProcessEnv = process.env): Buffer | undef
 }
 
 /**
+ * The ordered set of keys to try when decrypting, primary first. The primary
+ * comes from `FRICK_PUSH_CRED_KEY`; any additional overlap-window keys come
+ * from `FRICK_PUSH_CRED_KEY_PREVIOUS` (comma-separated). Invalid / wrong-size
+ * entries in the previous list are silently skipped so a stray comma or blank
+ * doesn't disable decryption. Returns an empty array when no valid primary key
+ * is configured.
+ */
+function readEncryptionKeys(env: NodeJS.ProcessEnv = process.env): Buffer[] {
+  const primary = decodeKey(env.FRICK_PUSH_CRED_KEY);
+  if (!primary) return [];
+  const keys = [primary];
+  const previous = env.FRICK_PUSH_CRED_KEY_PREVIOUS;
+  if (previous) {
+    for (const part of previous.split(",")) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+      const decoded = decodeKey(trimmed);
+      if (decoded) keys.push(decoded);
+    }
+  }
+  return keys;
+}
+
+/** The single key used for all new writes (the primary), if configured. */
+function readPrimaryKey(env: NodeJS.ProcessEnv = process.env): Buffer | undefined {
+  return decodeKey(env.FRICK_PUSH_CRED_KEY);
+}
+
+/**
  * Wrap a plaintext credential record. The returned envelope is the
  * base64-encoded concatenation `iv || ciphertext || authTag`, which is what
  * we persist in `tenant_settings`.
@@ -104,7 +140,7 @@ export function encryptCredential(
   value: object,
   env: NodeJS.ProcessEnv = process.env,
 ): { ok: true; ciphertext: string } | { ok: false; error: PushCredentialError } {
-  const key = readEncryptionKey(env);
+  const key = readPrimaryKey(env);
   if (!key) {
     return {
       ok: false,
@@ -126,8 +162,8 @@ export function decryptCredential<T extends object>(
   ciphertext: string,
   env: NodeJS.ProcessEnv = process.env,
 ): { ok: true; value: T } | { ok: false; error: PushCredentialError } {
-  const key = readEncryptionKey(env);
-  if (!key) {
+  const keys = readEncryptionKeys(env);
+  if (keys.length === 0) {
     return {
       ok: false,
       error: {
@@ -148,19 +184,26 @@ export function decryptCredential<T extends object>(
   const iv = raw.subarray(0, IV_BYTES);
   const tag = raw.subarray(raw.length - TAG_BYTES);
   const enc = raw.subarray(IV_BYTES, raw.length - TAG_BYTES);
-  const decipher = createDecipheriv(ENCRYPTION_ALGO, key, iv) as DecipherGCM;
-  decipher.setAuthTag(tag);
-  let plain: Buffer;
-  try {
-    plain = Buffer.concat([decipher.update(enc), decipher.final()]);
-  } catch {
-    return { ok: false, error: { code: "push.credentials.corrupt", message: "decryption failed" } };
+  // Try the primary key first, then each overlap-window key in order. A GCM
+  // auth-tag mismatch under one key just means the blob was written under a
+  // different key, so we fall through; only after every key fails do we report
+  // corruption.
+  for (const key of keys) {
+    const decipher = createDecipheriv(ENCRYPTION_ALGO, key, iv) as DecipherGCM;
+    decipher.setAuthTag(tag);
+    let plain: Buffer;
+    try {
+      plain = Buffer.concat([decipher.update(enc), decipher.final()]);
+    } catch {
+      continue;
+    }
+    try {
+      return { ok: true, value: JSON.parse(plain.toString("utf8")) as T };
+    } catch {
+      return { ok: false, error: { code: "push.credentials.corrupt", message: "decrypted blob is not JSON" } };
+    }
   }
-  try {
-    return { ok: true, value: JSON.parse(plain.toString("utf8")) as T };
-  } catch {
-    return { ok: false, error: { code: "push.credentials.corrupt", message: "decrypted blob is not JSON" } };
-  }
+  return { ok: false, error: { code: "push.credentials.corrupt", message: "decryption failed" } };
 }
 
 /**

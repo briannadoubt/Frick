@@ -94,7 +94,9 @@ A fresh ephemeral keypair and salt are used on every send. The encrypted body
 is capped at 4096 octets (RFC 8291); an over-cap payload returns
 `push.payloadTooLarge` without dispatching. Registrations whose subscription
 omits `p256dh`/`auth` still send an empty body (the pre-FR-60 wake-up path).
-Multi-key rotation for the encryption material is out of scope here (FR-61).
+Multi-key rotation of the *stored-credential* encryption key (the
+`FRICK_PUSH_CRED_KEY` overlap window, FR-61) is covered under [Key rotation](#key-rotation-overlap-window)
+below; the per-send RFC 8291 ephemeral material here is unaffected.
 
 The `encryptWebPushPayload(payload, p256dh, auth)` helper is exported from
 `@fricken/server/push/web-push-adapter` for callers that need to build the body
@@ -113,7 +115,26 @@ When `FRICK_PUSH_CRED_KEY` is unset (or not a base64-encoded 32-byte value):
 - The CLI's `tenants set-push` command refuses to encrypt — it surfaces `push.credentials.disabled`.
 - The adapters return `status: "skipped"` deliveries with the same code, so a misconfigured deploy doesn't silently downgrade to plaintext.
 
-Key rotation: change the env var, then `tenants set-push` every tenant again. Multi-key decryption (overlap windows) is not implemented yet — file a follow-up if you need it.
+### Key rotation (overlap window)
+
+`FRICK_PUSH_CRED_KEY` is always the *primary* key — every new write (`tenants
+set-push`, the admin credential route) encrypts under it. To rotate without
+re-saving every tenant in lockstep, keep the outgoing key(s) in
+`FRICK_PUSH_CRED_KEY_PREVIOUS` (comma-separated, base64-encoded 32-byte values)
+during an overlap window:
+
+```sh
+# Before: FRICK_PUSH_CRED_KEY=<oldKey>
+export FRICK_PUSH_CRED_KEY=<newKey>            # new primary
+export FRICK_PUSH_CRED_KEY_PREVIOUS=<oldKey>   # still decrypts old blobs
+```
+
+During the window a credential encrypted under either key decrypts (the primary
+is tried first, then each previous key in order), while all new writes use the
+new primary. Roll tenants forward at your own pace with `tenants set-push`; once
+every tenant has been re-saved, drop `FRICK_PUSH_CRED_KEY_PREVIOUS` to retire the
+old key. Blank or wrong-size entries in the previous list are skipped, so a stray
+comma won't disable decryption.
 
 ## Setting per-tenant credentials
 
