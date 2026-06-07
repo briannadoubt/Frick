@@ -125,10 +125,10 @@ export const frickTokens = {
       "onActionPrimary": "#ffffff",
       "incomingBubble": "#ffffff",
       "outgoingBubble": "#c8f7e8",
-      "success": "#168463",
-      "warning": "#9a6400",
+      "success": "#107a5b",
+      "warning": "#8a5a00",
       "danger": "#9e334f",
-      "info": "#5279dc"
+      "info": "#4169c4"
     },
     "gradient": {
       "brandHero": "linear-gradient(135deg, #ebfff8 0%, #dce8ff 100%)"

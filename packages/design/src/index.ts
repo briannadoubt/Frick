@@ -4,3 +4,4 @@ export * from "./model.js";
 export * from "./resolver.js";
 export * from "./validate.js";
 export * from "./validate-styles.js";
+export * from "./a11y.js";

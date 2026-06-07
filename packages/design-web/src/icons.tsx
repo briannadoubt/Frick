@@ -19,21 +19,39 @@ import {
 import { useDesignContext, type FrickDesignIconPack } from "./provider.js";
 
 export type FrickIcon = ComponentType<SVGProps<SVGSVGElement>>;
-export type FrickIconName =
-  | "send"
-  | "reload"
-  | "add"
-  | "details"
-  | "back"
-  | "threads"
-  | "live"
-  | "message"
-  | "paperclip"
-  | "mic"
-  | "video"
-  | "settings"
-  | "themeLight"
-  | "themeDark";
+
+/**
+ * The stable, documented icon-name contract (FR-101).
+ *
+ * These names are part of the design system's public API: a consumer can pass
+ * any of them to {@link FrickIconGlyph}, {@link IconButton}, etc., and every
+ * icon pack (native + frick fallback) is guaranteed to provide a glyph for
+ * each. The list is frozen — names are append-only and must not be renamed or
+ * removed without a breaking-change bump. See `docs/accessibility.md`.
+ */
+export const frickIconNames = [
+  "send",
+  "reload",
+  "add",
+  "details",
+  "back",
+  "threads",
+  "live",
+  "message",
+  "paperclip",
+  "mic",
+  "video",
+  "settings",
+  "themeLight",
+  "themeDark",
+] as const;
+
+export type FrickIconName = (typeof frickIconNames)[number];
+
+/** Runtime guard: true when `name` is part of the icon-name contract. */
+export function isFrickIconName(name: unknown): name is FrickIconName {
+  return typeof name === "string" && (frickIconNames as readonly string[]).includes(name);
+}
 
 export const icons = {
   action: {

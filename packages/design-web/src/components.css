@@ -38,12 +38,20 @@
   --frick-line-height-tight: 1.2;
   --frick-line-height-normal: 1.5;
   --frick-opacity-disabled: 0.48;
+  --frick-opacity-muted: 0.6;
+  --frick-opacity-dim: 0.3;
   --frick-font-weight-regular: var(--frick-typography-body-weight);
   --frick-font-weight-medium: var(--frick-typography-label-weight);
   --frick-font-weight-semibold: var(--frick-typography-title-weight);
   --frick-shadow-raised: var(--frick-component-surface-shadow);
   --frick-duration-fast: 120ms;
   --frick-duration-normal: 180ms;
+  /* Accessibility contract (FR-101): a single visible focus indicator used by
+     every keyboard-focusable control. Meets WCAG 2.4.7 (focus visible) and is
+     thick/offset enough to satisfy 2.4.11 focus appearance. */
+  --frick-focus-ring-width: 2px;
+  --frick-focus-ring-offset: 2px;
+  --frick-focus-ring-color: var(--frick-color-primary);
   --frick-chart-1: var(--frick-color-action-primary);
   --frick-chart-2: var(--frick-color-text-muted);
   --frick-chart-3: var(--frick-color-danger);
@@ -962,4 +970,90 @@
 .frick-pie-chart circle {
   stroke: var(--frick-chart-segment);
   stroke-width: var(--frick-size-3);
+}
+
+/* -------------------------------------------------------------------------
+   Accessibility contract (FR-101)
+   ------------------------------------------------------------------------- */
+
+/* Keyboard focus: every focusable control gets one consistent, visible ring.
+   `:focus-visible` keeps it keyboard-only (no ring on mouse click), while the
+   `:focus:not(:focus-visible)` reset suppresses the UA default for pointer
+   focus. Applies to native interactive elements plus any custom widget that
+   opts in via tabindex/role. */
+.frick-button:focus-visible,
+.frick-icon-button:focus-visible,
+.frick-segmented__option:focus-visible,
+.frick-reaction:focus-visible,
+.frick-workspace-shell__destination:focus-visible,
+.frick-workspace-list-item:focus-visible,
+.frick-toggle__input:focus-visible + .frick-toggle__track,
+.frick-input:focus-visible,
+.frick-textarea:focus-visible,
+.frick-composer__input:focus-visible,
+.frick-message-list:focus-visible,
+[role="toolbar"]:focus-visible,
+a:focus-visible {
+  outline: var(--frick-focus-ring-width) solid var(--frick-focus-ring-color);
+  outline-offset: var(--frick-focus-ring-offset);
+  border-radius: var(--frick-radius-sm);
+}
+
+.frick-button:focus:not(:focus-visible),
+.frick-icon-button:focus:not(:focus-visible),
+.frick-segmented__option:focus:not(:focus-visible),
+.frick-reaction:focus:not(:focus-visible),
+.frick-workspace-shell__destination:focus:not(:focus-visible),
+.frick-workspace-list-item:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Animated affordances. Defined here (not inline) so the reduced-motion block
+   below can disable them wholesale. */
+@keyframes frick-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes frick-typing-bounce {
+  0%,
+  80%,
+  100% {
+    opacity: var(--frick-opacity-dim);
+  }
+  40% {
+    opacity: 1;
+  }
+}
+
+.frick-typing span {
+  animation: frick-typing-bounce 1.2s ease-in-out infinite;
+}
+
+.frick-typing span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.frick-typing span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+/* Reduced motion: respect the user's OS preference (WCAG 2.3.3 / FR-101).
+   Transitions and animations are neutralized rather than removed so layout and
+   final state are unchanged — only the motion is gone. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .frick-typing span {
+    animation: none;
+    opacity: var(--frick-opacity-muted);
+  }
 }

@@ -102,10 +102,14 @@ describe("Frick design resolver", () => {
     });
 
     expect(frick.semantic.color.actionPrimary).toBe("#168463");
-    expect(frickenChat.semantic.color.actionPrimary).toBe("#5279dc");
+    // frickenChat uses a darker blue so white `onActionPrimary` clears WCAG AA
+    // on the action fill (FR-101 contrast contract).
+    expect(frickenChat.semantic.color.actionPrimary).toBe("#3a5cbf");
     expect(frick.component.button.background).toBe("#168463");
-    expect(frickenChat.component.button.background).toBe("#5279dc");
-    expect(frickenChat.semantic.color.outgoingBubble).toBe("#dce8ff");
+    expect(frickenChat.component.button.background).toBe("#3a5cbf");
+    // frickenChat no longer overrides the outgoing bubble; it inherits the
+    // mode-aware mint treatment (light mint in light mode) so it stays legible.
+    expect(frickenChat.semantic.color.outgoingBubble).toBe("#c8f7e8");
   });
 
   it("falls back to the brand icon family when the icon pack is not native", () => {

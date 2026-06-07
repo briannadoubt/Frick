@@ -120,10 +120,13 @@ export const frickDesignDefinition = defineDesign({
       onActionPrimary: alias("primitive.color.neutral.0"),
       incomingBubble: alias("primitive.color.neutral.0"),
       outgoingBubble: alias("primitive.color.mint.100"),
-      success: alias("primitive.color.mint.700"),
-      warning: alias("primitive.color.amber.700"),
+      // Status tones are used as *text/icon* colors on the page, so they are
+      // held to WCAG AA (4.5:1) against `page` — distinct from the brand fill
+      // colors above. See the contrast contract (FR-101) / docs/accessibility.md.
+      success: "#107a5b",
+      warning: "#8a5a00",
       danger: alias("primitive.color.red.700"),
-      info: alias("primitive.color.blue.500"),
+      info: "#4169c4",
     },
     gradient: {
       brandHero: alias("primitive.gradient.brandHero"),
@@ -188,6 +191,12 @@ export const frickDesignDefinition = defineDesign({
           border: "#354943",
           incomingBubble: "#202e2a",
           outgoingBubble: alias("primitive.color.mint.900"),
+          // Status tones flip to lighter variants in dark mode so they keep
+          // WCAG AA against the near-black page (FR-101 contrast contract).
+          success: "#54d8ac",
+          warning: "#e2b65c",
+          danger: "#ff8aa3",
+          info: "#7da2ff",
         },
       },
     },
@@ -197,8 +206,11 @@ export const frickDesignDefinition = defineDesign({
     frickenChat: {
       semantic: {
         color: {
-          actionPrimary: alias("primitive.color.blue.500"),
-          outgoingBubble: alias("primitive.color.blue.100"),
+          // Darker than blue.500 so white `onActionPrimary` clears WCAG AA on
+          // the primary action fill (FR-101). The outgoing bubble intentionally
+          // inherits the mode-aware mint treatment so it stays legible in both
+          // light and dark — brand differentiation lives in the action color.
+          actionPrimary: "#3a5cbf",
         },
       },
     },
