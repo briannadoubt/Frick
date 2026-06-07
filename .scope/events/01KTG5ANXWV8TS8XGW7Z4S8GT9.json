@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTG5ANXWV8TS8XGW7Z4S8GT9",
+  "ts": "2026-06-07T04:26:48.124Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ28",
+    "commentId": "01KTG5ANXWV8TS8XGW7Z4S8GT8",
+    "author": "claude",
+    "body": "ci.yml runs the TS + TS-Postgres + Swift + Android build/test matrix; pnpm verify:generated gates schema/fixture/design-token drift on every run."
+  }
+}

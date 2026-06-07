@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTGA9H49PCQ9H3NHTZ8DXT84",
+  "ts": "2026-06-07T05:53:33.321Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTGA9C8Z3AG9EY2MY6VGQ618",
+    "field": "branch",
+    "value": "feat/keychain-session-persistence"
+  }
+}

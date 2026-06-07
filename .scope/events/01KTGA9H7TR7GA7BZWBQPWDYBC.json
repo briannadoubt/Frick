@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGA9H7TR7GA7BZWBQPWDYBC",
+  "ts": "2026-06-07T05:53:33.434Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTGA9C8Z3AG9EY2MY6VGQ618",
+    "commentId": "01KTGA9H7TR7GA7BZWBQPWDYBB",
+    "author": "claude",
+    "body": "FrickSessionPersisting protocol + FrickKeychainSessionStore (kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly, optional accessGroup) + FrickInMemorySessionStore for tests. FrickClient auto-restores on construction, drops expired sessions (FrickSession.isExpired, unparseable expiry treated as live), and writes through on install/signOut/logout. 62 Swift tests green."
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTG9BWY4J47N3JHCYT0FVTVK",
+  "ts": "2026-06-07T05:37:22.372Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTG9BWY3WPEVR56EHJ1E9XG8",
+    "number": 142,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "Object deletes not broadcast over sync gateway (clients keep stale rows)",
+    "description": "## Symptom\nWhen an object is deleted on the server, other connected clients do NOT drop the row live — they only lose it on the next cold refetch. Every other mutation (objectUpsert, streamAppend) fans out over the sync gateway; delete silently does not.\n\n## Root cause (confirmed in Frick source)\n- apps/server/src/store.ts deleteObject() (~line 785) returns the delete result WITHOUT calling #notifyWriteListener — unlike writeObject, which notifies on every upsert.\n- The FrickStoreWriteEvent union has no `objectDelete` kind (only objectUpsert / streamAppend).\n- apps/server/src/sync/gateway.ts has no objectDelete handling and no publishObjectDeletes.\n\nVerified still missing from upstream Frick source as of this writing.\n\n## Current downstream workaround (fragile — should be retired by this fix)\nRangerCRM carries a local patch-package patch against the COMPILED dist: /Users/bri/dev/RangerCRM/server/patches/@fricken+server+0.1.1.patch. It (a) adds an objectDelete write-event + notify in store.js deleteObject, and (b) adds publishObjectDeletes in gateway.js that emits the removed id both as a tombstone record (the existing FrickSwift SDK decodes it -> .objectsDelta -> refetch drops the row) AND as a clean `removed: [{type,id}]` list (forward-compat for a future JS client), tenant-scoped, reusing the upsert packer. Patching dist/ is brittle and invisible to other Frick apps.\n\n## Proposed upstream fix (port the patch into source, properly)\n1. Add `objectDelete` to the FrickStoreWriteEvent union (store.ts ~line 236).\n2. Have deleteObject() call #notifyWriteListener({ kind: \"objectDelete\", tenantId, objectType, objectId }) when a row actually existed (parity with the upsert path).\n3. Add SyncGateway.publishObjectDeletes(type, ids, tenantId) and route the objectDelete write-event to it — emit both the tombstone Delta frame (SDK back-compat) and a `removed` list.\n4. Add a test: two subscribed clients, delete on one, assert the other receives a Delta/removed for the id.\n\n## Why generic / belongs upstream\nEvery Frick app that deletes objects needs live delete fan-out. This is framework infrastructure, not RangerCRM domain. Landing it upstream lets RangerCRM delete its patch-package patch entirely (and drops the patch-package/postinstall-postinstall dev deps from rangercrm-server).",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

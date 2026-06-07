@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTG5AP1C8XCBSCS4A6ZX5KF8",
+  "ts": "2026-06-07T04:26:48.236Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ26",
+    "commentId": "01KTG5AP1C8XCBSCS4A6ZX5KF7",
+    "author": "claude",
+    "body": "npm packages now publish with --provenance (SLSA provenance) via trusted publishing; publishConfig.provenance enforced by security-hardening test. Schema artifact signing tracked separately in FR-45."
+  }
+}

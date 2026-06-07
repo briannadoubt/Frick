@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTG9BWY3WPEVR56EHJ1E9XG5",
+  "ts": "2026-06-07T05:37:22.371Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTG9BWY3WPEVR56EHJ1E9XG4",
+    "number": 140,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "FrickSharingService stateful sharing layer",
+    "description": "## Frick today\nRaw verbs only — createInvitation / acceptInvitation / listGrants / revokeGrant on FrickClient, plus FrickSharingPermission / FrickInvitation / FrickGrant value types (FrickSharing.swift). No stateful layer.\n\n## What RangerCRM built (port source of truth)\n/Users/bri/dev/RangerCRM/RangerCRM/Model/RangerData/Services/FrickSharingService.swift (~275 LOC): an observable grant cache, the accept/revoke orchestration on top of the raw verbs, and deep-link parsing. Generic except the literal \"rangercrm\" URL scheme.\n\nAlso related: SharingPermissions.swift (~192 LOC) — permission-gating logic is generic; the NSManagedObject -> Frick recordType mapping stays app-side.\n\n## What the port gives us\nThe stateful sharing layer (the UICloudSharingController-equivalent for Frick) becomes reusable, with the URL scheme as injected config rather than a hardcoded literal. Self-contained ~260 generic lines; medium value, low coupling.\n\n## Downstream impact\nRangerCRM keeps only the recordType mapping + its scheme constant; the cache/orchestration/deep-link parsing come from FrickSwift.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTG9BWY2A7MWJBWFNEMR90N9",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

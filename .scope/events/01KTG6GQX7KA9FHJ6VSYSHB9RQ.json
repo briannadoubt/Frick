@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTG6GQX7KA9FHJ6VSYSHB9RQ",
+  "ts": "2026-06-07T04:47:35.335Z",
+  "actor": "claude (zavro review)",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTG6GQX7KA9FHJ6VSYSHB9RP",
+    "number": 132,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Per-tenant recurring-job fan-out",
+    "description": "Frick recurring jobs don't fan out per tenant, so Zavro reconstructs the active-tenant list from app rows and ticks each one. Reference impl: listCompanyTenantIds in ~/dev/aquariusyacht/apps/backend/src/domains/companies/resolve.ts:36, consumed by the recurring schedules in apps/backend/src/runtime/automation.ts. The 'enumerate live tenants and run this recurring job once per tenant' capability is a scheduler concern Frick should own (it holds the tenant ledger); the app should only supply a tenant predicate/source, not the fan-out loop.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTG6GQX2VYWEBVDB5DRZ6MVP",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTG5AN58XYHTT5EPJZZ19HA9",
+  "ts": "2026-06-07T04:26:47.336Z",
+  "actor": "unknown",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTG5AN58XYHTT5EPJZZ19HA8",
+    "number": 124,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Swift sync resilience: reconnect resubscribe + injectable schema descriptor/identity + resilient fetch",
+    "description": "Shipped in 0.1.1 (PR #5). FrickSyncSocket replays active subscriptions after reconnect and buffers pre-open frames (FIFO behind Hello); FrickClient accepts full app schema identity (schemaId/schemaRevision/schemaHash) + injected FrickSchemaDescriptor threaded into Hello/caps/HTTP guards/packed Snapshot+Delta decode; fetchObjects decodes rows individually and skips malformed rows (RCRM-136). Reconnect backoff exponent capped to avoid Int overflow.",
+    "status": "done",
+    "priority": "high",
+    "parentId": null,
+    "branch": "feat/sync-resubscribe-on-reconnect",
+    "prUrl": "https://github.com/briannadoubt/Frick/pull/5",
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTG9BWY3WPEVR56EHJ1E9XFZ",
+  "ts": "2026-06-07T05:37:22.371Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTG9BWY3WPEVR56EHJ1E9XFY",
+    "number": 137,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Generic store registry to replace the DataController bridge",
+    "description": "## Frick today\nNothing — store lookup is pure app glue.\n\n## What RangerCRM built\n/Users/bri/dev/RangerCRM/RangerCRM/Model/RangerData/Migration/DataController+FrickStoresBridge.swift — 127 lines of mechanical KeyPath plumbing, e.g.\n```swift\nextension DataController {\n    @MainActor var accounts: [AccountFrickModel] { FrickAccountStore.bridge?.accounts ?? [] }\n    // ... ~20 more, identical shape\n}\n```\nplus the `static weak var bridge: Frick<Entity>Store?` set in each store's init.\n\n## What the port gives us\nA generic, type-keyed store registry in FrickSwift (resolve the live store/array for a given Model type) so @FrickQuery and any consumer can find a store without an app-owned DataController exposing hand-written KeyPaths. The bridge file disappears entirely.\n\n## Notes\nCoupled with the FrickStore story (the `bridge` pointer is the seed of this) and a hard dependency for re-anchoring @FrickQuery off RangerCRM's DataController. Largely falls out of the store work — track separately so the @FrickQuery port has a clean anchor to depend on.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTG9BWY2A7MWJBWFNEMR90N9",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTG6GQX3D64EHBZ8H2S80RBZ",
+  "ts": "2026-06-07T04:47:35.331Z",
+  "actor": "claude (zavro review)",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTG6GQX3D64EHBZ8H2S80RBY",
+    "number": 128,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Ship an app-route helper kit (CORS, JSON I/O, :param router, bearer→session auth)",
+    "description": "Frick hands appRoutes a raw (req,res) with no framework context, so every app rewrites the same glue. Reference impl: ~/dev/aquariusyacht/apps/backend/src/runtime/http.ts — setCors, handlePreflight, sendJson, readJsonBody, a :param matchPath matcher, and authenticate (bearer token → store.sessions.readActive → principal). All of it is generic except the one app-specific line that maps userId→role; keep that pluggable (callback or leave role resolution to the app). Ship as a small re-exported helper module from @fricken/server. Low-risk, universally useful — start here.\n\nSee also the route assembly pattern in apps/backend/src/runtime/routes.ts (createCommandRoutes + late bindStore).",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTG6GQX2VYWEBVDB5DRZ6MVP",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTF75KKNJ7009ZDTR1BKE8ES",
+  "ts": "2026-06-06T19:39:44.629Z",
+  "actor": "codex",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0X",
+    "field": "description",
+    "value": "Blob bytes default to SQLite and can use a tenant-isolated filesystem bytes driver via FRICK_BLOB_DRIVER=filesystem plus FRICK_BLOB_STORAGE_PATH (FR-53 is done; see apps/server/src/storage/blob-bytes-driver.ts and docs/operations.md). Blob metadata remains in SQLite.\n\nRemaining scope:\n- Object-storage / S3-compatible blob driver behind the same bytes-driver interface (FR-54).\n- Blob processing pipeline extensions for derivatives, MIME/size validation, moderation hooks, and richer lifecycle handling (FR-55).\n- Orphaned-blob cleanup job (FR-57).\n\nPer-user blob quota enforcement landed under FR-56. Keep this epic focused on external bytes storage and blob lifecycle; Postgres runtime-store work remains FR-4."
+  }
+}

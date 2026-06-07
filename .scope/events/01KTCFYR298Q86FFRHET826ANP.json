@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTCFYR298Q86FFRHET826ANP",
+  "ts": "2026-06-05T18:15:33.705Z",
+  "actor": "unknown",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTCFYR25NKMSE9YHV26JK1XS",
+    "number": 123,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Update documentation from current codebase",
+    "description": "",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

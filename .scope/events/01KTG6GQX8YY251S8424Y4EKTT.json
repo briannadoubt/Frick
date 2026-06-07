@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTG6GQX8YY251S8424Y4EKTT",
+  "ts": "2026-06-07T04:47:35.336Z",
+  "actor": "claude (zavro review)",
+  "kind": "relation.add",
+  "payload": {
+    "fromId": "01KTG6GQX7KA9FHJ6VSYSHB9RR",
+    "toId": "01KT3SXZQDVJG2FHV3K9JYEZ0S",
+    "type": "relates_to"
+  }
+}

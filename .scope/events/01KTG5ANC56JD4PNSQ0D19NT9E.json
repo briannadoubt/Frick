@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTG5ANC56JD4PNSQ0D19NT9E",
+  "ts": "2026-06-07T04:26:47.557Z",
+  "actor": "unknown",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTG5ANC4H2HEH00APV7A6RPQ",
+    "number": 126,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "Flaky CI on main: cold-start tsx subprocess tests exceed vitest 5s default",
+    "description": "apps/cli + apps/server package-entry suites spawn the CLI/server entry via a cold 'pnpm exec tsx' per test. On loaded CI runners a single cold start exceeds vitest's 5s default, so pull_request runs (quiet runner) passed while push-to-main runs went red intermittently. Fix: global testTimeout/hookTimeout=30s in vitest.config.ts (+ widened package-entry execFile timeouts). A genuinely hung process still trips 30s.",
+    "status": "done",
+    "priority": "high",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0W",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

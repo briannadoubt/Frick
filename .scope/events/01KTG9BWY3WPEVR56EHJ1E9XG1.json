@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTG9BWY3WPEVR56EHJ1E9XG1",
+  "ts": "2026-06-07T05:37:22.371Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTG9BWY3WPEVR56EHJ1E9XG0",
+    "number": 138,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "@FrickQuery object-collection SwiftUI property wrapper",
+    "description": "## Frick today\nThe SwiftUI layer (packages/swift/Sources/FrickSwift/SwiftUI/FrickStream.swift) ships @FrickStream and @FrickPresence — but read their bodies: they bind to event-log tails and presence rows, NOT object collections. There is no object-query property wrapper. This is a NEW capability for Frick, not just dedup.\n\n## What RangerCRM built (port source of truth)\n/Users/bri/dev/RangerCRM/RangerCRM/Model/RangerData/Services/FrickQuery.swift — a genuine @FetchRequest drop-in:\n- @FrickQuery property wrapper resolving a typed array and exposing FrickQueryResults<Item>\n- FrickQueryResults conforms to RandomAccessCollection (ForEach/subscript work out of the box), with write-through `sortDescriptors` and `filter`\n- projectedValue: a Binding into the sort descriptors so sort-picker UIs mutate them via `$`\n- FrickSort<Item>: value-type keyPath comparator (String/Date/Double/Int overloads), replacing SortDescriptor<NSManagedObject>\nThis is the piece that let RangerCRM view code mechanically swap off @FetchRequest with a one-line declaration change.\n\n## What the port gives us\nCompletes the SwiftUI trio: @FrickStream (events) + @FrickPresence (presence) + @FrickQuery (objects). Any future Frick app gets declarative, sorted, filtered, live object lists for free.\n\n## Coupling to resolve\nRangerCRM's version resolves via `KeyPath<DataController, [Item]>` (app-specific) and reads DataController.shared. The port must re-anchor on the generic store registry (see that story) instead of an app DataController. RangerObject (the AnyObject marker the wrapper is generic over, /Users/bri/dev/RangerCRM/RangerCRM/Model/RangerData/Services/RangerObject.swift) folds into the FrickModel protocol.\n\nBlocked by: store registry (needs a generic anchor).",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTG9BWY2A7MWJBWFNEMR90N9",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTG5ANTC89FQDGCDZKAZWZVG",
+  "ts": "2026-06-07T04:26:48.012Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ25",
+    "commentId": "01KTG5ANTBERM1MVNY9W9AE7D2",
+    "author": "claude",
+    "body": "docs/versioning.md documents framework/schema/protocol/artifact version dimensions + compatibility windows + deprecation/support policy."
+  }
+}

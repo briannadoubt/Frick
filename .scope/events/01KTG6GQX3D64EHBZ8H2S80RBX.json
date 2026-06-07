@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTG6GQX3D64EHBZ8H2S80RBX",
+  "ts": "2026-06-07T04:47:35.331Z",
+  "actor": "claude (zavro review)",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTG6GQX2VYWEBVDB5DRZ6MVP",
+    "number": 127,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "App-author SDK: harvest reusable framework glue from Zavro",
+    "description": "Zavro (the multi-tenant field-service platform built on Frick, at ~/dev/aquariusyacht) has accreted a layer of code that is pure Frick-app plumbing — not Zavro business logic and not marine-specific. Every future Frick app will re-derive the same glue. This epic harvests it down into Frick so apps get it for free.\n\nProvenance: identified in a Zavro architecture review (2026-06-06). Each child story cites the reference implementation by path in ~/dev/aquariusyacht so a Frick agent can lift + generalize it. The test is strict: only code with NO Zavro/marine business concept belongs here. Excluded on purpose (these are Zavro the product, not framework): the entitlements/marketplace catalog, the per-vertical terminology engine, and the app role taxonomy.\n\nChildren cross-link to the topical epics they touch (FR-6 tenancy, FR-9 blobs, FR-5 auth).",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

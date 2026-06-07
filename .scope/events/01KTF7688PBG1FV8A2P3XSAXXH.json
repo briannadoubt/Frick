@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTF7688PBG1FV8A2P3XSAXXH",
+  "ts": "2026-06-06T19:40:05.782Z",
+  "actor": "codex",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ29",
+    "field": "description",
+    "value": "Filesystem blob bytes driver is implemented and done. It stores blob bytes under FRICK_BLOB_STORAGE_PATH when FRICK_BLOB_DRIVER=filesystem, keeps metadata in SQLite, validates the path at startup, writes atomically, and enforces tenant isolation through the store facade. See apps/server/src/storage/blob-bytes-driver.ts, apps/server/tests/blob-bytes-driver.test.ts, and docs/operations.md."
+  }
+}

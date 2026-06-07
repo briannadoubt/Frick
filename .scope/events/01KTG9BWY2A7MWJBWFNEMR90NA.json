@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTG9BWY2A7MWJBWFNEMR90NA",
+  "ts": "2026-06-07T05:37:22.370Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTG9BWY2A7MWJBWFNEMR90N9",
+    "number": 135,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "Promote RangerCRM's client observation tier into FrickSwift",
+    "description": "FrickSwift today is a thin transport: FrickClient (CRUD/auth/blobs/search), FrickSyncSocket (raw delta frames), and SwiftUI wrappers for append-only event streams + presence only (@FrickStream / @FrickPresence in packages/swift/Sources/FrickSwift/SwiftUI/FrickStream.swift). It has NO concept of an observable, live-updating collection of domain objects.\n\nRangerCRM built that entire missing tier itself, in /Users/bri/dev/RangerCRM/RangerCRM/Model/RangerData/ (~9,300 LOC — roughly 2x the size of FrickSwift's own ~4,800 LOC). It is generic, app-agnostic infrastructure that the next Frick app would otherwise re-derive from fetchObjects(). This epic relocates that tier down into FrickSwift and de-duplicates it (RangerCRM currently copy-pastes the store ~16x).\n\nLayer cake today:\n  app views (@FrickQuery, sign-in UI)\n  OBSERVATION TIER  <- lives in RangerCRM (FrickStore x16, *FrickModel x16, @FrickQuery, FrickSessionManager, FrickSharingService, DataController bridge)\n  FrickSwift SDK (FrickClient, FrickSyncSocket, @FrickStream/@FrickPresence, Keychain session persistence)\n\nGoal after this epic: FrickSwift owns the object-observation tier (observable store + @FrickQuery + observable model wrappers + store registry); RangerCRM sheds ~5,000 LOC and one security regression (see the session story); a new Frick app starts where RangerCRM is now instead of at fetchObjects().\n\nSuggested sequence: Store -> Registry -> @FrickQuery -> Session -> Sharing -> Model macro. Each story self-describes its Frick-today baseline, what RangerCRM built, and the delta the port adds.\n\nReference (read-only) for every story: RangerCRM's working implementations under /Users/bri/dev/RangerCRM/RangerCRM/Model/RangerData/ — these are battle-tested and should be the porting source of truth.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

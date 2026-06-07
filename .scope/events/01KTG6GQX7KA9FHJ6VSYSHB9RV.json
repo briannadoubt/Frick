@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTG6GQX7KA9FHJ6VSYSHB9RV",
+  "ts": "2026-06-07T04:47:35.335Z",
+  "actor": "claude (zavro review)",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTG6GQX7KA9FHJ6VSYSHB9RT",
+    "number": 134,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Projection-author ergonomics helpers",
+    "description": "The specific projections are app logic, but the micro-ergonomics every projection author re-derives are generic: a typed list<T>(ctx, type) over ctx.store.listObjects, a single(key, value) change-set helper, and the source-type bootstrap set used at boot. Reference impl: ~/dev/aquariusyacht/apps/backend/src/projections/index.ts. Ship these as small exported helpers alongside the projection API (FR-109/FR-115). Lowest priority — pure DX sugar.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTG6GQX2VYWEBVDB5DRZ6MVP",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

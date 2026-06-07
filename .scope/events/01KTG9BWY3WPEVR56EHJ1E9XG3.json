@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTG9BWY3WPEVR56EHJ1E9XG3",
+  "ts": "2026-06-07T05:37:22.371Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTG9BWY3WPEVR56EHJ1E9XG2",
+    "number": 139,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Observable session manager + drop app-side UserDefaults persistence",
+    "description": "## Frick today\nMore than RangerCRM is using. FrickClient ALREADY auto-persists sessions to the Keychain (FrickKeychainSessionStore) and auto-restores on construction — see FrickClient.swift (~line 1011) and FrickSessionPersistence.swift (FrickSessionPersisting protocol + Keychain/InMemory impls). The client comment even states injecting a session is \"no longer required for cross-launch persistence — the client auto-restores.\"\n\nWhat Frick does NOT offer: an observable auth-STATE holder (the session/isAuthenticating/verbs shape SwiftUI gates on).\n\n## What RangerCRM built\n/Users/bri/dev/RangerCRM/RangerCRM/Model/RangerData/Services/FrickSessionManager.swift — an @Observable holder with `session`, `isAuthenticating`, and signIn/signUp/signOut/requestPasswordReset/resetPassword verbs. BUT it ALSO re-implements session persistence to UserDefaults (restorePersistedSession/persist, ~lines 120-137), which duplicates and arguably REGRESSES Frick's existing Keychain persistence (UserDefaults is not the Keychain).\n\n## What the port gives us (two wins)\n1. The observable auth-state wrapper (session/isAuthenticating/verbs) becomes a reusable FrickSwift type every app needs.\n2. RangerCRM DELETES its UserDefaults persistence and rides Frick's Keychain auto-restore — strictly more secure, less code. This is the one port that is partly \"stop reimplementing what Frick already does.\"\n\n## Notes\nPreserve the DEBUG test initializer pattern (init(forTestingWith:session:) used by RangerCRMTests/Integration/) — the integration suite drives isolated clients/sessions without touching the singleton. Keep the RANGER_UITEST reset hook app-side (it wipes app-specific UserDefaults keys), but the generic session restore/persist moves to (or is deleted in favor of) Frick.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTG9BWY2A7MWJBWFNEMR90N9",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

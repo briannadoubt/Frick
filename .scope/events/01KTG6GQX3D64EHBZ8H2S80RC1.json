@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTG6GQX3D64EHBZ8H2S80RC1",
+  "ts": "2026-06-07T04:47:35.331Z",
+  "actor": "claude (zavro review)",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTG6GQX3D64EHBZ8H2S80RC0",
+    "number": 129,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Re-export extension-author types from the package index",
+    "description": "Three Zavro files reverse-engineer Frick's own extension types from the ServerOptions surface because they aren't exported:\n- PolicyHook  → NonNullable<ServerOptions[\"policyHooks\"]>[number]  (apps/backend/src/runtime/automation.ts:51)\n- FrickProjection → NonNullable<ServerOptions[\"projections\"]>[number] + the apply ctx type (apps/backend/src/projections/index.ts:18)\n- FrickBlobProcessor → NonNullable<ServerOptions[\"blobProcessors\"]>[number] (apps/backend/src/domains/media/processor.ts:20)\nAlso the FrickPolicyInput shape and FrickAppRoute handler arg types. Just export these from @fricken/server's index so app authors stop deriving them. Pure packaging change, no behavior. Pairs with the router kit.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTG6GQX2VYWEBVDB5DRZ6MVP",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

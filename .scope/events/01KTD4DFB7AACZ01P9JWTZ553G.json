@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTD4DFB7AACZ01P9JWTZ553G",
+  "ts": "2026-06-06T00:13:07.815Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTCFYR25NKMSE9YHV26JK1XS",
+    "commentId": "01KTD4DFB7AACZ01P9JWTZ553F",
+    "author": "codex",
+    "body": "Updated Android verification guidance across AGENTS, CONTRIBUTING, status, and Agent Kit surfaces; updated release docs/checklist for CI gates, auto-tagging, and Swift mirror tags. Verified with pnpm verify:generated. Accidental pnpm android:build reproduced known :app compile failure only."
+  }
+}

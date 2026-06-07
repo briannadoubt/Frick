@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTG9BWY3WPEVR56EHJ1E9XFX",
+  "ts": "2026-06-07T05:37:22.371Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTG9BWY3WPEVR56EHJ1E9XFW",
+    "number": 136,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Generic FrickStore<Model> observable object cache + sync loop",
+    "description": "## Frick today\nFrickClient exposes one-shot/imperative verbs: fetchObjects(type:), writeObject(...), deleteObject(...), and socket.subscribeObject(type:) emitting raw .objectsDelta frames. Nothing holds the results, nothing re-renders SwiftUI, nothing reconciles a delta into a cache.\n\n## What RangerCRM built (port source of truth)\n/Users/bri/dev/RangerCRM/RangerCRM/Model/RangerData/Stores/FrickAccountStore.swift (and 15 near-identical siblings). Each is an @MainActor @Observable cache that:\n- bootstrap(): fetch + map to model + sort, then open the sync socket\n- startSyncSubscription(): connectSync, subscribeObject(type:), consume .objectsDelta, and on any touching delta call refetchOnDelta()\n- refetchOnDelta(): re-fetch via REST and MERGE IN PLACE (removeAll absent ids, then mergeIntoCache per row) so ForEach rebinds same-id rows instead of replacing instances\n- upsert / delete: write-through to the server then update the cache\n- reset(): tear down on sign-out\n- a `static weak var bridge` pointer the DataController bridge reads through\n\nEvery one of the 16 files is this same ~220 lines; the ONLY per-entity differences are the DTO type and the sort predicate.\n\nNote the two hard-won correctness fixes embedded as ///FIX comments in FrickAccountStore.swift:\n- line ~157: re-sort/re-emit on every merge so an in-place edit (which mutates a model but not the array) still triggers @FrickQuery re-render\n- line ~210: in-place merge on delta refetch so cross-device edits re-render existing cells rather than replacing instances (ForEach won't rebind a same-id row)\nThese must be preserved in the generic version — they are exactly the bugs the next app would re-hit.\n\n## What the port gives us\nThe whole .objectsDelta -> live SwiftUI loop becomes framework-owned. Each app store collapses from ~220 lines to ~10 (DTO type + sort). ~3,500 LOC of RangerCRM -> one generic class. New entities become nearly free. The subtle re-render/delete-reconciliation fixes live in ONE place instead of 16.\n\n## Shape (sketch)\n```swift\n@MainActor @Observable\nopen class FrickStore<Model: FrickModel> {\n    public private(set) var items: [Model]\n    public private(set) var hasBootstrapped: Bool\n    public private(set) var lastError: String?\n    // injected: client/session, DTO type, sort, model factory\n    open func bootstrap() async { ... }\n    open func upsert(_ dto: Model.DTO) async { ... }\n    open func delete(id: String) async { ... }\n    open func reset() { ... }\n}\n```\nApp side: `final class FrickAccountStore: FrickStore<AccountFrickModel> { sort = { ... } }` — DTO + sort only.\n\nDepends on the FrickModel protocol contract (see the model-macro story for the wrapper; the protocol itself can land here). Decide whether the `static weak var bridge` registry is part of this story or the registry story — they're coupled.\n\n## Downstream impact\nRangerCRM: replace 16 hand-written Frick*Store files with thin subclasses. Highest value, lowest risk port of the epic — do it first to prove the FrickModel contract.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTG9BWY2A7MWJBWFNEMR90N9",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

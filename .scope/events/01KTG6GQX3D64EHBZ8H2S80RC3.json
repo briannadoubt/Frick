@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTG6GQX3D64EHBZ8H2S80RC3",
+  "ts": "2026-06-07T04:47:35.331Z",
+  "actor": "claude (zavro review)",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTG6GQX3D64EHBZ8H2S80RC2",
+    "number": 130,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Ship a stock image blob processor + magic-byte sniffer",
+    "description": "Frick owns the blob pipeline but apps supply the validate hook. Reference impl: ~/dev/aquariusyacht/apps/backend/src/domains/media/processor.ts — sniffImageFormat (PNG/JPEG/GIF/WebP magic bytes) plus a size-capped, mime-checked image validator that rejects non-images before they hit storage. Entirely generic; only the size cap and the rejection copy are app config. Ship sniffImageFormat as a utility and a configurable imageBlobProcessor({ maxBytes, message }) factory from @fricken/server.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTG6GQX2VYWEBVDB5DRZ6MVP",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

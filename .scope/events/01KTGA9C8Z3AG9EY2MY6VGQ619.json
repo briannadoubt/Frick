@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTGA9C8Z3AG9EY2MY6VGQ619",
+  "ts": "2026-06-07T05:53:28.351Z",
+  "actor": "unknown",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTGA9C8Z3AG9EY2MY6VGQ618",
+    "number": 143,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Keychain-backed session persistence + auto-restore in FrickSwift",
+    "description": "",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTG9BWY2A7MWJBWFNEMR90N9",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

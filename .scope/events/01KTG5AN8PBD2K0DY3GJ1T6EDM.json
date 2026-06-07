@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTG5AN8PBD2K0DY3GJ1T6EDM",
+  "ts": "2026-06-07T04:26:47.446Z",
+  "actor": "unknown",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTG5AN8PBD2K0DY3GJ1T6EDK",
+    "number": 125,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Automatic release pipeline + first 0.1.1 cut (npm/Swift/Android)",
+    "description": "release-autotag.yml auto-fires on a chore(release): commit to main (gated on head commit msg; also workflow_dispatch), creates+pushes framework-v/swift-v/android-v tags via RELEASE_TAG_TOKEN, which trigger publish-npm (trusted publishing/OIDC, --provenance), publish-swift (FrickSwift mirror), publish-android (GitHub Packages). Cut 0.1.1: all 9 @fricken/* packages live on npm, FrickSwift tagged 0.1.1, Android SDK published. Fixed 4 latent publish bugs surfaced on first run (npm heredoc, Android pnpm version conflict, Swift checkout token clobber, Android demo :app gate). Secrets RELEASE_TAG_TOKEN + SWIFT_MIRROR_TOKEN scoped as fine-grained PATs.",
+    "status": "done",
+    "priority": "high",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0W",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

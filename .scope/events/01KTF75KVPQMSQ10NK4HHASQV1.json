@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTF75KVPQMSQ10NK4HHASQV1",
+  "ts": "2026-06-06T19:39:44.886Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ24",
+    "commentId": "01KTF75KVPQMSQ10NK4HHASQV0",
+    "author": "codex",
+    "body": "Swift and Android publication workflows are present in source: publish-swift.yml mirrors packages/swift to FrickSwift on swift-v* tags, and publish-android.yml publishes the Android SDK to GitHub Packages on android-v* tags. Recent release docs now describe both flows; remaining release-engineering work lives in FR-8/FR-51 and current workflow hardening rather than this pipeline story."
+  }
+}

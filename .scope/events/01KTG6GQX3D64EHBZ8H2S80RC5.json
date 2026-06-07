@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTG6GQX3D64EHBZ8H2S80RC5",
+  "ts": "2026-06-07T04:47:35.331Z",
+  "actor": "claude (zavro review)",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTG6GQX3D64EHBZ8H2S80RC4",
+    "number": 131,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Multi-tenant active-tenant session switch",
+    "description": "Frick sessions are bound to a single tenant, so Zavro hand-rolls 'switch the caller's active tenant to another tenant they belong to' by minting a NEW session scoped to the target tenant while reusing the device/replica identity. Reference impl: handleTenantSwitch in ~/dev/aquariusyacht/apps/backend/src/runtime/routes.ts:232. The membership/authorization check is the app's; the session re-mint + tenant.ensure machinery is generic and belongs in the layer that already owns sessions, tenants, and partitioning. Provide a store.sessions API (or helper) for 'derive a sibling session in tenant X from this session'.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTG6GQX2VYWEBVDB5DRZ6MVP",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

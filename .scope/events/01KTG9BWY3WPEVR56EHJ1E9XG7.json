@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTG9BWY3WPEVR56EHJ1E9XG7",
+  "ts": "2026-06-07T05:37:22.371Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTG9BWY3WPEVR56EHJ1E9XG6",
+    "number": 141,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "@FrickModel macro for DTO-wrapper scaffolding",
+    "description": "## Frick today\nNothing — the model type is \"any Codable DTO.\" No reference-type observable wrapper, no identity/equality base.\n\n## What RangerCRM built\nRangerObject marker protocol (/Users/bri/dev/RangerCRM/RangerCRM/Model/RangerData/Services/RangerObject.swift) + 16 *FrickModel classes (/Users/bri/dev/RangerCRM/RangerCRM/Model/RangerData/Models/, ~2,609 LOC). Each wraps a DTO with identical scaffolding — objectId, private(set) dto, apply(_:), Identifiable, Hashable/== on objectId — PLUS domain-specific field accessors and relationship resolvers (which stay app-side).\n\n## What the port gives us\nA `@FrickModel` macro that generates the scaffolding from the DTO type, so apps write only fields + relationship resolvers. Defines the FrickModel protocol (associatedtype DTO; objectId; dto; apply) that FrickStore<Model> and @FrickQuery are generic over.\n\n## Notes\nHighest effort (a Swift macro target in packages/swift) and the lowest generic fraction of the epic (field accessors/relationships are inherently domain-specific). Sequence LAST — after FrickStore proves the FrickModel contract in plain protocol form. The protocol can ship with the store story; only the macro codegen needs this ticket.\n\nRelates to the store story (defines its Model contract).",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTG9BWY2A7MWJBWFNEMR90N9",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

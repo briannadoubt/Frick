@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTG6GQX7KA9FHJ6VSYSHB9RS",
+  "ts": "2026-06-07T04:47:35.335Z",
+  "actor": "claude (zavro review)",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTG6GQX7KA9FHJ6VSYSHB9RR",
+    "number": 133,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Declarative RBAC policy-hook builder (role × action × resource-type matrix)",
+    "description": "The mechanism — a synchronous, tightening-only policy hook that evaluates a role × action × resource-type write matrix — is generic; only the matrix data is app-specific. Reference impl: ~/dev/aquariusyacht/apps/backend/src/domains/users/rbac.ts (WRITABLE_OBJECTS matrix + rbacDenyReason) wired in apps/backend/src/runtime/automation.ts:89. Ship a makeRbacPolicyHook(matrix) factory from @fricken/server so apps declare the matrix and get the hook. NOTE: do NOT lift the userId→role-by-string-convention (roleForUserId) — that is a Zavro demo placeholder, not framework. Relates to the authz model in FR-1/FR-5.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTG6GQX2VYWEBVDB5DRZ6MVP",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}
