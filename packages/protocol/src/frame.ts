@@ -114,10 +114,24 @@ export interface HelloAckPayload {
   serverCapabilities: FrickServerCapabilities;
 }
 
+/** Identifies an object removed from a subscribed type (FR-142). */
+export interface ObjectRemoval {
+  type: string;
+  id: string;
+}
+
 export interface DeltaPayload {
   objects: PackedRecord[];
   events: PackedStreamEvent[];
   cursor: number;
+  /**
+   * Objects deleted on the server since the last delta (FR-142). Optional and
+   * additive: it rides alongside `objects` so the current SDKs, which refetch
+   * on any object delta, already reconcile the drop via the tombstone records
+   * in `objects`; a forward-looking client can instead drop these ids directly
+   * without a refetch. Absent on deltas that carry no deletions.
+   */
+  removed?: ObjectRemoval[];
 }
 
 export interface PresenceSetPayload {

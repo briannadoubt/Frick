@@ -241,6 +241,12 @@ export type FrickStoreWriteEvent =
       object: PlainObject;
     }
   | {
+      kind: "objectDelete";
+      tenantId: string;
+      objectType: string;
+      objectId: string;
+    }
+  | {
       kind: "streamAppend";
       tenantId: string;
       /** The freshly-appended, persisted event. */
@@ -783,10 +789,23 @@ export class FrickStore {
   deleteObject(type: string, id: string): boolean;
   deleteObject(tenantId: string, type: string, id: string): boolean;
   deleteObject(a: string, b: string, c?: string): boolean {
-    if (c !== undefined) {
-      return this.objects.delete(a, b, c);
+    const tenantId = c !== undefined ? a : DEFAULT_TENANT_ID;
+    const type = c !== undefined ? b : a;
+    const id = c !== undefined ? c : b;
+    const existed = this.objects.delete(tenantId, type, id);
+    // Notify only when a row actually went away (parity with the upsert
+    // path) so the sync gateway can broadcast the removal live — clients
+    // drop the row immediately instead of waiting for the next cold
+    // refetch (FR-142).
+    if (existed) {
+      this.#notifyWriteListener({
+        kind: "objectDelete",
+        tenantId,
+        objectType: type,
+        objectId: id,
+      });
     }
-    return this.objects.delete(DEFAULT_TENANT_ID, a, b);
+    return existed;
   }
 
   readObject(type: string, id: string): PlainObject | undefined;

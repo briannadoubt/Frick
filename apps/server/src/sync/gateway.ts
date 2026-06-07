@@ -523,6 +523,10 @@ export class SyncGateway {
       this.publishObjects(event.objectType, [event.object], event.tenantId);
       return;
     }
+    if (event.kind === "objectDelete") {
+      this.publishObjectDeletes(event.objectType, [event.objectId], event.tenantId);
+      return;
+    }
     this.publishStreamEvent(event.event);
     // Keep the SSE bridge fed from the same single funnel so EventSource
     // subscribers see server-originated appends too, not just client ones.
@@ -576,6 +580,58 @@ export class SyncGateway {
         type,
         objects: [...objects],
       });
+    }
+  }
+
+  /**
+   * Broadcast object deletions to subscribers of `type` (FR-142). Mirrors
+   * {@link publishObjects}: fan out locally, then forward over the cluster bus
+   * so peer nodes drop the rows for their own subscribers too.
+   */
+  publishObjectDeletes(type: string, ids: string[], tenantId?: string): void {
+    this.#fanOutObjectDeletes(type, ids, tenantId);
+    if (this.#clusterBus && tenantId !== undefined) {
+      this.#clusterBus.publish({
+        kind: "objectDeletes",
+        originNodeId: this.#clusterBus.nodeId,
+        tenantId,
+        type,
+        ids: [...ids],
+      });
+    }
+  }
+
+  /** Local-only delete fan-out, also reused by the cluster handler. */
+  #fanOutObjectDeletes(type: string, ids: string[], tenantId?: string): void {
+    if (ids.length === 0) {
+      return;
+    }
+    const cursor = Date.now();
+    // Emit each removed id two ways in one Delta frame: as a tombstone object
+    // record (an id-only object — the current SDKs decode the delta and
+    // refetch, which drops the now-absent row) and as a clean `removed` list
+    // (a forward-looking client drops the ids directly, no refetch). The row
+    // is already gone, so there's no object state to run per-record read authz
+    // against; tenant scoping is the boundary, matching the upsert path's
+    // tenant filter.
+    const tombstones = packObjects(
+      this.store,
+      type,
+      ids.map((id) => ({ id })),
+    );
+    const removed = ids.map((id) => ({ type, id }));
+    for (const { client: subscriber } of this.#subscriptions.objectSubscribers(type)) {
+      const principal = subscriber.principal;
+      if (!principal || !this.#isPrincipalActive(principal)) {
+        continue;
+      }
+      if (tenantId !== undefined && principal.tenantId !== tenantId) {
+        continue;
+      }
+      this.#sendFrame(subscriber, [
+        FrameKind.Delta,
+        { objects: tombstones, events: [], removed, cursor },
+      ]);
     }
   }
 
@@ -685,6 +741,9 @@ export class SyncGateway {
         return;
       case "objects":
         this.#fanOutObjects(envelope.type, envelope.objects as PlainObject[], envelope.tenantId);
+        return;
+      case "objectDeletes":
+        this.#fanOutObjectDeletes(envelope.type, envelope.ids as string[], envelope.tenantId);
         return;
       case "signal":
         // Don't re-broadcast to the bus — the originating node already

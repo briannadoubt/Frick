@@ -6,6 +6,8 @@ Each package version is independent — a release header documents which package
 
 ## Unreleased
 
+- **`@fricken/server` / `@fricken/protocol`:** Object **deletes** now live-push to subscribed sync clients (FR-142). Previously every other mutation (object upserts, stream appends) fanned out over the sync gateway but `store.deleteObject` did not — so other connected clients kept the deleted row until their next cold refetch. `deleteObject` now emits an `objectDelete` store write-event (only when a row actually existed), which the gateway fans out as a `Delta` frame carrying the removed id two ways: as a tombstone object record (the current Swift/Android SDKs refetch on any object delta and drop the now-absent row) and as a new optional `removed: { type, id }[]` list on `DeltaPayload` (a forward-looking client drops the ids directly, no refetch). Deletes are tenant-scoped and forwarded over the cluster bus (`objectDeletes` envelope) so peer nodes drop the rows for their own subscribers. The `removed` field is additive and absent on deltas with no deletions, so existing clients are unaffected. Retires RangerCRM's `@fricken/server` dist patch for delete fan-out.
+
 ## 0.1.1 — 2026-06-04
 
 All published packages move in lockstep `0.1.0 → 0.1.1`: `@fricken/protocol`, `@fricken/core`, `@fricken/react`, `@fricken/design`, `@fricken/design-web`, `@fricken/devtools`, `@fricken/agent-kit`, `@fricken/mcp`, `@fricken/server`, the Swift package (`swift-v0.1.1`), and the Android SDK (`android-v0.1.1`, `frickVersion = 0.1.1`). `schemaRevision` is unchanged.

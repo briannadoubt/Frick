@@ -49,6 +49,13 @@ export type ClusterEnvelope =
       objects: PlainObject[];
     }
   | {
+      kind: "objectDeletes";
+      originNodeId: NodeId;
+      tenantId: string;
+      type: string;
+      ids: string[];
+    }
+  | {
       kind: "signal";
       originNodeId: NodeId;
       tenantId: string;
