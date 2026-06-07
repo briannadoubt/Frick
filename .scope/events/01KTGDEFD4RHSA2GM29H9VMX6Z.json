@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGDEFD4RHSA2GM29H9VMX6Z",
+  "ts": "2026-06-07T06:48:41.124Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTG6GQX3D64EHBZ8H2S80RC4",
+    "commentId": "01KTGDEFD4RHSA2GM29H9VMX6Y",
+    "author": "claude",
+    "body": "Shipped deriveSiblingSession(store, opts) from @fricken/server: reuses caller userId/device/replica, ensures target tenant, mints new session in tenantId. SourceSessionNotActiveError on dead source token; injectable tokenFactory/now; authz left to caller. 5 tests; full server suite 771 green. aquariusyacht's handleTenantSwitch can drop its re-mint + tenant.ensure boilerplate (keep its Membership/company authz check)."
+  }
+}
