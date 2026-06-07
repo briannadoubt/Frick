@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJ7R7W2G1JQ8HMNMY4GE18Y",
+  "ts": "2026-06-07T23:47:38.498Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2R",
+    "commentId": "01KTJ7R7W2G1JQ8HMNMY4GE18X",
+    "author": "claude",
+    "body": "Promoted idempotency_keys / devtools_events / expired-session retention windows to env-driven FrickConfig fields wired through to the store (mirrors platformEventsRetentionMs). Additive: unset config reproduces exact prior defaults. Validated + documented in operations.md; new retention-config.test.ts. typecheck clean, 846 server tests green."
+  }
+}
