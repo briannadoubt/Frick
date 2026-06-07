@@ -116,7 +116,7 @@ describe("app-route kit: authenticateRequest", () => {
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
     });
 
-    const principal = authenticateRequest(
+    const principal = await authenticateRequest(
       store,
       makeRequest("GET", undefined, { authorization: "Bearer tok-live" }),
     );
@@ -139,12 +139,12 @@ describe("app-route kit: authenticateRequest", () => {
       expiresAt: "2000-01-01T00:00:00.000Z",
     });
 
-    expect(authenticateRequest(store, makeRequest("GET"))).toBeNull();
+    expect(await authenticateRequest(store, makeRequest("GET"))).toBeNull();
     expect(
-      authenticateRequest(store, makeRequest("GET", undefined, { authorization: "Basic xyz" })),
+      await authenticateRequest(store, makeRequest("GET", undefined, { authorization: "Basic xyz" })),
     ).toBeNull();
     expect(
-      authenticateRequest(store, makeRequest("GET", undefined, { authorization: "Bearer tok-dead" })),
+      await authenticateRequest(store, makeRequest("GET", undefined, { authorization: "Bearer tok-dead" })),
     ).toBeNull();
   });
 });

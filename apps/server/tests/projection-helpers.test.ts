@@ -39,7 +39,7 @@ describe("listProjectionObjects", () => {
       store,
       logger: undefined as never,
     };
-    const rows = listProjectionObjects<{ id: string; title: string }>(ctx, "Conversation");
+    const rows = await listProjectionObjects<{ id: string; title: string }>(ctx, "Conversation");
     expect(rows.map((r) => r.id).sort()).toEqual(["c1", "c2"]);
     expect(rows.map((r) => r.title).sort()).toEqual(["One", "Two"]);
   });

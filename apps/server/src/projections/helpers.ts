@@ -17,11 +17,11 @@ import type {
  * `type` in the apply/read context's tenant, cast to `T`. Saves the
  * `as unknown as T[]` dance in every projection handler.
  */
-export function listProjectionObjects<T = PlainObject>(
+export async function listProjectionObjects<T = PlainObject>(
   ctx: FrickProjectionContext,
   type: string,
-): T[] {
-  return ctx.store.listObjects(ctx.tenantId, type) as unknown as T[];
+): Promise<T[]> {
+  return (await ctx.store.listObjects(ctx.tenantId, type)) as unknown as T[];
 }
 
 /**

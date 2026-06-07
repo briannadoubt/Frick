@@ -1064,7 +1064,7 @@ export function createFrickServer(options: ServerOptions = {}) {
       if (sub === "jobs") {
         sendJson(response, 200, {
           registeredHandlers: jobRegistry.list(),
-          counts: store.jobs.countsByStatus(),
+          counts: await store.jobs.countsByStatus(),
           workerEnabled,
         });
         return;
@@ -1973,7 +1973,7 @@ export function createFrickServer(options: ServerOptions = {}) {
             Number.isFinite(quota) && quota < Number.MAX_SAFE_INTEGER;
           responseBody.usage = {
             ownerId: requestedOwnerId,
-            usedBytes: store.blobs.totalBytesForOwner(
+            usedBytes: await store.blobs.totalBytesForOwner(
               principal.tenantId,
               requestedOwnerId,
             ),
@@ -2291,7 +2291,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         );
         // FR-116: cheap cursor head probe — MAX(sequence)+COUNT, no payloads.
         if (parts[4] === "cursor") {
-          sendJson(response, 200, store.streamHead(principal.tenantId, stream, key));
+          sendJson(response, 200, await store.streamHead(principal.tenantId, stream, key));
           return;
         }
         // FR-116: forward cursor read. `?since=<seq>` returns the events whose
@@ -3652,7 +3652,7 @@ async function handleAdminRoute(
         outcome: "allow",
         ...(displayName !== undefined ? { detail: { displayName } } : {}),
       });
-      const row = store.tenants.create(tenantId, displayName);
+      const row = await store.tenants.create(tenantId, displayName);
       sendJson(response, 201, row);
     } catch (error) {
       if (error instanceof TenantAlreadyExistsError) {
@@ -3696,7 +3696,7 @@ async function handleAdminRoute(
   const archiveMatch = /^tenants\/([^/]+)\/archive$/.exec(sub);
   if (request.method === "POST" && archiveMatch) {
     const tenantId = decodeURIComponent(archiveMatch[1]!);
-    const existing = store.tenants.get(tenantId);
+    const existing = await store.tenants.get(tenantId);
     if (!existing) {
       strictAudit({
         action: "tenants.archive",
@@ -3709,8 +3709,8 @@ async function handleAdminRoute(
     }
     try {
       strictAudit({ action: "tenants.archive", target: tenantId, outcome: "allow" });
-      store.tenants.archive(tenantId);
-      const row = store.tenants.get(tenantId);
+      await store.tenants.archive(tenantId);
+      const row = await store.tenants.get(tenantId);
       sendJson(response, 200, row);
     } catch (error) {
       if (!(error instanceof AdminAuditWriteError)) {
@@ -3792,7 +3792,7 @@ async function handleAdminRoute(
   if (request.method === "GET" && showMatch) {
     // Read-side audit skipped — see GET /tenants comment above.
     const tenantId = decodeURIComponent(showMatch[1]!);
-    const row = store.tenants.get(tenantId);
+    const row = await store.tenants.get(tenantId);
     if (!row) {
       sendJson(response, 404, { error: "tenant_not_found" });
       return;

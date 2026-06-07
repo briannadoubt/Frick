@@ -53,7 +53,7 @@ describe("eachTenant", () => {
     await store.tenants.ensure("drop-1");
     await store.tenants.ensure("keep-2");
 
-    const ids = [...eachTenant({ filter: (t) => t.tenantId.startsWith("keep") })(ctx(store))].map(
+    const ids = [...(await eachTenant({ filter: (t) => t.tenantId.startsWith("keep") })(ctx(store)))].map(
       (t) => t.tenantId,
     );
     expect(ids.sort()).toEqual(["keep-1", "keep-2"]);
