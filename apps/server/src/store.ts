@@ -753,7 +753,7 @@ export class FrickStore {
         objectId: id,
         object: stored,
       });
-      this.#notifySearchForObject(tenantId, type, id, stored);
+      await this.#notifySearchForObject(tenantId, type, id, stored);
       this.#notifyWriteListener({
         kind: "objectUpsert",
         tenantId,
@@ -777,7 +777,7 @@ export class FrickStore {
       objectId: id,
       object: stored,
     });
-    this.#notifySearchForObject(DEFAULT_TENANT_ID, type, id, stored);
+    await this.#notifySearchForObject(DEFAULT_TENANT_ID, type, id, stored);
     this.#notifyWriteListener({
       kind: "objectUpsert",
       tenantId: DEFAULT_TENANT_ID,
@@ -787,8 +787,13 @@ export class FrickStore {
     });
   }
 
-  #notifySearchForObject(tenantId: string, type: string, id: string, value: PlainObject): void {
-    this.#notifySearch(
+  async #notifySearchForObject(
+    tenantId: string,
+    type: string,
+    id: string,
+    value: PlainObject,
+  ): Promise<void> {
+    await this.#notifySearch(
       (input) => input,
       ({ source }) => source.kind === "object" && source.type === type,
       { tenantId, object: { type, id, value } },
@@ -841,7 +846,7 @@ export class FrickStore {
       objectId: args.id,
       object: stored,
     });
-    this.#notifySearchForObject(tenantId, args.type, args.id, stored);
+    await this.#notifySearchForObject(tenantId, args.type, args.id, stored);
     this.#notifyWriteListener({
       kind: "objectUpsert",
       tenantId,
@@ -951,7 +956,7 @@ export class FrickStore {
         streamId: result.event.streamId,
         streamEvent: result.event,
       });
-      this.#notifySearch(
+      await this.#notifySearch(
         (i) => i,
         ({ source }) => source.kind === "stream" && source.type === result.event.stream,
         {
@@ -982,11 +987,11 @@ export class FrickStore {
    * Adapter failures are logged and swallowed — never let an indexer hiccup
    * tear down the originating write.
    */
-  #notifySearch(
+  async #notifySearch(
     pick: (def: FrickSearchProjectInput) => FrickSearchProjectInput,
     matches: (def: { source: { kind: string; type?: string; name?: string } }) => boolean,
     input: FrickSearchProjectInput,
-  ): void {
+  ): Promise<void> {
     for (const def of this.searchIndexes.list()) {
       const source = def.source as { kind: string; type?: string; name?: string };
       if (!matches({ source })) continue;
@@ -1002,7 +1007,7 @@ export class FrickStore {
       }
       if (!doc) continue;
       try {
-        this.searchAdapter.upsert(input.tenantId, def.name, withSearchSourceFields(input, doc));
+        await this.searchAdapter.upsert(input.tenantId, def.name, withSearchSourceFields(input, doc));
       } catch (error) {
         this.#logger.warn("frick.search.upsert_failed", {
           index: def.name,

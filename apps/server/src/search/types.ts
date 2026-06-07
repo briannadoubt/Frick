@@ -133,9 +133,9 @@ export interface FrickSearchAdapter {
    * filters by `index_name`, so its `registerIndex` is a no-op.
    */
   registerIndex(def: FrickSearchIndexDefinition): void;
-  upsert(tenantId: string, indexName: string, doc: FrickSearchDoc): void;
-  delete(tenantId: string, indexName: string, docId: string): void;
-  query(tenantId: string, query: FrickSearchQuery): FrickSearchResult;
+  upsert(tenantId: string, indexName: string, doc: FrickSearchDoc): Promise<void>;
+  delete(tenantId: string, indexName: string, docId: string): Promise<void>;
+  query(tenantId: string, query: FrickSearchQuery): Promise<FrickSearchResult>;
   /**
    * Wipe everything indexed under `(tenantId, indexName)` and re-ingest from
    * the supplied source iterator. Used by the admin rebuild route.

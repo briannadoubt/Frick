@@ -71,7 +71,7 @@ describe("restoreFrickDatabase", () => {
         content: Buffer.from([1, 2, 3]),
         metadata: { width: 64 },
       });
-      source.searchAdapter.upsert("tenant-alpha", "messages-fts", {
+      await source.searchAdapter.upsert("tenant-alpha", "messages-fts", {
         docId: "event-alpha",
         text: "alpha secret",
         fields: { senderId: "user-alpha" },
@@ -98,11 +98,13 @@ describe("restoreFrickDatabase", () => {
         expect(Array.from(derivative?.bytes ?? [])).toEqual([1, 2, 3]);
         expect(derivative?.row.metadata).toEqual({ width: 64 });
         expect(
-          target.searchAdapter.query("tenant-alpha", {
-            index: "messages-fts",
-            q: "alpha",
-            limit: 10,
-          }).total,
+          (
+            await target.searchAdapter.query("tenant-alpha", {
+              index: "messages-fts",
+              q: "alpha",
+              limit: 10,
+            })
+          ).total,
         ).toBe(1);
         expect(await target.tenantSettings.get("tenant-alpha", "retentionMs")).toBe(1234);
       } finally {

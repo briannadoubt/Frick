@@ -96,7 +96,7 @@ export async function eraseDataSubject(
     oldSearchDocs.map((doc) => doc.docId),
   );
   for (const doc of oldSearchDocs) {
-    store.searchAdapter.delete(tenantId, doc.indexName, doc.docId);
+    await store.searchAdapter.delete(tenantId, doc.indexName, doc.docId);
   }
 
   // Pseudonymize stream events authored by the user. The decoded events above
@@ -126,7 +126,7 @@ export async function eraseDataSubject(
     eventsPseudonymized += 1;
 
     for (const doc of collectProjectedSearchDocs(store, tenantId, [rewrittenEvent])) {
-      store.searchAdapter.upsert(tenantId, doc.indexName, {
+      await store.searchAdapter.upsert(tenantId, doc.indexName, {
         docId: doc.docId,
         text: doc.text,
         ...(doc.fields !== undefined ? { fields: doc.fields } : {}),

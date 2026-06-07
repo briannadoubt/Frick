@@ -10,6 +10,9 @@ export {
   rewritePlaceholders,
   type CreatePgSqlDriverOptions,
 } from "./storage/pg-sql-driver.js";
+// Search adapters behind the async FrickSearchAdapter seam (FR-24).
+export { createSqliteFtsSearchAdapter } from "./search/sqlite-fts.js";
+export { createPgFtsSearchAdapter } from "./search/pg-fts.js";
 // Multi-tenant active-tenant switch: re-mint a session into a sibling tenant.
 export {
   SourceSessionNotActiveError,

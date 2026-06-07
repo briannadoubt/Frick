@@ -1924,7 +1924,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         // visibility is filtered below before any hit leaves the server.
         let result: FrickSearchResult;
         try {
-          result = store.searchAdapter.query(principal.tenantId, {
+          result = await store.searchAdapter.query(principal.tenantId, {
             index: indexName,
             q,
             ...(filter !== undefined ? { filter } : {}),

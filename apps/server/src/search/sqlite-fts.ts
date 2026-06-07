@@ -31,13 +31,13 @@ export function createSqliteFtsSearchAdapter(db: DatabaseSync): FrickSearchAdapt
       // needing the framework to pass the project function in.
       defs.set(def.name, def);
     },
-    upsert(tenantId, indexName, doc) {
+    async upsert(tenantId, indexName, doc) {
       store.upsert(tenantId, indexName, doc);
     },
-    delete(tenantId, indexName, docId) {
+    async delete(tenantId, indexName, docId) {
       store.delete(tenantId, indexName, docId);
     },
-    query(tenantId, query: FrickSearchQuery): FrickSearchResult {
+    async query(tenantId, query: FrickSearchQuery): Promise<FrickSearchResult> {
       const rawLimit = query.limit ?? DEFAULT_SEARCH_LIMIT;
       const limit = Math.max(1, Math.min(MAX_SEARCH_LIMIT, Math.floor(rawLimit)));
       const trimmed = query.q.trim();
