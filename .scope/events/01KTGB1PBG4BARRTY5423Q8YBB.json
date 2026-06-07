@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGB1PBG4BARRTY5423Q8YBB",
+  "ts": "2026-06-07T06:06:45.104Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1P",
+    "commentId": "01KTGB1PBG4BARRTY5423Q8YBA",
+    "author": "claude",
+    "body": "Shipped POST /_frick/admin/sessions/revoke (by userId+optional tenant, or by sessionToken): deletes session rows + live-disconnects connected WS with close 1008 via new SyncGateway.closeSessionsForUser. Fail-closed audit 'sessions.revoke'. 7 tests in admin-session-revoke.test.ts; full server suite 738 green. Documented in operations.md + CHANGELOG."
+  }
+}

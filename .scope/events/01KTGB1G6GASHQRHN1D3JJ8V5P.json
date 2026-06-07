@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTGB1G6GASHQRHN1D3JJ8V5P",
+  "ts": "2026-06-07T06:06:38.800Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1P",
+    "field": "branch",
+    "value": "feat/fr34-admin-session-revocation"
+  }
+}
