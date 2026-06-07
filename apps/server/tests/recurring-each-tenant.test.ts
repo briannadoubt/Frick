@@ -64,10 +64,10 @@ describe("eachTenant", () => {
     await store.tenants.ensure("tenant-a");
 
     const targets = [
-      ...eachTenant({
+      ...(await eachTenant({
         filter: (t) => t.tenantId === "tenant-a",
         payload: (t) => ({ scope: t.tenantId }),
-      })(ctx(store)),
+      })(ctx(store))),
     ];
     expect(targets).toEqual([{ tenantId: "tenant-a", payload: { scope: "tenant-a" } }]);
   });

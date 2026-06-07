@@ -145,10 +145,7 @@ describe("DELETE /account", () => {
     // tenant-one's data gone; tenant-two fully intact (both its own row and the
     // decoy whose ownerId collided with tenant-one's principal).
     expect(await app.store.listObjects("tenant-one", "Note")).toHaveLength(0);
-    const t2Notes = app.store
-      .listObjects("tenant-two", "Note")
-      .map((n) => n.id)
-      .sort();
+    const t2Notes = (await app.store.listObjects("tenant-two", "Note")).map((n) => n.id).sort();
     expect(t2Notes).toEqual(["note-decoy", "note-t2"]);
     expect(await app.store.hasUser("tenant-two", "user-bravo")).toBe(true);
   });

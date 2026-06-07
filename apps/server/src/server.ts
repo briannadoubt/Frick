@@ -2241,7 +2241,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           policyHooks,
         );
         const value = await readJsonBody(request, tenantLimits.maxHttpBodyBytes);
-        store.enqueueSignal(principal.tenantId, signalRoute.name, signalRoute.key, value);
+        await store.enqueueSignal(principal.tenantId, signalRoute.name, signalRoute.key, value);
         gateway.publishSignal(signalRoute.name, signalRoute.key, value, principal.tenantId);
         sendJson(response, 200, { ok: true });
       } catch (error) {
@@ -2263,7 +2263,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           schemaHash: store.schema.hash,
           name: signalRoute.name,
           key: signalRoute.key,
-          data: store.drainSignals(principal.tenantId, signalRoute.name, signalRoute.key),
+          data: await store.drainSignals(principal.tenantId, signalRoute.name, signalRoute.key),
         });
       } catch (error) {
         sendErrorWithMetrics(response, error, "signal_rejected");
