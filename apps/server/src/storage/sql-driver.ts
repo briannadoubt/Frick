@@ -194,7 +194,9 @@ export interface SqlDriverConfig {
 export function createSqlDriver(config: SqlDriverConfig): SqliteSqlDriver {
   if (config.dbDriver === "postgres") {
     throw new FrickConfigError(
-      "postgres store driver not yet implemented (FR-119): use dbDriver='sqlite' until the Postgres adapter lands",
+      "the Postgres SqlDriver (FR-119) is built — call createPgSqlDriver() to use it directly. " +
+        "Wiring it into the synchronous createFrickServer path (async construction + porting the " +
+        "SQLite-bound devtools/search/platform-event subsystems off rawDb) is tracked under FR-121.",
     );
   }
 

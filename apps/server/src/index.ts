@@ -3,6 +3,13 @@ export { createFrickServer, defaultDatabasePath, type FrickAppRoute, type Server
 // plus the SQLite implementation. Exported so out-of-tree adapters/tests can
 // construct stores; the Postgres adapter implements the same interface.
 export { SqliteSqlDriver, createSqlDriver, type SqlDriver } from "./storage/sql-driver.js";
+// Postgres implementation of the same SqlDriver seam (FR-119).
+export {
+  PgSqlDriver,
+  createPgSqlDriver,
+  rewritePlaceholders,
+  type CreatePgSqlDriverOptions,
+} from "./storage/pg-sql-driver.js";
 // Multi-tenant active-tenant switch: re-mint a session into a sibling tenant.
 export {
   SourceSessionNotActiveError,
