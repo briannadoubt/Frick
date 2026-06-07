@@ -1,4 +1,18 @@
 export { createFrickServer, defaultDatabasePath, type FrickAppRoute, type ServerOptions } from "./server.js";
+// App-route helper kit: the glue every `appRoutes` handler otherwise rewrites
+// (CORS, JSON I/O, :param matching, bearer→session principal auth).
+export {
+  DEFAULT_MAX_JSON_BODY_BYTES,
+  JsonBodyTooLargeError,
+  authenticateRequest,
+  handlePreflight,
+  matchPath,
+  readJsonBody,
+  sendJson,
+  setCors,
+  type AppRouteCorsOptions,
+  type ReadJsonBodyOptions,
+} from "./app-routes/kit.js";
 // Extension-authoring types: the symbols apps need to author the
 // `policyHooks` and `blobProcessors` they pass to `createFrickServer`.
 // Referenced by `ServerOptions` but otherwise internal — surfaced here so
