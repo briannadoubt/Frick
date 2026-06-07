@@ -106,7 +106,7 @@ export async function handleDashboardRoute(input: DashboardRouteInput): Promise<
       return true;
     }
 
-    sendDashboardJson(input, 200, buildAnalyticsSummary({
+    sendDashboardJson(input, 200, await buildAnalyticsSummary({
       store: input.analyticsEvents,
       principal,
       windowMs: normalizeAnalyticsSummaryWindowMs(input.url.searchParams.get("windowMs")),

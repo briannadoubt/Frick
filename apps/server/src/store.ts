@@ -417,7 +417,7 @@ export class FrickStore {
         options.platformEventsRetentionMs ?? DEFAULT_PLATFORM_EVENTS_RETENTION_MS,
       maxRows: options.platformEventsMaxRows ?? DEFAULT_PLATFORM_EVENTS_MAX_ROWS,
     });
-    this.analyticsEvents = new AnalyticsEventStore(rawDb);
+    this.analyticsEvents = new AnalyticsEventStore(sql);
     this.projections = options.projections ?? createFrickProjectionRegistry();
     this.searchAdapter = options.searchAdapter ?? createSqliteFtsSearchAdapter(rawDb);
     this.searchIndexes = options.searchIndexes ?? createFrickSearchIndexRegistry();

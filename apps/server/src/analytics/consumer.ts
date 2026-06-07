@@ -101,7 +101,7 @@ export function createFrickAnalyticsEventConsumer(
     }
 
     try {
-      options.analyticsEvents.recordPlatformEvent(delivery.event);
+      await options.analyticsEvents.recordPlatformEvent(delivery.event);
       await options.platformEvents.ack(consumerName, delivery.event.id, deliveryAttempt(delivery));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

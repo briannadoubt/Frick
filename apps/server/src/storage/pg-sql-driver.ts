@@ -72,6 +72,7 @@ interface PgSqlDriverInit {
 }
 
 export class PgSqlDriver implements SqlDriver {
+  readonly dialect = "postgres" as const;
   readonly #pool: Pool;
   readonly #txClient: PoolClient | undefined;
   #txDepth = 0;

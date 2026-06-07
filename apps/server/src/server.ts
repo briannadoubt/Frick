@@ -1009,7 +1009,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         return;
       }
       if (sub === "analytics/summary") {
-        sendJson(response, 200, buildAnalyticsSummary({
+        sendJson(response, 200, await buildAnalyticsSummary({
           store: store.analyticsEvents,
           principal: inspectionPrincipal,
           windowMs: normalizeAnalyticsSummaryWindowMs(url.searchParams.get("windowMs")),

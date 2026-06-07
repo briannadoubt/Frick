@@ -1,4 +1,4 @@
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import type { SqlDriver } from "../storage/sql-driver.js";
 import type { Principal } from "../authz.js";
 import type { PlatformEventEnvelope } from "../platform-events/types.js";
 
@@ -102,15 +102,15 @@ const ANALYTICS_FAMILY = "analytics.user_event";
 const DEFAULT_RESULT_LIMIT = 10;
 
 export class AnalyticsEventStore {
-  readonly #db: DatabaseSync;
+  readonly #sql: SqlDriver;
   readonly #now: () => Date;
 
-  constructor(db: DatabaseSync, options: { now?: () => Date } = {}) {
-    this.#db = db;
+  constructor(sql: SqlDriver, options: { now?: () => Date } = {}) {
+    this.#sql = sql;
     this.#now = options.now ?? (() => new Date());
   }
 
-  recordPlatformEvent(event: PlatformEventEnvelope): RecordAnalyticsEventResult {
+  async recordPlatformEvent(event: PlatformEventEnvelope): Promise<RecordAnalyticsEventResult> {
     if (event.family !== ANALYTICS_FAMILY) {
       return { recorded: false, duplicate: false, skipped: true };
     }
@@ -127,16 +127,14 @@ export class AnalyticsEventStore {
     const tenantKey = event.tenantId ?? "";
     const routePath = analyticsRoutePath(properties, context);
 
-    this.#db.exec("BEGIN IMMEDIATE");
-    try {
-      const inserted = this.#db
-        .prepare(
-          `INSERT OR IGNORE INTO analytics_recent_events (
+    return this.#sql.transaction(async (tx) => {
+      const inserted = await tx.run(
+        `INSERT INTO analytics_recent_events (
               event_id, occurred_at, accepted_at, processed_at,
               tenant_id, account_id, subject_id, trace_id, name, properties, context
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (event_id) DO NOTHING`,
+        [
           event.id,
           event.occurredAt,
           event.acceptedAt,
@@ -148,34 +146,26 @@ export class AnalyticsEventStore {
           event.name,
           JSON.stringify(properties),
           JSON.stringify(context),
-        );
+        ],
+      );
 
       if (Number(inserted.changes ?? 0) === 0) {
-        this.#db.exec("COMMIT");
         return { recorded: false, duplicate: true, skipped: false };
       }
 
       const bucketStart = bucketStartIso(occurredAtMs, ANALYTICS_AGGREGATE_BUCKET_MS);
-      this.#incrementBucket(bucketStart, tenantKey, "event", event.name);
+      await this.#incrementBucket(tx, bucketStart, tenantKey, "event", event.name);
       if (routePath) {
-        this.#incrementBucket(bucketStart, tenantKey, "route", routePath);
+        await this.#incrementBucket(tx, bucketStart, tenantKey, "route", routePath);
       }
       if (event.subjectId) {
-        this.#incrementBucket(bucketStart, tenantKey, "subject", event.subjectId);
+        await this.#incrementBucket(tx, bucketStart, tenantKey, "subject", event.subjectId);
       }
-      this.#db.exec("COMMIT");
       return { recorded: true, duplicate: false, skipped: false };
-    } catch (error) {
-      try {
-        this.#db.exec("ROLLBACK");
-      } catch {
-        // Preserve the original error.
-      }
-      throw error;
-    }
+    });
   }
 
-  summary(input: Omit<BuildAnalyticsSummaryInput, "store">): AnalyticsSummary {
+  async summary(input: Omit<BuildAnalyticsSummaryInput, "store">): Promise<AnalyticsSummary> {
     const windowMs = normalizeAnalyticsSummaryWindowMs(input.windowMs);
     const now = input.now ?? new Date();
     const generatedAt = now.toISOString();
@@ -185,61 +175,54 @@ export class AnalyticsEventStore {
     const where = analyticsWhere(scope);
     const params = analyticsParams(scope, since);
 
-    const totals = this.#db
-      .prepare(
-        `SELECT
+    const totals = await this.#sql.get<TotalsRow>(
+      `SELECT
             COUNT(*) AS events,
             COUNT(DISTINCT subject_id) AS unique_users,
             COUNT(DISTINCT tenant_id) AS unique_tenants
           FROM analytics_recent_events
           WHERE ${where}`,
-      )
-      .get(...params) as TotalsRow | undefined;
+      [...params],
+    );
 
-    const topEvents = this.#db
-      .prepare(
-        `SELECT name, COUNT(*) AS count
+    const topEvents = await this.#sql.all<CountRow>(
+      `SELECT name, COUNT(*) AS count
           FROM analytics_recent_events
           WHERE ${where}
           GROUP BY name
           ORDER BY count DESC, name ASC
           LIMIT ?`,
-      )
-      .all(...params, limit) as unknown as CountRow[];
+      [...params, limit],
+    );
 
-    const topRoutes = this.#db
-      .prepare(
-        `SELECT path, COUNT(*) AS count
+    // JSON path extraction is the one genuinely non-portable predicate: SQLite
+    // uses json_type/json_extract, Postgres uses jsonb_typeof/`->>`.
+    const pathExpr = jsonPathTextExpr(this.#sql.dialect);
+    const topRoutes = await this.#sql.all<RouteCountRow>(
+      `SELECT path, COUNT(*) AS count
           FROM (
-            SELECT
-              CASE
-                WHEN json_type(properties, '$.path') = 'text'
-                  THEN json_extract(properties, '$.path')
-                WHEN json_type(context, '$.path') = 'text'
-                  THEN json_extract(context, '$.path')
-              END AS path
+            SELECT ${pathExpr} AS path
             FROM analytics_recent_events
             WHERE ${where}
               AND name = 'screen.viewed'
-          )
+          ) AS routes
           WHERE path IS NOT NULL
           GROUP BY path
           ORDER BY count DESC, path ASC
           LIMIT ?`,
-      )
-      .all(...params, limit) as unknown as RouteCountRow[];
+      [...params, limit],
+    );
 
-    const recentEvents = this.#db
-      .prepare(
-        `SELECT
+    const recentEvents = await this.#sql.all<RecentEventRow>(
+      `SELECT
             event_id, name, tenant_id, account_id, subject_id, trace_id,
             occurred_at, accepted_at, properties, context
           FROM analytics_recent_events
           WHERE ${where}
           ORDER BY occurred_at DESC, event_id DESC
           LIMIT ?`,
-      )
-      .all(...params, limit) as unknown as RecentEventRow[];
+      [...params, limit],
+    );
 
     return {
       family: ANALYTICS_FAMILY,
@@ -264,22 +247,45 @@ export class AnalyticsEventStore {
     };
   }
 
-  #incrementBucket(
+  async #incrementBucket(
+    tx: SqlDriver,
     bucketStart: string,
     tenantId: string,
     metricKind: "event" | "route" | "subject",
     metricKey: string,
-  ): void {
-    this.#db
-      .prepare(
-        `INSERT INTO analytics_aggregate_buckets (
+  ): Promise<void> {
+    await tx.run(
+      `INSERT INTO analytics_aggregate_buckets (
             bucket_start, bucket_ms, tenant_id, metric_kind, metric_key, count
           ) VALUES (?, ?, ?, ?, ?, 1)
           ON CONFLICT(bucket_start, bucket_ms, tenant_id, metric_kind, metric_key)
           DO UPDATE SET count = count + 1`,
-      )
-      .run(bucketStart, ANALYTICS_AGGREGATE_BUCKET_MS, tenantId, metricKind, metricKey);
+      [bucketStart, ANALYTICS_AGGREGATE_BUCKET_MS, tenantId, metricKind, metricKey],
+    );
   }
+}
+
+/**
+ * The `CASE … END` expression that pulls a text `$.path` out of the JSON
+ * `properties`/`context` columns — the only analytics predicate without a
+ * portable spelling. SQLite uses `json_type`/`json_extract` (text type is
+ * `'text'`); Postgres uses `jsonb_typeof`/`->>` (text type is `'string'`).
+ */
+function jsonPathTextExpr(dialect: SqlDriver["dialect"]): string {
+  if (dialect === "postgres") {
+    return `CASE
+                WHEN jsonb_typeof((properties::jsonb) -> 'path') = 'string'
+                  THEN (properties::jsonb) ->> 'path'
+                WHEN jsonb_typeof((context::jsonb) -> 'path') = 'string'
+                  THEN (context::jsonb) ->> 'path'
+              END`;
+  }
+  return `CASE
+                WHEN json_type(properties, '$.path') = 'text'
+                  THEN json_extract(properties, '$.path')
+                WHEN json_type(context, '$.path') = 'text'
+                  THEN json_extract(context, '$.path')
+              END`;
 }
 
 export function normalizeAnalyticsSummaryWindowMs(value: string | number | null | undefined): number {
@@ -296,7 +302,9 @@ export function normalizeAnalyticsSummaryWindowMs(value: string | number | null 
   );
 }
 
-export function buildAnalyticsSummary(input: BuildAnalyticsSummaryInput): AnalyticsSummary {
+export function buildAnalyticsSummary(
+  input: BuildAnalyticsSummaryInput,
+): Promise<AnalyticsSummary> {
   return input.store.summary(input);
 }
 
@@ -312,7 +320,7 @@ function analyticsWhere(scope: AnalyticsSummary["scope"]): string {
   return `occurred_at >= ?${tenantClause}`;
 }
 
-function analyticsParams(scope: AnalyticsSummary["scope"], since: string): readonly SQLInputValue[] {
+function analyticsParams(scope: AnalyticsSummary["scope"], since: string): readonly unknown[] {
   if (scope.kind === "tenant") {
     return [since, scope.tenantId];
   }

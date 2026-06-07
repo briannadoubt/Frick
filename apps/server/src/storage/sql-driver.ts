@@ -27,6 +27,14 @@ import type { FrickDbDriver } from "../config.js";
 
 export interface SqlDriver {
   /**
+   * Backend dialect. Almost all store SQL is dialect-neutral (the seam rewrites
+   * `?`→`$n` and stores write portable `ON CONFLICT … DO UPDATE` / `RETURNING`),
+   * but a few JSON-extraction predicates genuinely differ between SQLite and
+   * Postgres. Stores branch on this only where there is no portable spelling.
+   */
+  readonly dialect: "sqlite" | "postgres";
+
+  /**
    * Return the first matching row, or `undefined` when no row matches.
    * Equivalent to `db.prepare(sql).get(...params)`.
    */
@@ -95,6 +103,7 @@ type SqliteBindValue = null | number | bigint | string | Uint8Array;
 // ---------------------------------------------------------------------------
 
 export class SqliteSqlDriver implements SqlDriver {
+  readonly dialect = "sqlite" as const;
   readonly #db: DatabaseSync;
   #txDepth = 0;
 
