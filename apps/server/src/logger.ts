@@ -32,7 +32,48 @@ const LEVEL_PRIORITY: Record<FrickLogLevel, number> = {
 };
 
 const REDACTED_VALUE = "<redacted>";
-const SENSITIVE_FIELD_PATTERN = /(?:authorization|password|secret|token|api[-_]?key|private[-_]?key)/i;
+/**
+ * Field names (case-insensitive substring match) whose VALUES are always
+ * scrubbed before they reach stdout. The list intentionally over-matches:
+ * a logged field whose name contains one of these tokens is replaced with
+ * `<redacted>`, even if that particular occurrence happened to be benign.
+ *
+ * Covers the FR-69 sensitive surface: session / reset / device / refresh /
+ * access tokens (`token`), password hashes (`password`), API / private /
+ * signing keys, and message / stream-event bodies + payloads (`body`,
+ * `payload`, `ciphertext`). `digest` / `signature` / `cookie` / `passphrase` /
+ * `otp` / `mnemonic` / `seed` round out the defense-in-depth set. None of
+ * these collide with fields the framework legitimately logs today
+ * (`schemaHash`, `entryHash`, `previousHash` are NOT matched, and a
+ * `credentials` container is recursed into, not wholesale-redacted).
+ */
+const SENSITIVE_FIELD_PATTERN =
+  /(?:authorization|password|passphrase|secret|token|api[-_]?key|private[-_]?key|signing[-_]?key|cookie|ciphertext|signature|digest|mnemonic|\bseed\b|\botp\b|body|payload)/i;
+
+/**
+ * Recursively scrub sensitive values from an arbitrary fields object using the
+ * same rules the console logger applies. Returns a deep copy with
+ * sensitive-named keys replaced by `<redacted>`; circular references become
+ * `"[Circular]"`. Exported so call sites that build log / audit `detail`
+ * payloads can redact defensively BEFORE the value is handed to a logger or
+ * persisted to an audit row — defense in depth, not a substitute for keeping
+ * secrets out of those payloads in the first place.
+ */
+export function redactSensitiveFields(
+  fields: Record<string, unknown>,
+): Record<string, unknown> {
+  const seen = new WeakSet<object>();
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(fields)) {
+    out[key] = redactField(key, value, seen);
+  }
+  return out;
+}
+
+/** True when a field name matches the sensitive-field redaction pattern. */
+export function isSensitiveFieldName(key: string): boolean {
+  return SENSITIVE_FIELD_PATTERN.test(key);
+}
 
 function redactField(key: string, value: unknown, seen: WeakSet<object>): unknown {
   if (SENSITIVE_FIELD_PATTERN.test(key)) {

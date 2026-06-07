@@ -107,7 +107,12 @@ import {
   type FrickConfig,
   type FrickConfigOverrides,
 } from "./config.js";
-import { createConsoleLogger, createNoopLogger, type FrickLogger } from "./logger.js";
+import {
+  createConsoleLogger,
+  createNoopLogger,
+  redactSensitiveFields,
+  type FrickLogger,
+} from "./logger.js";
 import { FrickLimitError, limitsFromEnv, mergeLimits, type FrickLimits } from "./limits.js";
 import { resolveTenantLimits } from "./tenant-config.js";
 import { createInMemoryMetrics, type FrickMetrics } from "./metrics.js";
@@ -524,6 +529,36 @@ export function createFrickServer(options: ServerOptions = {}) {
   const adminTokenFingerprint = config.adminToken
     ? createHash("sha256").update(config.adminToken).digest("hex").slice(0, 12)
     : "";
+  // Auth + data-lifecycle audit. Login / logout / signup / data-export are
+  // user-initiated (no admin token), so the actor fingerprint is derived from
+  // the subject userId rather than the admin token — same 12-hex-char shape
+  // the admin chain uses, so an operator can correlate rows without the row
+  // ever carrying the raw identity. `detail` is scrubbed through the shared
+  // log-redaction helper so a caller can never leak a token/body into the
+  // tamper-evident chain. Best-effort: a dropped audit row must never fail a
+  // legitimate auth action.
+  const subjectFingerprint = (subject: string): string =>
+    `u:${createHash("sha256").update(subject).digest("hex").slice(0, 12)}`;
+  const recordLifecycleAudit = (input: {
+    action: string;
+    subject: string;
+    outcome: "allow" | "deny" | "error";
+    detail?: Record<string, unknown>;
+  }): void => {
+    try {
+      store.adminAudit.record({
+        adminTokenFingerprint: subjectFingerprint(input.subject),
+        action: input.action,
+        target: input.subject,
+        outcome: input.outcome,
+        ...(input.detail !== undefined
+          ? { detail: JSON.stringify(redactSensitiveFields(input.detail)) }
+          : {}),
+      });
+    } catch {
+      // Audit failures are best-effort; the auth action itself has committed.
+    }
+  };
   const policyHooks: readonly FrickPolicyHook[] = [
     ...(options.policyHooks ?? []),
   ];
@@ -1211,6 +1246,12 @@ export function createFrickServer(options: ServerOptions = {}) {
           tenantId,
         });
         const session = await createSessionForUser(store, account.userId, deviceId, replicaId, platform, config, tenantId);
+        recordLifecycleAudit({
+          action: "auth.signup",
+          subject: account.userId,
+          outcome: "allow",
+          detail: { tenantId, platform },
+        });
 
         sendAuthJson(response, 201, authSessionResponse(store, session, account));
       } catch (error) {
@@ -1235,12 +1276,24 @@ export function createFrickServer(options: ServerOptions = {}) {
         });
         const account = await store.verifyAccountPassword(tenantId, identity, password);
         if (!account) {
+          recordLifecycleAudit({
+            action: "auth.login",
+            subject: `${tenantId}:${identity}`,
+            outcome: "deny",
+            detail: { tenantId, reason: "invalidCredentials" },
+          });
           throw new AuthenticationError("Invalid handle or password");
         }
         const platform = parsePlatform(typeof body.platform === "string" ? body.platform : "web");
         const deviceId = typeof body.deviceId === "string" && body.deviceId.length > 0 ? body.deviceId : `device-${randomToken(12)}`;
         const replicaId = typeof body.replicaId === "string" && body.replicaId.length > 0 ? body.replicaId : `replica-${randomToken(12)}`;
         const session = await createSessionForUser(store, account.userId, deviceId, replicaId, platform, config, tenantId);
+        recordLifecycleAudit({
+          action: "auth.login",
+          subject: account.userId,
+          outcome: "allow",
+          detail: { tenantId, platform },
+        });
 
         sendAuthJson(response, 200, authSessionResponse(store, session, account));
       } catch (error) {
@@ -1320,6 +1373,12 @@ export function createFrickServer(options: ServerOptions = {}) {
         }
         await store.deleteSession(token);
         gateway.closeSession(token);
+        recordLifecycleAudit({
+          action: "auth.logout",
+          subject: principal.userId,
+          outcome: "allow",
+          detail: { tenantId: principal.tenantId },
+        });
         sendAuthJson(response, 200, { ok: true });
       } catch (error) {
         sendErrorWithMetrics(response, error, "logout_rejected");
@@ -1391,6 +1450,12 @@ export function createFrickServer(options: ServerOptions = {}) {
             bundle.app = appExtra;
           }
         }
+        recordLifecycleAudit({
+          action: "account.export",
+          subject: principal.userId,
+          outcome: "allow",
+          detail: { tenantId: principal.tenantId },
+        });
         sendAuthJson(response, 200, bundle);
       } catch (error) {
         sendErrorWithMetrics(response, error, "account_export_rejected");

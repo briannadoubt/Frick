@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { createRemoteJWKSet } from "jose";
 import type { FrickStore } from "../store.js";
 import type { FrickLogger } from "../logger.js";
@@ -354,6 +354,31 @@ export function createIdentityRouter(
 ): IdentityRouter {
   const userObject = { ...DEFAULT_USER_FIELDS, ...(options.config.userObject ?? {}) };
   const log = options.logger;
+
+  // Password-reset lifecycle audit on the shared admin-audit hash chain. The
+  // actor is the subject user (no admin token in scope), fingerprinted to the
+  // same 12-hex-char shape the admin rows use so an operator can correlate
+  // without the row ever carrying the raw identity. Best-effort: a dropped
+  // audit row must never fail the reset flow (which always returns 200 to
+  // avoid account enumeration).
+  const recordResetAudit = (input: {
+    action: string;
+    subject: string;
+    outcome: "allow" | "deny" | "error";
+    detail?: Record<string, unknown>;
+  }): void => {
+    try {
+      options.store.adminAudit.record({
+        adminTokenFingerprint: `u:${createHash("sha256").update(input.subject).digest("hex").slice(0, 12)}`,
+        action: input.action,
+        target: input.subject,
+        outcome: input.outcome,
+        ...(input.detail !== undefined ? { detail: JSON.stringify(input.detail) } : {}),
+      });
+    } catch {
+      // Best-effort — never break the reset flow on an audit hiccup.
+    }
+  };
 
   // Framework-managed outbound email. Built once when the app opts in via
   // `email.outbound`. Reset + welcome sends go through this router so they
@@ -1278,6 +1303,12 @@ export function createIdentityRouter(
         tenantId,
         expiresAt: issued.expiresAt,
       });
+      recordResetAudit({
+        action: "auth.password_reset.issued",
+        subject: userId,
+        outcome: "allow",
+        detail: { tenantId, expiresAt: issued.expiresAt },
+      });
       // Framework-managed send: when the app opted into `email.outbound`
       // and supplied a `resetUrl` builder, dispatch the templated reset
       // email through the configured adapter. Best-effort — a failure is
@@ -1390,6 +1421,12 @@ export function createIdentityRouter(
       event: "auth.email.password_reset_completed",
       userId: consumed.userId,
       tenantId: consumed.tenantId,
+    });
+    recordResetAudit({
+      action: "auth.password_reset.completed",
+      subject: consumed.userId,
+      outcome: "allow",
+      detail: { tenantId: consumed.tenantId },
     });
     sendJson(res, 200, { ok: true });
   }
