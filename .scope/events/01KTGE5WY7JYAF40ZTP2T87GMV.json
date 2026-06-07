@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGE5WY7JYAF40ZTP2T87GMV",
+  "ts": "2026-06-07T07:01:28.647Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTG9BWY2A7MWJBWFNEMR90N9",
+    "commentId": "01KTGE5WY7JYAF40ZTP2T87GMT",
+    "author": "claude",
+    "body": "Moved backlog→in_progress to reflect reality: FR-143 (Keychain-backed session persistence + auto-restore) shipped to main this session. Remaining children FR-136–142, FR-139 still open (the observable session manager, generic FrickStore<Model>, @FrickQuery, etc.)."
+  }
+}
