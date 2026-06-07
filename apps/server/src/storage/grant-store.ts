@@ -53,10 +53,12 @@ export class GrantStore {
    * NOTE: This accessor is now async to match the SqlDriver seam.
    */
   async isEmptyAsync(): Promise<boolean> {
-    const row = await this.sql.get<{ present: number }>(
+    const row = await this.sql.get<{ present: number | boolean }>(
       "SELECT EXISTS(SELECT 1 FROM grants) AS present",
     );
-    return (row?.present ?? 0) === 0;
+    // `EXISTS` yields integer 0/1 on SQLite but a boolean on Postgres — treat
+    // it as truthy so the check is portable across both drivers.
+    return !row?.present;
   }
 
   async create(args: CreateGrantArgs): Promise<FrickGrant> {

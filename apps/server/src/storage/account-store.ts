@@ -131,7 +131,7 @@ export class AccountStore {
   ): Promise<AccountRow | undefined> {
     return this.sql.get<AccountRow>(
       `SELECT * FROM auth_accounts
-          WHERE tenant_id = ? AND (handle = ? COLLATE NOCASE OR user_id = ?)
+          WHERE tenant_id = ? AND (LOWER(handle) = LOWER(?) OR user_id = ?)
           LIMIT 1`,
       [tenantId, identity, identity],
     );
