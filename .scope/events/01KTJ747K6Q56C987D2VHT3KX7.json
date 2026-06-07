@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJ747K6Q56C987D2VHT3KX7",
+  "ts": "2026-06-07T23:36:42.854Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3M",
+    "commentId": "01KTJ747K6Q56C987D2VHT3KX6",
+    "author": "claude",
+    "body": "Shipped reusable load harness as new @fricken/bench package (bench/). Run: pnpm load:harness [--users N --appends-per-user N --object-writes-per-user N --seed N --no-subscribe --pretty]; FRICK_LOAD_* env fallbacks; --http-url/--ws-url to target an external server. Spins up in-process createFrickServer on ephemeral port + :memory: SQLite (logger silenced), drives synthetic users (HTTP dev-login + WS Hello + subscribe + object upserts + stream appends), emits one JSON result to stdout (config, env, per-op count/errors/p50/p90/p99/throughput, totals). Programmatic: runLoad()/parseLoadConfig(). Foundation for FR-97-100. Test: apps/server/tests/load-harness.test.ts (tiny e2e, asserts shape). Gate green: typecheck exit 0; server vitest 823 passed | 45 skipped."
+  }
+}
