@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTHX89RX7RQAEPE75Y9GMMPN",
+  "ts": "2026-06-07T20:44:10.397Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0R",
+    "commentId": "01KTHX89RX7RQAEPE75Y9GMMPM",
+    "author": "claude",
+    "body": "Epic complete. Postgres storage half: FR-118 async seam, FR-119–122 adapters, FR-24 PG search, FR-146 keystone (createFrickServer runs on PG), FR-25 backup/restore parity. Horizontal-scale half: FR-27 RedisClusterBus, FR-28 multi-node-safe job/platform claims (FOR UPDATE SKIP LOCKED). FR-145 per-stream retention. All validated against a real Postgres/Redis. FR-23 cancelled (superseded by FR-118–122)."
+  }
+}

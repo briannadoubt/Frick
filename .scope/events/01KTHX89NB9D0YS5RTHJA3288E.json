@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTHX89NB9D0YS5RTHJA3288E",
+  "ts": "2026-06-07T20:44:10.283Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTGBB9JDBTCJG35ENKK34ZXB",
+    "commentId": "01KTHX89NB9D0YS5RTHJA3288D",
+    "author": "claude",
+    "body": "DONE (commit 790f32b): opt-in StreamStore.pruneRetention(policies) — maxAgeMs + maxEvents per stream type, keep-forever default, FrickStore timer armed only when a policy is set. Correlated maxEvents DELETE verified identical on SQLite + real Postgres. Cursor-safety documented as operator responsibility. 4 tests; suite 788 green."
+  }
+}

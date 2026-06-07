@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTHWWK65519MSVQ8EXKMSK5R",
+  "ts": "2026-06-07T20:37:46.821Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTGBB9JDBTCJG35ENKK34ZXB",
+    "field": "branch",
+    "value": "feat/fr145-stream-retention"
+  }
+}
