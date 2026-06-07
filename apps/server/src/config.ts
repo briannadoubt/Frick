@@ -186,6 +186,27 @@ export interface FrickConfig {
   /** Hard row cap for local SQLite platform events. */
   platformEventsMaxRows: number;
   /**
+   * Retention window (ms) for durable idempotency records (`idempotency_keys`).
+   * Rows older than this are removed by the background prune. Sourced from
+   * `FRICK_IDEMPOTENCY_KEY_RETENTION_MS`; defaults to 24h. This is the durable
+   * cleanup window and is independent of {@link FrickConfig.idempotencyReplayWindowMs}
+   * (the lookup-time dedupe bound).
+   */
+  idempotencyKeyRetentionMs: number;
+  /**
+   * Retention window (ms) for the DevTools event feed (`devtools_events`).
+   * Rows older than this are dropped by the prune timer. Sourced from
+   * `FRICK_DEVTOOLS_EVENTS_RETENTION_MS`; defaults to 1h.
+   */
+  devtoolsEventsRetentionMs: number;
+  /**
+   * Grace period (ms) kept before an expired `auth_sessions` row is pruned.
+   * `0` (the default) prunes a session the moment it expires; raise it to
+   * retain recently-expired rows for a window (e.g. forensics). Sourced from
+   * `FRICK_EXPIRED_SESSION_RETENTION_GRACE_MS`.
+   */
+  expiredSessionRetentionGraceMs: number;
+  /**
    * Replay window (ms) for `requestId` idempotency. On lookup, an
    * `(tenantId, replicaId, requestId)` record whose `created_at` is older than
    * this window is no longer treated as idempotent — a retry beyond the window
@@ -211,6 +232,15 @@ const DEFAULT_PLATFORM_EVENTS_TOPIC = "frick.platform.events";
 const DEFAULT_PLATFORM_EVENTS_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_PLATFORM_EVENTS_MAX_ROWS = 1_000_000;
 const DEFAULT_IDEMPOTENCY_REPLAY_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h
+// Retention defaults below mirror the canonical Store/DevTools constants
+// (DEFAULT_IDEMPOTENCY_KEY_RETENTION_MS in store.ts,
+// DEFAULT_DEVTOOLS_EVENTS_RETENTION_MS in devtools/event-store.ts,
+// DEFAULT_EXPIRED_SESSION_RETENTION_GRACE_MS in store.ts). They are restated
+// here so the config layer stays dependency-free; unset config reproduces the
+// exact same windows the store would have used on its own.
+const DEFAULT_IDEMPOTENCY_KEY_RETENTION_MS = 24 * 60 * 60 * 1000; // 24h
+const DEFAULT_DEVTOOLS_EVENTS_RETENTION_MS = 60 * 60 * 1000; // 1h
+const DEFAULT_EXPIRED_SESSION_RETENTION_GRACE_MS = 0;
 const DEFAULT_OTEL_SERVICE_NAME = "frick-server";
 const DEFAULT_OTEL_METRIC_EXPORT_INTERVAL_MS = 60_000;
 
@@ -379,6 +409,33 @@ export function loadFrickConfig(
       ),
     "idempotencyReplayWindowMs",
   );
+  const idempotencyKeyRetentionMs = validatePositiveInteger(
+    overrides.idempotencyKeyRetentionMs ??
+      parsePositiveInteger(
+        env.FRICK_IDEMPOTENCY_KEY_RETENTION_MS,
+        DEFAULT_IDEMPOTENCY_KEY_RETENTION_MS,
+        "FRICK_IDEMPOTENCY_KEY_RETENTION_MS",
+      ),
+    "idempotencyKeyRetentionMs",
+  );
+  const devtoolsEventsRetentionMs = validatePositiveInteger(
+    overrides.devtoolsEventsRetentionMs ??
+      parsePositiveInteger(
+        env.FRICK_DEVTOOLS_EVENTS_RETENTION_MS,
+        DEFAULT_DEVTOOLS_EVENTS_RETENTION_MS,
+        "FRICK_DEVTOOLS_EVENTS_RETENTION_MS",
+      ),
+    "devtoolsEventsRetentionMs",
+  );
+  const expiredSessionRetentionGraceMs = validateNonNegativeInteger(
+    overrides.expiredSessionRetentionGraceMs ??
+      parseNonNegativeInteger(
+        env.FRICK_EXPIRED_SESSION_RETENTION_GRACE_MS,
+        DEFAULT_EXPIRED_SESSION_RETENTION_GRACE_MS,
+        "FRICK_EXPIRED_SESSION_RETENTION_GRACE_MS",
+      ),
+    "expiredSessionRetentionGraceMs",
+  );
 
   if (dbDriver === "postgres" && !databaseUrl) {
     throw new FrickConfigError(
@@ -441,6 +498,9 @@ export function loadFrickConfig(
     platformEventsKafkaBrokers,
     platformEventsRetentionMs,
     platformEventsMaxRows,
+    idempotencyKeyRetentionMs,
+    devtoolsEventsRetentionMs,
+    expiredSessionRetentionGraceMs,
     idempotencyReplayWindowMs,
   };
 }
@@ -593,6 +653,26 @@ function parsePositiveInteger(value: string | undefined, fallback: number, varNa
 function validatePositiveInteger(value: number, fieldName: string): number {
   if (!Number.isInteger(value) || value <= 0) {
     throw new FrickConfigError(`${fieldName} must be a positive integer`);
+  }
+  return value;
+}
+
+function parseNonNegativeInteger(value: string | undefined, fallback: number, varName: string): number {
+  if (value === undefined || value === "") {
+    return fallback;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new FrickConfigError(
+      `${varName} must be a non-negative integer (got ${JSON.stringify(value)})`,
+    );
+  }
+  return parsed;
+}
+
+function validateNonNegativeInteger(value: number, fieldName: string): number {
+  if (!Number.isInteger(value) || value < 0) {
+    throw new FrickConfigError(`${fieldName} must be a non-negative integer`);
   }
   return value;
 }

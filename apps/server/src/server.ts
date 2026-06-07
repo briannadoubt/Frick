@@ -487,6 +487,9 @@ export function createFrickServer(options: ServerOptions = {}) {
       : {}),
     platformEventsRetentionMs: config.platformEventsRetentionMs,
     platformEventsMaxRows: config.platformEventsMaxRows,
+    idempotencyKeyRetentionMs: config.idempotencyKeyRetentionMs,
+    devtoolsEventsRetentionMs: config.devtoolsEventsRetentionMs,
+    expiredSessionRetentionGraceMs: config.expiredSessionRetentionGraceMs,
     idempotencyReplayWindowMs: config.idempotencyReplayWindowMs,
     blobDriver: config.blobDriver,
     blobStoragePath: config.blobStoragePath,
@@ -2712,6 +2715,9 @@ function isFrickConfig(value: FrickConfig | FrickConfigOverrides): value is Fric
     Array.isArray(v.platformEventsKafkaBrokers) &&
     typeof v.platformEventsRetentionMs === "number" &&
     typeof v.platformEventsMaxRows === "number" &&
+    typeof v.idempotencyKeyRetentionMs === "number" &&
+    typeof v.devtoolsEventsRetentionMs === "number" &&
+    typeof v.expiredSessionRetentionGraceMs === "number" &&
     typeof v.idempotencyReplayWindowMs === "number"
   );
 }

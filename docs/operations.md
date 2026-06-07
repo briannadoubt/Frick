@@ -78,6 +78,9 @@ All variables are optional. Defaults match the runtime mode.
 | `FRICK_PLATFORM_EVENTS_RETENTION_MS` | `604800000` (7d)    | `604800000`                           | SQLite platform event retention window. Positive integer milliseconds. |
 | `FRICK_PLATFORM_EVENTS_MAX_ROWS` | `1000000`               | `1000000`                             | SQLite platform event row cap after retention pruning. Positive integer. |
 | `FRICK_IDEMPOTENCY_REPLAY_WINDOW_MS` | `86400000` (24h)    | `86400000`                            | Replay-window bound (ms) for `requestId` idempotency, enforced at lookup time independent of retention/pruning: a retry older than the window mints a fresh event. Positive integer. |
+| `FRICK_IDEMPOTENCY_KEY_RETENTION_MS` | `86400000` (24h)    | `86400000`                            | Durable retention window (ms) for `idempotency_keys` rows; the background prune deletes rows older than this. Independent of `FRICK_IDEMPOTENCY_REPLAY_WINDOW_MS` (the lookup-time dedupe bound). Positive integer. Per-tenant `retentionMs` settings still override this globally. |
+| `FRICK_DEVTOOLS_EVENTS_RETENTION_MS` | `3600000` (1h)      | `3600000`                             | Retention window (ms) for the DevTools event feed (`devtools_events`); older rows are dropped by the prune timer. Positive integer. |
+| `FRICK_EXPIRED_SESSION_RETENTION_GRACE_MS` | `0`           | `0`                                   | Grace period (ms) kept before an expired `auth_sessions` row is pruned. `0` prunes the moment a session expires; raise to retain recently-expired rows (e.g. forensics). Non-negative integer. Overridden by an explicit `createFrickServer({ expiredSessionRetentionGraceMs })`. |
 | `FRICK_MAX_CONNECTIONS_PER_PRINCIPAL` | `64`               | `64`                                  | Per-principal concurrent WebSocket connection cap (see Runtime limits). Positive integer. An explicit `createFrickServer({ limits })` override wins over this env var. |
 
 Validation errors throw `FrickConfigError` at startup, before any port is
@@ -1013,6 +1016,24 @@ and `platform_events` prune passes). A session is eligible the moment it expires
 embedders can keep a forensics grace window via
 `createFrickServer({ expiredSessionRetentionGraceMs })` or disable the timer with
 `expiredSessionPruneIntervalMs: 0` (the one-shot at startup still runs).
+
+#### Configuring retention windows
+
+The retention windows for the growth-prone, auto-pruned tables are configurable
+from the environment (or `createFrickServer`/`loadFrickConfig` overrides). The
+prune mechanics are unchanged — these knobs only move the windows. Leaving every
+variable unset reproduces the historical defaults exactly, so this is purely
+additive.
+
+| Table | Env var | Default | Notes |
+| ----- | ------- | ------- | ----- |
+| `idempotency_keys` | `FRICK_IDEMPOTENCY_KEY_RETENTION_MS` | 24h | Durable cleanup window. Distinct from the lookup-time `FRICK_IDEMPOTENCY_REPLAY_WINDOW_MS`. Per-tenant `retentionMs` settings still take precedence. |
+| `devtools_events` | `FRICK_DEVTOOLS_EVENTS_RETENTION_MS` | 1h | DevTools event feed. |
+| `platform_events` | `FRICK_PLATFORM_EVENTS_RETENTION_MS` | 7d | SQLite platform-event pipeline (also bounded by `FRICK_PLATFORM_EVENTS_MAX_ROWS`). |
+| `auth_sessions` (expired) | `FRICK_EXPIRED_SESSION_RETENTION_GRACE_MS` | 0 | Grace before an expired session row is deleted. |
+
+Per-stream retention (FR-145) remains opt-in and is configured separately via
+`createFrickServer({ streamRetention })`, keyed by stream type.
 
 Both routes audit-log under `backup.dump` and `backup.restore`. These
 backup and restore audit writes are fail-closed: if the audit row cannot be

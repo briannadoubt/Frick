@@ -39,6 +39,9 @@ describe("loadFrickConfig", () => {
       platformEventsKafkaBrokers: [],
       platformEventsRetentionMs: 7 * 24 * 60 * 60 * 1000,
       platformEventsMaxRows: 1_000_000,
+      idempotencyKeyRetentionMs: 24 * 60 * 60 * 1000,
+      devtoolsEventsRetentionMs: 60 * 60 * 1000,
+      expiredSessionRetentionGraceMs: 0,
       idempotencyReplayWindowMs: 24 * 60 * 60 * 1000,
     });
   });
