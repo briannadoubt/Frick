@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGPQWXH3HK2Z0QD5ZD99PTD",
+  "ts": "2026-06-07T09:31:07.057Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1C",
+    "commentId": "01KTGPQWXH3HK2Z0QD5ZD99PTC",
+    "author": "claude",
+    "body": "Async-ified FrickSearchAdapter (upsert/delete/query -> Promise) + shipped createPgFtsSearchAdapter (tsvector/GIN, @@ plainto_tsquery, ts_rank, jsonb field filters). Rippled the now-async search-notify through store write paths + search route + erase. 3/3 PG conformance; SQLite 781 green; test:pg widened. This is the first of the SQLite-bound-subsystem ports the full-server-on-PG keystone needs (devtools/platform-events next)."
+  }
+}
