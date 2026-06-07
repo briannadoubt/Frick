@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadWebPushCredentials, TenantSettingsStore } from "@fricken/server";
+import { loadWebPushCredentials, TenantSettingsStore, SqliteSqlDriver } from "@fricken/server";
 
 const execFileAsync = promisify(execFile);
 
@@ -590,8 +590,8 @@ describe("frick tenants", () => {
     // The server-side credential loader must be able to decrypt what the CLI wrote.
     const db = new DatabaseSync(dbPath);
     try {
-      const tenantSettings = new TenantSettingsStore(db);
-      const loaded = loadWebPushCredentials(tenantSettings, "_default", {
+      const tenantSettings = new TenantSettingsStore(new SqliteSqlDriver(db));
+      const loaded = await loadWebPushCredentials(tenantSettings, "_default", {
         FRICK_PUSH_CRED_KEY: credKey,
       });
       expect(loaded.ok).toBe(true);

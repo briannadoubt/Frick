@@ -1,4 +1,8 @@
 export { createFrickServer, defaultDatabasePath, type FrickAppRoute, type ServerOptions } from "./server.js";
+// Async storage seam (FR-118): the SqlDriver interface every store binds to,
+// plus the SQLite implementation. Exported so out-of-tree adapters/tests can
+// construct stores; the Postgres adapter implements the same interface.
+export { SqliteSqlDriver, createSqlDriver, type SqlDriver } from "./storage/sql-driver.js";
 // Multi-tenant active-tenant switch: re-mint a session into a sibling tenant.
 export {
   SourceSessionNotActiveError,
