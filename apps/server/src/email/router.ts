@@ -80,18 +80,20 @@ export function createFrickEmailRouter(options: FrickEmailRouterOptions): FrickE
         error: delivery.error?.message,
       });
     }
-    store.devtoolsEvents.record({
-      kind: "frick.email.delivery",
-      tenantId: opts.tenantId,
-      fields: {
-        provider: adapter.provider,
-        recipient: redactEmail(message.to),
-        subject: message.subject,
-        status: delivery.status,
-        ...(delivery.error ? { errorCode: delivery.error.code } : {}),
-        ...(delivery.receiptId ? { receiptId: delivery.receiptId } : {}),
-      },
-    });
+    void store.devtoolsEvents
+      .record({
+        kind: "frick.email.delivery",
+        tenantId: opts.tenantId,
+        fields: {
+          provider: adapter.provider,
+          recipient: redactEmail(message.to),
+          subject: message.subject,
+          status: delivery.status,
+          ...(delivery.error ? { errorCode: delivery.error.code } : {}),
+          ...(delivery.receiptId ? { receiptId: delivery.receiptId } : {}),
+        },
+      })
+      .catch(() => {});
     return delivery;
   }
 

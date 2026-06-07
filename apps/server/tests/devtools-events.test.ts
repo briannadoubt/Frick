@@ -129,19 +129,19 @@ describe("devtools event feed", () => {
     await fetch(`${app.httpUrl}/health`);
 
     await waitFor(
-      () => app!.server.store.devtoolsEvents.list({ kind: "http.request" }).length >= 2,
+      async () => (await app!.server.store.devtoolsEvents.list({ kind: "http.request" })).length >= 2,
     );
-    const httpEvents = app.server.store.devtoolsEvents.list({ kind: "http.request" });
+    const httpEvents = await app.server.store.devtoolsEvents.list({ kind: "http.request" });
     expect(httpEvents.every((row) => row.kind === "http.request")).toBe(true);
-    const otherKind = app.server.store.devtoolsEvents.list({ kind: "ws.connect" });
+    const otherKind = await app.server.store.devtoolsEvents.list({ kind: "ws.connect" });
     expect(otherKind.length).toBe(0);
   });
 
   it("filters list results by tenantId", async () => {
     standaloneStore = new FrickStore({ path: ":memory:", seed: false });
-    standaloneStore.devtoolsEvents.record({ kind: "http.request", tenantId: "tenant-a" });
-    standaloneStore.devtoolsEvents.record({ kind: "http.request", tenantId: "tenant-b" });
-    standaloneStore.devtoolsEvents.record({ kind: "http.request" });
+    await standaloneStore.devtoolsEvents.record({ kind: "http.request", tenantId: "tenant-a" });
+    await standaloneStore.devtoolsEvents.record({ kind: "http.request", tenantId: "tenant-b" });
+    await standaloneStore.devtoolsEvents.record({ kind: "http.request" });
 
     const tenantA = await standaloneStore.devtoolsEvents.list({ tenantId: "tenant-a" });
     expect(tenantA).toHaveLength(1);
@@ -161,15 +161,15 @@ describe("devtools event feed", () => {
     });
     // Backdate two rows beyond the retention window.
     const oldIso = new Date(Date.now() - 60_000).toISOString();
-    standaloneStore.devtoolsEvents.record({ kind: "http.request", occurredAt: oldIso });
-    standaloneStore.devtoolsEvents.record({ kind: "http.request", occurredAt: oldIso });
+    await standaloneStore.devtoolsEvents.record({ kind: "http.request", occurredAt: oldIso });
+    await standaloneStore.devtoolsEvents.record({ kind: "http.request", occurredAt: oldIso });
     // And one fresh row.
-    standaloneStore.devtoolsEvents.record({ kind: "http.request" });
-    expect(standaloneStore.devtoolsEvents.rowCount()).toBe(3);
+    await standaloneStore.devtoolsEvents.record({ kind: "http.request" });
+    expect(await standaloneStore.devtoolsEvents.rowCount()).toBe(3);
 
-    const result = standaloneStore.devtoolsEvents.prune();
+    const result = await standaloneStore.devtoolsEvents.prune();
     expect(result.prunedByAge).toBe(2);
-    expect(standaloneStore.devtoolsEvents.rowCount()).toBe(1);
+    expect(await standaloneStore.devtoolsEvents.rowCount()).toBe(1);
   });
 
   it("inspect endpoint returns 404 when inspectionEnabled is false", async () => {
@@ -183,7 +183,7 @@ describe("devtools event feed", () => {
     await fetch(`${app.httpUrl}/health`);
     const headers = await inspectHeaders();
     await waitFor(
-      () => app!.server.store.devtoolsEvents.list({ kind: "http.request" }).length >= 1,
+      async () => (await app!.server.store.devtoolsEvents.list({ kind: "http.request" })).length >= 1,
     );
 
     const response = await fetch(

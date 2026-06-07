@@ -1095,13 +1095,13 @@ export function createFrickServer(options: ServerOptions = {}) {
           const parsed = Number(limitParam);
           if (Number.isFinite(parsed)) filter.limit = parsed;
         }
-        sendJson(response, 200, { events: store.devtoolsEvents.list(filter) });
+        sendJson(response, 200, { events: await store.devtoolsEvents.list(filter) });
         return;
       }
       if (sub === "devtools/summary") {
         const windowParam = url.searchParams.get("windowMs");
         const windowMs = windowParam ? Number(windowParam) : 60_000;
-        sendJson(response, 200, store.devtoolsEvents.summary(
+        sendJson(response, 200, await store.devtoolsEvents.summary(
           Number.isFinite(windowMs) && windowMs > 0 ? windowMs : 60_000,
         ));
         return;
@@ -1113,7 +1113,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           sendJson(response, 404, { error: "not_found" });
           return;
         }
-        const row = store.devtoolsEvents.getById(id);
+        const row = await store.devtoolsEvents.getById(id);
         if (!row) {
           sendJson(response, 404, { error: "not_found" });
           return;

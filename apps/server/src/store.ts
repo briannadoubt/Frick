@@ -407,7 +407,7 @@ export class FrickStore {
     this.pushRegistrations = new PushRegistrationStore(sql);
     // These stores take raw DatabaseSync handles (out-of-scope raw-SQLite subsystems).
     const rawDb = sql.rawDb;
-    this.devtoolsEvents = new DevToolsEventStore(rawDb, {
+    this.devtoolsEvents = new DevToolsEventStore(sql, {
       retentionMs:
         options.devtoolsEventsRetentionMs ?? DEFAULT_DEVTOOLS_EVENTS_RETENTION_MS,
       maxRows: options.devtoolsEventsMaxRows ?? DEFAULT_DEVTOOLS_EVENTS_MAX_ROWS,
@@ -505,16 +505,14 @@ export class FrickStore {
 
   #safeDevToolsPrune(): void {
     if (this.#closed) return;
-    try {
-      this.devtoolsEvents.prune();
-    } catch (error) {
+    void this.devtoolsEvents.prune().catch((error) => {
       // eslint-disable-next-line no-console
       console.warn(
         `[frick] devtools_events prune failed: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
-    }
+    });
   }
 
   #safePlatformEventsPrune(): void {

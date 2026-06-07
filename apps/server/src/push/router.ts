@@ -144,19 +144,21 @@ export function createNotificationRouter(deps: NotificationRouterOptions): Notif
         reason: delivery.error?.code,
       });
     }
-    store.devtoolsEvents.record({
-      kind: "frick.push.delivery",
-      tenantId: registration.tenantId,
-      fields: {
-        intent: intent.intent,
-        platform: registration.platform,
-        registrationId: registration.registrationId,
-        userId: registration.userId,
-        status: delivery.status,
-        ...(delivery.error ? { errorCode: delivery.error.code } : {}),
-        ...(delivery.receiptId ? { receiptId: delivery.receiptId } : {}),
-      },
-    });
+    void store.devtoolsEvents
+      .record({
+        kind: "frick.push.delivery",
+        tenantId: registration.tenantId,
+        fields: {
+          intent: intent.intent,
+          platform: registration.platform,
+          registrationId: registration.registrationId,
+          userId: registration.userId,
+          status: delivery.status,
+          ...(delivery.error ? { errorCode: delivery.error.code } : {}),
+          ...(delivery.receiptId ? { receiptId: delivery.receiptId } : {}),
+        },
+      })
+      .catch(() => {});
     return delivery;
   }
 

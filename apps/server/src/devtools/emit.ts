@@ -13,13 +13,17 @@ export interface DevToolsEmitInput {
 }
 
 export function emitDevToolsEvent(store: FrickStore, input: DevToolsEmitInput): void {
-  try {
-    store.devtoolsEvents.record({
+  // Best-effort + fire-and-forget: recording is async now (the store may be
+  // Postgres-backed), but emission sites must never await or throw. record()
+  // already swallows its own errors; the .catch() here is belt-and-suspenders
+  // against an unexpected rejection so it can never surface as unhandled.
+  void store.devtoolsEvents
+    .record({
       kind: input.kind,
       ...(input.tenantId !== undefined ? { tenantId: input.tenantId } : {}),
       ...(input.fields !== undefined ? { fields: input.fields } : {}),
+    })
+    .catch(() => {
+      // Best-effort — never break the caller.
     });
-  } catch {
-    // Best-effort — never break the caller.
-  }
 }

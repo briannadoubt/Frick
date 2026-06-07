@@ -15,7 +15,7 @@
  * fits comfortably while keeping recent history queryable.
  */
 
-import type { DatabaseSync } from "node:sqlite";
+import type { SqlDriver } from "../storage/sql-driver.js";
 
 export interface DevToolsEventInput {
   readonly kind: string;
@@ -66,13 +66,13 @@ const DEFAULT_LIST_LIMIT = 200;
 const MAX_LIST_LIMIT = 1000;
 
 export class DevToolsEventStore {
-  readonly #db: DatabaseSync;
+  readonly #sql: SqlDriver;
   readonly #retentionMs: number;
   readonly #maxRows: number;
   readonly #now: () => Date;
 
-  constructor(db: DatabaseSync, options: DevToolsEventStoreOptions) {
-    this.#db = db;
+  constructor(sql: SqlDriver, options: DevToolsEventStoreOptions) {
+    this.#sql = sql;
     this.#retentionMs = options.retentionMs;
     this.#maxRows = options.maxRows;
     this.#now = options.now ?? (() => new Date());
@@ -83,7 +83,7 @@ export class DevToolsEventStore {
    * case is that a single weird field bag silently drops the row, which is
    * preferable to taking down the originating handler.
    */
-  record(input: DevToolsEventInput): void {
+  async record(input: DevToolsEventInput): Promise<void> {
     const occurredAt = input.occurredAt ?? this.#now().toISOString();
     let fieldsJson: string;
     try {
@@ -92,18 +92,17 @@ export class DevToolsEventStore {
       fieldsJson = "{}";
     }
     try {
-      this.#db
-        .prepare(
-          `INSERT INTO devtools_events (occurred_at, kind, tenant_id, fields)
+      await this.#sql.run(
+        `INSERT INTO devtools_events (occurred_at, kind, tenant_id, fields)
             VALUES (?, ?, ?, ?)`,
-        )
-        .run(occurredAt, input.kind, input.tenantId ?? null, fieldsJson);
+        [occurredAt, input.kind, input.tenantId ?? null, fieldsJson],
+      );
     } catch {
       // Swallow — recording must never break the originating request path.
     }
   }
 
-  list(filter: DevToolsEventListFilter = {}): DevToolsEventRow[] {
+  async list(filter: DevToolsEventListFilter = {}): Promise<DevToolsEventRow[]> {
     const clauses: string[] = [];
     const params: Array<string | number | null> = [];
     if (filter.kind !== undefined) {
@@ -121,33 +120,35 @@ export class DevToolsEventStore {
     const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
     const limit = clampLimit(filter.limit);
     params.push(limit);
-    const rows = this.#db
-      .prepare(
-        `SELECT id, occurred_at, kind, tenant_id, fields
+    const rows = await this.#sql.all<{
+      id: number;
+      occurred_at: string;
+      kind: string;
+      tenant_id: string | null;
+      fields: string;
+    }>(
+      `SELECT id, occurred_at, kind, tenant_id, fields
           FROM devtools_events
           ${where}
           ORDER BY id DESC
           LIMIT ?`,
-      )
-      .all(...params) as Array<{
-        id: number;
-        occurred_at: string;
-        kind: string;
-        tenant_id: string | null;
-        fields: string;
-      }>;
+      params,
+    );
     return rows.map((row) => decodeRow(row));
   }
 
-  getById(id: number): DevToolsEventRow | undefined {
-    const row = this.#db
-      .prepare(
-        `SELECT id, occurred_at, kind, tenant_id, fields
+  async getById(id: number): Promise<DevToolsEventRow | undefined> {
+    const row = await this.#sql.get<{
+      id: number;
+      occurred_at: string;
+      kind: string;
+      tenant_id: string | null;
+      fields: string;
+    }>(
+      `SELECT id, occurred_at, kind, tenant_id, fields
           FROM devtools_events WHERE id = ?`,
-      )
-      .get(id) as
-      | { id: number; occurred_at: string; kind: string; tenant_id: string | null; fields: string }
-      | undefined;
+      [id],
+    );
     return row ? decodeRow(row) : undefined;
   }
 
@@ -156,17 +157,18 @@ export class DevToolsEventStore {
    * inspection `/summary` endpoint as a single-shot "what's happening now"
    * view that doesn't require fetching every row.
    */
-  summary(windowMs: number): { windowMs: number; total: number; byKind: Record<string, number> } {
+  async summary(
+    windowMs: number,
+  ): Promise<{ windowMs: number; total: number; byKind: Record<string, number> }> {
     const cutoffIso = new Date(this.#now().getTime() - Math.max(0, windowMs)).toISOString();
-    const rows = this.#db
-      .prepare(
-        `SELECT kind, COUNT(*) AS count
+    const rows = await this.#sql.all<{ kind: string; count: number }>(
+      `SELECT kind, COUNT(*) AS count
           FROM devtools_events
           WHERE occurred_at >= ?
           GROUP BY kind
           ORDER BY count DESC`,
-      )
-      .all(cutoffIso) as Array<{ kind: string; count: number }>;
+      [cutoffIso],
+    );
     let total = 0;
     const byKind: Record<string, number> = {};
     for (const row of rows) {
@@ -180,50 +182,43 @@ export class DevToolsEventStore {
    * Two-phase prune: drop rows older than the retention window, then if the
    * table still exceeds the cap, drop the oldest rows until it fits.
    */
-  prune(): DevToolsEventsPruneResult {
+  async prune(): Promise<DevToolsEventsPruneResult> {
     const cutoffIso = new Date(this.#now().getTime() - this.#retentionMs).toISOString();
-    let prunedByAge = 0;
-    let prunedByCap = 0;
-    this.#db.exec("BEGIN IMMEDIATE");
-    try {
-      const ageResult = this.#db
-        .prepare("DELETE FROM devtools_events WHERE occurred_at < ?")
-        .run(cutoffIso);
-      prunedByAge = Number(ageResult.changes ?? 0);
+    // Two sequential sweeps WITHOUT a wrapping transaction. The seam's
+    // transaction() holds a `BEGIN IMMEDIATE` across awaits on the shared
+    // SQLite connection, which would collide with other connection users.
+    // A rolling-window GC sweep needs no cross-statement atomicity: the worst
+    // case is the cap count being off by a concurrently-inserted row, which
+    // the next sweep corrects.
+    const ageResult = await this.#sql.run("DELETE FROM devtools_events WHERE occurred_at < ?", [
+      cutoffIso,
+    ]);
+    const prunedByAge = Number(ageResult.changes ?? 0);
 
-      const remaining = this.#db
-        .prepare("SELECT COUNT(*) AS count FROM devtools_events")
-        .get() as { count: number };
-      const overflow = Number(remaining.count) - this.#maxRows;
-      if (overflow > 0) {
-        const capResult = this.#db
-          .prepare(
-            `DELETE FROM devtools_events
+    let prunedByCap = 0;
+    const remaining = await this.#sql.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM devtools_events",
+    );
+    const overflow = Number(remaining?.count ?? 0) - this.#maxRows;
+    if (overflow > 0) {
+      const capResult = await this.#sql.run(
+        `DELETE FROM devtools_events
               WHERE id IN (
                 SELECT id FROM devtools_events
                   ORDER BY id ASC
                   LIMIT ?
               )`,
-          )
-          .run(overflow);
-        prunedByCap = Number(capResult.changes ?? 0);
-      }
-      this.#db.exec("COMMIT");
-    } catch (error) {
-      try {
-        this.#db.exec("ROLLBACK");
-      } catch {
-        // Swallow — surface the original cause.
-      }
-      throw error;
+        [overflow],
+      );
+      prunedByCap = Number(capResult.changes ?? 0);
     }
     return { prunedByAge, prunedByCap };
   }
 
-  rowCount(): number {
-    const row = this.#db
-      .prepare("SELECT COUNT(*) AS count FROM devtools_events")
-      .get() as { count: number } | undefined;
+  async rowCount(): Promise<number> {
+    const row = await this.#sql.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM devtools_events",
+    );
     return Number(row?.count ?? 0);
   }
 }
