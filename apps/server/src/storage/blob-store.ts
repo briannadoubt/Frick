@@ -55,9 +55,17 @@ export class BlobStore {
 
   async create(tenantId: string, metadata: BlobMetadataInput): Promise<void> {
     await this.sql.run(
-      `INSERT OR REPLACE INTO blob_metadata
+      `INSERT INTO blob_metadata
           (tenant_id, blob_id, owner_id, content_hash, byte_length, mime_type, storage_key, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(blob_id) DO UPDATE SET
+            tenant_id = excluded.tenant_id,
+            owner_id = excluded.owner_id,
+            content_hash = excluded.content_hash,
+            byte_length = excluded.byte_length,
+            mime_type = excluded.mime_type,
+            storage_key = excluded.storage_key,
+            created_at = excluded.created_at`,
       [
         tenantId,
         metadata.blobId,

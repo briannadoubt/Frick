@@ -76,10 +76,19 @@ export class BlobDerivativeStore {
     const now = new Date().toISOString();
     const metadataJson = input.metadata ? JSON.stringify(input.metadata) : null;
     await this.sql.run(
-      `INSERT OR REPLACE INTO blob_derivatives
+      `INSERT INTO blob_derivatives
           (parent_blob_id, derivative_id, tenant_id, processor_id, mime_type,
            byte_length, content_hash, storage_key, content, metadata, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(tenant_id, parent_blob_id, derivative_id) DO UPDATE SET
+            processor_id = excluded.processor_id,
+            mime_type = excluded.mime_type,
+            byte_length = excluded.byte_length,
+            content_hash = excluded.content_hash,
+            storage_key = excluded.storage_key,
+            content = excluded.content,
+            metadata = excluded.metadata,
+            created_at = excluded.created_at`,
       [
         input.parentBlobId,
         input.derivativeId,
