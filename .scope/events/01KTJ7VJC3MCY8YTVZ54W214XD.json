@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJ7VJC3MCY8YTVZ54W214XD",
+  "ts": "2026-06-07T23:49:27.555Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1M",
+    "commentId": "01KTJ7VJC3MCY8YTVZ54W214XC",
+    "author": "claude",
+    "body": "Opt-in server-side device binding (FRICK_BIND_SESSION_DEVICE / FrickLimits.bindSessionDevice, default OFF). Gateway #authenticateHelloSession now compares Hello deviceId+replicaId against the session-bound values; mismatch -> auth.unauthenticated Nack (reason sessionDeviceMismatch) + 1008 close so client re-auths. Principal device/replica still always server-derived. Tests: ws-session-device-binding.test.ts + limits.test.ts env/default coverage. CHANGELOG + threat-model updated. typecheck=0, server vitest 847 passed / 45 skipped."
+  }
+}
