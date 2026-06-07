@@ -20,7 +20,7 @@ describe("restoreFrickDatabase", () => {
     try {
       await source.tenants.create("tenant-alpha");
       await source.upsertObject("tenant-alpha", "User", "user-ada", { displayName: "Ada" });
-      source.appendEvent({
+      await source.appendEvent({
         tenantId: "tenant-alpha",
         requestId: "req-1",
         replicaId: "replica-1",
@@ -59,7 +59,7 @@ describe("restoreFrickDatabase", () => {
     const source = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
     try {
       await source.tenants.create("tenant-alpha");
-      source.blobDerivatives.record({
+      await source.blobDerivatives.record({
         tenantId: "tenant-alpha",
         parentBlobId: "blob-parent-alpha",
         derivativeId: "thumb",

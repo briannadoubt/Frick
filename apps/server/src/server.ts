@@ -1270,8 +1270,8 @@ export function createFrickServer(options: ServerOptions = {}) {
           clientIp: clientIpFromRequest(request),
           limits,
         });
-        if (!store.hasUser(tenantId, userId)) {
-          store.createAccountUser({
+        if (!(await store.hasUser(tenantId, userId))) {
+          await store.createAccountUser({
             tenantId,
             userId,
             handle: devHandleFromUserId(userId),
