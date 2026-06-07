@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGDJA8MX2W1X2PEZMQ9PQYN",
+  "ts": "2026-06-07T06:50:46.932Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTG6GQX7KA9FHJ6VSYSHB9RP",
+    "commentId": "01KTGDJA8MX2W1X2PEZMQ9PQYM",
+    "author": "claude",
+    "body": "Shipped eachTenant({includeArchived?,filter?,payload?}) from @fricken/server — builds a FrickRecurringJob.resolveTargets that fans out one enqueue per ledger tenant per tick (active-only by default). App supplies just predicate/payload, not the loop. 4 tests; full server suite 775 green. aquariusyacht can replace listCompanyTenantIds-based per-tenant scheduling."
+  }
+}

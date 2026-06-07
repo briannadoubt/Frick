@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTGDJ435FAV3GM0AZ15P6CE8",
+  "ts": "2026-06-07T06:50:40.613Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTG6GQX7KA9FHJ6VSYSHB9RP",
+    "field": "branch",
+    "value": "feat/fr132-recurring-each-tenant"
+  }
+}
