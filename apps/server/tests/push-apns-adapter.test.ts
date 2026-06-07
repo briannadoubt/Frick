@@ -64,12 +64,12 @@ function registration(token: string): PushDeviceRegistration {
   };
 }
 
-function setupTenant(env: NodeJS.ProcessEnv): { tenantSettings: TenantSettingsStore } {
+async function setupTenant(env: NodeJS.ProcessEnv): Promise<{ tenantSettings: TenantSettingsStore }> {
   const pem = generateP256Pem();
   const db = new DatabaseSync(":memory:");
   runFrameworkMigrations(db, { supportedSchemaRevision: foundationSchema.schemaRevision });
   const tenantSettings = new TenantSettingsStore(new SqliteSqlDriver(db));
-  saveApnsCredentials(
+  await saveApnsCredentials(
     tenantSettings,
     "tenant-1",
     {
@@ -160,7 +160,7 @@ describe("APNs adapter", () => {
 
   it("delivers a 200 response with apns-id receipt", async () => {
     const env = { FRICK_PUSH_CRED_KEY: freshKey() };
-    const { tenantSettings } = setupTenant(env);
+    const { tenantSettings } = await setupTenant(env);
     mock.routes.set("device-ok", () => ({ status: 200 }));
     const adapter = adapterFor(env);
     try {
@@ -177,7 +177,7 @@ describe("APNs adapter", () => {
 
   it("maps 410 Unregistered to push.unregistered", async () => {
     const env = { FRICK_PUSH_CRED_KEY: freshKey() };
-    const { tenantSettings } = setupTenant(env);
+    const { tenantSettings } = await setupTenant(env);
     mock.routes.set("device-dead", () => ({ status: 410, reason: "Unregistered" }));
     const adapter = adapterFor(env);
     try {
@@ -191,7 +191,7 @@ describe("APNs adapter", () => {
 
   it("maps 400 BadDeviceToken to push.badDeviceToken", async () => {
     const env = { FRICK_PUSH_CRED_KEY: freshKey() };
-    const { tenantSettings } = setupTenant(env);
+    const { tenantSettings } = await setupTenant(env);
     mock.routes.set("device-bad", () => ({ status: 400, reason: "BadDeviceToken" }));
     const adapter = adapterFor(env);
     try {

@@ -53,7 +53,7 @@ describe("PUT /_frick/admin/tenants/:tenantId/push/apns", () => {
     });
     expect(response.status).toBe(204);
 
-    const loaded = loadApnsCredentials(
+    const loaded = await loadApnsCredentials(
       app.store.tenantSettings,
       "_default",
       { FRICK_PUSH_CRED_KEY },

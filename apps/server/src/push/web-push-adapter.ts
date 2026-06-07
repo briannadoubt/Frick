@@ -99,7 +99,7 @@ export function createFrickWebPushAdapter(options: WebPushAdapterOptions = {}): 
     registration: PushDeviceRegistration,
     ctx: FrickNotificationContext,
   ): Promise<FrickPushDelivery> {
-    const credentialResult = loadWebPushCredentials(ctx.store.tenantSettings, ctx.tenantId, env);
+    const credentialResult = await loadWebPushCredentials(ctx.store.tenantSettings, ctx.tenantId, env);
     if (!credentialResult.ok) {
       return {
         registration,

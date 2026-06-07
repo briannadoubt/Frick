@@ -31,12 +31,12 @@ export async function tenantsCommand(parsed: ParsedArgs, out: OutputOptions): Pr
   });
 }
 
-function tenantsList(parsed: ParsedArgs, out: OutputOptions): number {
+async function tenantsList(parsed: ParsedArgs, out: OutputOptions): Promise<number> {
   const config = loadConfig(contextFlagsFrom(parsed.flags));
   const store = openStore(config);
   try {
     const includeArchived = parsed.flags["include-archived"] === true;
-    const rows = store.tenants.list(includeArchived);
+    const rows = await store.tenants.list(includeArchived);
     emit({ tenants: rows }, out);
     return 0;
   } finally {
@@ -52,7 +52,7 @@ function requireFlag(flags: Record<string, string | boolean>, key: string): stri
   return value;
 }
 
-function tenantsSetPush(parsed: ParsedArgs, out: OutputOptions): number {
+async function tenantsSetPush(parsed: ParsedArgs, out: OutputOptions): Promise<number> {
   const tenantId = parsed.positionals[1];
   if (!tenantId) {
     throw new CliUsageError("frick tenants set-push requires a tenant id positional argument");
@@ -68,7 +68,7 @@ function tenantsSetPush(parsed: ParsedArgs, out: OutputOptions): number {
       const bundleId = requireFlag(parsed.flags, "bundle-id");
       const useSandbox = parsed.flags.sandbox === true;
       const privateKeyPem = readFileSync(p8Path, "utf8");
-      const result = saveApnsCredentials(store.tenantSettings, tenantId, {
+      const result = await saveApnsCredentials(store.tenantSettings, tenantId, {
         keyId,
         teamId,
         bundleId,
@@ -101,7 +101,7 @@ function tenantsSetPush(parsed: ParsedArgs, out: OutputOptions): number {
           { path },
         );
       }
-      const result = saveFcmCredentials(store.tenantSettings, tenantId, {
+      const result = await saveFcmCredentials(store.tenantSettings, tenantId, {
         projectId: parsedJson.project_id,
         clientEmail: parsedJson.client_email,
         privateKey: parsedJson.private_key,
@@ -125,7 +125,7 @@ function tenantsSetPush(parsed: ParsedArgs, out: OutputOptions): number {
       const publicKey = requireFlag(parsed.flags, "public-key");
       const privateKeyPath = requireFlag(parsed.flags, "private-key");
       const privateKey = readFileSync(privateKeyPath, "utf8");
-      const result = saveWebPushCredentials(store.tenantSettings, tenantId, {
+      const result = await saveWebPushCredentials(store.tenantSettings, tenantId, {
         subject,
         publicKey,
         privateKey,
@@ -144,7 +144,7 @@ function tenantsSetPush(parsed: ParsedArgs, out: OutputOptions): number {
   }
 }
 
-function tenantsCreate(parsed: ParsedArgs, out: OutputOptions): number {
+async function tenantsCreate(parsed: ParsedArgs, out: OutputOptions): Promise<number> {
   const tenantId = parsed.positionals[1];
   if (!tenantId) {
     throw new CliUsageError("frick tenants create requires a tenant id positional argument");
@@ -153,7 +153,7 @@ function tenantsCreate(parsed: ParsedArgs, out: OutputOptions): number {
   const config = loadConfig(contextFlagsFrom(parsed.flags));
   const store = openStore(config);
   try {
-    const row = store.tenants.create(tenantId, displayName);
+    const row = await store.tenants.create(tenantId, displayName);
     emit({ ok: true, tenant: row }, out);
     return 0;
   } catch (error) {

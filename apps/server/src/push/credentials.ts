@@ -167,37 +167,37 @@ export function decryptCredential<T extends object>(
  * Convenience: load APNs creds for a tenant. Returns the decrypted record or
  * a structured error describing why the lookup failed.
  */
-export function loadApnsCredentials(
+export async function loadApnsCredentials(
   store: TenantSettingsStore,
   tenantId: string,
   env: NodeJS.ProcessEnv = process.env,
-): { ok: true; value: ApnsCredentials } | { ok: false; error: PushCredentialError } {
+): Promise<{ ok: true; value: ApnsCredentials } | { ok: false; error: PushCredentialError }> {
   return loadCredential<ApnsCredentials>(store, tenantId, APNS_SETTINGS_KEY, env);
 }
 
-export function loadFcmCredentials(
+export async function loadFcmCredentials(
   store: TenantSettingsStore,
   tenantId: string,
   env: NodeJS.ProcessEnv = process.env,
-): { ok: true; value: FcmCredentials } | { ok: false; error: PushCredentialError } {
+): Promise<{ ok: true; value: FcmCredentials } | { ok: false; error: PushCredentialError }> {
   return loadCredential<FcmCredentials>(store, tenantId, FCM_SETTINGS_KEY, env);
 }
 
-export function loadWebPushCredentials(
+export async function loadWebPushCredentials(
   store: TenantSettingsStore,
   tenantId: string,
   env: NodeJS.ProcessEnv = process.env,
-): { ok: true; value: WebPushCredentials } | { ok: false; error: PushCredentialError } {
+): Promise<{ ok: true; value: WebPushCredentials } | { ok: false; error: PushCredentialError }> {
   return loadCredential<WebPushCredentials>(store, tenantId, WEB_PUSH_SETTINGS_KEY, env);
 }
 
-function loadCredential<T extends object>(
+async function loadCredential<T extends object>(
   store: TenantSettingsStore,
   tenantId: string,
   key: string,
   env: NodeJS.ProcessEnv,
-): { ok: true; value: T } | { ok: false; error: PushCredentialError } {
-  const stored = store.get(tenantId, key);
+): Promise<{ ok: true; value: T } | { ok: false; error: PushCredentialError }> {
+  const stored = await store.get(tenantId, key);
   if (typeof stored !== "string") {
     return {
       ok: false,
@@ -208,42 +208,42 @@ function loadCredential<T extends object>(
 }
 
 /** Save APNs creds for a tenant. Returns an error if encryption is disabled. */
-export function saveApnsCredentials(
+export async function saveApnsCredentials(
   store: TenantSettingsStore,
   tenantId: string,
   value: ApnsCredentials,
   env: NodeJS.ProcessEnv = process.env,
-): { ok: true } | { ok: false; error: PushCredentialError } {
+): Promise<{ ok: true } | { ok: false; error: PushCredentialError }> {
   return saveCredential(store, tenantId, APNS_SETTINGS_KEY, value, env);
 }
 
-export function saveFcmCredentials(
+export async function saveFcmCredentials(
   store: TenantSettingsStore,
   tenantId: string,
   value: FcmCredentials,
   env: NodeJS.ProcessEnv = process.env,
-): { ok: true } | { ok: false; error: PushCredentialError } {
+): Promise<{ ok: true } | { ok: false; error: PushCredentialError }> {
   return saveCredential(store, tenantId, FCM_SETTINGS_KEY, value, env);
 }
 
-export function saveWebPushCredentials(
+export async function saveWebPushCredentials(
   store: TenantSettingsStore,
   tenantId: string,
   value: WebPushCredentials,
   env: NodeJS.ProcessEnv = process.env,
-): { ok: true } | { ok: false; error: PushCredentialError } {
+): Promise<{ ok: true } | { ok: false; error: PushCredentialError }> {
   return saveCredential(store, tenantId, WEB_PUSH_SETTINGS_KEY, value, env);
 }
 
-function saveCredential(
+async function saveCredential(
   store: TenantSettingsStore,
   tenantId: string,
   key: string,
   value: object,
   env: NodeJS.ProcessEnv,
-): { ok: true } | { ok: false; error: PushCredentialError } {
+): Promise<{ ok: true } | { ok: false; error: PushCredentialError }> {
   const wrapped = encryptCredential(value, env);
   if (!wrapped.ok) return wrapped;
-  store.set(tenantId, key, wrapped.ciphertext);
+  await store.set(tenantId, key, wrapped.ciphertext);
   return { ok: true };
 }

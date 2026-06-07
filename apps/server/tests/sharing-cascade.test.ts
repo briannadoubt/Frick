@@ -119,15 +119,15 @@ describe("FR-70 — assertCanSubscribe cascade (unit)", () => {
   // NOTE: `key` has no default. A defaulted param would replace an
   // explicitly-passed `undefined`, silently turning the whole-projection
   // (no-key) case into a keyed read — callers pass the key explicitly.
-  function attempt(
+  async function attempt(
     userId: string,
     tenant: string,
     kind: "stream" | "projection",
     key: string | undefined,
-  ): "allow" | "deny" {
+  ): Promise<"allow" | "deny"> {
     const principal = principalFromUserId(userId, "r", "d", tenant);
     try {
-      assertCanSubscribe(
+      await assertCanSubscribe(
         principal,
         kind,
         kind === "stream" ? "documentEdits" : "documentSummary",
@@ -145,26 +145,26 @@ describe("FR-70 — assertCanSubscribe cascade (unit)", () => {
 
   for (const kind of ["stream", "projection"] as const) {
     it(`grantee can read the shared object's ${kind}`, async () => {
-      expect(attempt(GRANTEE_ID, TENANT, kind, RECORD_ID)).toBe("allow");
+      expect(await attempt(GRANTEE_ID, TENANT, kind, RECORD_ID)).toBe("allow");
     });
 
     it(`non-grantee in the same tenant cannot read the ${kind}`, async () => {
-      expect(attempt(STRANGER_ID, TENANT, kind, RECORD_ID)).toBe("deny");
+      expect(await attempt(STRANGER_ID, TENANT, kind, RECORD_ID)).toBe("deny");
     });
 
     it(`owner is unaffected for the ${kind}`, async () => {
-      expect(attempt(OWNER_ID, TENANT, kind, RECORD_ID)).toBe("allow");
+      expect(await attempt(OWNER_ID, TENANT, kind, RECORD_ID)).toBe("allow");
     });
 
     it(`cross-tenant grantee cannot read the ${kind}`, async () => {
       // Same userId, different tenant: the cascade lookup is tenant-scoped, so
       // the grant does not apply and the deny stands.
-      expect(attempt(GRANTEE_ID, "tenant-other", kind, RECORD_ID)).toBe("deny");
+      expect(await attempt(GRANTEE_ID, "tenant-other", kind, RECORD_ID)).toBe("deny");
     });
   }
 
   it("cascade does not apply when the row id does not match the grant", async () => {
-    expect(attempt(GRANTEE_ID, TENANT, "stream", "doc-2")).toBe("deny");
+    expect(await attempt(GRANTEE_ID, TENANT, "stream", "doc-2")).toBe("deny");
   });
 
   // NOTE: passing undefined here is intentional and now reaches the cascade as
@@ -173,7 +173,7 @@ describe("FR-70 — assertCanSubscribe cascade (unit)", () => {
   it("whole-projection subscribe (no key) fails closed", async () => {
     // No key -> no resolvable record id -> cascade skipped -> the owner-only
     // deny stands. We deny rather than over-share the entire projection.
-    expect(attempt(GRANTEE_ID, TENANT, "projection", undefined)).toBe("deny");
+    expect(await attempt(GRANTEE_ID, TENANT, "projection", undefined)).toBe("deny");
   });
 });
 

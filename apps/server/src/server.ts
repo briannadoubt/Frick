@@ -4392,7 +4392,7 @@ async function handleAdminRoute(
         privateKeyPem: requireString(body.privateKeyPem, "privateKeyPem"),
         ...(typeof body.useSandbox === "boolean" ? { useSandbox: body.useSandbox } : {}),
       };
-      const result = saveApnsCredentials(store.tenantSettings, tenantId, creds);
+      const result = await saveApnsCredentials(store.tenantSettings, tenantId, creds);
       if (!result.ok) {
         sendPushCredentialError(response, result.error);
         return;
@@ -4425,7 +4425,7 @@ async function handleAdminRoute(
           ? { tokenUri: body.tokenUri }
           : {}),
       };
-      const result = saveFcmCredentials(store.tenantSettings, tenantId, creds);
+      const result = await saveFcmCredentials(store.tenantSettings, tenantId, creds);
       if (!result.ok) {
         sendPushCredentialError(response, result.error);
         return;
@@ -4455,7 +4455,7 @@ async function handleAdminRoute(
         publicKey: requireString(body.publicKey, "publicKey"),
         privateKey: requireString(body.privateKey, "privateKey"),
       };
-      const result = saveWebPushCredentials(store.tenantSettings, tenantId, creds);
+      const result = await saveWebPushCredentials(store.tenantSettings, tenantId, creds);
       if (!result.ok) {
         sendPushCredentialError(response, result.error);
         return;

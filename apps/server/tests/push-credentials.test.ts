@@ -75,7 +75,7 @@ describe("push credentials", () => {
   it("returns missing error when no credential is stored", async () => {
     const env = { FRICK_PUSH_CRED_KEY: freshKey() };
     const store = openStore();
-    const result = loadApnsCredentials(store, "tenant-1", env);
+    const result = await loadApnsCredentials(store, "tenant-1", env);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.code).toBe("push.credentials.missing");
@@ -84,7 +84,7 @@ describe("push credentials", () => {
   it("save/load round-trips APNs credentials per tenant", async () => {
     const env = { FRICK_PUSH_CRED_KEY: freshKey() };
     const store = openStore();
-    const save = saveApnsCredentials(
+    const save = await saveApnsCredentials(
       store,
       "tenant-1",
       {
@@ -96,7 +96,7 @@ describe("push credentials", () => {
       env,
     );
     expect(save.ok).toBe(true);
-    const load = loadApnsCredentials(store, "tenant-1", env);
+    const load = await loadApnsCredentials(store, "tenant-1", env);
     expect(load.ok).toBe(true);
     if (!load.ok) return;
     expect(load.value.keyId).toBe("ABCD123456");
@@ -106,7 +106,7 @@ describe("push credentials", () => {
   it("save/load round-trips FCM credentials per tenant", async () => {
     const env = { FRICK_PUSH_CRED_KEY: freshKey() };
     const store = openStore();
-    const save = saveFcmCredentials(
+    const save = await saveFcmCredentials(
       store,
       "tenant-1",
       {
@@ -117,7 +117,7 @@ describe("push credentials", () => {
       env,
     );
     expect(save.ok).toBe(true);
-    const load = loadFcmCredentials(store, "tenant-1", env);
+    const load = await loadFcmCredentials(store, "tenant-1", env);
     expect(load.ok).toBe(true);
     if (!load.ok) return;
     expect(load.value.projectId).toBe("frick-test");

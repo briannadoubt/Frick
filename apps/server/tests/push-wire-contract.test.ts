@@ -73,7 +73,7 @@ describe("FCM wire contract — matches Kotlin FrickPushPayload.from(notificatio
     const db = new DatabaseSync(":memory:");
     runFrameworkMigrations(db, { supportedSchemaRevision: foundationSchema.schemaRevision });
     const tenantSettings = new TenantSettingsStore(new SqliteSqlDriver(db));
-    saveFcmCredentials(
+    await saveFcmCredentials(
       tenantSettings,
       "tenant-1",
       { projectId: "frick-test", clientEmail: "svc@frick-test.iam.gserviceaccount.com", privateKey },
@@ -171,7 +171,7 @@ describe("APNs wire contract — matches Swift FrickPushPayload.from(userInfo:)"
     const db = new DatabaseSync(":memory:");
     runFrameworkMigrations(db, { supportedSchemaRevision: foundationSchema.schemaRevision });
     const tenantSettings = new TenantSettingsStore(new SqliteSqlDriver(db));
-    saveApnsCredentials(
+    await saveApnsCredentials(
       tenantSettings,
       "tenant-1",
       { teamId: "TEAM12345", keyId: "KEY12345A", privateKeyPem: privateKey, bundleId: "dev.frick.demo" },

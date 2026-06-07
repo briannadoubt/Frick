@@ -89,19 +89,19 @@ describe("deriveSiblingSession", () => {
     store = makeStore();
     seedSession(store, "dead-token", "2000-01-01T00:00:00.000Z");
 
-    expect(() =>
-      await deriveSiblingSession(store!, { fromSessionToken: "nope", tenantId: "tenant-b", ttlSeconds: 60 }),
-    ).toThrow(SourceSessionNotActiveError);
-    expect(() =>
-      await deriveSiblingSession(store!, { fromSessionToken: "dead-token", tenantId: "tenant-b", ttlSeconds: 60 }),
-    ).toThrow(SourceSessionNotActiveError);
+    await expect(
+      deriveSiblingSession(store!, { fromSessionToken: "nope", tenantId: "tenant-b", ttlSeconds: 60 }),
+    ).rejects.toThrow(SourceSessionNotActiveError);
+    await expect(
+      deriveSiblingSession(store!, { fromSessionToken: "dead-token", tenantId: "tenant-b", ttlSeconds: 60 }),
+    ).rejects.toThrow(SourceSessionNotActiveError);
   });
 
   it("rejects a non-positive ttl", async () => {
     store = makeStore();
     seedSession(store, "src-token", FUTURE);
-    expect(() =>
-      await deriveSiblingSession(store!, { fromSessionToken: "src-token", tenantId: "tenant-b", ttlSeconds: 0 }),
-    ).toThrow(RangeError);
+    await expect(
+      deriveSiblingSession(store!, { fromSessionToken: "src-token", tenantId: "tenant-b", ttlSeconds: 0 }),
+    ).rejects.toThrow(RangeError);
   });
 });

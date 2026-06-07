@@ -1127,7 +1127,7 @@ export class SyncGateway {
       }
     }
     try {
-      assertCanSubscribe(
+      await assertCanSubscribe(
         principal,
         payload.kind,
         payload.name,
