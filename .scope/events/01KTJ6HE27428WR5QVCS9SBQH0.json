@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJ6HE27428WR5QVCS9SBQH0",
+  "ts": "2026-06-07T23:26:26.887Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1Q",
+    "commentId": "01KTJ6HE27428WR5QVCS9SBQGZ",
+    "author": "claude",
+    "body": "Shipped pluggable FrickPasswordHasher (Argon2id default, scrypt fallback) with self-describing algorithm-tagged hashes and lazy re-hash of legacy scrypt credentials on successful login; selectable via FRICK_PASSWORD_HASHER/config/StoreOptions."
+  }
+}
