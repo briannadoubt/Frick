@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJ6DYQ9W28XYD75SBQ47FWH",
+  "ts": "2026-06-07T23:24:32.873Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ31",
+    "field": "branch",
+    "value": "feat/fr76-77-diagnostics-cli"
+  },
+  "model": "Claude Opus 4.8 (1M context)"
+}

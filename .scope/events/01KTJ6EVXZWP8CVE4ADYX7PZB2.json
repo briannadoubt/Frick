@@ -1,0 +1,14 @@
+{
+  "v": 1,
+  "id": "01KTJ6EVXZWP8CVE4ADYX7PZB2",
+  "ts": "2026-06-07T23:25:02.783Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ31",
+    "commentId": "01KTJ6EVXY3RVHW2327N1NB9T4",
+    "author": "claude",
+    "body": "Shipped `frick inspect diagnostics` — emits the full FR-76 snapshot from a local DB with no HTTP server, with optional stream:streamId positional args to probe specific cursors. Added to inspect subcommands + --help metadata. CLI consumes assembleDiagnosticsSnapshot from @fricken/server. Tests in apps/cli/tests/cli.test.ts (shape + malformed-probe usage error). Note: `frick doctor` already existed and covers the health/obvious-problem checks (schema/db/migrations/config), so the diagnostics surface focuses on the full structured snapshot. Typecheck clean; server (794) + cli (42) suites green."
+  },
+  "model": "Claude Opus 4.8 (1M context)"
+}

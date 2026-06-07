@@ -1,0 +1,14 @@
+{
+  "v": 1,
+  "id": "01KTJ6EVTE55WF61NGAACHSFCT",
+  "ts": "2026-06-07T23:25:02.670Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ30",
+    "commentId": "01KTJ6EVTE55WF61NGAACHSFCS",
+    "author": "claude",
+    "body": "Shipped the structured diagnostics snapshot data model. New canonical `DiagnosticsSnapshot` type in @fricken/protocol (schema identity + compatibility verdict, subscriptions, cursors, pending appends, recent acks, redacted error envelopes, connection state, cache metadata, sync timing, capabilities/limits) plus redactDiagnosticsContext + DIAGNOSTICS_VERSION. Server-side assembleDiagnosticsSnapshot(store, opts) builds it from a live FrickStore: migration compatibility, idempotency cache metadata, requested stream-cursor probes, and recent error envelopes from the DevTools feed (every envelope redacted of secrets). Gateway-only surfaces passed via runtime. Tests: packages/protocol/tests/diagnostics.test.ts + apps/server/tests/diagnostics-snapshot.test.ts (incl. secret-redaction). Branch feat/fr76-77-diagnostics-cli."
+  },
+  "model": "Claude Opus 4.8 (1M context)"
+}

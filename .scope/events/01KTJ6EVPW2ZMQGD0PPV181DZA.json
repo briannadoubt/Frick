@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJ6EVPW2ZMQGD0PPV181DZA",
+  "ts": "2026-06-07T23:25:02.556Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ31",
+    "field": "status",
+    "value": "done"
+  },
+  "model": "Claude Opus 4.8 (1M context)"
+}
