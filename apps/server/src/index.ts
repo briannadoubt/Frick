@@ -83,6 +83,11 @@ export {
   type ProjectionDeltaNotice,
 } from "./projections/registry.js";
 export {
+  listProjectionObjects,
+  projectionSourceObjectTypes,
+  singleChange,
+} from "./projections/helpers.js";
+export {
   PUSH_REVOCATION_ERROR_CODES,
   isPushRevocationError,
   type FrickNotificationContext,
