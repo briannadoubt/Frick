@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGBG6CZT60KB0EX8PTDR22J",
+  "ts": "2026-06-07T06:14:40.287Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTG6GQX3D64EHBZ8H2S80RC0",
+    "commentId": "01KTGBG6CYD147Z50DFB7S86KR",
+    "author": "claude",
+    "body": "Verified-complete: all four derived surfaces (FrickPolicyHook/FrickPolicyInput, FrickProjection + apply ctx FrickProjectionContext/Handler/WriteEvent + ProjectionApplyResult/ProjectionChange, FrickBlobProcessor, FrickAppRoute) are already exported from @fricken/server's index (authz+blob landed under FR-113). Extended apps/server/tests/index-extension-exports.test.ts to author a projection + app route straight from index types, locking the surface (5 tests green). Zavro can drop its NonNullable<ServerOptions[...]>[number] derivations."
+  }
+}

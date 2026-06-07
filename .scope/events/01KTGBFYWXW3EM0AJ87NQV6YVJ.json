@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTGBFYWXW3EM0AJ87NQV6YVJ",
+  "ts": "2026-06-07T06:14:32.605Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTG6GQX3D64EHBZ8H2S80RC0",
+    "field": "branch",
+    "value": "feat/fr129-lock-extension-author-exports"
+  }
+}
