@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJ6BZNHXRM3FPVK52HBWFZJ",
+  "ts": "2026-06-07T23:23:28.305Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2S",
+    "commentId": "01KTJ6BZNHXRM3FPVK52HBWFZH",
+    "author": "claude",
+    "body": "Shipped: broadened log redaction (body/payload/ciphertext/cookie/signature/digest/passphrase/otp/mnemonic/seed) + exported redactSensitiveFields/isSensitiveFieldName; emit admin-audit hash-chain rows for auth.signup, auth.login (allow+deny), auth.logout, account.export, password_reset.issued/completed with subject-derived actor fingerprint and redacted detail. typecheck green, server vitest 796 passed / 45 skipped."
+  }
+}

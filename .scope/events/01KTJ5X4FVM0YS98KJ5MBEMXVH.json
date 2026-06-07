@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJ5X4FVM0YS98KJ5MBEMXVH",
+  "ts": "2026-06-07T23:15:21.723Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1Q",
+    "field": "branch",
+    "value": "feat/fr35-pluggable-password-hashing"
+  }
+}

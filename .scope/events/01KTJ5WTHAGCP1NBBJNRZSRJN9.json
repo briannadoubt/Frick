@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJ5WTHAGCP1NBBJNRZSRJN9",
+  "ts": "2026-06-07T23:15:11.530Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2S",
+    "field": "branch",
+    "value": "feat/fr69-privacy-safe-logging"
+  }
+}
