@@ -165,7 +165,7 @@ describe("runtime platform event publishers", () => {
     });
     const row = await app.store.jobs.enqueue({ tenantId: "_default", jobType: "ServerJob", payload: {} });
 
-    await waitFor(async () => (app!.store.jobs.getById(row.id)?.status === "completed" ? true : undefined));
+    await waitFor(async () => ((await app!.store.jobs.getById(row.id))?.status === "completed" ? true : undefined));
 
     const delivery = await waitForPlatformEvent(platformEvents, "job.completed");
     expect(delivery.event.payload).toMatchObject({

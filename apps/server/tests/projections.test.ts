@@ -117,7 +117,7 @@ describe("projection registry", () => {
     expect(counter).toBe(3);
     // Simulate drift — the rebuild should restore the truth from raw events.
     counter = 999;
-    const result = projections.rebuildAll({
+    const result = await projections.rebuildAll({
       tenantId: "_default",
       store,
       logger: noopLogger(),

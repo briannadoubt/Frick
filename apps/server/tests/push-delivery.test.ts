@@ -171,7 +171,7 @@ describe("push delivery via admin route + router", () => {
     const s2 = await devLogin(app.httpUrl, "user-ada");
     // Insert a registration directly with a platform that has no adapter.
     // We bypass the HTTP route because it validates the platform value.
-    app.store.pushRegistrations.register({
+    await app.store.pushRegistrations.register({
       tenantId: s2.tenantId,
       userId: s2.userId,
       deviceId: "device-x",
