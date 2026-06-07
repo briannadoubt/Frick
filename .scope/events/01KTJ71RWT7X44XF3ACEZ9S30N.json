@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJ71RWT7X44XF3ACEZ9S30N",
+  "ts": "2026-06-07T23:35:22.266Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3V",
+    "commentId": "01KTJ71RWT7X44XF3ACEZ9S30M",
+    "author": "claude",
+    "body": "Shipped localization hooks: @fricken/protocol ErrorLocalizer + English default message table + localizeErrorCode (code/envelope -> localized string, fallback chain region->base->English->envelope msg->[code], {token} interpolation from details, function messages). @fricken/design-web FrickLabelsProvider/useComponentLabels localize built-in component chrome (workspace inspector Close button) with English defaults + inline override. Wire protocol (error codes) unchanged. New tests in both packages. typecheck exit 0; protocol 93/93, design-web 37/37 green."
+  }
+}
