@@ -16,6 +16,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import { productTestSchema } from "@fricken/protocol";
 import { createFrickServer } from "../src/server.js";
+import { dumpFrickDatabase } from "../src/backup/dump.js";
+import { restoreFrickDatabase } from "../src/backup/restore.js";
 
 const DATABASE_URL = process.env.FRICK_DATABASE_URL;
 const describeOrSkip = DATABASE_URL ? describe : describe.skip;
@@ -116,5 +118,49 @@ describeOrSkip("createFrickServer on Postgres", () => {
   it("exposes the postgres driver dialect on the store", () => {
     // The store the server built is Postgres-backed.
     expect(server!.store.searchAdapter.id).toBe("postgres-tsvector");
+  });
+
+  it("round-trips an NDJSON backup → restore on Postgres (FR-25)", async () => {
+    const store = server!.store;
+    await store.upsertObject("_default", "Conversation", "backup-me", {
+      kind: "group",
+      title: "Backup room",
+      createdBy: "user-ada",
+    });
+
+    // Dump the whole database to NDJSON lines.
+    const lines: string[] = [];
+    for await (const line of dumpFrickDatabase(store)) lines.push(line);
+    expect(lines.length).toBeGreaterThan(1); // header + at least the object row
+    expect(lines.some((l) => l.includes("backup-me"))).toBe(true);
+
+    // Mutate after the dump so we can prove the restore reverts it.
+    await store.upsertObject("_default", "Conversation", "backup-me", {
+      kind: "group",
+      title: "Mutated after dump",
+      createdBy: "user-ada",
+    });
+    await store.upsertObject("_default", "Conversation", "added-after-dump", {
+      kind: "group",
+      title: "Should be gone after restore",
+      createdBy: "user-ada",
+    });
+
+    // Restore the dump with overwrite (truncate + reinsert).
+    async function* source() {
+      for (const l of lines) yield `${l}\n`;
+    }
+    const report = await restoreFrickDatabase({
+      target: store,
+      source: source(),
+      confirm: "yes",
+      overwrite: true,
+    });
+    expect(report.skipped).toEqual([]);
+
+    // The dumped value is back; the post-dump mutation/addition are gone.
+    const restored = await store.readObject("_default", "Conversation", "backup-me");
+    expect((restored as { title?: string } | undefined)?.title).toBe("Backup room");
+    expect(await store.readObject("_default", "Conversation", "added-after-dump")).toBeUndefined();
   });
 });

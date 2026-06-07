@@ -43,11 +43,11 @@ function inspectServer(parsed: ParsedArgs, out: OutputOptions): number {
   }
 }
 
-function inspectDb(parsed: ParsedArgs, out: OutputOptions): number {
+async function inspectDb(parsed: ParsedArgs, out: OutputOptions): Promise<number> {
   const config = loadConfig(contextFlagsFrom(parsed.flags));
   const store = openStore(config);
   try {
-    const applied = store.listAppliedMigrations();
+    const applied = await store.listAppliedMigrations();
     const last = applied[applied.length - 1];
     emit(
       {

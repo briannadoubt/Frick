@@ -927,7 +927,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     }
 
     if (request.method === "GET" && url.pathname === "/ready") {
-      const applied = safeListAppliedMigrations(store);
+      const applied = await safeListAppliedMigrations(store);
       const dbReady = store.pingDatabase();
       const migrationsReady = applied !== undefined;
       if (!dbReady || !migrationsReady) {
@@ -984,7 +984,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         return;
       }
       if (sub === "migrations") {
-        const applied = safeListAppliedMigrations(store) ?? [];
+        const applied = (await safeListAppliedMigrations(store)) ?? [];
         sendJson(response, 200, {
           applied: applied.map((row) => ({
             id: row.id,
@@ -1041,7 +1041,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         return;
       }
       if (sub === "db") {
-        const applied = safeListAppliedMigrations(store) ?? [];
+        const applied = (await safeListAppliedMigrations(store)) ?? [];
         const last = applied[applied.length - 1];
         sendJson(response, 200, {
           ready: store.pingDatabase(),
@@ -2573,9 +2573,9 @@ export function createFrickServer(options: ServerOptions = {}) {
   };
 }
 
-function safeListAppliedMigrations(store: FrickStore) {
+async function safeListAppliedMigrations(store: FrickStore) {
   try {
-    return store.listAppliedMigrations();
+    return await store.listAppliedMigrations();
   } catch {
     return undefined;
   }

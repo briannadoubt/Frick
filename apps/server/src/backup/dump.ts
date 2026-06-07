@@ -17,7 +17,7 @@
  * and the migration ledger.
  */
 
-import type { DatabaseSync } from "node:sqlite";
+import type { SqlDriver } from "../storage/sql-driver.js";
 import type { FrickStore } from "../store.js";
 
 export interface FrickDumpOptions {
@@ -123,7 +123,7 @@ export async function* dumpFrickDatabase(
   const wholeDb = tenantScope === "all";
   const includeAdmin = options.includeAdminAudit ?? wholeDb;
   const includeMigrations = options.includeMigrations ?? wholeDb;
-  const db = store.rawDatabase();
+  const sql = store.sqlDriver;
 
   const header: FrickDumpHeader = {
     frickFormat: 1,
@@ -132,7 +132,7 @@ export async function* dumpFrickDatabase(
     schemaVersion: store.schema.schemaVersion,
     schemaRevision: store.schema.schemaRevision,
     schemaHash: store.schema.hash,
-    appliedMigrations: store.listAppliedMigrations().map((row) => row.id),
+    appliedMigrations: (await store.listAppliedMigrations()).map((row) => row.id),
     tenantId: tenantScope,
   };
   yield JSON.stringify({ type: "header", row: header });
@@ -147,10 +147,10 @@ export async function* dumpFrickDatabase(
       continue;
     }
 
-    if (!tableExists(db, table.name)) continue;
+    if (!(await tableExists(sql, table.name))) continue;
 
-    const { sql, params } = buildSelect(table, wholeDb, tenantScope);
-    const rows = db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
+    const { sql: sqlText, params } = buildSelect(table, wholeDb, tenantScope);
+    const rows = await sql.all<Record<string, unknown>>(sqlText, params);
 
     for (const row of rows) {
       yield JSON.stringify({ type: table.name, row: encodeRow(row) });
@@ -190,11 +190,14 @@ function buildSelect(
   return { sql: `SELECT * FROM ${table.name} ORDER BY ${table.orderBy}`, params: [] };
 }
 
-function tableExists(db: DatabaseSync, name: string): boolean {
-  const row = db
-    .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(name) as { ok?: number } | undefined;
-  return row?.ok === 1;
+async function tableExists(sql: SqlDriver, name: string): Promise<boolean> {
+  // SQLite catalogs tables in sqlite_master; Postgres in information_schema.
+  const query =
+    sql.dialect === "postgres"
+      ? "SELECT 1 AS ok FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = ?"
+      : "SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?";
+  const row = await sql.get<{ ok?: number }>(query, [name]);
+  return Number(row?.ok ?? 0) === 1;
 }
 
 /**

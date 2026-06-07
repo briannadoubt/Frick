@@ -41,7 +41,7 @@ import {
   type StoredEvent,
 } from "./storage/stream-store.js";
 import { BoundedIdempotencyCache } from "./storage/idempotency-cache.js";
-import { listAppliedMigrations, type AppliedMigrationRow } from "./storage/migrations.js";
+import type { AppliedMigrationRow } from "./storage/migrations.js";
 import { createNoopLogger, type FrickLogger } from "./logger.js";
 import {
   createFrickProjectionRegistry,
@@ -742,9 +742,39 @@ export class FrickStore {
     }
   }
 
-  /** List applied migrations recorded in the `frick_migrations` ledger. */
-  listAppliedMigrations(): AppliedMigrationRow[] {
-    return listAppliedMigrations(this.db);
+  /**
+   * List applied migrations recorded in the `frick_migrations` ledger. Reads
+   * through the {@link SqlDriver} so it works on SQLite and Postgres alike.
+   */
+  async listAppliedMigrations(): Promise<AppliedMigrationRow[]> {
+    const rows = await this.#sqlDriver.all<{
+      id: string;
+      schema_revision: number;
+      applied_at: string;
+      checksum: string;
+      duration_ms: number;
+    }>(
+      `SELECT id, schema_revision, applied_at, checksum, duration_ms
+          FROM frick_migrations
+          ORDER BY schema_revision ASC, id ASC`,
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      schemaRevision: Number(row.schema_revision),
+      appliedAt: row.applied_at,
+      checksum: row.checksum,
+      durationMs: Number(row.duration_ms),
+    }));
+  }
+
+  /**
+   * Internal escape hatch for the backup/restore subsystem: the {@link
+   * SqlDriver} the store reads/writes through. Backup needs to stream every row
+   * of every framework table (and restore needs to insert directly) on both
+   * SQLite and Postgres. NOT part of the public store API.
+   */
+  get sqlDriver(): SqlDriver {
+    return this.#sqlDriver;
   }
 
   /**
