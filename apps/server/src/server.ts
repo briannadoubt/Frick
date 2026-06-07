@@ -1168,6 +1168,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           adminTokenFingerprint,
           logger,
           notificationRouter,
+          gateway,
         );
       } catch (error) {
         sendErrorWithMetrics(response, error, "admin_rejected");
@@ -3476,6 +3477,7 @@ async function handleAdminRoute(
   adminTokenFingerprint: string,
   logger: FrickLogger,
   notificationRouter: NotificationRouter,
+  gateway: SyncGateway,
 ): Promise<void> {
   const sub = url.pathname.slice("/_frick/admin/".length);
 
@@ -3532,6 +3534,70 @@ async function handleAdminRoute(
     }
     const entries = store.adminAudit.list(options);
     sendJson(response, 200, { entries });
+    return;
+  }
+
+  if (request.method === "POST" && sub === "sessions/revoke") {
+    // Proactive session revocation so operators stop deleting `auth_sessions`
+    // rows by hand (threat-model.md). Revoke by `userId` (every session for
+    // that user, optionally scoped to one `tenantId`) or by a single
+    // `sessionToken`. Deleting the row blocks future requests; the live
+    // disconnect drops any currently-connected WebSocket so a revoked client
+    // can't keep streaming on an already-open socket. (FR-34)
+    const body = await readJsonBody(request, maxBodyBytes);
+    const userId = typeof body.userId === "string" && body.userId.length > 0 ? body.userId : undefined;
+    const sessionToken =
+      typeof body.sessionToken === "string" && body.sessionToken.length > 0 ? body.sessionToken : undefined;
+    const tenantId =
+      typeof body.tenantId === "string" && body.tenantId.length > 0 ? body.tenantId : undefined;
+
+    if (!userId && !sessionToken) {
+      strictAudit({ action: "sessions.revoke", outcome: "deny", detail: { reason: "missingTarget" } });
+      const envelope = createFrickErrorEnvelope({
+        code: "sync.protocolError",
+        message: "Provide a userId or a sessionToken to revoke",
+        requestId: "admin_session_revoke_invalid",
+        retryable: false,
+        details: { reason: "missingTarget" },
+        schemaHash: foundationSchema.hash,
+        schemaRevision: foundationSchema.schemaRevision,
+      });
+      sendJson(response, 400, {
+        error: envelope,
+        code: envelope.code,
+        message: envelope.message,
+        requestId: envelope.requestId,
+        retryable: envelope.retryable,
+      });
+      return;
+    }
+
+    let revoked = 0;
+    let disconnected = 0;
+    if (userId) {
+      revoked += store.deleteSessionsForUser(userId, tenantId);
+      disconnected += gateway.closeSessionsForUser(userId, tenantId);
+    }
+    if (sessionToken) {
+      if (store.deleteSession(sessionToken)) {
+        revoked += 1;
+      }
+      gateway.closeSession(sessionToken);
+    }
+
+    strictAudit({
+      action: "sessions.revoke",
+      ...(userId !== undefined ? { target: userId } : {}),
+      outcome: "allow",
+      detail: {
+        ...(userId !== undefined ? { userId } : {}),
+        ...(tenantId !== undefined ? { tenantId } : {}),
+        ...(sessionToken !== undefined ? { byToken: true } : {}),
+        revoked,
+        disconnected,
+      },
+    });
+    sendJson(response, 200, { revoked, disconnected });
     return;
   }
 

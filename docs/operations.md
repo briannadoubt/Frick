@@ -991,6 +991,16 @@ When `adminEnabled` is on:
   the dump and returns a `FrickRestoreReport` JSON. Refused in
   production mode with `auth.forbidden` and
   `details.reason: "restoreNotAllowedInProduction"`.
+- `POST /_frick/admin/sessions/revoke` proactively revokes sessions so
+  operators no longer delete `auth_sessions` rows by hand. Body is either
+  `{ "userId": "...", "tenantId"?: "..." }` (every session for that user,
+  optionally scoped to one tenant) or `{ "sessionToken": "..." }` (a single
+  session). It deletes the matching rows — blocking future requests — and
+  live-disconnects any currently-connected WebSocket for those sessions with
+  close code `1008` so a revoked client can't keep streaming on an
+  already-open socket. Returns `{ "revoked": <rows>, "disconnected": <conns> }`.
+  A request naming neither target returns `400 sync.protocolError`. Audit-logged
+  as `sessions.revoke`.
 
 Both routes audit-log under `backup.dump` and `backup.restore`. These
 backup and restore audit writes are fail-closed: if the audit row cannot be

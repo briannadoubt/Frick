@@ -311,6 +311,39 @@ export class SyncGateway {
     this.#clientsBySessionToken.delete(sessionToken);
   }
 
+  /**
+   * Live-disconnect every connected client belonging to `userId` — the
+   * companion to {@link closeSession} for admin revocation that operates on a
+   * user rather than a single token (the admin never sees the raw tokens).
+   * Optionally scoped to one tenant so a multi-tenant user keeps sessions in
+   * other tenants. Returns the number of connections actually closed.
+   */
+  closeSessionsForUser(userId: string, tenantId?: string): number {
+    let closed = 0;
+    for (const [token, clients] of [...this.#clientsBySessionToken.entries()]) {
+      for (const client of [...clients]) {
+        const principal = client.principal;
+        if (!principal || principal.userId !== userId) {
+          continue;
+        }
+        if (tenantId !== undefined && principal.tenantId !== tenantId) {
+          continue;
+        }
+        try {
+          client.socket.close(1008, "Session revoked");
+        } catch {
+          client.socket.terminate();
+        }
+        clients.delete(client);
+        closed += 1;
+      }
+      if (clients.size === 0) {
+        this.#clientsBySessionToken.delete(token);
+      }
+    }
+    return closed;
+  }
+
   #startWebSocketTelemetryConnection(
     devtoolsCtx: DevToolsConnectionContext,
     principal: Principal | undefined,
