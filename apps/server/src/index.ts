@@ -260,6 +260,14 @@ export {
   type FrameworkMigration,
 } from "./storage/migrations.js";
 export { FrickResetRefusedError, resetFrickDatabase } from "./storage/reset.js";
+// Structured diagnostics snapshot assembler (FR-76): turn a live store into the
+// shared `DiagnosticsSnapshot` shape consumed by `frick inspect diagnostics`.
+export {
+  assembleDiagnosticsSnapshot,
+  type AssembleDiagnosticsOptions,
+  type DiagnosticsCursorProbe,
+  type DiagnosticsRuntime,
+} from "./diagnostics.js";
 export {
   TenantAlreadyExistsError,
   TenantStore,

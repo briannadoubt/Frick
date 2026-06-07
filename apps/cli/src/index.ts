@@ -23,7 +23,11 @@ const COMMANDS: readonly CommandSpec[] = [
   { name: "lint", summary: "Lint the current schema or compare it to a previous snapshot" },
   { name: "migrate", summary: "Manage framework migrations", subcommands: ["status", "up"] },
   { name: "doctor", summary: "Composite health check (schema, db, migrations, config)" },
-  { name: "inspect", summary: "Inspect runtime state from the local DB", subcommands: ["server", "db", "jobs"] },
+  {
+    name: "inspect",
+    summary: "Inspect runtime state from the local DB",
+    subcommands: ["server", "db", "jobs", "diagnostics"],
+  },
   { name: "reset", summary: "Drop framework tables (development only, requires --dev)" },
   { name: "tenants", summary: "Manage the tenants ledger", subcommands: ["list", "create", "set-push"] },
   { name: "verify", summary: "Run `pnpm verify:generated` end-to-end" },

@@ -8,6 +8,7 @@ export { generateTypeScriptBindings } from "./generators/typescript.js";
 export * from "./capabilities.js";
 export * from "./codec.js";
 export * from "./compatibility.js";
+export * from "./diagnostics.js";
 export * from "./errors.js";
 export * from "./fixtures.js";
 export * from "./frame.js";

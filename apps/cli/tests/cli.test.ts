@@ -670,6 +670,46 @@ describe("frick inspect", () => {
     const body = parseLastJson(result.stdout) as { available: boolean };
     expect(typeof body.available).toBe("boolean");
   });
+
+  it("diagnostics emits the structured snapshot model", async () => {
+    await runCli(["migrate", "up", "--db-path", dbPath, "--env", "development"]);
+    const result = await runCli(["inspect", "diagnostics", "--db-path", dbPath, "--env", "development"]);
+    expect(result.exitCode).toBe(0);
+    const body = parseLastJson(result.stdout) as {
+      diagnosticsVersion: number;
+      source: string;
+      env: string;
+      schema: { schemaId: string; schemaRevision: number; schemaHash: string };
+      compatibility: { matched: boolean; expectedRevision: number };
+      caches: Array<{ name: string }>;
+      recentErrors: unknown[];
+      syncTiming: { snapshotAt: string };
+    };
+    expect(body.diagnosticsVersion).toBe(1);
+    expect(body.source).toBe("cli");
+    expect(body.env).toBe("development");
+    expect(typeof body.schema.schemaId).toBe("string");
+    expect(typeof body.compatibility.matched).toBe("boolean");
+    // A freshly-migrated DB is at the instance's own revision.
+    expect(body.compatibility.matched).toBe(true);
+    expect(body.caches.some((c) => c.name === "idempotency")).toBe(true);
+    expect(Array.isArray(body.recentErrors)).toBe(true);
+    expect(typeof body.syncTiming.snapshotAt).toBe("string");
+  });
+
+  it("diagnostics rejects a malformed cursor probe", async () => {
+    await runCli(["migrate", "up", "--db-path", dbPath, "--env", "development"]);
+    const result = await runCli([
+      "inspect",
+      "diagnostics",
+      "not-a-valid-probe",
+      "--db-path",
+      dbPath,
+      "--env",
+      "development",
+    ]);
+    expect(result.exitCode).toBe(2);
+  });
 });
 
 describe("frick backup / restore", () => {
