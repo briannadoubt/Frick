@@ -53,10 +53,10 @@ describe("FR-116 per-record object subscription authz", () => {
 
     // Seed three tenant rows before the viewer subscribes.
     for (const id of ["doc-1", "doc-2", "doc-3"]) {
-      seed(ctx, viewer.tenantId, id);
+      await seed(ctx, viewer.tenantId, id);
     }
     // Grant the viewer read on exactly one of them.
-    grant(ctx, viewer.tenantId, "writer", "viewer", "doc-2");
+    await grant(ctx, viewer.tenantId, "writer", "viewer", "doc-2");
 
     const socket = await connectAndHello(ctx.wsUrl, viewer.sessionToken);
     const snapshots = collect(socket, FrameKind.Snapshot);
@@ -72,7 +72,7 @@ describe("FR-116 per-record object subscription authz", () => {
     const viewer = await devLogin(ctx.httpUrl, { userId: "viewer" });
 
     // Pre-grant the row the viewer is allowed to see once written.
-    grant(ctx, viewer.tenantId, "writer", "viewer", "granted");
+    await grant(ctx, viewer.tenantId, "writer", "viewer", "granted");
 
     const socket = await connectAndHello(ctx.wsUrl, viewer.sessionToken);
     const snapshots = collect(socket, FrameKind.Snapshot);
@@ -82,9 +82,9 @@ describe("FR-116 per-record object subscription authz", () => {
     expect(snapshot.objects).toEqual([]);
 
     // Write a NON-granted record first: it must never reach the viewer.
-    seed(ctx, viewer.tenantId, "secret");
+    await seed(ctx, viewer.tenantId, "secret");
     // Then write the GRANTED record: only this one should arrive.
-    seed(ctx, viewer.tenantId, "granted");
+    await seed(ctx, viewer.tenantId, "granted");
 
     const delta = await deltas.next();
     expect(idsOf(delta.objects)).toEqual(["granted"]);
@@ -101,9 +101,9 @@ describe("FR-116 per-record object subscription authz", () => {
     const writer = await devLogin(ctx.httpUrl, { userId: "writer" });
 
     for (const id of ["doc-1", "doc-2", "doc-3"]) {
-      seed(ctx, writer.tenantId, id);
+      await seed(ctx, writer.tenantId, id);
     }
-    grant(ctx, writer.tenantId, "writer", "viewer", "doc-2");
+    await grant(ctx, writer.tenantId, "writer", "viewer", "doc-2");
 
     const socket = await connectAndHello(ctx.wsUrl, writer.sessionToken);
     const snapshots = collect(socket, FrameKind.Snapshot);
@@ -114,7 +114,7 @@ describe("FR-116 per-record object subscription authz", () => {
     expect(idsOf(snapshot.objects).sort()).toEqual(["doc-1", "doc-2", "doc-3"]);
 
     // A live write also reaches the un-denied subscriber.
-    seed(ctx, writer.tenantId, "doc-4");
+    await seed(ctx, writer.tenantId, "doc-4");
     const delta = await deltas.next();
     expect(idsOf(delta.objects)).toEqual(["doc-4"]);
     socket.close();
@@ -124,7 +124,7 @@ describe("FR-116 per-record object subscription authz", () => {
     const ctx = await startServer();
     const sub = await devLogin(ctx.httpUrl, { userId: "anyone" });
 
-    seed(ctx, sub.tenantId, "doc-1");
+    await seed(ctx, sub.tenantId, "doc-1");
 
     const socket = await connectAndHello(ctx.wsUrl, sub.sessionToken);
     const snapshots = collect(socket, FrameKind.Snapshot);
@@ -134,7 +134,7 @@ describe("FR-116 per-record object subscription authz", () => {
     const snapshot = await snapshots.next();
     expect(idsOf(snapshot.objects)).toEqual(["doc-1"]);
 
-    seed(ctx, sub.tenantId, "doc-2");
+    await seed(ctx, sub.tenantId, "doc-2");
     const delta = await deltas.next();
     expect(idsOf(delta.objects)).toEqual(["doc-2"]);
     socket.close();
@@ -146,7 +146,7 @@ describe("FR-116 per-record object subscription authz", () => {
 
     // A grant in tenant-a turns on per-record authz; the cross-tenant write
     // below must still be invisible regardless.
-    grant(ctx, "tenant-a", "writer", "viewer", "doc-a");
+    await grant(ctx, "tenant-a", "writer", "viewer", "doc-a");
 
     const socket = await connectAndHello(ctx.wsUrl, a.sessionToken);
     const snapshots = collect(socket, FrameKind.Snapshot);
@@ -154,7 +154,7 @@ describe("FR-116 per-record object subscription authz", () => {
     subscribe(socket);
     await snapshots.next();
 
-    seed(ctx, "tenant-b", "doc-x");
+    await seed(ctx, "tenant-b", "doc-x");
     expect(await deltas.maybeNext(150)).toBeUndefined();
     socket.close();
   });
@@ -203,8 +203,8 @@ async function devLogin(
 
 // Write directly through the store so the FR-114 store-write listener fans the
 // upsert out to gateway subscribers exactly as a client/HTTP write would.
-function seed(ctx: ServerCtx, tenantId: string, id: string): void {
-  ctx.store.upsertObjectWithPolicy({
+async function seed(ctx: ServerCtx, tenantId: string, id: string): Promise<void> {
+  await ctx.store.upsertObjectWithPolicy({
     tenantId,
     type: TYPE,
     id,
@@ -212,14 +212,14 @@ function seed(ctx: ServerCtx, tenantId: string, id: string): void {
   });
 }
 
-function grant(
+async function grant(
   ctx: ServerCtx,
   tenantId: string,
   ownerUserId: string,
   granteeUserId: string,
   recordId: string,
-): void {
-  ctx.store.grants.create({
+): Promise<void> {
+  await ctx.store.grants.create({
     id: randomUUID(),
     tenantId,
     ownerUserId,

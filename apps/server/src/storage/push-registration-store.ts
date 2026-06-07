@@ -15,7 +15,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { SqlDriver } from "./sql-driver.js";
 
 export type PushPlatform = "apns" | "fcm" | "webPush" | "test";
 export type PushEnvironment = "production" | "sandbox";
@@ -58,7 +58,7 @@ export function isPushPlatform(value: string): value is PushPlatform {
 }
 
 export class PushRegistrationStore {
-  constructor(private readonly db: DatabaseSync) {}
+  constructor(private readonly sql: SqlDriver) {}
 
   /**
    * Register a device, reactivating-or-refreshing semantics:
@@ -75,8 +75,8 @@ export class PushRegistrationStore {
    * the original revocation timestamp. Keeping tombstones intact preserves
    * audit history at the cost of one extra row per re-registration cycle.
    */
-  register(input: PushRegistrationInput): PushDeviceRegistration {
-    const existing = this.findActive(
+  async register(input: PushRegistrationInput): Promise<PushDeviceRegistration> {
+    const existing = await this.findActive(
       input.tenantId,
       input.userId,
       input.deviceId,
@@ -84,25 +84,22 @@ export class PushRegistrationStore {
     );
     const now = new Date().toISOString();
     if (existing) {
-      this.db
-        .prepare(
-          `UPDATE push_device_registrations
+      await this.sql.run(
+        `UPDATE push_device_registrations
              SET token = ?, environment = ?, last_seen_at = ?
              WHERE registration_id = ?`,
-        )
-        .run(input.token, input.environment, now, existing.registrationId);
+        [input.token, input.environment, now, existing.registrationId],
+      );
       return { ...existing, token: input.token, environment: input.environment, lastSeenAt: now };
     }
 
     const registrationId = `push-${randomUUID()}`;
-    this.db
-      .prepare(
-        `INSERT INTO push_device_registrations
+    await this.sql.run(
+      `INSERT INTO push_device_registrations
             (registration_id, tenant_id, user_id, device_id, platform, token,
              environment, created_at, last_seen_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
+      [
         registrationId,
         input.tenantId,
         input.userId,
@@ -112,7 +109,8 @@ export class PushRegistrationStore {
         input.environment,
         now,
         now,
-      );
+      ],
+    );
     return {
       registrationId,
       tenantId: input.tenantId,
@@ -135,68 +133,66 @@ export class PushRegistrationStore {
    * this call (i.e. it was active before). Returns `false` when no such row
    * existed or it was already revoked.
    */
-  revoke(registrationId: string, tenantId: string): boolean {
+  async revoke(registrationId: string, tenantId: string): Promise<boolean> {
     const now = new Date().toISOString();
-    const result = this.db
-      .prepare(
-        `UPDATE push_device_registrations
+    const result = await this.sql.run(
+      `UPDATE push_device_registrations
             SET revoked_at = ?
             WHERE registration_id = ? AND tenant_id = ? AND revoked_at IS NULL`,
-      )
-      .run(now, registrationId, tenantId);
+      [now, registrationId, tenantId],
+    );
     return Number(result.changes ?? 0) > 0;
   }
 
   /** Look up by id, scoped to a tenant. Returns `undefined` if absent. */
-  getById(registrationId: string, tenantId: string): PushDeviceRegistration | undefined {
-    const row = this.db
-      .prepare(
-        `SELECT * FROM push_device_registrations
+  async getById(
+    registrationId: string,
+    tenantId: string,
+  ): Promise<PushDeviceRegistration | undefined> {
+    const row = await this.sql.get<RawRow>(
+      `SELECT * FROM push_device_registrations
           WHERE registration_id = ? AND tenant_id = ?
           LIMIT 1`,
-      )
-      .get(registrationId, tenantId) as RawRow | undefined;
+      [registrationId, tenantId],
+    );
     return row ? mapRow(row) : undefined;
   }
 
   /** Active rows for a user, ordered by creation. */
-  listByUser(tenantId: string, userId: string): PushDeviceRegistration[] {
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM push_device_registrations
+  async listByUser(tenantId: string, userId: string): Promise<PushDeviceRegistration[]> {
+    const rows = await this.sql.all<RawRow>(
+      `SELECT * FROM push_device_registrations
           WHERE tenant_id = ? AND user_id = ? AND revoked_at IS NULL
           ORDER BY created_at ASC`,
-      )
-      .all(tenantId, userId) as unknown as RawRow[];
+      [tenantId, userId],
+    );
     return rows.map(mapRow);
   }
 
   /** Bump `last_seen_at` on a row — used after a successful delivery. */
-  touch(registrationId: string, tenantId: string): void {
+  async touch(registrationId: string, tenantId: string): Promise<void> {
     const now = new Date().toISOString();
-    this.db
-      .prepare(
-        `UPDATE push_device_registrations
+    await this.sql.run(
+      `UPDATE push_device_registrations
             SET last_seen_at = ?
             WHERE registration_id = ? AND tenant_id = ?`,
-      )
-      .run(now, registrationId, tenantId);
+      [now, registrationId, tenantId],
+    );
   }
 
-  private findActive(
+  private async findActive(
     tenantId: string,
     userId: string,
     deviceId: string,
     platform: PushPlatform,
-  ): PushDeviceRegistration | undefined {
-    const row = this.db
-      .prepare(
-        `SELECT * FROM push_device_registrations
+  ): Promise<PushDeviceRegistration | undefined> {
+    const row = await this.sql.get<RawRow>(
+      `SELECT * FROM push_device_registrations
           WHERE tenant_id = ? AND user_id = ? AND device_id = ? AND platform = ?
             AND revoked_at IS NULL
           LIMIT 1`,
-      )
-      .get(tenantId, userId, deviceId, platform) as RawRow | undefined;
+      [tenantId, userId, deviceId, platform],
+    );
     return row ? mapRow(row) : undefined;
   }
 }

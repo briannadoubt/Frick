@@ -950,7 +950,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     }
 
     if (config.inspectionEnabled && request.method === "GET" && url.pathname.startsWith("/_frick/inspect/")) {
-      const inspectionPrincipal = inspectionPrincipalFromRequest(request, url, store, config);
+      const inspectionPrincipal = await inspectionPrincipalFromRequest(request, url, store, config);
       if (inspectionPrincipal instanceof Error) {
         sendErrorWithMetrics(response, inspectionPrincipal, "inspect_unauthorized");
         return;
@@ -1141,7 +1141,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           sendErrorWithMetrics(response, new AuthenticationError("Missing admin token"), "admin_unauthorized");
           return;
         }
-        const session = store.readActiveSession(token);
+        const session = await store.readActiveSession(token);
         if (session) {
           sendErrorWithMetrics(
             response,
@@ -1188,7 +1188,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         const handle = normalizeHandle(requireString(body.handle, "handle"));
         const password = normalizePassword(requireString(body.password, "password"));
         const tenantId = resolveAuthTenantId(body.tenantId);
-        ensureTenantAllowed(store, config, tenantId);
+        await ensureTenantAllowed(store, config, tenantId);
         authAttemptLimiter.check({
           route: "/auth/signup",
           tenantId,
@@ -1199,14 +1199,14 @@ export function createFrickServer(options: ServerOptions = {}) {
         const platform = parsePlatform(typeof body.platform === "string" ? body.platform : "web");
         const deviceId = typeof body.deviceId === "string" && body.deviceId.length > 0 ? body.deviceId : `device-${randomToken(12)}`;
         const replicaId = typeof body.replicaId === "string" && body.replicaId.length > 0 ? body.replicaId : `replica-${randomToken(12)}`;
-        const account = store.createAccountUser({
+        const account = await store.createAccountUser({
           userId: userIdFromHandle(tenantId, handle),
           handle,
           displayName,
           password,
           tenantId,
         });
-        const session = createSessionForUser(store, account.userId, deviceId, replicaId, platform, config, tenantId);
+        const session = await createSessionForUser(store, account.userId, deviceId, replicaId, platform, config, tenantId);
 
         sendAuthJson(response, 201, authSessionResponse(store, session, account));
       } catch (error) {
@@ -1221,7 +1221,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         const identity = requireString(body.identity, "identity").trim();
         const password = requireString(body.password, "password");
         const tenantId = resolveAuthTenantId(body.tenantId);
-        ensureTenantAllowed(store, config, tenantId);
+        await ensureTenantAllowed(store, config, tenantId);
         authAttemptLimiter.check({
           route: "/auth/login",
           tenantId,
@@ -1229,14 +1229,14 @@ export function createFrickServer(options: ServerOptions = {}) {
           clientIp: clientIpFromRequest(request),
           limits,
         });
-        const account = store.verifyAccountPassword(tenantId, identity, password);
+        const account = await store.verifyAccountPassword(tenantId, identity, password);
         if (!account) {
           throw new AuthenticationError("Invalid handle or password");
         }
         const platform = parsePlatform(typeof body.platform === "string" ? body.platform : "web");
         const deviceId = typeof body.deviceId === "string" && body.deviceId.length > 0 ? body.deviceId : `device-${randomToken(12)}`;
         const replicaId = typeof body.replicaId === "string" && body.replicaId.length > 0 ? body.replicaId : `replica-${randomToken(12)}`;
-        const session = createSessionForUser(store, account.userId, deviceId, replicaId, platform, config, tenantId);
+        const session = await createSessionForUser(store, account.userId, deviceId, replicaId, platform, config, tenantId);
 
         sendAuthJson(response, 200, authSessionResponse(store, session, account));
       } catch (error) {
@@ -1262,7 +1262,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         const body = await readJsonBody(request, limits.maxHttpBodyBytes);
         const userId = requireString(body.userId, "userId");
         const tenantId = resolveAuthTenantId(body.tenantId);
-        ensureTenantAllowed(store, config, tenantId);
+        await ensureTenantAllowed(store, config, tenantId);
         authAttemptLimiter.check({
           route: "/auth/dev-login",
           tenantId,
@@ -1287,7 +1287,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         const platform = parsePlatform(typeof body.platform === "string" ? body.platform : "web");
         const deviceId = typeof body.deviceId === "string" && body.deviceId.length > 0 ? body.deviceId : `device-${randomToken(12)}`;
         const replicaId = typeof body.replicaId === "string" && body.replicaId.length > 0 ? body.replicaId : `replica-${randomToken(12)}`;
-        const session = createSessionForUser(store, userId, deviceId, replicaId, platform, config, tenantId);
+        const session = await createSessionForUser(store, userId, deviceId, replicaId, platform, config, tenantId);
 
         sendAuthJson(response, 200, {
           schemaHash: store.schema.hash,
@@ -1310,11 +1310,11 @@ export function createFrickServer(options: ServerOptions = {}) {
         if (!token) {
           throw new AuthenticationError("Missing session token");
         }
-        const principal = principalFromActiveSessionToken(store, token);
+        const principal = await principalFromActiveSessionToken(store, token);
         if (principal instanceof Error) {
           throw principal;
         }
-        store.deleteSession(token);
+        await store.deleteSession(token);
         gateway.closeSession(token);
         sendAuthJson(response, 200, { ok: true });
       } catch (error) {
@@ -1323,7 +1323,7 @@ export function createFrickServer(options: ServerOptions = {}) {
       return;
     }
 
-    const principal = protectedHttpPrincipal(request, url, store, config);
+    const principal = await protectedHttpPrincipal(request, url, store, config);
     if (principal instanceof Error) {
       sendErrorWithMetrics(response, principal, "unauthorized");
       return;
@@ -1333,7 +1333,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     // is read in a single point query so this is cheap relative to the rest
     // of the handler. Shadowing the outer `limits` keeps the existing
     // `limits.maxXxx` call sites untouched.
-    const tenantLimits = resolveTenantLimits(principal.tenantId, store, limits);
+    const tenantLimits = await resolveTenantLimits(principal.tenantId, store, limits);
 
     if (request.method === "POST" && url.pathname === "/analytics/events") {
       try {
@@ -1379,7 +1379,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         // app hook layers product-specific data on top (and is responsible
         // for its own tenant/owner scoping). Never returns another
         // principal's or another tenant's data.
-        const base = buildAccountExportBase(store, principal);
+        const base = await buildAccountExportBase(store, principal);
         const bundle: AccountExport = { ...base };
         if (options.onAccountExport) {
           const appExtra = await options.onAccountExport(principal, base);
@@ -1407,7 +1407,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         // tenant's data. `principal` was resolved before the deletion, so
         // concurrent in-flight requests that already resolved their own
         // principal are unaffected.
-        const result = deleteAccountData(store, principal);
+        const result = await deleteAccountData(store, principal);
         // App-specific cascade runs after the framework default has committed,
         // so the hook can read the returned counts and the framework's data is
         // already gone. The hook owns its own tenant/owner scoping.
@@ -1465,7 +1465,7 @@ export function createFrickServer(options: ServerOptions = {}) {
       sendJson(response, 200, {
         schemaHash: store.schema.hash,
         type,
-        data: store.listObjectsForUser(principal.tenantId, type, principal.userId),
+        data: await store.listObjectsForUser(principal.tenantId, type, principal.userId),
       });
       return;
     }
@@ -1476,7 +1476,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         // Delete reuses the write authz decision — a principal that can
         // upsert this object can also remove it. Per-app policy hooks may
         // gate further (e.g. require admin role).
-        assertCanWriteObject(
+        await assertCanWriteObject(
           principal,
           objectWriteRoute.type,
           objectWriteRoute.id,
@@ -1485,7 +1485,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           undefined,
           grantLookup,
         );
-        const removed = store.deleteObject(
+        const removed = await store.deleteObject(
           principal.tenantId,
           objectWriteRoute.type,
           objectWriteRoute.id,
@@ -1505,7 +1505,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     if (objectWriteRoute && (request.method === "POST" || request.method === "PUT")) {
       try {
         const value = await readJsonBody(request, tenantLimits.maxHttpBodyBytes);
-        assertCanWriteObject(
+        await assertCanWriteObject(
           principal,
           objectWriteRoute.type,
           objectWriteRoute.id,
@@ -1516,7 +1516,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         );
         const mergePolicy = store.objectMergePolicy(objectWriteRoute.type);
         const expectedVersion = parseIfMatchHeader(request);
-        const result = store.upsertObjectWithPolicy({
+        const result = await store.upsertObjectWithPolicy({
           tenantId: principal.tenantId,
           type: objectWriteRoute.type,
           id: objectWriteRoute.id,
@@ -1589,7 +1589,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         if (environment !== "production" && environment !== "sandbox") {
           throw new Error('environment must be "production" or "sandbox"');
         }
-        const registration = store.pushRegistrations.register({
+        const registration = await store.pushRegistrations.register({
           tenantId: principal.tenantId,
           userId: principal.userId,
           deviceId,
@@ -1613,14 +1613,14 @@ export function createFrickServer(options: ServerOptions = {}) {
           sendJson(response, 404, { error: "push_registration_not_found" });
           return;
         }
-        const existing = store.pushRegistrations.getById(registrationId, principal.tenantId);
+        const existing = await store.pushRegistrations.getById(registrationId, principal.tenantId);
         // 404 covers two cases — truly missing, or owned by another user in
         // the same tenant. We don't disclose existence across users.
         if (!existing || existing.userId !== principal.userId) {
           sendJson(response, 404, { error: "push_registration_not_found" });
           return;
         }
-        store.pushRegistrations.revoke(registrationId, principal.tenantId);
+        await store.pushRegistrations.revoke(registrationId, principal.tenantId);
         response.writeHead(204);
         response.end();
       } catch (error) {
@@ -1638,7 +1638,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         const ttlSeconds = resolveInvitationTtlSeconds(body.expiresInSeconds);
         const now = new Date();
         const expiresAt = new Date(now.getTime() + ttlSeconds * 1000).toISOString();
-        const invitation = store.invitations.create({
+        const invitation = await store.invitations.create({
           id: `inv-${randomToken(12)}`,
           tenantId: principal.tenantId,
           ownerUserId: principal.userId,
@@ -1661,7 +1661,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         const body = await readJsonBody(request, tenantLimits.maxHttpBodyBytes);
         const token = requireString(body.token, "token");
         const now = new Date().toISOString();
-        const outcome = store.invitations.redeem({
+        const outcome = await store.invitations.redeem({
           token,
           tenantId: principal.tenantId,
           redeemerUserId: principal.userId,
@@ -1731,7 +1731,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           );
           return;
         }
-        const grant = store.grants.create({
+        const grant = await store.grants.create({
           id: `grant-${randomToken(12)}`,
           tenantId: invitation.tenantId,
           ownerUserId: invitation.ownerUserId,
@@ -1753,7 +1753,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         const recordType = url.searchParams.get("recordType") ?? undefined;
         const recordId = url.searchParams.get("recordId") ?? undefined;
         const includeRevoked = url.searchParams.get("includeRevoked") === "true";
-        const grants = store.grants.list({
+        const grants = await store.grants.list({
           tenantId: principal.tenantId,
           principalUserId: principal.userId,
           ...(recordType !== undefined ? { recordType } : {}),
@@ -1774,7 +1774,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           sendJson(response, 404, { error: "grant_not_found" });
           return;
         }
-        const existing = store.grants.getById(principal.tenantId, grantId);
+        const existing = await store.grants.getById(principal.tenantId, grantId);
         // Only the owner that issued the invitation can revoke via DELETE.
         // Grantees who want to drop their own access use the dedicated
         // POST /share/grants/:id/leave route below; we keep DELETE
@@ -1784,7 +1784,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           return;
         }
         const now = new Date().toISOString();
-        const grant = store.grants.revoke({
+        const grant = await store.grants.revoke({
           tenantId: principal.tenantId,
           id: grantId,
           now,
@@ -1811,7 +1811,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           sendJson(response, 404, { error: "grant_not_found" });
           return;
         }
-        const existing = store.grants.getById(principal.tenantId, grantId);
+        const existing = await store.grants.getById(principal.tenantId, grantId);
         // Self-revocation ("leave share"): only the grantee may leave their
         // own grant. Owners revoke via DELETE /share/grants/:id. A caller
         // who is not the grantee (including the owner) gets a 404 so the
@@ -1822,7 +1822,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           return;
         }
         const now = new Date().toISOString();
-        const grant = store.grants.revoke({
+        const grant = await store.grants.revoke({
           tenantId: principal.tenantId,
           id: grantId,
           now,
@@ -1867,7 +1867,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         url.searchParams.forEach((value, key) => {
           query[key] = value;
         });
-        assertCanSubscribe(
+        await assertCanSubscribe(
           principal,
           "projection",
           name,
@@ -1933,7 +1933,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         } catch {
           throw new InvalidSearchQueryError();
         }
-        const authorizedResult = filterSearchResultForPrincipal(
+        const authorizedResult = await filterSearchResultForPrincipal(
           result,
           def,
           principal,
@@ -1961,7 +1961,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         }
         const responseBody: Record<string, unknown> = {
           schemaHash: store.schema.hash,
-          data: store.blobs.list(principal.tenantId, requestedOwnerId),
+          data: await store.blobs.list(principal.tenantId, requestedOwnerId),
         };
         // Quota-aware listing (FR-56): when scoped to a single owner, report
         // that owner's current usage and the effective per-principal cap.
@@ -1991,7 +1991,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     if (blobContentId && request.method === "PUT") {
       try {
         const content = await readRawBody(request, tenantLimits.maxBlobBytes, "maxBlobBytes");
-        const metadata = store.blobs.read(principal.tenantId, blobContentId);
+        const metadata = await store.blobs.read(principal.tenantId, blobContentId);
         const contentHash = sha256ContentHash(content);
         let responseStatus = 200;
         let responseContentHash = metadata?.contentHash ?? contentHash;
@@ -1999,7 +1999,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         let resolvedMimeType: string;
 
         if (metadata) {
-          assertBlobOwnership(principal, metadata.ownerId, policyHooks);
+          await assertBlobOwnership(principal, metadata.ownerId, policyHooks);
           validateBlobContent(blobContentId, metadata.byteLength, metadata.contentHash, content, contentHash);
           resolvedOwnerId = metadata.ownerId;
           resolvedMimeType = metadata.mimeType;
@@ -2009,7 +2009,7 @@ export function createFrickServer(options: ServerOptions = {}) {
             url.searchParams.get("ownerId") ?? headerValue(request, "x-frick-owner-id"),
             "ownerId",
           );
-          assertBlobOwnership(principal, ownerId, policyHooks);
+          await assertBlobOwnership(principal, ownerId, policyHooks);
           resolvedOwnerId = ownerId;
           resolvedMimeType = inferMimeType(request);
         }
@@ -2053,7 +2053,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         // is effectively unlimited, so this is a no-op unless configured.
         const quota = tenantLimits.maxBlobBytesPerPrincipal;
         if (Number.isFinite(quota) && quota < Number.MAX_SAFE_INTEGER) {
-          const currentBytes = store.blobs.totalBytesForOwner(
+          const currentBytes = await store.blobs.totalBytesForOwner(
             principal.tenantId,
             resolvedOwnerId,
           );
@@ -2114,13 +2114,13 @@ export function createFrickServer(options: ServerOptions = {}) {
 
     if (blobContentId && request.method === "GET") {
       try {
-        const metadata = store.blobs.read(principal.tenantId, blobContentId);
-        const content = store.blobs.readContent(principal.tenantId, blobContentId);
+        const metadata = await store.blobs.read(principal.tenantId, blobContentId);
+        const content = await store.blobs.readContent(principal.tenantId, blobContentId);
         if (!metadata || !content) {
           sendJson(response, 404, { error: "blob_content_not_found" });
           return;
         }
-        assertCanReadBlob(principal, metadata.ownerId, policyHooks);
+        await assertCanReadBlob(principal, metadata.ownerId, policyHooks);
 
         response.writeHead(200, {
           "content-type": metadata.mimeType,
@@ -2139,7 +2139,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     const derivativeContentRoute = parseDerivativeContentPath(url);
     if (derivativeContentRoute && request.method === "GET") {
       try {
-        const metadata = store.blobs.read(
+        const metadata = await store.blobs.read(
           principal.tenantId,
           derivativeContentRoute.blobId,
         );
@@ -2149,8 +2149,8 @@ export function createFrickServer(options: ServerOptions = {}) {
           sendJson(response, 404, { error: "blob_not_found" });
           return;
         }
-        assertCanReadBlob(principal, metadata.ownerId, policyHooks);
-        const result = store.blobDerivatives.read(
+        await assertCanReadBlob(principal, metadata.ownerId, policyHooks);
+        const result = await store.blobDerivatives.read(
           derivativeContentRoute.blobId,
           derivativeContentRoute.derivativeId,
           principal.tenantId,
@@ -2177,13 +2177,13 @@ export function createFrickServer(options: ServerOptions = {}) {
     const derivativeListBlobId = parseDerivativeListPath(url);
     if (derivativeListBlobId && request.method === "GET") {
       try {
-        const metadata = store.blobs.read(principal.tenantId, derivativeListBlobId);
+        const metadata = await store.blobs.read(principal.tenantId, derivativeListBlobId);
         if (!metadata) {
           sendJson(response, 404, { error: "blob_not_found" });
           return;
         }
-        assertCanReadBlob(principal, metadata.ownerId, policyHooks);
-        const derivatives = store.blobDerivatives.listForParent(
+        await assertCanReadBlob(principal, metadata.ownerId, policyHooks);
+        const derivatives = await store.blobDerivatives.listForParent(
           derivativeListBlobId,
           principal.tenantId,
         );
@@ -2197,12 +2197,12 @@ export function createFrickServer(options: ServerOptions = {}) {
     if (request.method === "GET" && url.pathname.startsWith("/blobs/")) {
       try {
         const blobId = decodeURIComponent(url.pathname.slice("/blobs/".length));
-        const metadata = blobId ? store.blobs.read(principal.tenantId, blobId) : undefined;
+        const metadata = blobId ? await store.blobs.read(principal.tenantId, blobId) : undefined;
         if (!metadata) {
           sendJson(response, 404, { error: "blob_not_found" });
           return;
         }
-        assertCanReadBlob(principal, metadata.ownerId, policyHooks);
+        await assertCanReadBlob(principal, metadata.ownerId, policyHooks);
         sendJson(response, 200, metadata);
       } catch (error) {
         sendErrorWithMetrics(response, error, "blob_rejected");
@@ -2214,8 +2214,8 @@ export function createFrickServer(options: ServerOptions = {}) {
       try {
         const body = await readJsonBody(request, tenantLimits.maxHttpBodyBytes);
         const ownerId = requireString(body.ownerId, "ownerId");
-        assertBlobOwnership(principal, ownerId, policyHooks);
-        store.blobs.create(principal.tenantId, {
+        await assertBlobOwnership(principal, ownerId, policyHooks);
+        await store.blobs.create(principal.tenantId, {
           blobId: requireString(body.blobId, "blobId"),
           ownerId,
           contentHash: requireString(body.contentHash, "contentHash"),
@@ -2233,7 +2233,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     const signalRoute = parseSignalPath(url);
     if (signalRoute && request.method === "POST") {
       try {
-        assertCanSignal(
+        await assertCanSignal(
           principal,
           signalRoute.name,
           signalRoute.key,
@@ -2252,7 +2252,7 @@ export function createFrickServer(options: ServerOptions = {}) {
 
     if (signalRoute && request.method === "GET") {
       try {
-        assertCanReadSignal(
+        await assertCanReadSignal(
           principal,
           signalRoute.name,
           signalRoute.key,
@@ -2280,7 +2280,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         return;
       }
       try {
-        assertCanSubscribe(
+        await assertCanSubscribe(
           principal,
           "stream",
           stream,
@@ -2308,7 +2308,7 @@ export function createFrickServer(options: ServerOptions = {}) {
             tenantLimits.maxStreamPageSize,
             tenantLimits.maxStreamPageSize,
           );
-          const events = store.readEvents(principal.tenantId, stream, key, since, limit);
+          const events = await store.readEvents(principal.tenantId, stream, key, since, limit);
           sendJson(response, 200, { events });
           return;
         }
@@ -2323,7 +2323,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           // defaults to 50 and is clamped server-side to [1, 500].
           const before = Number(beforeParam);
           const limit = parseStreamPageLimit(limitParam, 50, Math.min(500, tenantLimits.maxStreamPageSize));
-          events = store.readEventsBefore(
+          events = await store.readEventsBefore(
             principal.tenantId,
             stream,
             key,
@@ -2337,7 +2337,7 @@ export function createFrickServer(options: ServerOptions = {}) {
             tenantLimits.maxStreamPageSize,
             tenantLimits.maxStreamPageSize,
           );
-          const page = store.readEvents(principal.tenantId, stream, key, cursor, limit + 1);
+          const page = await store.readEvents(principal.tenantId, stream, key, cursor, limit + 1);
           hasMore = page.length > limit;
           events = page.slice(0, limit);
           cursor = events.at(-1)?.sequence ?? cursor;
@@ -2382,7 +2382,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         const event = requireString(body.event, "event");
         const payload = requireRecord(body.payload, "payload");
         assertPayloadWithinLimit(payload, tenantLimits.maxStreamAppendPayloadBytes);
-        assertCanAppend(
+        await assertCanAppend(
           principal,
           stream,
           key,
@@ -2391,7 +2391,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           payload,
           policyHooks,
         );
-        const result = store.appendEvent({
+        const result = await store.appendEvent({
           tenantId: principal.tenantId,
           requestId: requireString(body.requestId, "requestId"),
           replicaId: principal.replicaId,
@@ -3314,7 +3314,7 @@ function headerValue(request: http.IncomingMessage, name: string): string | unde
   return Array.isArray(value) ? value[0] : value;
 }
 
-function protectedHttpPrincipal(request: http.IncomingMessage, url: URL, store: FrickStore, config: FrickConfig): Principal | AuthenticationError {
+async function protectedHttpPrincipal(request: http.IncomingMessage, url: URL, store: FrickStore, config: FrickConfig): Promise<Principal | AuthenticationError> {
   if (!isProtectedPath(url.pathname)) {
     return {
       userId: "public",
@@ -3342,45 +3342,46 @@ function protectedHttpPrincipal(request: http.IncomingMessage, url: URL, store: 
     };
   }
 
-  const session = store.readActiveSession(token);
+  const session = await store.readActiveSession(token);
   return principalFromActiveSessionToken(store, token, session);
 }
 
-function principalFromActiveSessionToken(
+async function principalFromActiveSessionToken(
   store: FrickStore,
   token: string,
-  session: StoredSession | undefined = store.readActiveSession(token),
-): Principal | AuthenticationError {
-  if (!session) {
-    const stale = store.readAnySession(token);
+  session?: StoredSession | undefined,
+): Promise<Principal | AuthenticationError> {
+  const resolvedSession = session ?? await store.readActiveSession(token);
+  if (!resolvedSession) {
+    const stale = await store.readAnySession(token);
     if (stale && Date.parse(stale.expiresAt) <= Date.now()) {
       return new SessionExpiredError();
     }
     return new AuthenticationError("Invalid or expired session token");
   }
 
-  if (isTenantArchived(store, session.tenantId)) {
+  if (await isTenantArchived(store, resolvedSession.tenantId)) {
     return new AuthenticationError("Tenant is archived");
   }
 
   return {
-    userId: session.userId,
-    deviceId: session.deviceId,
-    replicaId: session.replicaId,
-    tenantId: session.tenantId,
+    userId: resolvedSession.userId,
+    deviceId: resolvedSession.deviceId,
+    replicaId: resolvedSession.replicaId,
+    tenantId: resolvedSession.tenantId,
   };
 }
 
-function isTenantArchived(store: FrickStore, tenantId: string): boolean {
-  return store.tenants.get(tenantId)?.archivedAt !== undefined;
+async function isTenantArchived(store: FrickStore, tenantId: string): Promise<boolean> {
+  return (await store.tenants.get(tenantId))?.archivedAt !== undefined;
 }
 
-function inspectionPrincipalFromRequest(
+async function inspectionPrincipalFromRequest(
   request: http.IncomingMessage,
   url: URL,
   store: FrickStore,
   config: FrickConfig,
-): Principal | AuthenticationError {
+): Promise<Principal | AuthenticationError> {
   if (config.env === "production") {
     const admin = adminPrincipalFromRequest(request, url, config);
     return admin ?? new AuthenticationError("Missing or invalid admin token");
@@ -3449,11 +3450,11 @@ class UnknownTenantError extends AuthorizationError {
  * subsequent requests resolve cleanly. Throws {@link UnknownTenantError}
  * when the tenant is unknown and implicit creation is disabled.
  */
-function ensureTenantAllowed(store: FrickStore, config: FrickConfig, tenantId: string): void {
+async function ensureTenantAllowed(store: FrickStore, config: FrickConfig, tenantId: string): Promise<void> {
   if (tenantId === DEFAULT_TENANT_ID) {
     return;
   }
-  const existing = store.tenants.get(tenantId);
+  const existing = await store.tenants.get(tenantId);
   if (existing && !existing.archivedAt) {
     return;
   }
@@ -3461,7 +3462,7 @@ function ensureTenantAllowed(store: FrickStore, config: FrickConfig, tenantId: s
     throw new UnknownTenantError(tenantId);
   }
   if (config.implicitTenantCreation) {
-    store.tenants.ensure(tenantId);
+    await store.tenants.ensure(tenantId);
     return;
   }
   throw new UnknownTenantError(tenantId);
@@ -3532,7 +3533,7 @@ async function handleAdminRoute(
       const parsed = Number.parseInt(limitParam, 10);
       if (Number.isFinite(parsed)) options.limit = parsed;
     }
-    const entries = store.adminAudit.list(options);
+    const entries = await store.adminAudit.list(options);
     sendJson(response, 200, { entries });
     return;
   }
@@ -3575,11 +3576,11 @@ async function handleAdminRoute(
     let revoked = 0;
     let disconnected = 0;
     if (userId) {
-      revoked += store.deleteSessionsForUser(userId, tenantId);
+      revoked += await store.deleteSessionsForUser(userId, tenantId);
       disconnected += gateway.closeSessionsForUser(userId, tenantId);
     }
     if (sessionToken) {
-      if (store.deleteSession(sessionToken)) {
+      if (await store.deleteSession(sessionToken)) {
         revoked += 1;
       }
       gateway.closeSession(sessionToken);
@@ -3606,7 +3607,7 @@ async function handleAdminRoute(
     // poll target and would dwarf mutation rows. Documented as a known gap
     // in docs/operations.md so operators know reads aren't traced here.
     const includeArchived = url.searchParams.get("includeArchived") === "true";
-    sendJson(response, 200, { tenants: store.tenants.list(includeArchived) });
+    sendJson(response, 200, { tenants: await store.tenants.list(includeArchived) });
     return;
   }
 
@@ -3619,7 +3620,7 @@ async function handleAdminRoute(
         typeof body.displayName === "string" && body.displayName.length > 0
           ? body.displayName
           : undefined;
-      const existing = store.tenants.get(tenantId);
+      const existing = await store.tenants.get(tenantId);
       if (existing && !existing.archivedAt) {
         strictAudit({
           action: "tenants.create",
@@ -3816,7 +3817,7 @@ async function handleAdminRoute(
       }
       limit = Math.min(1000, Math.floor(parsed));
     }
-    const accounts = store.accounts.list(tenantId, limit);
+    const accounts = await store.accounts.list(tenantId, limit);
     sendJson(response, 200, { accounts });
     return;
   }
@@ -3855,9 +3856,9 @@ async function handleAdminRoute(
           : userIdFromHandle(tenantId, handle);
       const target = `${tenantId}/${handle}`;
       const existingAccount =
-        store.accounts.readByIdentity(tenantId, handle) ??
-        store.accounts.readByIdentity(tenantId, userId);
-      if (existingAccount || store.hasUser(tenantId, userId)) {
+        await store.accounts.readByIdentity(tenantId, handle) ??
+        await store.accounts.readByIdentity(tenantId, userId);
+      if (existingAccount || await store.hasUser(tenantId, userId)) {
         strictAudit({
           action: "accounts.create",
           target,
@@ -3873,7 +3874,7 @@ async function handleAdminRoute(
         outcome: "allow",
         detail: { tenantId, handle, userId },
       });
-      const account = store.createAccountUser({
+      const account = await store.createAccountUser({
         tenantId,
         userId,
         handle,
@@ -3992,7 +3993,7 @@ async function handleAdminRoute(
         outcome: "allow",
         detail: { tenantId, recipientCount: recipientUserIds.length },
       });
-      const row = notificationRouter.enqueueIntent(intent);
+      const row = await notificationRouter.enqueueIntent(intent);
       sendJson(response, 201, { jobId: row.id, jobType: row.jobType, status: row.status });
     } catch (error) {
       if (!(error instanceof AdminAuditWriteError)) {
@@ -4337,7 +4338,7 @@ async function handleAdminRoute(
         outcome: "allow",
         detail: { tenantId },
       });
-      const report = eraseDataSubject(store, tenantId, userId);
+      const report = await eraseDataSubject(store, tenantId, userId);
       sendJson(response, 200, report);
     } catch (error) {
       if (!(error instanceof AdminAuditWriteError)) {
@@ -4373,7 +4374,7 @@ async function handleAdminRoute(
   }
 
   if (request.method === "GET" && sub === "compliance/audit/verify") {
-    const result = store.adminAudit.verifyChain();
+    const result = await store.adminAudit.verifyChain();
     const status = result.valid ? 200 : 409;
     sendJson(response, status, result);
     return;
@@ -4628,55 +4629,60 @@ function parseStreamPageLimit(value: string | null, defaultLimit: number, config
   return Math.max(1, Math.min(max, Math.floor(parsed)));
 }
 
-function filterSearchResultForPrincipal(
+async function filterSearchResultForPrincipal(
   result: FrickSearchResult,
   def: FrickSearchIndexDefinition,
   principal: Principal,
   store: FrickStore,
   policyHooks?: readonly FrickPolicyHook[],
-): FrickSearchResult {
+): Promise<FrickSearchResult> {
   if (principal.scope === "admin") {
     const hits = result.hits.map(stripSearchSourceFields);
     return { hits, total: result.total };
   }
-  const hits = result.hits.filter((hit) => {
-    switch (def.source.kind) {
-      case "object":
-        return isSearchObjectHitVisible(hit, def.source.type, principal, store);
-      case "stream":
-        return isSearchStreamHitVisible(hit, def.source.type, principal, store, policyHooks);
-      case "projection":
-        return isSearchProjectionHitVisible(hit, def.source.name, principal, store, policyHooks);
-      default:
-        return false;
-    }
-  }).map(stripSearchSourceFields);
+  const visibilityFlags = await Promise.all(
+    result.hits.map((hit) => {
+      switch (def.source.kind) {
+        case "object":
+          return isSearchObjectHitVisible(hit, def.source.type, principal, store);
+        case "stream":
+          return isSearchStreamHitVisible(hit, def.source.type, principal, store, policyHooks);
+        case "projection":
+          return isSearchProjectionHitVisible(hit, def.source.name, principal, store, policyHooks);
+        default:
+          return Promise.resolve(false);
+      }
+    }),
+  );
+  const hits = result.hits
+    .filter((_, i) => visibilityFlags[i])
+    .map(stripSearchSourceFields);
   return { hits, total: hits.length };
 }
 
-function isSearchObjectHitVisible(
+async function isSearchObjectHitVisible(
   hit: FrickSearchResult["hits"][number],
   type: string,
   principal: Principal,
   store: FrickStore,
-): boolean {
+): Promise<boolean> {
   const source = searchSourceFromHit(hit);
   const objectId =
     source.kind === "object" && source.type === type && source.id ? source.id : hit.docId;
-  const object = store.readObject(principal.tenantId, type, objectId);
+  const object = await store.readObject(principal.tenantId, type, objectId);
   return (
     object !== undefined &&
     store.isObjectVisibleToUser(principal.tenantId, type, object, principal.userId)
   );
 }
 
-function isSearchStreamHitVisible(
+async function isSearchStreamHitVisible(
   hit: FrickSearchResult["hits"][number],
   stream: string,
   principal: Principal,
   store: FrickStore,
   policyHooks?: readonly FrickPolicyHook[],
-): boolean {
+): Promise<boolean> {
   const source = searchSourceFromHit(hit);
   const streamId =
     source.kind === "stream" && source.type === stream && source.id
@@ -4690,7 +4696,7 @@ function isSearchStreamHitVisible(
   }
 
   try {
-    assertCanSubscribe(
+    await assertCanSubscribe(
       principal,
       "stream",
       stream,
@@ -4705,13 +4711,13 @@ function isSearchStreamHitVisible(
   }
 }
 
-function isSearchProjectionHitVisible(
+async function isSearchProjectionHitVisible(
   hit: FrickSearchResult["hits"][number],
   projection: string,
   principal: Principal,
   store: FrickStore,
   policyHooks?: readonly FrickPolicyHook[],
-): boolean {
+): Promise<boolean> {
   const source = searchSourceFromHit(hit);
   const key = source.kind === "projection" && source.type === projection ? source.id : undefined;
   if (!key) {
@@ -4721,7 +4727,7 @@ function isSearchProjectionHitVisible(
     return false;
   }
   try {
-    assertCanSubscribe(
+    await assertCanSubscribe(
       principal,
       "projection",
       projection,
@@ -4751,7 +4757,7 @@ async function* sourceIterableForIndex(
   tenantId: string,
 ): AsyncGenerator<FrickSearchProjectInput, void, void> {
   if (def.source.kind === "object") {
-    for (const value of store.listObjects(tenantId, def.source.type)) {
+    for (const value of await store.listObjects(tenantId, def.source.type)) {
       const id = typeof value.id === "string" ? value.id : "";
       yield {
         tenantId,
@@ -4761,7 +4767,7 @@ async function* sourceIterableForIndex(
     return;
   }
   if (def.source.kind === "stream") {
-    for (const event of store.streams.listAllByStreamType(tenantId, def.source.type)) {
+    for (const event of await store.streams.listAllByStreamType(tenantId, def.source.type)) {
       yield {
         tenantId,
         streamEvent: {
@@ -4785,7 +4791,7 @@ function parsePlatform(platform: string): "web" | "ios" | "android" | "server" {
   throw new Error("platform must be one of web, ios, android, server");
 }
 
-function createSessionForUser(
+async function createSessionForUser(
   store: FrickStore,
   userId: string,
   deviceId: string,
@@ -4793,7 +4799,7 @@ function createSessionForUser(
   platform: "web" | "ios" | "android" | "server",
   config: FrickConfig,
   tenantId: string = DEFAULT_TENANT_ID,
-): StoredSession {
+): Promise<StoredSession> {
   const expiresAt = new Date(Date.now() + config.sessionTtlSeconds * 1000).toISOString();
   const sessionToken = randomToken(32);
   void platform;

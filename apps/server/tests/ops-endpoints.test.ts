@@ -107,7 +107,7 @@ describe("operational HTTP endpoints", () => {
   it("/_frick/inspect/db reflects cache growth after appends", async () => {
     app = await startServer();
     for (let i = 0; i < 3; i += 1) {
-      app.store.appendEvent({
+      await app.store.appendEvent({
         requestId: `request-${i}`,
         replicaId: "replica-ops-test",
         stream: "MessageStream",
@@ -134,7 +134,7 @@ describe("operational HTTP endpoints", () => {
   it("/_frick/inspect/db honors operator-tuned idempotencyCacheCapacity and reports evictions", async () => {
     app = await startServer({ idempotencyCacheCapacity: 2 });
     for (let i = 0; i < 5; i += 1) {
-      app.store.appendEvent({
+      await app.store.appendEvent({
         requestId: `request-tight-${i}`,
         replicaId: "replica-ops-test",
         stream: "MessageStream",

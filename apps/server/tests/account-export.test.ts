@@ -59,7 +59,7 @@ describe("GET /account/export", () => {
     app = await startServer();
     const ada = await devLogin(app.httpUrl, "user-ada");
 
-    app.store.upsertObject(ada.tenantId, "Note", "note-1", {
+    await app.store.upsertObject(ada.tenantId, "Note", "note-1", {
       ownerId: "user-ada",
       email: "ada@example.com",
       body: "ada's secret diary",
@@ -86,8 +86,8 @@ describe("GET /account/export", () => {
     const ada = await devLogin(app.httpUrl, "user-ada");
     const grace = await devLogin(app.httpUrl, "user-grace");
 
-    app.store.upsertObject(ada.tenantId, "Note", "note-ada", { ownerId: "user-ada", body: "ada" });
-    app.store.upsertObject(grace.tenantId, "Note", "note-grace", { ownerId: "user-grace", body: "grace" });
+    await app.store.upsertObject(ada.tenantId, "Note", "note-ada", { ownerId: "user-ada", body: "ada" });
+    await app.store.upsertObject(grace.tenantId, "Note", "note-grace", { ownerId: "user-grace", body: "grace" });
 
     const adaExport = await getJson(`${app.httpUrl}/account/export`, ada.sessionToken);
     expect(adaExport.body.objects.Note).toHaveLength(1);
@@ -104,12 +104,12 @@ describe("GET /account/export", () => {
     const t1 = await devLogin(app.httpUrl, "user-alpha", "tenant-one");
     const t2 = await devLogin(app.httpUrl, "user-bravo", "tenant-two");
 
-    app.store.upsertObject("tenant-one", "Note", "note-t1", { ownerId: "user-alpha", body: "tenant-1 data" });
-    app.store.upsertObject("tenant-two", "Note", "note-t2", { ownerId: "user-bravo", body: "tenant-2 data" });
+    await app.store.upsertObject("tenant-one", "Note", "note-t1", { ownerId: "user-alpha", body: "tenant-1 data" });
+    await app.store.upsertObject("tenant-two", "Note", "note-t2", { ownerId: "user-bravo", body: "tenant-2 data" });
     // Cross-tenant decoy: tenant-two owns a Note whose ownerId matches
     // tenant-one's principal. Tenant isolation (not just owner scoping) must
     // still hide it.
-    app.store.upsertObject("tenant-two", "Note", "note-decoy", { ownerId: "user-alpha", body: "leak?" });
+    await app.store.upsertObject("tenant-two", "Note", "note-decoy", { ownerId: "user-alpha", body: "leak?" });
 
     const exportT1 = await getJson(`${app.httpUrl}/account/export`, t1.sessionToken);
     expect(exportT1.body.tenantId).toBe("tenant-one");
@@ -133,7 +133,7 @@ describe("GET /account/export", () => {
     };
     app = await startServer({ onAccountExport });
     const ada = await devLogin(app.httpUrl, "user-ada");
-    app.store.upsertObject(ada.tenantId, "Note", "note-1", { ownerId: "user-ada", body: "x" });
+    await app.store.upsertObject(ada.tenantId, "Note", "note-1", { ownerId: "user-ada", body: "x" });
 
     const { body } = await getJson(`${app.httpUrl}/account/export`, ada.sessionToken);
     expect(body.app).toEqual({

@@ -23,7 +23,7 @@ afterEach(async () => {
 });
 
 describe("foundation sync gateway", () => {
-  it("resolves the default database path from the server package", () => {
+  it("resolves the default database path from the server package", async () => {
     const dbPath = defaultDatabasePath();
 
     expect(path.isAbsolute(dbPath)).toBe(true);

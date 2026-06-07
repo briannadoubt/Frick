@@ -4,7 +4,7 @@ import { FrickStore } from "../src/store.js";
 
 let store: FrickStore | undefined;
 
-afterEach(() => {
+afterEach(async () => {
   store?.close();
   store = undefined;
 });
@@ -26,7 +26,7 @@ function makeAppend(requestId: string, body: string) {
 }
 
 describe("FrickStore idempotency replay window (lookup-time bound)", () => {
-  it("dedupes a replay that lands within the window", () => {
+  it("dedupes a replay that lands within the window", async () => {
     store = new FrickStore({
       path: ":memory:",
       seed: true,
@@ -36,8 +36,8 @@ describe("FrickStore idempotency replay window (lookup-time bound)", () => {
     });
 
     const input = makeAppend("request-within", "once");
-    const first = store.appendEvent(input);
-    const second = store.appendEvent(input);
+    const first = await store.appendEvent(input);
+    const second = await store.appendEvent(input);
 
     expect(first.created).toBe(true);
     expect(second.created).toBe(false);
@@ -56,14 +56,14 @@ describe("FrickStore idempotency replay window (lookup-time bound)", () => {
       idempotencyKeyPruneIntervalMs: 0,
     });
 
-    const first = store.appendEvent(makeAppend("request-beyond", "first"));
+    const first = await store.appendEvent(makeAppend("request-beyond", "first"));
     expect(first.created).toBe(true);
     expect(store.idempotencyKeyRowCount()).toBe(1);
 
     // Age the record past the 10ms window. No prune pass runs.
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    const replay = store.appendEvent(makeAppend("request-beyond", "second"));
+    const replay = await store.appendEvent(makeAppend("request-beyond", "second"));
 
     // Beyond the replay window → not deduped, even though the original
     // idempotency row was never pruned: a fresh event is minted.
@@ -75,12 +75,12 @@ describe("FrickStore idempotency replay window (lookup-time bound)", () => {
 
     // An immediate re-replay is within the window of the NEW record, so it
     // dedupes to the fresh event rather than the original.
-    const reReplay = store.appendEvent(makeAppend("request-beyond", "third"));
+    const reReplay = await store.appendEvent(makeAppend("request-beyond", "third"));
     expect(reReplay.created).toBe(false);
     expect(reReplay.event.eventId).toBe(replay.event.eventId);
   });
 
-  it("defaults to honouring replays for the full default window when unset", () => {
+  it("defaults to honouring replays for the full default window when unset", async () => {
     store = new FrickStore({
       path: ":memory:",
       seed: true,
@@ -89,8 +89,8 @@ describe("FrickStore idempotency replay window (lookup-time bound)", () => {
     });
 
     const input = makeAppend("request-default", "once");
-    const first = store.appendEvent(input);
-    const second = store.appendEvent(input);
+    const first = await store.appendEvent(input);
+    const second = await store.appendEvent(input);
 
     expect(first.created).toBe(true);
     expect(second.created).toBe(false);

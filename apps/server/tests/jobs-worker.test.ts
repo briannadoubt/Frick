@@ -52,7 +52,7 @@ describe("FrickJobWorker", () => {
       telemetry,
     });
     worker.start();
-    const row = store.jobs.enqueue({
+    const row = await store.jobs.enqueue({
       tenantId: "_default",
       jobType: "TelemetryJob",
       payload: { value: 42 },
@@ -92,7 +92,7 @@ describe("FrickJobWorker", () => {
       telemetry,
     });
     worker.start();
-    const row = store.jobs.enqueue({
+    const row = await store.jobs.enqueue({
       tenantId: "_default",
       jobType: "BoomTelemetryJob",
       payload: {},
@@ -128,7 +128,7 @@ describe("FrickJobWorker", () => {
       telemetry: new ThrowingTelemetryRuntime(),
     });
     worker.start();
-    const row = store.jobs.enqueue({
+    const row = await store.jobs.enqueue({
       tenantId: "_default",
       jobType: "TelemetryThrowsJob",
       payload: {},
@@ -152,7 +152,7 @@ describe("FrickJobWorker", () => {
       pollIntervalMs: 25,
     });
     worker.start();
-    const row = store.jobs.enqueue({
+    const row = await store.jobs.enqueue({
       tenantId: "_default",
       jobType: "TestJob",
       payload: { value: 42 },
@@ -177,14 +177,14 @@ describe("FrickJobWorker", () => {
     worker.start();
     // Use max_attempts: 1 and available_at in the past so backoff doesn't
     // stall the test — one claim, one fail, one dead-letter.
-    const row = store.jobs.enqueue({
+    const row = await store.jobs.enqueue({
       tenantId: "_default",
       jobType: "BoomJob",
       payload: {},
       maxAttempts: 1,
     });
     await waitFor(() => store!.jobs.getById(row.id)?.status === "dead_lettered");
-    const final = store.jobs.getById(row.id)!;
+    const final = await store.jobs.getById(row.id)!;
     expect(final.lastErrorCode).toBe("server.internal");
     expect(final.lastErrorMessage).toContain("kaboom");
   });
@@ -199,14 +199,14 @@ describe("FrickJobWorker", () => {
       pollIntervalMs: 10,
     });
     worker.start();
-    const row = store.jobs.enqueue({
+    const row = await store.jobs.enqueue({
       tenantId: "_default",
       jobType: "MissingType",
       payload: {},
       maxAttempts: 5,
     });
     await waitFor(() => store!.jobs.getById(row.id)?.status === "dead_lettered");
-    const final = store.jobs.getById(row.id)!;
+    const final = await store.jobs.getById(row.id)!;
     expect(final.lastErrorCode).toBe("jobs.unknownHandler");
     // Non-retryable: dead-lettered on attempt 1 even though max_attempts = 5.
     expect(final.attemptCount).toBe(1);
@@ -230,7 +230,7 @@ describe("FrickJobWorker", () => {
       gracefulShutdownTimeoutMs: 2000,
     });
     worker.start();
-    store.jobs.enqueue({
+    await store.jobs.enqueue({
       tenantId: "_default",
       jobType: "SlowJob",
       payload: {},

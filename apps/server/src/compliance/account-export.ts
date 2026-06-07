@@ -106,19 +106,19 @@ export type OnAccountExport = (
  * {@link ACCOUNT_EXPORT_REDACTED_SENSITIVITIES}); the principal's own `pii` /
  * `private` / `content` values are returned in full.
  */
-export function buildAccountExportBase(
+export async function buildAccountExportBase(
   store: FrickStore,
   principal: Principal,
   options: AccountExportOptions = {},
-): AccountExportBase {
+): Promise<AccountExportBase> {
   const ownerFields = options.ownerFields ?? DEFAULT_OWNER_FIELDS;
   const redact = options.redact ?? ACCOUNT_EXPORT_REDACTED_SENSITIVITIES;
   const objects: Record<string, PlainObject[]> = {};
 
   for (const objectDef of store.schema.objects) {
-    const owned = store
-      .listObjects(principal.tenantId, objectDef.name)
-      .filter((record) => isOwnedBy(record, principal.userId, ownerFields));
+    const owned = (await store.listObjects(principal.tenantId, objectDef.name)).filter((record) =>
+      isOwnedBy(record, principal.userId, ownerFields),
+    );
     const fields = objectByName(store.schema, objectDef.name).fields;
     objects[objectDef.name] = owned.map((record) =>
       redactRecord(record, fields, { redact }),

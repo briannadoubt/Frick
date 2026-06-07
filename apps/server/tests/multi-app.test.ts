@@ -186,7 +186,7 @@ describe("multi-app server", () => {
     expect(payload.error.details?.knownAppIds).toEqual(["chat", "docs"]);
   });
 
-  it("rejects duplicate basePath at createFrickServer", () => {
+  it("rejects duplicate basePath at createFrickServer", async () => {
     expect(() =>
       createFrickServer({
         port: 0,

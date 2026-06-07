@@ -17,7 +17,7 @@ function listTables(db: DatabaseSync): string[] {
 }
 
 describe("resetFrickDatabase", () => {
-  it("drops all framework tables when confirmed in development", () => {
+  it("drops all framework tables when confirmed in development", async () => {
     const db = new DatabaseSync(":memory:");
     runFrameworkMigrations(db, {
       supportedSchemaRevision: foundationSchema.schemaRevision,
@@ -45,7 +45,7 @@ describe("resetFrickDatabase", () => {
     db.close();
   });
 
-  it("refuses without the confirmDevReset flag", () => {
+  it("refuses without the confirmDevReset flag", async () => {
     const db = new DatabaseSync(":memory:");
     runFrameworkMigrations(db, {
       supportedSchemaRevision: foundationSchema.schemaRevision,
@@ -67,7 +67,7 @@ describe("resetFrickDatabase", () => {
     db.close();
   });
 
-  it("refuses outside development env even when confirmed", () => {
+  it("refuses outside development env even when confirmed", async () => {
     const db = new DatabaseSync(":memory:");
     runFrameworkMigrations(db, {
       supportedSchemaRevision: foundationSchema.schemaRevision,

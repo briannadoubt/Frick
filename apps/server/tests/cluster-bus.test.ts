@@ -27,7 +27,7 @@ function streamEventEnvelope(originNodeId: string, sequence: number): ClusterEnv
 }
 
 describe("MemoryClusterBus", () => {
-  it("delivers an envelope published on bus A to a subscriber on bus B", () => {
+  it("delivers an envelope published on bus A to a subscriber on bus B", async () => {
     const channel = new MemoryClusterChannel();
     const a = new MemoryClusterBus({ channel, nodeId: "node-a" });
     const b = new MemoryClusterBus({ channel, nodeId: "node-b" });
@@ -42,7 +42,7 @@ describe("MemoryClusterBus", () => {
     expect(received[0]?.originNodeId).toBe("node-a");
   });
 
-  it("filters out a bus's own publishes from its own subscribers (self-publish loop guard)", () => {
+  it("filters out a bus's own publishes from its own subscribers (self-publish loop guard)", async () => {
     const channel = new MemoryClusterChannel();
     const a = new MemoryClusterBus({ channel, nodeId: "node-a" });
     const b = new MemoryClusterBus({ channel, nodeId: "node-b" });
@@ -58,7 +58,7 @@ describe("MemoryClusterBus", () => {
     expect(onB).toHaveBeenCalledTimes(1);
   });
 
-  it("isolates subscriber exceptions so one buggy handler can't poison the rest", () => {
+  it("isolates subscriber exceptions so one buggy handler can't poison the rest", async () => {
     const channel = new MemoryClusterChannel();
     const a = new MemoryClusterBus({ channel, nodeId: "node-a" });
     const b = new MemoryClusterBus({ channel, nodeId: "node-b" });
@@ -84,14 +84,14 @@ describe("MemoryClusterBus", () => {
     expect(onB).not.toHaveBeenCalled();
   });
 
-  it("assigns a stable random nodeId when none is supplied", () => {
+  it("assigns a stable random nodeId when none is supplied", async () => {
     const a = new MemoryClusterBus();
     const b = new MemoryClusterBus();
     expect(a.nodeId).not.toBe(b.nodeId);
     expect(a.nodeId.length).toBeGreaterThan(8);
   });
 
-  it("drops inbound envelopes whose tenant is not in the subscribed set", () => {
+  it("drops inbound envelopes whose tenant is not in the subscribed set", async () => {
     const channel = new MemoryClusterChannel();
     const a = new MemoryClusterBus({ channel, nodeId: "node-a" });
     const b = new MemoryClusterBus({ channel, nodeId: "node-b" });
@@ -107,7 +107,7 @@ describe("MemoryClusterBus", () => {
     expect(seen.map((e) => e.tenantId)).toEqual(["acme"]);
   });
 
-  it("treats an empty subscribed set as 'drop everything'", () => {
+  it("treats an empty subscribed set as 'drop everything'", async () => {
     const channel = new MemoryClusterChannel();
     const a = new MemoryClusterBus({ channel, nodeId: "node-a" });
     const b = new MemoryClusterBus({ channel, nodeId: "node-b" });
@@ -120,7 +120,7 @@ describe("MemoryClusterBus", () => {
     expect(seen).toEqual([]);
   });
 
-  it("a bus that never calls setSubscribedTenants passes envelopes through unfiltered", () => {
+  it("a bus that never calls setSubscribedTenants passes envelopes through unfiltered", async () => {
     const channel = new MemoryClusterChannel();
     const a = new MemoryClusterBus({ channel, nodeId: "node-a" });
     const b = new MemoryClusterBus({ channel, nodeId: "node-b" });
@@ -133,7 +133,7 @@ describe("MemoryClusterBus", () => {
     expect(seen.map((e) => e.tenantId)).toEqual(["globex", "acme"]);
   });
 
-  it("snapshots the tenant set so caller mutation does not leak in", () => {
+  it("snapshots the tenant set so caller mutation does not leak in", async () => {
     const channel = new MemoryClusterChannel();
     const a = new MemoryClusterBus({ channel, nodeId: "node-a" });
     const b = new MemoryClusterBus({ channel, nodeId: "node-b" });
@@ -149,7 +149,7 @@ describe("MemoryClusterBus", () => {
     expect(seen).toEqual([]);
   });
 
-  it("carries every envelope kind across nodes", () => {
+  it("carries every envelope kind across nodes", async () => {
     const channel = new MemoryClusterChannel();
     const a = new MemoryClusterBus({ channel, nodeId: "node-a" });
     const b = new MemoryClusterBus({ channel, nodeId: "node-b" });

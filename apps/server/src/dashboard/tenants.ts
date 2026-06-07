@@ -22,13 +22,15 @@ export interface BuildDashboardTenantsInput {
   readonly limit?: number;
 }
 
-export function buildDashboardTenants(input: BuildDashboardTenantsInput): DashboardTenants {
+export async function buildDashboardTenants(
+  input: BuildDashboardTenantsInput,
+): Promise<DashboardTenants> {
   const scope = input.principal.scope === "admin" ? "admin" : "tenant";
   const includeArchived = input.includeArchived === true;
   const limit = normalizeDashboardTenantLimit(input.limit);
   const rows = scope === "admin"
-    ? input.store.tenants.list(includeArchived)
-    : ownTenantRows(input.store, input.principal, includeArchived);
+    ? await input.store.tenants.list(includeArchived)
+    : await ownTenantRows(input.store, input.principal, includeArchived);
   const tenants = rows.slice(0, limit);
 
   return {
@@ -49,12 +51,12 @@ export function normalizeDashboardTenantLimit(value: number | undefined): number
   return Math.min(MAX_TENANT_LIMIT, Math.floor(value));
 }
 
-function ownTenantRows(
+async function ownTenantRows(
   store: FrickStore,
   principal: Principal,
   includeArchived: boolean,
-): TenantRow[] {
-  const row = store.tenants.get(principal.tenantId);
+): Promise<TenantRow[]> {
+  const row = await store.tenants.get(principal.tenantId);
   if (!row) return [];
   if (row.archivedAt && !includeArchived) return [];
   return [row];

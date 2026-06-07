@@ -1,9 +1,9 @@
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
   frickSharingPermissionSatisfies,
   type FrickGrant,
   type FrickSharingPermission,
 } from "@fricken/protocol";
+import type { SqlDriver } from "./sql-driver.js";
 
 interface GrantSqlRow {
   id: string;
@@ -39,7 +39,7 @@ export interface ListGrantsArgs {
 }
 
 export class GrantStore {
-  constructor(private readonly db: DatabaseSync) {}
+  constructor(private readonly sql: SqlDriver) {}
 
   /**
    * `true` while the `grants` table holds no rows at all (revoked rows still
@@ -49,23 +49,23 @@ export class GrantStore {
    * baseline decision allows every in-tenant row. A single `EXISTS` probe
    * against a table that is empty in the common deployment, called once per
    * fan-out batch (not per row).
+   *
+   * NOTE: This accessor is now async to match the SqlDriver seam.
    */
-  get isEmpty(): boolean {
-    const row = this.db
-      .prepare("SELECT EXISTS(SELECT 1 FROM grants) AS present")
-      .get() as { present: number } | undefined;
+  async isEmptyAsync(): Promise<boolean> {
+    const row = await this.sql.get<{ present: number }>(
+      "SELECT EXISTS(SELECT 1 FROM grants) AS present",
+    );
     return (row?.present ?? 0) === 0;
   }
 
-  create(args: CreateGrantArgs): FrickGrant {
-    this.db
-      .prepare(
-        `INSERT INTO grants (
+  async create(args: CreateGrantArgs): Promise<FrickGrant> {
+    await this.sql.run(
+      `INSERT INTO grants (
             id, tenant_id, owner_user_id, record_type, record_id,
             grantee_user_id, permission, created_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
+      [
         args.id,
         args.tenantId,
         args.ownerUserId,
@@ -74,7 +74,8 @@ export class GrantStore {
         args.granteeUserId,
         args.permission,
         args.createdAt,
-      );
+      ],
+    );
     return {
       id: args.id,
       tenantId: args.tenantId,
@@ -87,19 +88,20 @@ export class GrantStore {
     };
   }
 
-  getById(tenantId: string, id: string): FrickGrant | undefined {
-    const row = this.db
-      .prepare("SELECT * FROM grants WHERE tenant_id = ? AND id = ?")
-      .get(tenantId, id) as unknown as GrantSqlRow | undefined;
+  async getById(tenantId: string, id: string): Promise<FrickGrant | undefined> {
+    const row = await this.sql.get<GrantSqlRow>(
+      "SELECT * FROM grants WHERE tenant_id = ? AND id = ?",
+      [tenantId, id],
+    );
     return row ? toGrant(row) : undefined;
   }
 
-  list(args: ListGrantsArgs): FrickGrant[] {
+  async list(args: ListGrantsArgs): Promise<FrickGrant[]> {
     const filters: string[] = [
       "tenant_id = ?",
       "(owner_user_id = ? OR grantee_user_id = ?)",
     ];
-    const params: SQLInputValue[] = [args.tenantId, args.principalUserId, args.principalUserId];
+    const params: unknown[] = [args.tenantId, args.principalUserId, args.principalUserId];
 
     if (args.recordType !== undefined) {
       filters.push("record_type = ?");
@@ -116,25 +118,24 @@ export class GrantStore {
     const sql =
       `SELECT * FROM grants WHERE ${filters.join(" AND ")} ` +
       "ORDER BY created_at DESC, id ASC";
-    const rows = this.db.prepare(sql).all(...params) as unknown as GrantSqlRow[];
+    const rows = await this.sql.all<GrantSqlRow>(sql, params);
     return rows.map(toGrant);
   }
 
   /** Idempotent. Returns the updated row (or undefined if the id is unknown). */
-  revoke(args: { tenantId: string; id: string; now: string }): FrickGrant | undefined {
-    const existing = this.getById(args.tenantId, args.id);
+  async revoke(args: { tenantId: string; id: string; now: string }): Promise<FrickGrant | undefined> {
+    const existing = await this.getById(args.tenantId, args.id);
     if (!existing) {
       return undefined;
     }
     if (existing.revokedAt) {
       return existing;
     }
-    this.db
-      .prepare(
-        `UPDATE grants SET revoked_at = ?
+    await this.sql.run(
+      `UPDATE grants SET revoked_at = ?
           WHERE tenant_id = ? AND id = ? AND revoked_at IS NULL`,
-      )
-      .run(args.now, args.tenantId, args.id);
+      [args.now, args.tenantId, args.id],
+    );
     return { ...existing, revokedAt: args.now };
   }
 
@@ -144,26 +145,20 @@ export class GrantStore {
    * `tenantId` whose permission satisfies `required`. Returning a boolean
    * (rather than the row) keeps the hot-path interface minimal.
    */
-  hasActiveGrantFor(args: {
+  async hasActiveGrantFor(args: {
     tenantId: string;
     granteeUserId: string;
     recordType: string;
     recordId: string;
     required: FrickSharingPermission;
-  }): boolean {
-    const rows = this.db
-      .prepare(
-        `SELECT permission FROM grants
+  }): Promise<boolean> {
+    const rows = await this.sql.all<{ permission: string }>(
+      `SELECT permission FROM grants
           WHERE tenant_id = ? AND grantee_user_id = ?
             AND record_type = ? AND record_id = ?
             AND revoked_at IS NULL`,
-      )
-      .all(
-        args.tenantId,
-        args.granteeUserId,
-        args.recordType,
-        args.recordId,
-      ) as unknown as Array<{ permission: string }>;
+      [args.tenantId, args.granteeUserId, args.recordType, args.recordId],
+    );
     for (const row of rows) {
       if (frickSharingPermissionSatisfies(row.permission as FrickSharingPermission, args.required)) {
         return true;
@@ -185,23 +180,18 @@ export class GrantStore {
    * `"read"` also matches `"write"` grants because `"write"` satisfies
    * `"read"` (see {@link frickSharingPermissionSatisfies}).
    */
-  hasActiveGrantForRecordId(args: {
+  async hasActiveGrantForRecordId(args: {
     tenantId: string;
     granteeUserId: string;
     recordId: string;
-  }): boolean {
-    const rows = this.db
-      .prepare(
-        `SELECT permission FROM grants
+  }): Promise<boolean> {
+    const rows = await this.sql.all<{ permission: string }>(
+      `SELECT permission FROM grants
           WHERE tenant_id = ? AND grantee_user_id = ?
             AND record_id = ?
             AND revoked_at IS NULL`,
-      )
-      .all(
-        args.tenantId,
-        args.granteeUserId,
-        args.recordId,
-      ) as unknown as Array<{ permission: string }>;
+      [args.tenantId, args.granteeUserId, args.recordId],
+    );
     for (const row of rows) {
       if (frickSharingPermissionSatisfies(row.permission as FrickSharingPermission, "read")) {
         return true;

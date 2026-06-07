@@ -224,7 +224,7 @@ async function startServer() {
     dbPath: ":memory:",
     schema: productTestSchema,
   });
-  server.store.projections.register(createDemoDeltaProjection());
+  await server.store.projections.register(createDemoDeltaProjection());
   await server.listen();
   const address = server.server.address();
   if (!address || typeof address === "string") {

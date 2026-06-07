@@ -22,13 +22,13 @@ export interface BuildDashboardAccountsInput {
   readonly limit?: number;
 }
 
-export function buildDashboardAccounts(input: BuildDashboardAccountsInput): DashboardAccounts {
+export async function buildDashboardAccounts(input: BuildDashboardAccountsInput): Promise<DashboardAccounts> {
   const scope = input.principal.scope === "admin" ? "admin" : "tenant";
   const tenantId = scope === "admin"
     ? input.tenantId || input.principal.tenantId
     : input.principal.tenantId;
   const limit = normalizeDashboardAccountLimit(input.limit);
-  const rows = input.store.accounts.list(tenantId, limit + 1);
+  const rows = await input.store.accounts.list(tenantId, limit + 1);
   const accounts = rows.slice(0, limit);
 
   return {

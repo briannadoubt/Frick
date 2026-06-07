@@ -9,6 +9,7 @@
  *   - access-token cache (one token exchange across multiple sends within
  *     the same expiry window)
  */
+import { SqliteSqlDriver } from "../src/storage/sql-driver.js";
 import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
@@ -38,7 +39,7 @@ function setupTenant(env: NodeJS.ProcessEnv): {
   });
   const db = new DatabaseSync(":memory:");
   runFrameworkMigrations(db, { supportedSchemaRevision: foundationSchema.schemaRevision });
-  const tenantSettings = new TenantSettingsStore(db);
+  const tenantSettings = new TenantSettingsStore(new SqliteSqlDriver(db));
   saveFcmCredentials(
     tenantSettings,
     "tenant-1",
@@ -94,7 +95,7 @@ describe("FCM adapter", () => {
     const env = { FRICK_PUSH_CRED_KEY: freshKey() };
     const db = new DatabaseSync(":memory:");
     runFrameworkMigrations(db, { supportedSchemaRevision: foundationSchema.schemaRevision });
-    const tenantSettings = new TenantSettingsStore(db);
+    const tenantSettings = new TenantSettingsStore(new SqliteSqlDriver(db));
     const adapter = createFrickFcmAdapter({ env, fetch: (async () => new Response()) as typeof fetch });
     const delivery = await adapter.send(intent, registration, makeCtx(tenantSettings));
     expect(delivery.status).toBe("skipped");

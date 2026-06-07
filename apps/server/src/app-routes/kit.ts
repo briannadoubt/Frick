@@ -144,12 +144,15 @@ export function matchPath(pattern: string, pathname: string): Record<string, str
  * the token. Role/RBAC mapping is the app's responsibility — derive it from
  * the returned `userId`.
  */
-export function authenticateRequest(store: FrickStore, req: IncomingMessage): Principal | null {
+export async function authenticateRequest(
+  store: FrickStore,
+  req: IncomingMessage,
+): Promise<Principal | null> {
   const header = req.headers["authorization"];
   const token =
     typeof header === "string" && header.startsWith("Bearer ") ? header.slice(7) : undefined;
   if (!token) return null;
-  const session = store.sessions.readActive(token);
+  const session = await store.sessions.readActive(token);
   if (!session) return null;
   return {
     userId: session.userId,

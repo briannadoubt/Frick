@@ -19,7 +19,7 @@ function openPipeline(now = () => new Date("2026-05-17T00:00:00.000Z")) {
   });
 }
 
-afterEach(() => {
+afterEach(async () => {
   store?.close();
   store = undefined;
   db?.close();
@@ -45,7 +45,7 @@ describe("SQLite platform events", () => {
       payload: { jobType: "Example" },
     });
 
-    const [delivery] = await store.platformEvents.claim("dashboard");
+    const [delivery] = await await store.platformEvents.claim("dashboard");
     expect(delivery?.event.id).toBe(receipt.id);
     expect(delivery?.event.payload).toEqual({ jobType: "Example" });
   });

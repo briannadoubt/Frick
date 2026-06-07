@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import { BoundedIdempotencyCache } from "../src/storage/idempotency-cache.js";
 
 describe("BoundedIdempotencyCache", () => {
-  it("rejects non-positive capacity", () => {
+  it("rejects non-positive capacity", async () => {
     expect(() => new BoundedIdempotencyCache<string>(0)).toThrow();
     expect(() => new BoundedIdempotencyCache<string>(-1)).toThrow();
     expect(() => new BoundedIdempotencyCache<string>(Number.NaN)).toThrow();
   });
 
-  it("stores entries under capacity without evicting", () => {
+  it("stores entries under capacity without evicting", async () => {
     const cache = new BoundedIdempotencyCache<number>(3);
     cache.set("a", 1);
     cache.set("b", 2);
@@ -20,7 +20,7 @@ describe("BoundedIdempotencyCache", () => {
     expect(cache.get("c")).toBe(3);
   });
 
-  it("evicts least-recently-used keys in order when over capacity", () => {
+  it("evicts least-recently-used keys in order when over capacity", async () => {
     const cache = new BoundedIdempotencyCache<number>(2);
     cache.set("a", 1);
     cache.set("b", 2);
@@ -32,7 +32,7 @@ describe("BoundedIdempotencyCache", () => {
     expect(cache.get("c")).toBe(3);
   });
 
-  it("updates recency on get so oldest becomes newest after access", () => {
+  it("updates recency on get so oldest becomes newest after access", async () => {
     const cache = new BoundedIdempotencyCache<number>(3);
     cache.set("a", 1);
     cache.set("b", 2);
@@ -47,7 +47,7 @@ describe("BoundedIdempotencyCache", () => {
     expect(cache.get("d")).toBe(4);
   });
 
-  it("re-setting an existing key updates value and moves it to most-recent", () => {
+  it("re-setting an existing key updates value and moves it to most-recent", async () => {
     const cache = new BoundedIdempotencyCache<number>(3);
     cache.set("a", 1);
     cache.set("b", 2);
@@ -62,7 +62,7 @@ describe("BoundedIdempotencyCache", () => {
     expect(cache.get("d")).toBe(4);
   });
 
-  it("increments evictions counter on each eviction", () => {
+  it("increments evictions counter on each eviction", async () => {
     const cache = new BoundedIdempotencyCache<number>(2);
     cache.set("a", 1);
     cache.set("b", 2);
@@ -76,7 +76,7 @@ describe("BoundedIdempotencyCache", () => {
     expect(cache.size).toBe(2);
   });
 
-  it("get on missing key returns undefined without affecting state", () => {
+  it("get on missing key returns undefined without affecting state", async () => {
     const cache = new BoundedIdempotencyCache<number>(2);
     cache.set("a", 1);
     cache.set("b", 2);

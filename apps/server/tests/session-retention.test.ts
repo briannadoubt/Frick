@@ -10,7 +10,7 @@ import { FrickStore } from "../src/store.js";
 
 let store: FrickStore | undefined;
 
-afterEach(() => {
+afterEach(async () => {
   store?.close();
   store = undefined;
 });
@@ -40,23 +40,23 @@ const PAST = "2000-01-01T00:00:00.000Z";
 const FUTURE = "2999-01-01T00:00:00.000Z";
 
 describe("FrickStore auth_sessions retention", () => {
-  it("prunes expired session rows and leaves live ones", () => {
+  it("prunes expired session rows and leaves live ones", async () => {
     store = makeStore();
     createSession(store, "expired", PAST);
     createSession(store, "live", FUTURE);
 
     // Both rows physically exist before pruning (readAny ignores expiry).
-    expect(store.sessions.readAny("expired")).toBeDefined();
-    expect(store.sessions.readAny("live")).toBeDefined();
+    expect(await store.sessions.readAny("expired")).toBeDefined();
+    expect(await store.sessions.readAny("live")).toBeDefined();
 
-    const removed = store.sessions.pruneExpired();
+    const removed = await store.sessions.pruneExpired();
     expect(removed).toBe(1);
 
-    expect(store.sessions.readAny("expired")).toBeUndefined();
-    expect(store.sessions.readAny("live")).toBeDefined();
+    expect(await store.sessions.readAny("expired")).toBeUndefined();
+    expect(await store.sessions.readAny("live")).toBeDefined();
   });
 
-  it("keeps a recently-expired row within the grace window", () => {
+  it("keeps a recently-expired row within the grace window", async () => {
     // A 1h grace window: a row that expired 'now' is still within grace and
     // must survive a prune whose cutoff is one hour in the past.
     store = makeStore();
@@ -64,26 +64,26 @@ describe("FrickStore auth_sessions retention", () => {
     createSession(store, "recent", justExpired);
 
     const cutoff = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    expect(store.sessions.pruneExpired(cutoff)).toBe(0);
-    expect(store.sessions.readAny("recent")).toBeDefined();
+    expect(await store.sessions.pruneExpired(cutoff)).toBe(0);
+    expect(await store.sessions.readAny("recent")).toBeDefined();
 
     // With the default (no-grace) cutoff it is eligible.
-    expect(store.sessions.pruneExpired()).toBe(1);
-    expect(store.sessions.readAny("recent")).toBeUndefined();
+    expect(await store.sessions.pruneExpired()).toBe(1);
+    expect(await store.sessions.readAny("recent")).toBeUndefined();
   });
 
-  it("sweeps expired rows on the background pass when a grace is configured", () => {
+  it("sweeps expired rows on the background pass when a grace is configured", async () => {
     // Grace of 0 (default) — the store's own #safeExpiredSessionPrune deletes
     // anything already expired. Drive it by re-running the constructor's prime
     // path: create an expired row, then trigger a manual prune via the public
     // store API used by the timer.
     store = makeStore({ expiredSessionRetentionGraceMs: 0 });
     createSession(store, "dead", PAST);
-    expect(store.sessions.readAny("dead")).toBeDefined();
+    expect(await store.sessions.readAny("dead")).toBeDefined();
 
     // pruneExpired with the default cutoff mirrors what the background timer
     // calls each tick.
-    expect(store.sessions.pruneExpired()).toBe(1);
-    expect(store.sessions.readAny("dead")).toBeUndefined();
+    expect(await store.sessions.pruneExpired()).toBe(1);
+    expect(await store.sessions.readAny("dead")).toBeUndefined();
   });
 });

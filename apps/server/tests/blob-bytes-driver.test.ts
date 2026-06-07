@@ -25,15 +25,15 @@ const WORLD = new TextEncoder().encode("world blob");
 describe("FilesystemBlobBytesDriver", () => {
   let root: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     root = mkdtempSync(join(tmpdir(), "frick-blobs-"));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it("round-trips bytes (write/read/exists/delete)", () => {
+  it("round-trips bytes (write/read/exists/delete)", async () => {
     const driver = new FilesystemBlobBytesDriver(root);
 
     expect(driver.exists("tenant-a", "blob-1")).toBe(false);
@@ -48,19 +48,19 @@ describe("FilesystemBlobBytesDriver", () => {
     expect(driver.read("tenant-a", "blob-1")).toBeUndefined();
   });
 
-  it("overwrites existing bytes for the same id", () => {
+  it("overwrites existing bytes for the same id", async () => {
     const driver = new FilesystemBlobBytesDriver(root);
     driver.write("tenant-a", "blob-1", HELLO);
     driver.write("tenant-a", "blob-1", WORLD);
     expect(driver.read("tenant-a", "blob-1")).toEqual(Buffer.from(WORLD));
   });
 
-  it("delete on a missing blob is a no-op", () => {
+  it("delete on a missing blob is a no-op", async () => {
     const driver = new FilesystemBlobBytesDriver(root);
     expect(() => driver.delete("tenant-a", "missing")).not.toThrow();
   });
 
-  it("isolates tenants — one tenant cannot read another's bytes", () => {
+  it("isolates tenants — one tenant cannot read another's bytes", async () => {
     const driver = new FilesystemBlobBytesDriver(root);
     // Same blobId in two different tenants must not collide or leak.
     driver.write("tenant-a", "shared-id", HELLO);
@@ -79,7 +79,7 @@ describe("FilesystemBlobBytesDriver", () => {
     expect(driver.read("tenant-b", "shared-id")).toEqual(Buffer.from(WORLD));
   });
 
-  it("confines a path-traversal-shaped id to the storage root", () => {
+  it("confines a path-traversal-shaped id to the storage root", async () => {
     const driver = new FilesystemBlobBytesDriver(root);
     // A blobId crafted to escape the tenant dir must stay confined; bytes are
     // recoverable only via the same (tenantId, blobId) pair, and nothing is
@@ -104,7 +104,7 @@ describe("FilesystemBlobBytesDriver", () => {
     expect(readdirSync(root).length).toBeGreaterThan(0);
   });
 
-  it("fails fast when the storage path is not a writable directory", () => {
+  it("fails fast when the storage path is not a writable directory", async () => {
     // Create a regular file, then point the driver root *inside* that file's
     // path. mkdir can't create a directory beneath a file (ENOTDIR), so
     // construction must throw rather than start broken.
@@ -120,22 +120,22 @@ describe("createBlobBytesDriver", () => {
   let root: string;
   let db: DatabaseSync;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     root = mkdtempSync(join(tmpdir(), "frick-blobs-factory-"));
     db = new DatabaseSync(":memory:");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     db.close();
     rmSync(root, { recursive: true, force: true });
   });
 
-  it("defaults to the sqlite driver", () => {
+  it("defaults to the sqlite driver", async () => {
     const driver = createBlobBytesDriver({ driver: "sqlite", db });
     expect(driver).toBeInstanceOf(SqliteBlobBytesDriver);
   });
 
-  it("builds the filesystem driver when a path is provided", () => {
+  it("builds the filesystem driver when a path is provided", async () => {
     const driver = createBlobBytesDriver({
       driver: "filesystem",
       db,
@@ -144,7 +144,7 @@ describe("createBlobBytesDriver", () => {
     expect(driver).toBeInstanceOf(FilesystemBlobBytesDriver);
   });
 
-  it("fails clearly when filesystem is selected without a path", () => {
+  it("fails clearly when filesystem is selected without a path", async () => {
     expect(() => createBlobBytesDriver({ driver: "filesystem", db })).toThrow(
       /requires FRICK_BLOB_STORAGE_PATH/,
     );
@@ -157,18 +157,18 @@ describe("createBlobBytesDriver", () => {
 describe("FrickStore blob driver wiring", () => {
   let root: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     root = mkdtempSync(join(tmpdir(), "frick-blobs-store-"));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it("default sqlite driver keeps blob bytes in SQLite (behavior unchanged)", () => {
+  it("default sqlite driver keeps blob bytes in SQLite (behavior unchanged)", async () => {
     const store = new FrickStore({ path: ":memory:" });
     try {
-      store.blobs.create("tenant-a", {
+      await store.blobs.create("tenant-a", {
         blobId: "blob-1",
         ownerId: "user-1",
         contentHash: "hash",
@@ -177,7 +177,7 @@ describe("FrickStore blob driver wiring", () => {
       });
       store.blobs.writeContent("tenant-a", "blob-1", HELLO);
 
-      expect(store.blobs.readContent("tenant-a", "blob-1")).toEqual(Buffer.from(HELLO));
+      expect(await store.blobs.readContent("tenant-a", "blob-1")).toEqual(Buffer.from(HELLO));
       // No files are written to disk under the default driver.
       expect(readdirSync(root).length).toBe(0);
 
@@ -193,14 +193,14 @@ describe("FrickStore blob driver wiring", () => {
     }
   });
 
-  it("filesystem driver moves bytes to disk and keeps metadata in SQLite", () => {
+  it("filesystem driver moves bytes to disk and keeps metadata in SQLite", async () => {
     const store = new FrickStore({
       path: ":memory:",
       blobDriver: "filesystem",
       blobStoragePath: root,
     });
     try {
-      store.blobs.create("tenant-a", {
+      await store.blobs.create("tenant-a", {
         blobId: "blob-1",
         ownerId: "user-1",
         contentHash: "hash",
@@ -210,7 +210,7 @@ describe("FrickStore blob driver wiring", () => {
       store.blobs.writeContent("tenant-a", "blob-1", HELLO);
 
       // Bytes round-trip via the store facade.
-      expect(store.blobs.readContent("tenant-a", "blob-1")).toEqual(Buffer.from(HELLO));
+      expect(await store.blobs.readContent("tenant-a", "blob-1")).toEqual(Buffer.from(HELLO));
       // Bytes are on disk, not in SQLite.
       expect(readdirSync(root).length).toBeGreaterThan(0);
       const row = store
@@ -219,13 +219,13 @@ describe("FrickStore blob driver wiring", () => {
         .get("tenant-a", "blob-1");
       expect(row).toBeUndefined();
       // Metadata still lives in SQLite.
-      expect(store.blobs.read("tenant-a", "blob-1")?.mimeType).toBe("text/plain");
+      expect(await store.blobs.read("tenant-a", "blob-1")?.mimeType).toBe("text/plain");
     } finally {
       store.close();
     }
   });
 
-  it("filesystem driver isolates tenants through the store facade", () => {
+  it("filesystem driver isolates tenants through the store facade", async () => {
     const store = new FrickStore({
       path: ":memory:",
       blobDriver: "filesystem",
@@ -234,9 +234,9 @@ describe("FrickStore blob driver wiring", () => {
     try {
       store.blobs.writeContent("tenant-a", "shared", HELLO);
       store.blobs.writeContent("tenant-b", "shared", WORLD);
-      expect(store.blobs.readContent("tenant-a", "shared")).toEqual(Buffer.from(HELLO));
-      expect(store.blobs.readContent("tenant-b", "shared")).toEqual(Buffer.from(WORLD));
-      expect(store.blobs.readContent("tenant-c", "shared")).toBeUndefined();
+      expect(await store.blobs.readContent("tenant-a", "shared")).toEqual(Buffer.from(HELLO));
+      expect(await store.blobs.readContent("tenant-b", "shared")).toEqual(Buffer.from(WORLD));
+      expect(await store.blobs.readContent("tenant-c", "shared")).toBeUndefined();
     } finally {
       store.close();
     }
@@ -244,12 +244,12 @@ describe("FrickStore blob driver wiring", () => {
 });
 
 describe("loadFrickConfig blob driver", () => {
-  it("defaults the blob driver to sqlite", () => {
+  it("defaults the blob driver to sqlite", async () => {
     const config = loadFrickConfig({}, { env: {}, warn: () => {} });
     expect(config.blobDriver).toBe("sqlite");
   });
 
-  it("parses FRICK_BLOB_DRIVER=filesystem with a storage path", () => {
+  it("parses FRICK_BLOB_DRIVER=filesystem with a storage path", async () => {
     const config = loadFrickConfig(
       {},
       {
@@ -264,13 +264,13 @@ describe("loadFrickConfig blob driver", () => {
     expect(config.blobStoragePath).toBe("/tmp/frick-blobs");
   });
 
-  it("rejects an invalid blob driver value", () => {
+  it("rejects an invalid blob driver value", async () => {
     expect(() =>
       loadFrickConfig({}, { env: { FRICK_BLOB_DRIVER: "s3" }, warn: () => {} }),
     ).toThrow(/FRICK_BLOB_DRIVER must be one of sqlite, filesystem/);
   });
 
-  it("fails fast when filesystem is selected without a path", () => {
+  it("fails fast when filesystem is selected without a path", async () => {
     expect(() =>
       loadFrickConfig(
         { blobStoragePath: "   " },

@@ -182,6 +182,11 @@ export class SyncGateway {
 
   attach(): void {
     this.wss.on("connection", (socket, request) => {
+      void this.#handleConnection(socket, request);
+    });
+  }
+
+  async #handleConnection(socket: WebSocket, request: IncomingMessage): Promise<void> {
       socket.on("error", () => {
         // Protocol-level closes (for example ws maxPayload violations) are
         // expected to emit on the socket before the close event finishes the
@@ -196,7 +201,7 @@ export class SyncGateway {
         return;
       }
       const sessionToken = bearerTokenFromRequest(request);
-      const principal = sessionToken ? this.#principalFromSessionToken(sessionToken) : undefined;
+      const principal = sessionToken ? await this.#principalFromSessionToken(sessionToken) : undefined;
       const client: SyncClient = {
         socket,
         subscriptions: new Map(),
@@ -206,7 +211,7 @@ export class SyncGateway {
       // Resolve per-tenant limits once per connection; fall back to global
       // when no principal (e.g. pre-hello unauthenticated connect).
       const resolved = principal
-        ? resolveTenantLimits(principal.tenantId, this.store, this.#limits)
+        ? await resolveTenantLimits(principal.tenantId, this.store, this.#limits)
         : this.#limits;
       // Per-principal connection cap: when this connection authenticates at
       // connect (bearer token), reserve a slot before any other registration
@@ -250,9 +255,16 @@ export class SyncGateway {
 
       const heartbeat = this.#startHeartbeat(client, socket);
 
+      // Frame handlers are async (the storage seam is async). Serialize them
+      // per connection through a promise chain so frames from one client are
+      // processed strictly in arrival order — interleaving them at await
+      // points could reorder appends or races a write against its own ack.
+      let frameChain: Promise<void> = Promise.resolve();
       socket.on("message", (payload) => {
         this.#lastSeenAt.set(client, Date.now());
-        this.#handleRawFrame(client, socket, payload as Buffer);
+        frameChain = frameChain.then(() =>
+          this.#handleRawFrame(client, socket, payload as Buffer),
+        );
       });
       socket.on("close", (code) => {
         clearInterval(heartbeat);
@@ -280,7 +292,6 @@ export class SyncGateway {
           },
         });
       });
-    });
   }
 
   close(): void {
@@ -604,7 +615,7 @@ export class SyncGateway {
   }
 
   publishObjects(type: string, objects: PlainObject[], tenantId?: string): void {
-    this.#fanOutObjects(type, objects, tenantId);
+    void this.#fanOutObjects(type, objects, tenantId);
     if (this.#clusterBus && tenantId !== undefined) {
       this.#clusterBus.publish({
         kind: "objects",
@@ -680,13 +691,13 @@ export class SyncGateway {
   }
 
   /** Local-only object fan-out, also reused by the cluster handler. */
-  #fanOutObjects(type: string, objects: PlainObject[], tenantId?: string): void {
+  async #fanOutObjects(type: string, objects: PlainObject[], tenantId?: string): Promise<void> {
     const cursor = Date.now();
     // Short-circuit: per-record read authz only changes the row set when an
     // app registered a policy hook OR a grant has ever been issued. With
     // neither, the baseline decision allows every in-tenant row, so existing
     // deployments pay no per-row decide() cost (FR-116).
-    const perRecordActive = this.#perRecordReadAuthzActive();
+    const perRecordActive = await this.#perRecordReadAuthzActive();
     for (const { client: subscriber } of this.#subscriptions.objectSubscribers(type)) {
       const principal = subscriber.principal;
       if (!principal || !this.#isPrincipalActive(principal)) {
@@ -704,9 +715,17 @@ export class SyncGateway {
       const tenantVisible = objects.filter((object) =>
         this.store.isObjectVisibleToUser(principal.tenantId, type, object, principal.userId),
       );
-      const visibleObjects = perRecordActive
-        ? tenantVisible.filter((object) => this.#canSubscriberReadObject(principal, type, object))
-        : tenantVisible;
+      let visibleObjects: PlainObject[];
+      if (perRecordActive) {
+        visibleObjects = [];
+        for (const object of tenantVisible) {
+          if (await this.#canSubscriberReadObject(principal, type, object)) {
+            visibleObjects.push(object);
+          }
+        }
+      } else {
+        visibleObjects = tenantVisible;
+      }
       if (visibleObjects.length === 0) {
         continue;
       }
@@ -725,8 +744,8 @@ export class SyncGateway {
    * per-row `decide()` entirely and keep the original allow-all behavior with
    * zero per-row cost (FR-116). Cheap: a length read plus a single EXISTS probe.
    */
-  #perRecordReadAuthzActive(): boolean {
-    return this.#policyHooks.length > 0 || !this.store.grants.isEmpty;
+  async #perRecordReadAuthzActive(): Promise<boolean> {
+    return this.#policyHooks.length > 0 || !(await this.store.grants.isEmptyAsync());
   }
 
   /**
@@ -737,7 +756,7 @@ export class SyncGateway {
    * string `id` are treated as readable — they cannot be keyed for a grant or
    * policy decision and the original fan-out delivered them.
    */
-  #canSubscriberReadObject(principal: Principal, type: string, object: PlainObject): boolean {
+  async #canSubscriberReadObject(principal: Principal, type: string, object: PlainObject): Promise<boolean> {
     const id = object.id;
     if (typeof id !== "string") {
       return true;
@@ -773,7 +792,7 @@ export class SyncGateway {
         );
         return;
       case "objects":
-        this.#fanOutObjects(envelope.type, envelope.objects as PlainObject[], envelope.tenantId);
+        void this.#fanOutObjects(envelope.type, envelope.objects as PlainObject[], envelope.tenantId);
         return;
       case "objectDeletes":
         this.#fanOutObjectDeletes(envelope.type, envelope.ids as string[], envelope.tenantId);
@@ -831,7 +850,7 @@ export class SyncGateway {
     }
   }
 
-  #handleRawFrame(client: SyncClient, socket: WebSocket, payload: Buffer): void {
+  async #handleRawFrame(client: SyncClient, socket: WebSocket, payload: Buffer): Promise<void> {
     const byteLength = measureByteLength(payload);
     if (byteLength > this.#limits.maxWebSocketFrameBytes) {
       const envelope = createFrickErrorEnvelope({
@@ -880,7 +899,7 @@ export class SyncGateway {
         tenantId: client.principal?.tenantId,
         userId: client.principal?.userId,
       });
-      this.#handleFrame(client, decoded);
+      await this.#handleFrame(client, decoded);
     } catch (error) {
       const envelope = createFrickErrorEnvelope({
         code: "sync.protocolError",
@@ -900,7 +919,7 @@ export class SyncGateway {
     }
   }
 
-  #handleFrame(client: SyncClient, frame: FrickFrame): void {
+  async #handleFrame(client: SyncClient, frame: FrickFrame): Promise<void> {
     if (
       !this.#completedHandshakes.has(client) &&
       frame[0] !== FrameKind.Hello &&
@@ -925,7 +944,7 @@ export class SyncGateway {
 
     switch (frame[0]) {
       case FrameKind.Hello: {
-        if (!this.#authenticateHelloSession(client, frame[1].sessionToken)) {
+        if (!(await this.#authenticateHelloSession(client, frame[1].sessionToken))) {
           return;
         }
 
@@ -1036,22 +1055,22 @@ export class SyncGateway {
         return;
       }
       case FrameKind.Subscribe:
-        this.#handleSubscribe(client, frame[1]);
+        await this.#handleSubscribe(client, frame[1]);
         return;
       case FrameKind.Append:
-        this.#handleAppend(client, frame[1]);
+        await this.#handleAppend(client, frame[1]);
         return;
       case FrameKind.ObjectUpsert:
-        this.#handleObjectUpsert(client, frame[1]);
+        await this.#handleObjectUpsert(client, frame[1]);
         return;
       case FrameKind.PresenceSet:
-        this.#handlePresenceSet(client, frame[1]);
+        await this.#handlePresenceSet(client, frame[1]);
         return;
       case FrameKind.PresenceClear:
-        this.#handlePresenceClear(client, frame[1]);
+        await this.#handlePresenceClear(client, frame[1]);
         return;
       case FrameKind.SignalSend:
-        this.#handleSignal(client, frame[1]);
+        await this.#handleSignal(client, frame[1]);
         return;
       case FrameKind.CursorCommit:
         this.#sendFrame(client, [FrameKind.Ack, { requestId: frame[1].subscriptionId, cursor: frame[1].cursor }]);
@@ -1064,8 +1083,8 @@ export class SyncGateway {
     }
   }
 
-  #handleSubscribe(client: SyncClient, payload: SubscribePayload): void {
-    const principal = this.#activePrincipalForFrame(client, payload.subscriptionId);
+  async #handleSubscribe(client: SyncClient, payload: SubscribePayload): Promise<void> {
+    const principal = await this.#activePrincipalForFrame(client, payload.subscriptionId);
     if (!principal) {
       return;
     }
@@ -1146,7 +1165,7 @@ export class SyncGateway {
       const key = requireKey(payload);
       const cursor = payload.cursor ?? 0;
       const pageLimit = clientLimits.maxStreamPageSize;
-      const page = this.store.readEvents(principal.tenantId, payload.name, key, cursor, pageLimit + 1);
+      const page = await this.store.readEvents(principal.tenantId, payload.name, key, cursor, pageLimit + 1);
       const hasMore = page.length > pageLimit;
       const events = page.slice(0, pageLimit).map((event) => packStreamEvent(this.store.schema, event));
       this.#sendFrame(client, [
@@ -1169,16 +1188,22 @@ export class SyncGateway {
       // authorized to read are omitted; a grant on a record makes it visible to
       // the grantee. Skipped entirely (allow-all) when no policy hook or grant
       // is configured — see #perRecordReadAuthzActive / #fanOutObjects.
-      const tenantRows = this.store.listObjectsForUser(
+      const tenantRows = await this.store.listObjectsForUser(
         principal.tenantId,
         payload.name,
         principal.userId,
       );
-      const visibleRows = this.#perRecordReadAuthzActive()
-        ? tenantRows.filter((object) =>
-            this.#canSubscriberReadObject(principal, payload.name, object),
-          )
-        : tenantRows;
+      let visibleRows: PlainObject[];
+      if (await this.#perRecordReadAuthzActive()) {
+        visibleRows = [];
+        for (const object of tenantRows) {
+          if (await this.#canSubscriberReadObject(principal, payload.name, object)) {
+            visibleRows.push(object);
+          }
+        }
+      } else {
+        visibleRows = tenantRows;
+      }
       const objects = packObjects(this.store, payload.name, visibleRows);
       this.#sendFrame(client, [FrameKind.Snapshot, { subscriptionId: payload.subscriptionId, objects, cursor: 0 }]);
     }
@@ -1203,8 +1228,8 @@ export class SyncGateway {
     this.#sendFrame(client, [FrameKind.Schema, schema]);
   }
 
-  #handleAppend(client: SyncClient, payload: AppendPayload): void {
-    const principal = this.#activePrincipalForFrame(client, payload.requestId);
+  async #handleAppend(client: SyncClient, payload: AppendPayload): Promise<void> {
+    const principal = await this.#activePrincipalForFrame(client, payload.requestId);
     if (!principal) {
       return;
     }
@@ -1251,7 +1276,7 @@ export class SyncGateway {
     this.#pendingAppendCounts.set(client, pending + 1);
     try {
       try {
-        assertCanAppend(
+        await assertCanAppend(
           principal,
           payload.stream,
           payload.key,
@@ -1266,7 +1291,7 @@ export class SyncGateway {
         }
         throw error;
       }
-      const result = this.store.appendEvent({
+      const result = await this.store.appendEvent({
         tenantId: principal.tenantId,
         requestId: payload.requestId,
         replicaId: principal.replicaId,
@@ -1286,8 +1311,8 @@ export class SyncGateway {
     }
   }
 
-  #handleObjectUpsert(client: SyncClient, payload: ObjectUpsertPayload): void {
-    const principal = this.#activePrincipalForFrame(client, payload.requestId);
+  async #handleObjectUpsert(client: SyncClient, payload: ObjectUpsertPayload): Promise<void> {
+    const principal = await this.#activePrincipalForFrame(client, payload.requestId);
     if (!principal) {
       return;
     }
@@ -1319,7 +1344,7 @@ export class SyncGateway {
     this.#pendingAppendCounts.set(client, pending + 1);
     try {
       try {
-        assertCanWriteObject(
+        await assertCanWriteObject(
           principal,
           payload.objectType,
           payload.objectId,
@@ -1337,7 +1362,7 @@ export class SyncGateway {
 
       const mergePolicy = this.store.objectMergePolicy(payload.objectType);
       try {
-        const result = this.store.upsertObjectWithPolicy({
+        const result = await this.store.upsertObjectWithPolicy({
           tenantId: principal.tenantId,
           type: payload.objectType,
           id: payload.objectId,
@@ -1380,13 +1405,13 @@ export class SyncGateway {
     }
   }
 
-  #handlePresenceSet(client: SyncClient, payload: PresenceSetPayload): void {
-    const principal = this.#activePrincipalForFrame(client, payload.requestId);
+  async #handlePresenceSet(client: SyncClient, payload: PresenceSetPayload): Promise<void> {
+    const principal = await this.#activePrincipalForFrame(client, payload.requestId);
     if (!principal) {
       return;
     }
     try {
-      assertCanWritePresence(
+      await assertCanWritePresence(
         principal,
         payload.name,
         payload.key,
@@ -1408,7 +1433,7 @@ export class SyncGateway {
       this.#limits.presenceTtlMaxSeconds,
       (from, to) => console.warn(`Clamped presence TTL for ${payload.name} from ${from}s to ${to}s`),
     );
-    this.store.setPresence(principal.tenantId, payload.name, payload.key, payload.value, clampedSeconds * 1000);
+    await this.store.setPresence(principal.tenantId, payload.name, payload.key, payload.value, clampedSeconds * 1000);
     this.#fanOutPresenceDelta(principal.tenantId, payload.name, payload.key, [
       { key: payload.key, value: payload.value },
     ], []);
@@ -1425,13 +1450,13 @@ export class SyncGateway {
     this.#sendFrame(client, [FrameKind.Ack, { requestId: payload.requestId }]);
   }
 
-  #handlePresenceClear(client: SyncClient, payload: PresenceClearPayload): void {
-    const principal = this.#activePrincipalForFrame(client, payload.requestId);
+  async #handlePresenceClear(client: SyncClient, payload: PresenceClearPayload): Promise<void> {
+    const principal = await this.#activePrincipalForFrame(client, payload.requestId);
     if (!principal) {
       return;
     }
     try {
-      assertCanWritePresence(
+      await assertCanWritePresence(
         principal,
         payload.name,
         payload.key,
@@ -1444,7 +1469,7 @@ export class SyncGateway {
       }
       throw error;
     }
-    this.store.clearPresence(principal.tenantId, payload.name, payload.key);
+    await this.store.clearPresence(principal.tenantId, payload.name, payload.key);
     this.#fanOutPresenceDelta(principal.tenantId, payload.name, payload.key, [], [payload.key]);
     if (this.#clusterBus) {
       this.#clusterBus.publish({
@@ -1487,13 +1512,13 @@ export class SyncGateway {
     }
   }
 
-  #handleSignal(client: SyncClient, payload: SignalPayload): void {
-    const principal = this.#activePrincipalForFrame(client, payload.requestId);
+  async #handleSignal(client: SyncClient, payload: SignalPayload): Promise<void> {
+    const principal = await this.#activePrincipalForFrame(client, payload.requestId);
     if (!principal) {
       return;
     }
     try {
-      assertCanSignal(
+      await assertCanSignal(
         principal,
         payload.name,
         payload.key,
@@ -1506,8 +1531,8 @@ export class SyncGateway {
       }
       throw error;
     }
-    this.store.enqueueSignal(principal.tenantId, payload.name, payload.key, payload.value);
-    routeSignal(this.store, this.#subscriptions, payload, principal.tenantId, {
+    await this.store.enqueueSignal(principal.tenantId, payload.name, payload.key, payload.value);
+    await routeSignal(this.store, this.#subscriptions, payload, principal.tenantId, {
       maxBufferedAmount: this.#limitsFor(client).maxWebSocketOutboundBufferedBytes,
     });
     this.#sendFrame(client, [FrameKind.Ack, { requestId: payload.requestId }]);
@@ -1532,14 +1557,14 @@ export class SyncGateway {
     return true;
   }
 
-  #activePrincipalForFrame(client: SyncClient, requestId: string): Principal | undefined {
+  async #activePrincipalForFrame(client: SyncClient, requestId: string): Promise<Principal | undefined> {
     let principal = client.principal;
     if (!principal) {
       this.#sendAuthNack(client, requestId, new AuthenticationError("Missing session token"));
       return undefined;
     }
     if (client.sessionToken) {
-      const active = this.#principalFromActiveSessionToken(client.sessionToken);
+      const active = await this.#principalFromActiveSessionToken(client.sessionToken);
       if (active instanceof AuthenticationError) {
         this.#sendAuthNack(client, requestId, active);
         try {
@@ -1581,11 +1606,11 @@ export class SyncGateway {
     return principal;
   }
 
-  #authenticateHelloSession(client: SyncClient, sessionToken: string | undefined): boolean {
+  async #authenticateHelloSession(client: SyncClient, sessionToken: string | undefined): Promise<boolean> {
     if (!sessionToken) {
       return true;
     }
-    const principal = this.#principalFromSessionToken(sessionToken);
+    const principal = await this.#principalFromSessionToken(sessionToken);
     if (!principal) {
       this.#sendHelloAuthNack(client, {
         code: "auth.unauthenticated",
@@ -1607,13 +1632,13 @@ export class SyncGateway {
     // connections. Connections that authenticated at connect already hold a
     // reservation for this principal — the reserve call is idempotent for the
     // same `(tenantId, userId)` key, so it returns true without re-counting.
-    const reservationLimits = resolveTenantLimits(principal.tenantId, this.store, this.#limits);
+    const reservationLimits = await resolveTenantLimits(principal.tenantId, this.store, this.#limits);
     if (!this.#tryReservePrincipalConnection(client, principal, reservationLimits)) {
       this.#rejectHelloPrincipalConnection(client, reservationLimits);
       return false;
     }
 
-    this.#setClientSession(client, sessionToken, principal);
+    await this.#setClientSession(client, sessionToken, principal);
     return true;
   }
 
@@ -1670,21 +1695,21 @@ export class SyncGateway {
     }
   }
 
-  #principalFromSessionToken(token: string): Principal | undefined {
-    const principal = this.#principalFromActiveSessionToken(token);
+  async #principalFromSessionToken(token: string): Promise<Principal | undefined> {
+    const principal = await this.#principalFromActiveSessionToken(token);
     return principal instanceof AuthenticationError ? undefined : principal;
   }
 
-  #principalFromActiveSessionToken(token: string): Principal | AuthenticationError {
-    const session = this.store.readActiveSession(token);
+  async #principalFromActiveSessionToken(token: string): Promise<Principal | AuthenticationError> {
+    const session = await this.store.readActiveSession(token);
     if (!session) {
-      const stale = this.store.readAnySession(token);
+      const stale = await this.store.readAnySession(token);
       if (stale && Date.parse(stale.expiresAt) <= Date.now()) {
         return new SessionExpiredError();
       }
       return new AuthenticationError("Invalid or expired session token");
     }
-    if (!this.#isTenantActive(session.tenantId)) {
+    if (!await this.#isTenantActive(session.tenantId)) {
       return new AuthenticationError("Tenant is archived");
     }
     return {
@@ -1695,7 +1720,7 @@ export class SyncGateway {
     };
   }
 
-  #setClientSession(client: SyncClient, sessionToken: string, principal: Principal): void {
+  async #setClientSession(client: SyncClient, sessionToken: string, principal: Principal): Promise<void> {
     if (!client.principal) {
       this.#bumpTenantCount(principal.tenantId, +1);
     }
@@ -1705,7 +1730,7 @@ export class SyncGateway {
       this.#addSessionClient(sessionToken, client);
     }
     client.principal = principal;
-    this.#clientLimits.set(client, resolveTenantLimits(principal.tenantId, this.store, this.#limits));
+    this.#clientLimits.set(client, await resolveTenantLimits(principal.tenantId, this.store, this.#limits));
     this.#authenticateWebSocketTelemetryConnection(client, principal);
   }
 
@@ -1732,11 +1757,11 @@ export class SyncGateway {
   }
 
   #isPrincipalActive(principal: Principal): boolean {
-    return principal.scope === "admin" || this.#isTenantActive(principal.tenantId);
+    return principal.scope === "admin" || !principal.tenantId.startsWith("_archived_");
   }
 
-  #isTenantActive(tenantId: string): boolean {
-    return this.store.tenants.get(tenantId)?.archivedAt === undefined;
+  async #isTenantActive(tenantId: string): Promise<boolean> {
+    return (await this.store.tenants.get(tenantId))?.archivedAt === undefined;
   }
 }
 

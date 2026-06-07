@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { SqlDriver } from "./sql-driver.js";
 
 /**
  * One entry in the admin audit log. Rows are appended by the admin route
@@ -102,11 +102,13 @@ function constantTimeEquals(a: string, b: string): boolean {
 
 export class AdminAuditStore {
   constructor(
-    private readonly db: DatabaseSync,
+    private readonly sql: SqlDriver,
     private readonly now: () => Date = () => new Date(),
   ) {}
 
-  record(input: Omit<AdminAuditRow, "id" | "occurredAt" | "previousHash" | "entryHash">): AdminAuditRow {
+  async record(
+    input: Omit<AdminAuditRow, "id" | "occurredAt" | "previousHash" | "entryHash">,
+  ): Promise<AdminAuditRow> {
     const occurredAt = this.now().toISOString();
     const target = input.target ?? null;
     const detail = input.detail ?? null;
@@ -115,9 +117,9 @@ export class AdminAuditStore {
     // `id DESC` because `id` is the AUTOINCREMENT insertion order — clock
     // skew on `occurred_at` would otherwise let two rows tie. Empty string
     // for the genesis row keeps the canonical input stable.
-    const previousRow = this.db
-      .prepare(`SELECT entry_hash FROM admin_audit_log ORDER BY id DESC LIMIT 1`)
-      .get() as { entry_hash: string | null } | undefined;
+    const previousRow = await this.sql.get<{ entry_hash: string | null }>(
+      `SELECT entry_hash FROM admin_audit_log ORDER BY id DESC LIMIT 1`,
+    );
     const previousHash = previousRow?.entry_hash ?? "";
 
     const canonical = canonicalJson({
@@ -130,13 +132,11 @@ export class AdminAuditStore {
     });
     const entryHash = computeEntryHash(previousHash, canonical);
 
-    const result = this.db
-      .prepare(
-        `INSERT INTO admin_audit_log
+    const result = await this.sql.run(
+      `INSERT INTO admin_audit_log
            (occurred_at, admin_token_fingerprint, action, target, outcome, detail, previous_hash, entry_hash)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
+      [
         occurredAt,
         input.adminTokenFingerprint,
         input.action,
@@ -145,7 +145,8 @@ export class AdminAuditStore {
         detail,
         previousHash,
         entryHash,
-      );
+      ],
+    );
     return {
       id: Number(result.lastInsertRowid),
       occurredAt,
@@ -159,7 +160,7 @@ export class AdminAuditStore {
     };
   }
 
-  list(options: AdminAuditListOptions = {}): AdminAuditRow[] {
+  async list(options: AdminAuditListOptions = {}): Promise<AdminAuditRow[]> {
     const clauses: string[] = [];
     const params: Array<string | number> = [];
     if (options.since !== undefined) {
@@ -174,16 +175,15 @@ export class AdminAuditStore {
     const requested = options.limit ?? DEFAULT_LIST_LIMIT;
     const limit = Math.max(1, Math.min(MAX_LIST_LIMIT, Math.floor(requested)));
     params.push(limit);
-    const rows = this.db
-      .prepare(
-        `SELECT id, occurred_at, admin_token_fingerprint, action, target, outcome, detail,
+    const rows = await this.sql.all<AdminAuditSqlRow>(
+      `SELECT id, occurred_at, admin_token_fingerprint, action, target, outcome, detail,
                 previous_hash, entry_hash
            FROM admin_audit_log
            ${where}
            ORDER BY occurred_at DESC, id DESC
            LIMIT ?`,
-      )
-      .all(...params) as unknown as AdminAuditSqlRow[];
+      params,
+    );
     return rows.map(toRow);
   }
 
@@ -194,15 +194,13 @@ export class AdminAuditStore {
    * Rows with a NULL `entry_hash` (pre-chain rows from before migration 0012)
    * are skipped — they form the implicit "genesis" prefix.
    */
-  verifyChain(): AdminAuditChainVerification {
-    const rows = this.db
-      .prepare(
-        `SELECT id, occurred_at, admin_token_fingerprint, action, target, outcome, detail,
+  async verifyChain(): Promise<AdminAuditChainVerification> {
+    const rows = await this.sql.all<AdminAuditSqlRow>(
+      `SELECT id, occurred_at, admin_token_fingerprint, action, target, outcome, detail,
                 previous_hash, entry_hash
            FROM admin_audit_log
            ORDER BY id ASC`,
-      )
-      .all() as unknown as AdminAuditSqlRow[];
+    );
 
     let previousHash = "";
     let sawHashed = false;

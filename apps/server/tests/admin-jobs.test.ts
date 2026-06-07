@@ -56,7 +56,7 @@ describe("/_frick/admin/jobs/:jobType POST", () => {
     });
 
     expect(response.status).toBe(500);
-    expect(app.store.jobs.list({ jobType: "TestJob" })).toEqual([]);
+    expect(await app.store.jobs.list({ jobType: "TestJob" })).toEqual([]);
   });
 
   it("non-admin bearer returns 403", async () => {

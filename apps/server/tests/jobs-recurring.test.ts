@@ -18,7 +18,7 @@ afterEach(async () => {
 });
 
 describe("createFrickRecurringRegistry", () => {
-  it("enforces minimum intervalMs of 60_000", () => {
+  it("enforces minimum intervalMs of 60_000", async () => {
     expect(() =>
       createFrickRecurringRegistry([
         {
@@ -31,7 +31,7 @@ describe("createFrickRecurringRegistry", () => {
     ).toThrow(/intervalMs must be >= 60000/);
   });
 
-  it("accepts intervalMs exactly at the minimum", () => {
+  it("accepts intervalMs exactly at the minimum", async () => {
     expect(() =>
       createFrickRecurringRegistry([
         {
@@ -44,7 +44,7 @@ describe("createFrickRecurringRegistry", () => {
     ).not.toThrow();
   });
 
-  it("lists registered jobs", () => {
+  it("lists registered jobs", async () => {
     const job: FrickRecurringJob = {
       name: "test-job",
       jobType: "test",
@@ -253,7 +253,7 @@ describe("createRecurringScheduler", () => {
     store.close();
   });
 
-  it("stop prevents further ticks", () => {
+  it("stop prevents further ticks", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000_000_000_000);
 

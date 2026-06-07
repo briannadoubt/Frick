@@ -1,8 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   SqliteBlobBytesDriver,
   type BlobBytesDriver,
 } from "./blob-bytes-driver.js";
+import type { SqlDriver } from "./sql-driver.js";
+import type { SqliteSqlDriver } from "./sql-driver.js";
 
 export interface BlobMetadataInput {
   blobId: string;
@@ -33,26 +34,31 @@ export class BlobStore {
   readonly #bytes: BlobBytesDriver;
 
   /**
-   * Blob *metadata* always lives in SQLite (`this.db`). Blob *bytes* are served
-   * by a pluggable {@link BlobBytesDriver} (FR-53). When no driver is supplied,
-   * the store defaults to the SQLite bytes driver, preserving the historical
-   * behavior of storing bytes in the `blob_content` table.
+   * Blob *metadata* always lives in the SQL driver (`this.sql`). Blob *bytes*
+   * are served by a pluggable {@link BlobBytesDriver} (FR-53). When no driver
+   * is supplied, the store defaults to the SQLite bytes driver, preserving the
+   * historical behavior of storing bytes in the `blob_content` table.
    */
   constructor(
-    private readonly db: DatabaseSync,
+    private readonly sql: SqlDriver,
     bytes?: BlobBytesDriver,
   ) {
-    this.#bytes = bytes ?? new SqliteBlobBytesDriver(db);
+    // Fall back to the SQLite bytes driver using the raw DatabaseSync handle
+    // exposed by SqliteSqlDriver. This keeps the bytes driver synchronous
+    // (BlobBytesDriver interface is sync) while the metadata path is async.
+    this.#bytes =
+      bytes ??
+      new SqliteBlobBytesDriver(
+        (sql as SqliteSqlDriver).rawDb,
+      );
   }
 
-  create(tenantId: string, metadata: BlobMetadataInput): void {
-    this.db
-      .prepare(
-        `INSERT OR REPLACE INTO blob_metadata
+  async create(tenantId: string, metadata: BlobMetadataInput): Promise<void> {
+    await this.sql.run(
+      `INSERT OR REPLACE INTO blob_metadata
           (tenant_id, blob_id, owner_id, content_hash, byte_length, mime_type, storage_key, created_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
+      [
         tenantId,
         metadata.blobId,
         metadata.ownerId,
@@ -61,31 +67,31 @@ export class BlobStore {
         metadata.mimeType,
         metadata.storageKey ?? null,
         new Date().toISOString(),
-      );
+      ],
+    );
   }
 
-  read(tenantId: string, blobId: string): BlobMetadata | undefined {
-    const row = this.db
-      .prepare("SELECT * FROM blob_metadata WHERE tenant_id = ? AND blob_id = ?")
-      .get(tenantId, blobId) as BlobRow | undefined;
+  async read(tenantId: string, blobId: string): Promise<BlobMetadata | undefined> {
+    const row = await this.sql.get<BlobRow>(
+      "SELECT * FROM blob_metadata WHERE tenant_id = ? AND blob_id = ?",
+      [tenantId, blobId],
+    );
     if (!row) {
       return undefined;
     }
     return mapBlobRow(row);
   }
 
-  list(tenantId: string, ownerId?: string): BlobMetadata[] {
+  async list(tenantId: string, ownerId?: string): Promise<BlobMetadata[]> {
     const rows = ownerId
-      ? (this.db
-          .prepare(
-            "SELECT * FROM blob_metadata WHERE tenant_id = ? AND owner_id = ? ORDER BY created_at DESC, blob_id ASC",
-          )
-          .all(tenantId, ownerId) as unknown as BlobRow[])
-      : (this.db
-          .prepare(
-            "SELECT * FROM blob_metadata WHERE tenant_id = ? ORDER BY created_at DESC, blob_id ASC",
-          )
-          .all(tenantId) as unknown as BlobRow[]);
+      ? await this.sql.all<BlobRow>(
+          "SELECT * FROM blob_metadata WHERE tenant_id = ? AND owner_id = ? ORDER BY created_at DESC, blob_id ASC",
+          [tenantId, ownerId],
+        )
+      : await this.sql.all<BlobRow>(
+          "SELECT * FROM blob_metadata WHERE tenant_id = ? ORDER BY created_at DESC, blob_id ASC",
+          [tenantId],
+        );
     return rows.map(mapBlobRow);
   }
 
@@ -96,12 +102,11 @@ export class BlobStore {
    * principal's usage never reflects another principal's or another tenant's
    * blobs. Returns `0` when the owner has no blobs.
    */
-  totalBytesForOwner(tenantId: string, ownerId: string): number {
-    const row = this.db
-      .prepare(
-        "SELECT COALESCE(SUM(byte_length), 0) AS total FROM blob_metadata WHERE tenant_id = ? AND owner_id = ?",
-      )
-      .get(tenantId, ownerId) as { total: number | bigint } | undefined;
+  async totalBytesForOwner(tenantId: string, ownerId: string): Promise<number> {
+    const row = await this.sql.get<{ total: number | bigint }>(
+      "SELECT COALESCE(SUM(byte_length), 0) AS total FROM blob_metadata WHERE tenant_id = ? AND owner_id = ?",
+      [tenantId, ownerId],
+    );
     return row ? Number(row.total) : 0;
   }
 

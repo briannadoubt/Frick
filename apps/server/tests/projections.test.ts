@@ -9,13 +9,13 @@ import {
 
 let store: FrickStore | undefined;
 
-afterEach(() => {
+afterEach(async () => {
   store?.close();
   store = undefined;
 });
 
 describe("projection registry", () => {
-  it("dispatches object upserts to matching registered projections", () => {
+  it("dispatches object upserts to matching registered projections", async () => {
     const events: FrickProjectionWriteEvent[] = [];
     const projection: FrickProjection = {
       name: "test-room-members",
@@ -33,13 +33,13 @@ describe("projection registry", () => {
     // Drain seed-time notifications so we only assert on what we trigger.
     events.length = 0;
 
-    store.upsertObject("RoomMember", "member-test", {
+    await store.upsertObject("RoomMember", "member-test", {
       conversationId: "conversation-general",
       userId: "user-ada",
       role: "member",
     });
     // Upserts to unrelated object types must not invoke this projection.
-    store.upsertObject("User", "user-spy", { displayName: "Spy" });
+    await store.upsertObject("User", "user-spy", { displayName: "Spy" });
 
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
@@ -50,7 +50,7 @@ describe("projection registry", () => {
     expect((events[0]?.object as { userId?: string } | undefined)?.userId).toBe("user-ada");
   });
 
-  it("fires multiple projections that share a source", () => {
+  it("fires multiple projections that share a source", async () => {
     const firstApplied: string[] = [];
     const secondApplied: string[] = [];
     const projections = createFrickProjectionRegistry();
@@ -66,7 +66,7 @@ describe("projection registry", () => {
     });
     store = new FrickStore({ path: ":memory:", seed: true, projections , schema: productTestSchema });
 
-    store.appendEvent({
+    await store.appendEvent({
       requestId: "request-shared-1",
       replicaId: "replica-1",
       stream: "MessageStream",
@@ -83,7 +83,7 @@ describe("projection registry", () => {
     expect(secondApplied).toEqual(["conversation-general"]);
   });
 
-  it("rebuild() resets and re-derives projection state from source events", () => {
+  it("rebuild() resets and re-derives projection state from source events", async () => {
     let counter = 0;
     const projections = createFrickProjectionRegistry();
     projections.register({
@@ -93,15 +93,15 @@ describe("projection registry", () => {
         apply: () => {
           counter += 1;
         },
-        rebuild: (ctx) => {
-          counter = ctx.store.readEvents("MessageStream", "conversation-general", 0).length;
+        rebuild: async (ctx) => {
+          counter = (await ctx.store.readEvents("MessageStream", "conversation-general", 0)).length;
         },
       },
     });
     store = new FrickStore({ path: ":memory:", seed: true, projections , schema: productTestSchema });
 
     for (let i = 1; i <= 3; i += 1) {
-      store.appendEvent({
+      await store.appendEvent({
         requestId: `request-counter-${i}`,
         replicaId: "replica-1",
         stream: "MessageStream",
@@ -133,7 +133,7 @@ describe("projection registry", () => {
   // projection registry primitives exercised by the other cases here cover
   // the framework contract that remains.
 
-  it("registry rejects duplicate registrations", () => {
+  it("registry rejects duplicate registrations", async () => {
     const projections = createFrickProjectionRegistry();
     projections.register({
       name: "dup",

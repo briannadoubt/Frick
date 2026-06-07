@@ -106,7 +106,7 @@ describe("blob processor pipeline", () => {
     expect(body.error.details?.rejectionReason).toBe("text uploads forbidden");
 
     // The metadata row must not have been created.
-    expect(app.store.blobs.read(session.tenantId, "blob-reject-1")).toBeUndefined();
+    expect(await app.store.blobs.read(session.tenantId, "blob-reject-1")).toBeUndefined();
   });
 
   it("runs async processors and persists derivative rows", async () => {

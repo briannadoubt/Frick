@@ -78,7 +78,7 @@ describe("sharing primitives — invitations and grants", () => {
     // route path clamps to a future time; reaching into the store for
     // this case keeps the test fast and deterministic.
     const past = new Date(Date.now() - 60_000).toISOString();
-    const invitation = app.store.invitations.create({
+    const invitation = await app.store.invitations.create({
       id: "inv-expired",
       tenantId: "t1",
       ownerUserId: "user-owner-short",

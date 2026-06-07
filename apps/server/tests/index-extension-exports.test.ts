@@ -34,7 +34,7 @@ import {
 // reverse-engineering out of `ServerOptions` (projections + app routes), so
 // every type an app author needs is importable directly from the index.
 describe("@fricken/server index extension-authoring exports", () => {
-  it("re-exports the authz value symbols", () => {
+  it("re-exports the authz value symbols", async () => {
     expect(ALLOW).toEqual({ allow: true, reason: "allow" });
     expect(typeof deny).toBe("function");
     expect(deny("ownerMismatch", "nope")).toEqual({
@@ -44,7 +44,7 @@ describe("@fricken/server index extension-authoring exports", () => {
     });
   });
 
-  it("re-exports the authz types usable to author a policy hook", () => {
+  it("re-exports the authz types usable to author a policy hook", async () => {
     const principal: Principal = {
       userId: "u",
       deviceId: "d",
@@ -64,7 +64,7 @@ describe("@fricken/server index extension-authoring exports", () => {
     expect(reason).toBe("allow");
   });
 
-  it("re-exports the blob-processor types usable to author a processor", () => {
+  it("re-exports the blob-processor types usable to author a processor", async () => {
     const processor: FrickBlobProcessor = {
       id: "noop",
       matches: {},
@@ -81,7 +81,7 @@ describe("@fricken/server index extension-authoring exports", () => {
     expect(typeof collect).toBe("function");
   });
 
-  it("re-exports the projection types usable to author a projection (FR-129)", () => {
+  it("re-exports the projection types usable to author a projection (FR-129)", async () => {
     // Mirrors what an app author writes for `ServerOptions.projections`,
     // proving they no longer need to derive the apply ctx / change types out
     // of `NonNullable<ServerOptions["projections"]>[number]`.
@@ -104,7 +104,7 @@ describe("@fricken/server index extension-authoring exports", () => {
     expect(result).toEqual({ changes: [{ key: "user-1:conv-1", value: { unread: 1 } }] });
   });
 
-  it("re-exports FrickAppRoute usable to author an app route (FR-129)", () => {
+  it("re-exports FrickAppRoute usable to author an app route (FR-129)", async () => {
     // App routes get raw node http req/res; the only Frick-specific type is
     // the route descriptor itself, which must be importable from the index.
     const route: FrickAppRoute = {

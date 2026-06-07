@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { FrickInvitation, FrickSharingPermission } from "@fricken/protocol";
+import type { SqlDriver } from "./sql-driver.js";
 
 interface InvitationSqlRow {
   id: string;
@@ -36,17 +36,15 @@ export type RedeemOutcome =
   | { kind: "tenantMismatch"; invitation: FrickInvitation };
 
 export class InvitationStore {
-  constructor(private readonly db: DatabaseSync) {}
+  constructor(private readonly sql: SqlDriver) {}
 
-  create(args: CreateInvitationArgs): FrickInvitation {
-    this.db
-      .prepare(
-        `INSERT INTO invitations (
+  async create(args: CreateInvitationArgs): Promise<FrickInvitation> {
+    await this.sql.run(
+      `INSERT INTO invitations (
             id, tenant_id, owner_user_id, record_type, record_id,
             permission, token, created_at, expires_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
+      [
         args.id,
         args.tenantId,
         args.ownerUserId,
@@ -56,7 +54,8 @@ export class InvitationStore {
         args.token,
         args.createdAt,
         args.expiresAt,
-      );
+      ],
+    );
     return {
       id: args.id,
       tenantId: args.tenantId,
@@ -70,17 +69,19 @@ export class InvitationStore {
     };
   }
 
-  getByToken(token: string): FrickInvitation | undefined {
-    const row = this.db
-      .prepare("SELECT * FROM invitations WHERE token = ?")
-      .get(token) as unknown as InvitationSqlRow | undefined;
+  async getByToken(token: string): Promise<FrickInvitation | undefined> {
+    const row = await this.sql.get<InvitationSqlRow>(
+      "SELECT * FROM invitations WHERE token = ?",
+      [token],
+    );
     return row ? toInvitation(row) : undefined;
   }
 
-  getById(tenantId: string, id: string): FrickInvitation | undefined {
-    const row = this.db
-      .prepare("SELECT * FROM invitations WHERE tenant_id = ? AND id = ?")
-      .get(tenantId, id) as unknown as InvitationSqlRow | undefined;
+  async getById(tenantId: string, id: string): Promise<FrickInvitation | undefined> {
+    const row = await this.sql.get<InvitationSqlRow>(
+      "SELECT * FROM invitations WHERE tenant_id = ? AND id = ?",
+      [tenantId, id],
+    );
     return row ? toInvitation(row) : undefined;
   }
 
@@ -88,8 +89,13 @@ export class InvitationStore {
    * invitation on `ok`. The caller is responsible for creating the
    * corresponding {@link Grant} in the same logical operation (the routes
    * do both inside a wrapping transaction). */
-  redeem(args: { token: string; tenantId: string; redeemerUserId: string; now: string }): RedeemOutcome {
-    const found = this.getByToken(args.token);
+  async redeem(args: {
+    token: string;
+    tenantId: string;
+    redeemerUserId: string;
+    now: string;
+  }): Promise<RedeemOutcome> {
+    const found = await this.getByToken(args.token);
     if (!found) {
       return { kind: "notFound" };
     }
@@ -102,13 +108,12 @@ export class InvitationStore {
     if (Date.parse(found.expiresAt) <= Date.parse(args.now)) {
       return { kind: "expired", invitation: found };
     }
-    this.db
-      .prepare(
-        `UPDATE invitations
+    await this.sql.run(
+      `UPDATE invitations
             SET redeemed_at = ?, redeemed_by_user_id = ?
           WHERE id = ? AND redeemed_at IS NULL`,
-      )
-      .run(args.now, args.redeemerUserId, found.id);
+      [args.now, args.redeemerUserId, found.id],
+    );
     return {
       kind: "ok",
       invitation: {

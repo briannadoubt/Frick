@@ -46,7 +46,7 @@ function listTables(db: DatabaseSync): string[] {
 }
 
 describe("framework migration runner", () => {
-  it("applies the initial migration on a fresh database", () => {
+  it("applies the initial migration on a fresh database", async () => {
     const db = openDb();
 
     const result = runFrameworkMigrations(db, {
@@ -106,7 +106,7 @@ describe("framework migration runner", () => {
     db.close();
   });
 
-  it("is idempotent across repeated runs", () => {
+  it("is idempotent across repeated runs", async () => {
     const db = openDb();
 
     const first = runFrameworkMigrations(db, {
@@ -124,16 +124,16 @@ describe("framework migration runner", () => {
     db.close();
   });
 
-  it("the FrickStore constructor wires the runner so server boot creates tables", () => {
+  it("the FrickStore constructor wires the runner so server boot creates tables", async () => {
     const store = new FrickStore({ path: ":memory:", seed: false });
     // FrickStore exposes #db privately; reach in via store operations to prove
     // tables exist. listObjects on a known type should return an empty array
     // rather than throwing — that confirms the table is present.
-    expect(store.listObjects("Conversation")).toEqual([]);
+    expect(await store.listObjects("Conversation")).toEqual([]);
     store.close();
   });
 
-  it("refuses to boot when a recorded migration checksum has drifted", () => {
+  it("refuses to boot when a recorded migration checksum has drifted", async () => {
     const db = openDb();
     runFrameworkMigrations(db, {
       supportedSchemaRevision: foundationSchema.schemaRevision,
@@ -167,7 +167,7 @@ describe("framework migration runner", () => {
     db.close();
   });
 
-  it("refuses to boot when the database records a future schema revision", () => {
+  it("refuses to boot when the database records a future schema revision", async () => {
     const db = openDb();
     runFrameworkMigrations(db, {
       supportedSchemaRevision: foundationSchema.schemaRevision,
@@ -205,7 +205,7 @@ describe("framework migration runner", () => {
     db.close();
   });
 
-  it("rolls back the ledger insert if the migration SQL fails", () => {
+  it("rolls back the ledger insert if the migration SQL fails", async () => {
     const db = openDb();
     const broken: FrameworkMigration = {
       id: "0001_initial_foundation_tables",
@@ -226,7 +226,7 @@ describe("framework migration runner", () => {
     db.close();
   });
 
-  it("supports an explicit migrations override (extension point for app registries)", () => {
+  it("supports an explicit migrations override (extension point for app registries)", async () => {
     const db = openDb();
     const extra: FrameworkMigration = {
       id: "9000_test_extra",

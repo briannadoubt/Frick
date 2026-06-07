@@ -91,7 +91,7 @@ describe("FR-109 projection delta-push end-to-end", () => {
       "conversation-general:user-ada": { userId: "user-ada", role: "owner" },
     });
     // ...and the framework-materialized snapshot agrees.
-    expect(app.store.projections.snapshot(ROOM_ROSTER, ada.tenantId)).toEqual([
+    expect(await app.store.projections.snapshot(ROOM_ROSTER, ada.tenantId)).toEqual([
       {
         key: "conversation-general:user-ada",
         value: { conversationId: "conversation-general", userId: "user-ada", role: "owner" },
@@ -205,7 +205,7 @@ describe("FR-109 projection delta-push end-to-end", () => {
     socketA.close();
   });
 
-  it("throws a config error when a projection source references an unknown type (FR-110)", () => {
+  it("throws a config error when a projection source references an unknown type (FR-110)", async () => {
     expect(() =>
       createFrickServer({
         port: 0,

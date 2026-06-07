@@ -7,7 +7,7 @@ import {
 } from "../src/config.js";
 
 describe("loadFrickConfig", () => {
-  it("defaults to development with demo auth enabled and sensible deployment defaults", () => {
+  it("defaults to development with demo auth enabled and sensible deployment defaults", async () => {
     const config = loadFrickConfig({}, { env: {}, warn: () => {} });
     expect(config).toEqual({
       env: "development",
@@ -42,7 +42,7 @@ describe("loadFrickConfig", () => {
     });
   });
 
-  it("disables demo auth and inspection by default in production and binds to 0.0.0.0", () => {
+  it("disables demo auth and inspection by default in production and binds to 0.0.0.0", async () => {
     const config = loadFrickConfig(
       { dbPath: "/var/lib/frick.sqlite" },
       { env: { FRICK_ENV: "production" }, warn: () => {} },
@@ -54,7 +54,7 @@ describe("loadFrickConfig", () => {
     expect(config.allowedOrigins).toEqual([]);
   });
 
-  it("reads overrides for env, demoAuthEnabled, and session ttl", () => {
+  it("reads overrides for env, demoAuthEnabled, and session ttl", async () => {
     const config = loadFrickConfig(
       { env: "test", demoAuthEnabled: false, sessionTtlSeconds: 30 },
       { env: {}, warn: () => {} },
@@ -64,7 +64,7 @@ describe("loadFrickConfig", () => {
     expect(config.sessionTtlSeconds).toBe(30);
   });
 
-  it("reads env vars for the new deployment fields", () => {
+  it("reads env vars for the new deployment fields", async () => {
     const config = loadFrickConfig(
       {},
       {
@@ -116,7 +116,7 @@ describe("loadFrickConfig", () => {
     expect(config.idempotencyReplayWindowMs).toBe(120000);
   });
 
-  it("defaults the idempotency replay window to 24h and rejects non-positive values", () => {
+  it("defaults the idempotency replay window to 24h and rejects non-positive values", async () => {
     const defaulted = loadFrickConfig({}, { env: {}, warn: () => {} });
     expect(defaulted.idempotencyReplayWindowMs).toBe(24 * 60 * 60 * 1000);
 
@@ -134,7 +134,7 @@ describe("loadFrickConfig", () => {
     ).toThrow(FrickConfigError);
   });
 
-  it("defaults platform events to kafka when brokers are configured", () => {
+  it("defaults platform events to kafka when brokers are configured", async () => {
     const config = loadFrickConfig(
       {},
       {
@@ -148,7 +148,7 @@ describe("loadFrickConfig", () => {
     expect(config.platformEventsKafkaBrokers).toEqual(["redpanda:9092"]);
   });
 
-  it("enables OTel when an OTLP endpoint is configured", () => {
+  it("enables OTel when an OTLP endpoint is configured", async () => {
     const config = loadFrickConfig(
       {},
       {
@@ -164,7 +164,7 @@ describe("loadFrickConfig", () => {
     expect(config.otelExporterOtlpEndpoint).toBe("http://collector:4318");
   });
 
-  it("enables OTel when signal-specific OTLP endpoints are configured", () => {
+  it("enables OTel when signal-specific OTLP endpoints are configured", async () => {
     const config = loadFrickConfig(
       {},
       {
@@ -181,7 +181,7 @@ describe("loadFrickConfig", () => {
     expect(config.otelExporterOtlpMetricsEndpoint).toBe("http://collector:4318/v1/metrics");
   });
 
-  it("reads env vars when no overrides are provided", () => {
+  it("reads env vars when no overrides are provided", async () => {
     const config = loadFrickConfig(
       {},
       {
@@ -198,7 +198,7 @@ describe("loadFrickConfig", () => {
     expect(config.sessionTtlSeconds).toBe(60);
   });
 
-  it("throws FrickConfigError when demoAuthEnabled is forced on in production", () => {
+  it("throws FrickConfigError when demoAuthEnabled is forced on in production", async () => {
     expect(() =>
       loadFrickConfig(
         { env: "production", demoAuthEnabled: true, dbPath: "/var/lib/frick.sqlite" },
@@ -207,7 +207,7 @@ describe("loadFrickConfig", () => {
     ).toThrow(FrickConfigError);
   });
 
-  it("throws FrickConfigError when dbPath is ':memory:' in production", () => {
+  it("throws FrickConfigError when dbPath is ':memory:' in production", async () => {
     expect(() =>
       loadFrickConfig(
         { env: "production", dbPath: ":memory:" },
@@ -216,37 +216,37 @@ describe("loadFrickConfig", () => {
     ).toThrow(FrickConfigError);
   });
 
-  it("throws FrickConfigError on unrecognized env values", () => {
+  it("throws FrickConfigError on unrecognized env values", async () => {
     expect(() => loadFrickConfig({}, { env: { FRICK_ENV: "staging" }, warn: () => {} })).toThrow(
       FrickConfigError,
     );
   });
 
-  it("throws FrickConfigError on invalid boolean values", () => {
+  it("throws FrickConfigError on invalid boolean values", async () => {
     expect(() =>
       loadFrickConfig({}, { env: { FRICK_DEMO_AUTH_ENABLED: "maybe" }, warn: () => {} }),
     ).toThrow(FrickConfigError);
   });
 
-  it("throws FrickConfigError on non-numeric session ttl", () => {
+  it("throws FrickConfigError on non-numeric session ttl", async () => {
     expect(() =>
       loadFrickConfig({}, { env: { FRICK_SESSION_TTL_SECONDS: "forever" }, warn: () => {} }),
     ).toThrow(FrickConfigError);
   });
 
-  it("throws FrickConfigError on out-of-range port", () => {
+  it("throws FrickConfigError on out-of-range port", async () => {
     expect(() =>
       loadFrickConfig({}, { env: { FRICK_PORT: "99999" }, warn: () => {} }),
     ).toThrow(FrickConfigError);
   });
 
-  it("throws FrickConfigError on unrecognized log level", () => {
+  it("throws FrickConfigError on unrecognized log level", async () => {
     expect(() =>
       loadFrickConfig({}, { env: { FRICK_LOG_LEVEL: "trace" }, warn: () => {} }),
     ).toThrow(FrickConfigError);
   });
 
-  it("throws FrickConfigError on invalid platform events config", () => {
+  it("throws FrickConfigError on invalid platform events config", async () => {
     expect(() =>
       loadFrickConfig({}, { env: { FRICK_PLATFORM_EVENTS_DRIVER: "redis" }, warn: () => {} }),
     ).toThrow(FrickConfigError);
@@ -261,7 +261,7 @@ describe("loadFrickConfig", () => {
     ).toThrow(FrickConfigError);
   });
 
-  it("parses subdomain-wildcard and exact allowed origins together", () => {
+  it("parses subdomain-wildcard and exact allowed origins together", async () => {
     const config = loadFrickConfig(
       {},
       {
@@ -279,7 +279,7 @@ describe("loadFrickConfig", () => {
     ]);
   });
 
-  it("throws FrickConfigError on malformed allowed-origin patterns", () => {
+  it("throws FrickConfigError on malformed allowed-origin patterns", async () => {
     // Bare host wildcard (no subdomain to match against).
     expect(() =>
       loadFrickConfig({}, { env: { FRICK_ALLOWED_ORIGINS: "https://*" }, warn: () => {} }),
@@ -308,7 +308,7 @@ describe("loadFrickConfig", () => {
     ).toThrow(FrickConfigError);
   });
 
-  it("validates allowed-origin overrides as well as env values", () => {
+  it("validates allowed-origin overrides as well as env values", async () => {
     expect(() =>
       loadFrickConfig({ allowedOrigins: ["https://a.*.com"] }, { env: {}, warn: () => {} }),
     ).toThrow(FrickConfigError);
@@ -322,7 +322,7 @@ describe("loadFrickConfig", () => {
 });
 
 describe("originMatchesAllowlistEntry", () => {
-  it("matches exact origins", () => {
+  it("matches exact origins", async () => {
     expect(originMatchesAllowlistEntry("https://app.example.com", "https://app.example.com")).toBe(
       true,
     );
@@ -331,11 +331,11 @@ describe("originMatchesAllowlistEntry", () => {
     );
   });
 
-  it("allow-all wildcard matches anything", () => {
+  it("allow-all wildcard matches anything", async () => {
     expect(originMatchesAllowlistEntry("https://anything.example.org", "*")).toBe(true);
   });
 
-  it("subdomain wildcard matches subdomains over the same scheme and port", () => {
+  it("subdomain wildcard matches subdomains over the same scheme and port", async () => {
     expect(originMatchesAllowlistEntry("https://app.example.com", "https://*.example.com")).toBe(
       true,
     );
@@ -344,11 +344,11 @@ describe("originMatchesAllowlistEntry", () => {
     );
   });
 
-  it("subdomain wildcard does NOT match the apex host", () => {
+  it("subdomain wildcard does NOT match the apex host", async () => {
     expect(originMatchesAllowlistEntry("https://example.com", "https://*.example.com")).toBe(false);
   });
 
-  it("subdomain wildcard rejects scheme, port, and lookalike mismatches", () => {
+  it("subdomain wildcard rejects scheme, port, and lookalike mismatches", async () => {
     // Different scheme.
     expect(originMatchesAllowlistEntry("http://app.example.com", "https://*.example.com")).toBe(
       false,
@@ -367,7 +367,7 @@ describe("originMatchesAllowlistEntry", () => {
     ).toBe(false);
   });
 
-  it("isOriginInAllowlist returns true when any entry matches", () => {
+  it("isOriginInAllowlist returns true when any entry matches", async () => {
     const list = ["https://admin.example.com", "https://*.example.com"];
     expect(isOriginInAllowlist("https://admin.example.com", list)).toBe(true);
     expect(isOriginInAllowlist("https://tenant42.example.com", list)).toBe(true);
@@ -377,14 +377,14 @@ describe("originMatchesAllowlistEntry", () => {
 });
 
 describe("loadFrickConfig storage driver", () => {
-  it("defaults the db driver to sqlite", () => {
+  it("defaults the db driver to sqlite", async () => {
     const config = loadFrickConfig({}, { env: {}, warn: () => {} });
     expect(config.dbDriver).toBe("sqlite");
     expect(config.databaseUrl).toBeUndefined();
     expect(config.dbPath).toBe("./frick.sqlite");
   });
 
-  it("accepts an explicit sqlite driver and keeps FRICK_DB_PATH working", () => {
+  it("accepts an explicit sqlite driver and keeps FRICK_DB_PATH working", async () => {
     const config = loadFrickConfig(
       {},
       {
@@ -396,7 +396,7 @@ describe("loadFrickConfig storage driver", () => {
     expect(config.dbPath).toBe("/var/lib/frick.sqlite");
   });
 
-  it("parses FRICK_DATABASE_URL into config for future postgres use", () => {
+  it("parses FRICK_DATABASE_URL into config for future postgres use", async () => {
     const config = loadFrickConfig(
       {},
       {
@@ -409,25 +409,25 @@ describe("loadFrickConfig storage driver", () => {
     expect(config.databaseUrl).toBe("postgres://user:pass@localhost:5432/frick");
   });
 
-  it("throws FrickConfigError on an invalid db driver value", () => {
+  it("throws FrickConfigError on an invalid db driver value", async () => {
     expect(() =>
       loadFrickConfig({}, { env: { FRICK_DB_DRIVER: "mysql" }, warn: () => {} }),
     ).toThrow(FrickConfigError);
   });
 
-  it("rejects the postgres driver when FRICK_DATABASE_URL is missing (FR-22)", () => {
+  it("rejects the postgres driver when FRICK_DATABASE_URL is missing (FR-22)", async () => {
     expect(() =>
       loadFrickConfig({}, { env: { FRICK_DB_DRIVER: "postgres" }, warn: () => {} }),
     ).toThrow(/FRICK_DB_DRIVER=postgres requires FRICK_DATABASE_URL/);
   });
 
-  it("rejects the postgres driver via overrides when no database URL is set", () => {
+  it("rejects the postgres driver via overrides when no database URL is set", async () => {
     expect(() => loadFrickConfig({ dbDriver: "postgres" }, { env: {}, warn: () => {} })).toThrow(
       FrickConfigError,
     );
   });
 
-  it("accepts the postgres driver when FRICK_DATABASE_URL is provided (FR-22)", () => {
+  it("accepts the postgres driver when FRICK_DATABASE_URL is provided (FR-22)", async () => {
     const config = loadFrickConfig(
       {},
       {
@@ -442,7 +442,7 @@ describe("loadFrickConfig storage driver", () => {
     expect(config.databaseUrl).toBe("postgres://user:pass@localhost:5432/frick");
   });
 
-  it("still guards dbPath ':memory:' in production when the sqlite driver is selected", () => {
+  it("still guards dbPath ':memory:' in production when the sqlite driver is selected", async () => {
     expect(() =>
       loadFrickConfig(
         {},
@@ -454,13 +454,13 @@ describe("loadFrickConfig storage driver", () => {
     ).toThrow(/dbPath ':memory:' is forbidden in production/);
   });
 
-  it("defaults the blob driver to sqlite (FR-53)", () => {
+  it("defaults the blob driver to sqlite (FR-53)", async () => {
     const config = loadFrickConfig({}, { env: {}, warn: () => {} });
     expect(config.blobDriver).toBe("sqlite");
     expect(config.blobStoragePath).toBe("./frick-blobs/");
   });
 
-  it("accepts the filesystem blob driver with a storage path (FR-53)", () => {
+  it("accepts the filesystem blob driver with a storage path (FR-53)", async () => {
     const config = loadFrickConfig(
       {},
       {
@@ -472,13 +472,13 @@ describe("loadFrickConfig storage driver", () => {
     expect(config.blobStoragePath).toBe("/var/lib/frick-blobs");
   });
 
-  it("rejects an invalid blob driver value (FR-53)", () => {
+  it("rejects an invalid blob driver value (FR-53)", async () => {
     expect(() =>
       loadFrickConfig({}, { env: { FRICK_BLOB_DRIVER: "s3" }, warn: () => {} }),
     ).toThrow(FrickConfigError);
   });
 
-  it("rejects the filesystem blob driver when no storage path is set (FR-53)", () => {
+  it("rejects the filesystem blob driver when no storage path is set (FR-53)", async () => {
     expect(() =>
       loadFrickConfig(
         { blobStoragePath: "" },

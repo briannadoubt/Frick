@@ -54,7 +54,7 @@ describe("platform event pipeline routes", () => {
     expect(body.ok).toBe(true);
   });
 
-  it("fails before opening storage when kafka is selected without brokers", () => {
+  it("fails before opening storage when kafka is selected without brokers", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "frick-platform-events-kafka-"));
     const dbPath = path.join(dir, "frick.sqlite");
     try {

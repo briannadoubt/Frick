@@ -44,12 +44,12 @@ const OVERRIDABLE_KEYS = [
  * locally; settings change infrequently and the existing call sites only
  * need the value once per connection / once per HTTP request.
  */
-export function resolveTenantLimits(
+export async function resolveTenantLimits(
   tenantId: string,
   store: FrickStore,
   defaults: FrickLimits,
-): FrickLimits {
-  const raw = store.tenantSettings.get(tenantId, "limits");
+): Promise<FrickLimits> {
+  const raw = await store.tenantSettings.get(tenantId, "limits");
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return { ...defaults };
   }
@@ -69,11 +69,11 @@ export function resolveTenantLimits(
  * Returns `undefined` when the tenant has no override — callers fall back
  * to the global default.
  */
-export function resolveTenantRetentionMs(
+export async function resolveTenantRetentionMs(
   tenantId: string,
   store: FrickStore,
-): number | undefined {
-  const raw = store.tenantSettings.get(tenantId, "retentionMs");
+): Promise<number | undefined> {
+  const raw = await store.tenantSettings.get(tenantId, "retentionMs");
   if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0) {
     return undefined;
   }

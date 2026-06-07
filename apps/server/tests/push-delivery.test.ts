@@ -220,7 +220,7 @@ describe("push delivery via admin route + router", () => {
     expect(deliveries).toHaveLength(1);
     expect(deliveries[0]?.status).toBe("failed");
     expect(deliveries[0]?.error?.code).toBe("push.badDeviceToken");
-    const stored = app.store.pushRegistrations.getById(regId, session.tenantId);
+    const stored = await app.store.pushRegistrations.getById(regId, session.tenantId);
     expect(stored?.revokedAt).toBeDefined();
   });
 

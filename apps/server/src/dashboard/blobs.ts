@@ -46,20 +46,22 @@ export interface BuildDashboardBlobsInput {
   readonly limit?: number;
 }
 
-export function buildDashboardBlobs(input: BuildDashboardBlobsInput): DashboardBlobs {
+export async function buildDashboardBlobs(input: BuildDashboardBlobsInput): Promise<DashboardBlobs> {
   const scope = input.principal.scope === "admin" ? "admin" : "tenant";
   const tenantId = scope === "admin"
     ? input.tenantId || input.principal.tenantId
     : input.principal.tenantId;
   const ownerId = scope === "admin" ? input.ownerId : input.principal.userId;
   const limit = normalizeDashboardBlobLimit(input.limit);
-  const visibleBlobs = input.store.blobs.list(tenantId, ownerId);
-  const blobs = visibleBlobs
-    .slice(0, limit)
-    .map((blob) => toDashboardBlobRow(
-      blob,
-      input.store.blobDerivatives.listForParent(blob.blobId, tenantId),
-    ));
+  const visibleBlobs = await input.store.blobs.list(tenantId, ownerId);
+  const blobs = await Promise.all(
+    visibleBlobs.slice(0, limit).map(async (blob) =>
+      toDashboardBlobRow(
+        blob,
+        await input.store.blobDerivatives.listForParent(blob.blobId, tenantId),
+      ),
+    ),
+  );
 
   return {
     schemaHash: input.store.schema.hash,

@@ -24,14 +24,14 @@ describe("POST /_frick/admin/sessions/revoke", () => {
     app = await startServer();
     const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
     // Session is live before revocation.
-    expect(app.store.readActiveSession(ada.sessionToken)).toBeDefined();
+    expect(await app.store.readActiveSession(ada.sessionToken)).toBeDefined();
 
     const res = await revoke(app.httpUrl, { userId: "user-ada" });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ revoked: 1, disconnected: 0 });
 
     // Row is gone — the token no longer resolves to an active session.
-    expect(app.store.readActiveSession(ada.sessionToken)).toBeUndefined();
+    expect(await app.store.readActiveSession(ada.sessionToken)).toBeUndefined();
   });
 
   it("live-disconnects a connected client when its user is revoked", async () => {
@@ -56,7 +56,7 @@ describe("POST /_frick/admin/sessions/revoke", () => {
     // can't log in to two tenants through it. Mint the two same-user sessions
     // directly to exercise tenant-scoped revocation.
     const expiresAt = new Date(Date.now() + 60_000).toISOString();
-    app.store.sessions.create({
+    await app.store.sessions.create({
       sessionToken: "token-a",
       tenantId: "tenant-a",
       userId: "user-ada",
@@ -64,7 +64,7 @@ describe("POST /_frick/admin/sessions/revoke", () => {
       replicaId: "replica-a",
       expiresAt,
     });
-    app.store.sessions.create({
+    await app.store.sessions.create({
       sessionToken: "token-b",
       tenantId: "tenant-b",
       userId: "user-ada",
@@ -76,8 +76,8 @@ describe("POST /_frick/admin/sessions/revoke", () => {
     const res = await revoke(app.httpUrl, { userId: "user-ada", tenantId: "tenant-a" });
     expect((await res.json()).revoked).toBe(1);
 
-    expect(app.store.readActiveSession("token-a")).toBeUndefined();
-    expect(app.store.readActiveSession("token-b")).toBeDefined();
+    expect(await app.store.readActiveSession("token-a")).toBeUndefined();
+    expect(await app.store.readActiveSession("token-b")).toBeDefined();
   });
 
   it("revokes a single session by token", async () => {
@@ -86,7 +86,7 @@ describe("POST /_frick/admin/sessions/revoke", () => {
 
     const res = await revoke(app.httpUrl, { sessionToken: ada.sessionToken });
     expect((await res.json())).toEqual({ revoked: 1, disconnected: 0 });
-    expect(app.store.readActiveSession(ada.sessionToken)).toBeUndefined();
+    expect(await app.store.readActiveSession(ada.sessionToken)).toBeUndefined();
   });
 
   it("400s when neither userId nor sessionToken is provided", async () => {

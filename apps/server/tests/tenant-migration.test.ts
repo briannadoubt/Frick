@@ -8,7 +8,7 @@ function openDb(): DatabaseSync {
 }
 
 describe("0003_tenant_boundary migration", () => {
-  it("backfills existing rows with the default tenant id", () => {
+  it("backfills existing rows with the default tenant id", async () => {
     const db = openDb();
 
     // Apply migrations through 0002 only. Later migrations depend on the
@@ -51,7 +51,7 @@ describe("0003_tenant_boundary migration", () => {
     db.close();
   });
 
-  it("enforces handle uniqueness per tenant, not globally", () => {
+  it("enforces handle uniqueness per tenant, not globally", async () => {
     const db = openDb();
     runFrameworkMigrations(db, {
       supportedSchemaRevision: foundationSchema.schemaRevision,
@@ -92,7 +92,7 @@ describe("0003_tenant_boundary migration", () => {
     db.close();
   });
 
-  it("scopes idempotency_keys primary key to tenant", () => {
+  it("scopes idempotency_keys primary key to tenant", async () => {
     const db = openDb();
     runFrameworkMigrations(db, {
       supportedSchemaRevision: foundationSchema.schemaRevision,

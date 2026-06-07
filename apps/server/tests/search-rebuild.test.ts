@@ -49,7 +49,7 @@ describe("admin search rebuild route", () => {
     // through the store API since the framework no longer ships the
     // chat-specific POST /conversations route.
     const convId = "conv-rebuild-1";
-    app.store.upsertObject("_default", "Conversation", convId, {
+    await app.store.upsertObject("_default", "Conversation", convId, {
       kind: "group",
       title: "Penguin Plotters",
       createdBy: ada.userId ?? "user-ada",

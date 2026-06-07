@@ -221,7 +221,7 @@ describe("decide() deny-by-default for unrecognised actions", () => {
   };
   const stranger = principalFromUserId("user-stranger");
 
-  it("denies object.read for an action with no explicit allow rule", () => {
+  it("denies object.read for an action with no explicit allow rule", async () => {
     const decision = decide(
       { principal: stranger, action: "object.read", resource: { kind: "object", name: "Conversation" } },
       memberships,
@@ -232,7 +232,7 @@ describe("decide() deny-by-default for unrecognised actions", () => {
     }
   });
 
-  it("allows custom presence writes so app policy hooks can tighten them", () => {
+  it("allows custom presence writes so app policy hooks can tighten them", async () => {
     const decision = decide(
       {
         principal: stranger,
@@ -244,7 +244,7 @@ describe("decide() deny-by-default for unrecognised actions", () => {
     expect(decision.allow).toBe(true);
   });
 
-  it("allows object.write for custom app objects in the principal's own tenant", () => {
+  it("allows object.write for custom app objects in the principal's own tenant", async () => {
     const decision = decide(
       { principal: stranger, action: "object.write", resource: { kind: "object", name: "Note" } },
       memberships,
@@ -252,7 +252,7 @@ describe("decide() deny-by-default for unrecognised actions", () => {
     expect(decision.allow).toBe(true);
   });
 
-  it("denies cross-tenant object.write with reason tenantMismatch", () => {
+  it("denies cross-tenant object.write with reason tenantMismatch", async () => {
     const decision = decide(
       {
         principal: stranger,
@@ -322,7 +322,7 @@ describe("policy hook ordering", () => {
 });
 
 describe("admin scope bypasses tenant isolation", () => {
-  it("admin-scope decide() permits a different resource tenant", () => {
+  it("admin-scope decide() permits a different resource tenant", async () => {
     const adminPrincipal = {
       userId: "_admin",
       deviceId: "_admin",
@@ -351,7 +351,7 @@ describe("admin scope bypasses tenant isolation", () => {
     }
   });
 
-  it("tenant-scope decide() denies a different resource tenant with tenantMismatch", () => {
+  it("tenant-scope decide() denies a different resource tenant with tenantMismatch", async () => {
     const tenantPrincipal = principalFromUserId("user-ada", "replica", "device", "tenant-a");
     const memberships: MembershipReader = {
       hasUser: () => true,

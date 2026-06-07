@@ -9,6 +9,7 @@
  * We also assert that the ES256 JWT is well-formed (parseable header, kid
  * matches, iss matches, signature is IEEE-P1363 64 bytes wide).
  */
+import { SqliteSqlDriver } from "../src/storage/sql-driver.js";
 import {
   connect as h2Connect,
   createServer as createH2Server,
@@ -67,7 +68,7 @@ function setupTenant(env: NodeJS.ProcessEnv): { tenantSettings: TenantSettingsSt
   const pem = generateP256Pem();
   const db = new DatabaseSync(":memory:");
   runFrameworkMigrations(db, { supportedSchemaRevision: foundationSchema.schemaRevision });
-  const tenantSettings = new TenantSettingsStore(db);
+  const tenantSettings = new TenantSettingsStore(new SqliteSqlDriver(db));
   saveApnsCredentials(
     tenantSettings,
     "tenant-1",
@@ -146,7 +147,7 @@ describe("APNs adapter", () => {
     const env = { FRICK_PUSH_CRED_KEY: freshKey() };
     const db = new DatabaseSync(":memory:");
     runFrameworkMigrations(db, { supportedSchemaRevision: foundationSchema.schemaRevision });
-    const tenantSettings = new TenantSettingsStore(db);
+    const tenantSettings = new TenantSettingsStore(new SqliteSqlDriver(db));
     const adapter = adapterFor(env);
     try {
       const delivery = await adapter.send(intent, registration("notoken"), makeCtx(tenantSettings));
@@ -202,7 +203,7 @@ describe("APNs adapter", () => {
     }
   });
 
-  it("signs a parseable ES256 JWT with the credential's keyId and teamId", () => {
+  it("signs a parseable ES256 JWT with the credential's keyId and teamId", async () => {
     const pem = generateP256Pem();
     const token = signApnsJwt(
       {

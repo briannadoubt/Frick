@@ -91,7 +91,7 @@ describe("/_frick/admin/tenants routes", () => {
     });
 
     expect(response.status).toBe(500);
-    expect(app.store.tenants.get("tenant-audit-fail")).toBeUndefined();
+    expect(await app.store.tenants.get("tenant-audit-fail")).toBeUndefined();
   });
 
   it("POST returns 409 envelope on duplicate id", async () => {
@@ -173,7 +173,7 @@ describe("/_frick/admin/tenants routes", () => {
     expect(response.status).toBe(404);
   });
 
-  it("rejects production startup with FrickConfigError when adminToken is too short", () => {
+  it("rejects production startup with FrickConfigError when adminToken is too short", async () => {
     expect(() =>
       loadFrickConfig(
         { adminToken: "short", dbPath: "/tmp/x.sqlite" },

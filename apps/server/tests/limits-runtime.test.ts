@@ -343,7 +343,7 @@ describe("presence TTL clamping", () => {
     // The presence row should have been stored with a clamped TTL — readPresence
     // returns the value if expires_at > now. Configured max is 7s, schema TTL is
     // 5s, so the lease is alive immediately after set.
-    const presence = app.store.readPresence("TypingState", "conversation-general");
+    const presence = await app.store.readPresence("TypingState", "conversation-general");
     expect(presence).toBeTruthy();
     socket.close();
   });
@@ -385,7 +385,7 @@ describe("presence TTL clamping", () => {
     await waitForFrameCount(frames, 3);
 
     await new Promise((resolve) => setTimeout(resolve, 200));
-    const presence = app.store.readPresence("TypingState", "conversation-clamp-down");
+    const presence = await app.store.readPresence("TypingState", "conversation-clamp-down");
     expect(presence).toBeUndefined();
     socket.close();
   });

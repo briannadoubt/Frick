@@ -36,7 +36,7 @@ beforeAll(async () => {
   jwks = createLocalJWKSet({ keys: [jwk] });
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.unstubAllGlobals();
 });
 

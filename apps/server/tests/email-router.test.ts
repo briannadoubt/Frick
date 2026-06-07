@@ -104,7 +104,7 @@ describe("FrickEmailRouter", () => {
     });
     try {
       await router.send({ to: "x@y.com", from: "noreply@app.test", subject: "s", text: "t" }, { tenantId: "t1" });
-      const events = store.devtoolsEvents.list({ kind: "frick.email.delivery" });
+      const events = await store.devtoolsEvents.list({ kind: "frick.email.delivery" });
       expect(events).toHaveLength(1);
       expect(events[0]?.fields.status).toBe("delivered");
       expect(events[0]?.fields.recipient).toBe("x@y.com"); // 3-char local stays unmasked except for middle

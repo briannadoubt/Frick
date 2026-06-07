@@ -1,3 +1,4 @@
+import { SqliteSqlDriver } from "../src/storage/sql-driver.js";
 import { DatabaseSync } from "node:sqlite";
 import { foundationSchema } from "@fricken/protocol";
 import { afterEach, describe, expect, it } from "vitest";
@@ -22,11 +23,11 @@ function openDb(): DatabaseSync {
 const FINGERPRINT = "abc123def456";
 
 describe("admin audit chain", () => {
-  it("populates previous_hash + entry_hash on every record", () => {
+  it("populates previous_hash + entry_hash on every record", async () => {
     const db = openDb();
-    const store = new AdminAuditStore(db);
+    const store = new AdminAuditStore(new SqliteSqlDriver(db));
 
-    const first = store.record({
+    const first = await store.record({
       adminTokenFingerprint: FINGERPRINT,
       action: "tenants.create",
       target: "t1",
@@ -35,7 +36,7 @@ describe("admin audit chain", () => {
     expect(first.previousHash).toBe("");
     expect(first.entryHash).toMatch(/^[0-9a-f]{64}$/);
 
-    const second = store.record({
+    const second = await store.record({
       adminTokenFingerprint: FINGERPRINT,
       action: "tenants.archive",
       target: "t1",
@@ -47,11 +48,11 @@ describe("admin audit chain", () => {
     db.close();
   });
 
-  it("verifyChain returns valid after a sequence of inserts", () => {
+  it("verifyChain returns valid after a sequence of inserts", async () => {
     const db = openDb();
-    const store = new AdminAuditStore(db);
+    const store = new AdminAuditStore(new SqliteSqlDriver(db));
     for (let i = 0; i < 5; i += 1) {
-      store.record({
+      await store.record({
         adminTokenFingerprint: FINGERPRINT,
         action: "tenants.create",
         target: `t-${i}`,
@@ -59,26 +60,26 @@ describe("admin audit chain", () => {
         detail: JSON.stringify({ i }),
       });
     }
-    expect(store.verifyChain()).toEqual({ valid: true });
+    expect(await store.verifyChain()).toEqual({ valid: true });
     db.close();
   });
 
-  it("verifyChain detects tampering with action field", () => {
+  it("verifyChain detects tampering with action field", async () => {
     const db = openDb();
-    const store = new AdminAuditStore(db);
-    store.record({
+    const store = new AdminAuditStore(new SqliteSqlDriver(db));
+    await store.record({
       adminTokenFingerprint: FINGERPRINT,
       action: "tenants.create",
       target: "t-a",
       outcome: "allow",
     });
-    const second = store.record({
+    const second = await store.record({
       adminTokenFingerprint: FINGERPRINT,
       action: "tenants.archive",
       target: "t-a",
       outcome: "allow",
     });
-    store.record({
+    await store.record({
       adminTokenFingerprint: FINGERPRINT,
       action: "tenants.create",
       target: "t-b",
@@ -91,7 +92,7 @@ describe("admin audit chain", () => {
       second.id,
     );
 
-    const result = store.verifyChain();
+    const result = await store.verifyChain();
     expect(result.valid).toBe(false);
     expect(result.brokenAt).toBe(second.id);
     db.close();
@@ -143,10 +144,10 @@ describe("admin audit chain", () => {
     expect(body.brokenAt).toBe(1);
   });
 
-  it("verifyChain detects tampering with entry_hash itself", () => {
+  it("verifyChain detects tampering with entry_hash itself", async () => {
     const db = openDb();
-    const store = new AdminAuditStore(db);
-    const first = store.record({
+    const store = new AdminAuditStore(new SqliteSqlDriver(db));
+    const first = await store.record({
       adminTokenFingerprint: FINGERPRINT,
       action: "tenants.create",
       target: "t-a",
@@ -156,7 +157,7 @@ describe("admin audit chain", () => {
       "0".repeat(64),
       first.id,
     );
-    const result = store.verifyChain();
+    const result = await store.verifyChain();
     expect(result.valid).toBe(false);
     expect(result.brokenAt).toBe(first.id);
     db.close();

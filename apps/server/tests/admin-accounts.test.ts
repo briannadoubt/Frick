@@ -180,8 +180,8 @@ describe("/_frick/admin/accounts POST", () => {
     });
 
     expect(response.status).toBe(500);
-    expect(app.store.accounts.readByIdentity("_default", "auditfail")).toBeUndefined();
-    expect(app.store.hasUser("_default", "user-auditfail")).toBe(false);
+    expect(await app.store.accounts.readByIdentity("_default", "auditfail")).toBeUndefined();
+    expect(await app.store.hasUser("_default", "user-auditfail")).toBe(false);
   });
 
   it("same handle in different tenants both succeed", async () => {

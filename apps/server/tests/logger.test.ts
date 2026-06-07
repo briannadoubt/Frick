@@ -19,7 +19,7 @@ function capture(level: "debug" | "info" | "warn" | "error") {
 }
 
 describe("createConsoleLogger", () => {
-  it("writes JSON-line records with timestamp, level, and message", () => {
+  it("writes JSON-line records with timestamp, level, and message", async () => {
     const { logger, lines } = capture("debug");
     logger.info("hello", { foo: "bar" });
     expect(lines).toHaveLength(1);
@@ -28,7 +28,7 @@ describe("createConsoleLogger", () => {
     expect(typeof lines[0].parsed.ts).toBe("string");
   });
 
-  it("routes warn and error to stderr; info and debug to stdout", () => {
+  it("routes warn and error to stderr; info and debug to stdout", async () => {
     const { logger, lines } = capture("debug");
     logger.debug("d");
     logger.info("i");
@@ -37,7 +37,7 @@ describe("createConsoleLogger", () => {
     expect(lines.map((l) => l.stream)).toEqual(["out", "out", "err", "err"]);
   });
 
-  it("honors the log-level threshold", () => {
+  it("honors the log-level threshold", async () => {
     const { logger, lines } = capture("warn");
     logger.debug("d");
     logger.info("i");
@@ -46,7 +46,7 @@ describe("createConsoleLogger", () => {
     expect(lines.map((l) => (l.parsed as { level: string }).level)).toEqual(["warn", "error"]);
   });
 
-  it("redacts sensitive fields", () => {
+  it("redacts sensitive fields", async () => {
     const { logger, lines } = capture("debug");
     logger.info("login", {
       userId: "user-ada",
@@ -62,7 +62,7 @@ describe("createConsoleLogger", () => {
     });
   });
 
-  it("createNoopLogger discards everything", () => {
+  it("createNoopLogger discards everything", async () => {
     const logger = createNoopLogger();
     expect(() => {
       logger.info("ignored", { secret: "value" });
@@ -70,7 +70,7 @@ describe("createConsoleLogger", () => {
     }).not.toThrow();
   });
 
-  it("redacts Authorization-header field values", () => {
+  it("redacts Authorization-header field values", async () => {
     const { logger, lines } = capture("debug");
     logger.info("req", { Authorization: "Bearer abc", authorization: "Bearer xyz" });
     expect(lines[0].parsed).toMatchObject({
@@ -79,7 +79,7 @@ describe("createConsoleLogger", () => {
     });
   });
 
-  it("redacts sensitive fields recursively while preserving safe nested primitives", () => {
+  it("redacts sensitive fields recursively while preserving safe nested primitives", async () => {
     const { logger, lines } = capture("debug");
     logger.info("req", {
       userId: "user-ada",
@@ -116,7 +116,7 @@ describe("createConsoleLogger", () => {
     });
   });
 
-  it("redacts common secret key names inside arrays", () => {
+  it("redacts common secret key names inside arrays", async () => {
     const { logger, lines } = capture("debug");
     logger.info("push", {
       credentials: [
@@ -140,7 +140,7 @@ describe("createConsoleLogger", () => {
   });
 
   describe("child", () => {
-    it("inherits parent fields on every emission", () => {
+    it("inherits parent fields on every emission", async () => {
       const { logger, lines } = capture("debug");
       logger.child({ requestId: "r-1" }).info("hi", { foo: "bar" });
       expect(lines[0].parsed).toMatchObject({
@@ -150,25 +150,25 @@ describe("createConsoleLogger", () => {
       });
     });
 
-    it("cascades through nested children", () => {
+    it("cascades through nested children", async () => {
       const { logger, lines } = capture("debug");
       logger.child({ a: 1 }).child({ b: 2 }).info("hi");
       expect(lines[0].parsed).toMatchObject({ msg: "hi", a: 1, b: 2 });
     });
 
-    it("per-emission fields override inherited ones", () => {
+    it("per-emission fields override inherited ones", async () => {
       const { logger, lines } = capture("debug");
       logger.child({ status: 200 }).info("done", { status: 500 });
       expect((lines[0].parsed as { status: number }).status).toBe(500);
     });
 
-    it("redacts inherited sensitive fields", () => {
+    it("redacts inherited sensitive fields", async () => {
       const { logger, lines } = capture("debug");
       logger.child({ password: "supersecret" }).info("nope");
       expect((lines[0].parsed as { password: string }).password).toBe("<redacted>");
     });
 
-    it("createNoopLogger.child returns a no-op logger", () => {
+    it("createNoopLogger.child returns a no-op logger", async () => {
       const logger = createNoopLogger();
       expect(() => {
         logger.child({ a: 1 }).info("hi");

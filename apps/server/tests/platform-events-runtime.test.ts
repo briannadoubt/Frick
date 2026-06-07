@@ -56,7 +56,7 @@ describe("runtime platform event publishers", () => {
       platformEvents: store.platformEvents,
     });
     worker.start();
-    const row = store.jobs.enqueue({ tenantId: "_default", jobType: "ExampleJob", payload: {} });
+    const row = await store.jobs.enqueue({ tenantId: "_default", jobType: "ExampleJob", payload: {} });
 
     await waitFor(() => (store!.jobs.getById(row.id)?.status === "completed" ? true : undefined));
 
@@ -92,7 +92,7 @@ describe("runtime platform event publishers", () => {
       platformEvents: store.platformEvents,
     });
     worker.start();
-    const row = store.jobs.enqueue({
+    const row = await store.jobs.enqueue({
       tenantId: "_default",
       jobType: "RetryJob",
       payload: {},
@@ -128,7 +128,7 @@ describe("runtime platform event publishers", () => {
       platformEvents: store.platformEvents,
     });
     worker.start();
-    const row = store.jobs.enqueue({ tenantId: "_default", jobType: "DeadJob", payload: {} });
+    const row = await store.jobs.enqueue({ tenantId: "_default", jobType: "DeadJob", payload: {} });
 
     await waitFor(() =>
       store!.jobs.getById(row.id)?.status === "dead_lettered" ? true : undefined,
@@ -163,7 +163,7 @@ describe("runtime platform event publishers", () => {
         },
       },
     });
-    const row = app.store.jobs.enqueue({ tenantId: "_default", jobType: "ServerJob", payload: {} });
+    const row = await app.store.jobs.enqueue({ tenantId: "_default", jobType: "ServerJob", payload: {} });
 
     await waitFor(() => (app!.store.jobs.getById(row.id)?.status === "completed" ? true : undefined));
 
@@ -198,8 +198,8 @@ describe("runtime platform event publishers", () => {
       platformEvents: throwingPipeline,
     });
     worker.start();
-    const first = store.jobs.enqueue({ tenantId: "_default", jobType: "SafeJob", payload: {} });
-    const second = store.jobs.enqueue({ tenantId: "_default", jobType: "SafeJob", payload: {} });
+    const first = await store.jobs.enqueue({ tenantId: "_default", jobType: "SafeJob", payload: {} });
+    const second = await store.jobs.enqueue({ tenantId: "_default", jobType: "SafeJob", payload: {} });
 
     await waitFor(() =>
       store!.jobs.getById(first.id)?.status === "completed" &&
