@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTHJ714CSYY1SW8ZYPEH09W0",
+  "ts": "2026-06-07T17:31:14.444Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTHJ3SWTR2BAQS6ASYC9QHZA",
+    "commentId": "01KTHJ714CSYY1SW8ZYPEH09VZ",
+    "author": "claude",
+    "body": "Increment 2 (platform-events) dialect hazards identified before porting — these are NOT driver-translated (the PgSqlDriver only rewrites ?→$n), so portable SQL must be hand-written, matching FR-119-122 conventions:\n1. claim() uses INSERT OR IGNORE → rewrite to INSERT ... SELECT ... ON CONFLICT DO NOTHING (portable; deliveries unique key is (consumer,event_id)).\n2. publish() relies on result.lastInsertRowid for sequence → on PG the driver only surfaces lastInsertRowid from RETURNING id, so change to INSERT ... RETURNING id read via sql.get<{id}>() (node:sqlite supports RETURNING via get/all, per job-store).\n3. #findByIdempotencyKey uses 'tenant_id IS ?' (SQLite NULL-safe equality) → PG needs 'tenant_id IS NOT DISTINCT FROM ?', which SQLite does NOT support. Need a driver-aware predicate or split queries by null/non-null. CHECK how FR-120 identity stores handled NULL-safe matching.\n4. claim()/prune() use raw BEGIN IMMEDIATE → SqlDriver.transaction (mind the #txDepth concurrent-nesting note above; claim is serial per worker so OK).\n\nKEY SEQUENCING INSIGHT: platform-events PG correctness is unverifiable until createFrickServer runs on PG. Recommend doing the keystone WIRING (createSqlDriver→PG, async store.initialize() running PG migrations from listen(), driver-aware close, search-adapter selection) with the ALREADY-ported subsystems first, then port platform-events + analytics LAST with a real-PG smoke test (FRICK_DATABASE_URL → docker PG on :5433) to validate each statement. Avoid landing blind dialect ports."
+  }
+}
