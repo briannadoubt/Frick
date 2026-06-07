@@ -179,6 +179,11 @@ export class SqlitePlatformEventPipeline implements PlatformEventPipeline {
         [name],
       );
 
+      // Multi-node safety (FR-28): lock-and-skip the eligible delivery rows on
+      // Postgres so two consumers on different nodes can't claim the same
+      // delivery. SQLite serializes on one connection and omits the clause.
+      // The lock is on the delivery rows (d), not the joined events.
+      const lockClause = this.#sql.dialect === "postgres" ? "FOR UPDATE OF d SKIP LOCKED" : "";
       const selected = await tx.all<{ event_id: string }>(
         `SELECT d.event_id
             FROM platform_event_deliveries d
@@ -189,7 +194,8 @@ export class SqlitePlatformEventPipeline implements PlatformEventPipeline {
                 OR (d.status = 'claimed' AND (d.claimed_at IS NULL OR d.claimed_at <= ?))
               )
             ORDER BY e.id ASC
-            LIMIT ?`,
+            LIMIT ?
+            ${lockClause}`,
         [name, availableAt, staleClaimedBefore, batchSize],
       );
       const eventIds = selected.map((row) => row.event_id);

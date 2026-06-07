@@ -153,7 +153,8 @@ export class JobStore {
       `INSERT INTO jobs (
             tenant_id, job_type, packed, status, created_at,
             available_at, max_attempts, attempt_count, idempotency_key
-          ) VALUES (?, ?, ?, 'ready', ?, ?, ?, 0, ?)`,
+          ) VALUES (?, ?, ?, 'ready', ?, ?, ?, 0, ?)
+          RETURNING id`,
       [
         input.tenantId,
         input.jobType,
@@ -194,6 +195,14 @@ export class JobStore {
     }
     params.push(limit);
 
+    // Multi-node safety (FR-28): on Postgres, two nodes running this claim
+    // concurrently could otherwise select the same 'ready' rows in the
+    // subquery and both flip them to 'running' (the outer `id IN (…)` re-check
+    // does not re-test status). `FOR UPDATE SKIP LOCKED` makes each claimer
+    // lock-and-take a disjoint set, skipping rows a peer already holds — the
+    // canonical Postgres queue pattern. SQLite serializes writers on one
+    // connection, so it needs (and has) no row-lock clause.
+    const lockClause = this.sql.dialect === "postgres" ? "FOR UPDATE SKIP LOCKED" : "";
     // SQLite's `UPDATE ... RETURNING` lands in node:sqlite via .all().
     const rows = await this.sql.all<RawJobRow>(
       `UPDATE jobs SET
@@ -206,6 +215,7 @@ export class JobStore {
             WHERE status = 'ready' AND available_at <= ? ${typeClause}
             ORDER BY available_at ASC, id ASC
             LIMIT ?
+            ${lockClause}
           )
           RETURNING *`,
       params,
