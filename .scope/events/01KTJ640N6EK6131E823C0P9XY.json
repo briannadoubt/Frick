@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJ640N6EK6131E823C0P9XY",
+  "ts": "2026-06-07T23:19:07.174Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2H",
+    "commentId": "01KTJ640N6EK6131E823C0P9XX",
+    "author": "claude",
+    "body": "Shipped multi-key overlap window for stored push credential encryption. FRICK_PUSH_CRED_KEY is the primary (all new writes); optional FRICK_PUSH_CRED_KEY_PREVIOUS (comma-separated base64 32-byte keys) lets old-key blobs still decrypt during rotation, retired by dropping it. decryptCredential tries primary then each previous in order. Env-var only, no API changes. New tests/push-credentials-rotation.test.ts (5 tests). typecheck exit 0; server vitest 793 passed / 45 skipped."
+  }
+}
