@@ -169,6 +169,31 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  bench:
+    dependencies:
+      '@fricken/protocol':
+        specifier: workspace:*
+        version: link:../packages/protocol
+      '@fricken/server':
+        specifier: workspace:*
+        version: link:../apps/server
+      ws:
+        specifier: ^8.18.3
+        version: 8.20.0
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.12.3
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   packages/agent-kit:
     devDependencies:
       '@types/node':
