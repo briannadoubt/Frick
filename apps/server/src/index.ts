@@ -22,6 +22,13 @@ export {
   type FrickBlobValidationResult,
 } from "./blobs/processor.js";
 export {
+  DEFAULT_MAX_IMAGE_BYTES,
+  imageBlobProcessor,
+  sniffImageFormat,
+  type ImageBlobProcessorOptions,
+  type ImageFormat,
+} from "./blobs/image-processor.js";
+export {
   type FrickJobContext,
   type FrickJobHandler,
   type FrickJobRegistry,
