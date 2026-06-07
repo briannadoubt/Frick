@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTHKWMCE0RE638K1VT0Y1G97",
+  "ts": "2026-06-07T18:00:30.862Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTHJ3SWTR2BAQS6ASYC9QHZA",
+    "commentId": "01KTHKWMCE0RE638K1VT0Y1G96",
+    "author": "claude",
+    "body": "DONE: createFrickServer runs on Postgres. Wired the PG SqlDriver into createSqlDriver (dbUrl + lazy pool), added SqlDriver.dialect/initializeSchema/close + isSqliteSqlDriver guard, async store.initialize() (runs PG migrations from listen(); #schemaReady gates maintenance prunes), driver-aware search-adapter + close. Ported the last 4 rawDb subsystems to the async seam across the 4 increments: devtools (b9deb39), platform-events (88f06e3), analytics (dc7804c), and blob-bytes (this commit). Validated end-to-end on real Postgres via tests/createserver-postgres.test.ts (boot+migrate, object write/read/delete, postgres-tsvector search). Full SQLite suite green (781). Unblocks FR-25."
+  }
+}
