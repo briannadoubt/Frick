@@ -25,7 +25,7 @@ import { ObjectStore, type ObjectUpsertResult } from "./storage/object-store.js"
 import { PresenceStore } from "./storage/presence-store.js";
 import { PushRegistrationStore } from "./storage/push-registration-store.js";
 import { initializeStorage } from "./storage/schema.js";
-import { createSqlDriver, type SqliteSqlDriver } from "./storage/sql-driver.js";
+import { createSqlDriver, isSqliteSqlDriver, type SqlDriver } from "./storage/sql-driver.js";
 import type { DatabaseSync } from "node:sqlite";
 import { SessionStore, type StoredSession } from "./storage/session-store.js";
 import { TenantStore } from "./storage/tenant-store.js";
@@ -56,6 +56,7 @@ import {
   type FrickSearchProjectInput,
 } from "./search/types.js";
 import { createSqliteFtsSearchAdapter } from "./search/sqlite-fts.js";
+import { createPgFtsSearchAdapter } from "./search/pg-fts.js";
 import { withSearchSourceFields } from "./search/source-fields.js";
 import {
   DEFAULT_DEVTOOLS_EVENTS_MAX_ROWS,
@@ -117,6 +118,8 @@ export interface StoreOptions {
    * implemented (FR-119) and will throw `FrickConfigError` at construction.
    */
   dbDriver?: "sqlite" | "postgres";
+  /** Postgres connection string. Required when `dbDriver === "postgres"`. */
+  dbUrl?: string | undefined;
   schema?: FrickSchema;
   seed?: boolean;
   /**
@@ -313,7 +316,8 @@ export class FrickStore {
   readonly searchIndexes: FrickSearchIndexRegistry;
   readonly #logger: FrickLogger;
 
-  readonly #sqlDriver: SqliteSqlDriver;
+  readonly #sqlDriver: SqlDriver;
+  #schemaReady = false;
 
   /**
    * Narrow accessor for the underlying SQLite handle. Exposed for the
@@ -333,6 +337,12 @@ export class FrickStore {
    * SQLite-backed store.
    */
   get db(): DatabaseSync {
+    if (!isSqliteSqlDriver(this.#sqlDriver)) {
+      throw new Error(
+        "FrickStore.db (raw SQLite handle) is only available on the SQLite driver; " +
+          "this store is Postgres-backed.",
+      );
+    }
     return this.#sqlDriver.rawDb;
   }
   readonly #idempotencyCacheCapacity: number;
@@ -357,14 +367,23 @@ export class FrickStore {
   constructor(options: StoreOptions) {
     this.schema = validateSchema(options.schema ?? foundationSchema);
 
-    // Build the async storage driver. The factory handles path creation and
-    // throws FrickConfigError for unsupported drivers (e.g. "postgres" until FR-119).
+    // Build the async storage driver. The factory creates a SQLite handle or a
+    // Postgres pool (the pool connects lazily, so construction stays sync).
     this.#sqlDriver = createSqlDriver({
       dbDriver: options.dbDriver ?? "sqlite",
       dbPath: options.path,
+      dbUrl: options.dbUrl,
     });
-    initializeStorage(this.#sqlDriver.rawDb, this.schema.schemaRevision);
-    this.#recordSchema();
+    // SQLite DDL is synchronous, so the schema is ready immediately and every
+    // `new FrickStore()` caller (the entire test suite) keeps working without
+    // an await. Postgres schema setup is async and runs in `initialize()`
+    // (awaited from the server's listen()); until then `#schemaReady` is false
+    // so the maintenance prunes no-op instead of querying missing tables.
+    if (isSqliteSqlDriver(this.#sqlDriver)) {
+      initializeStorage(this.#sqlDriver.rawDb, this.schema.schemaRevision);
+      this.#recordSchema();
+      this.#schemaReady = true;
+    }
 
     this.#idempotencyCacheCapacity =
       options.idempotencyCacheCapacity ?? DEFAULT_IDEMPOTENCY_CACHE_CAPACITY;
@@ -405,8 +424,6 @@ export class FrickStore {
     this.tenantSettings = new TenantSettingsStore(sql);
     this.adminAudit = new AdminAuditStore(sql);
     this.pushRegistrations = new PushRegistrationStore(sql);
-    // These stores take raw DatabaseSync handles (out-of-scope raw-SQLite subsystems).
-    const rawDb = sql.rawDb;
     this.devtoolsEvents = new DevToolsEventStore(sql, {
       retentionMs:
         options.devtoolsEventsRetentionMs ?? DEFAULT_DEVTOOLS_EVENTS_RETENTION_MS,
@@ -419,7 +436,11 @@ export class FrickStore {
     });
     this.analyticsEvents = new AnalyticsEventStore(sql);
     this.projections = options.projections ?? createFrickProjectionRegistry();
-    this.searchAdapter = options.searchAdapter ?? createSqliteFtsSearchAdapter(rawDb);
+    this.searchAdapter =
+      options.searchAdapter ??
+      (isSqliteSqlDriver(sql)
+        ? createSqliteFtsSearchAdapter(sql.rawDb)
+        : createPgFtsSearchAdapter(sql));
     this.searchIndexes = options.searchIndexes ?? createFrickSearchIndexRegistry();
     this.#logger = options.logger ?? createNoopLogger();
     void options.seed;
@@ -479,6 +500,29 @@ export class FrickStore {
     }
   }
 
+  /**
+   * Async schema setup for backends that cannot initialize synchronously in the
+   * constructor (Postgres runs its migration runner; the SQLite path already
+   * initialized in the constructor and this is a no-op). Idempotent. The server
+   * awaits this in `listen()` before serving traffic. Once it completes, the
+   * maintenance prunes (which no-op until the schema exists) begin doing work.
+   */
+  async initialize(): Promise<void> {
+    if (this.#schemaReady || this.#closed) {
+      return;
+    }
+    await this.#sqlDriver.initializeSchema(this.schema.schemaRevision);
+    await this.#recordSchemaAsync();
+    this.#schemaReady = true;
+    // The constructor's one-shot maintenance sweeps no-op'd because the schema
+    // wasn't ready; run them now that the tables exist. The recurring timers
+    // were already scheduled and stop no-op'ing from here on.
+    this.#safePrune();
+    this.#safeDevToolsPrune();
+    this.#safePlatformEventsPrune();
+    this.#safeExpiredSessionPrune();
+  }
+
   close(): void {
     if (this.#closed) {
       return;
@@ -500,11 +544,14 @@ export class FrickStore {
       clearInterval(this.#expiredSessionPruneTimer);
       this.#expiredSessionPruneTimer = undefined;
     }
-    this.#sqlDriver.rawDb.close();
+    // SQLite closes synchronously; the Postgres pool's end() is async — fire it
+    // and don't block close() (callers that need to await teardown can await
+    // the driver directly). Both are exposed behind SqlDriver.close().
+    void this.#sqlDriver.close();
   }
 
   #safeDevToolsPrune(): void {
-    if (this.#closed) return;
+    if (this.#closed || !this.#schemaReady) return;
     void this.devtoolsEvents.prune().catch((error) => {
       // eslint-disable-next-line no-console
       console.warn(
@@ -516,7 +563,7 @@ export class FrickStore {
   }
 
   #safePlatformEventsPrune(): void {
-    if (this.#closed) return;
+    if (this.#closed || !this.#schemaReady) return;
     void this.platformEvents.prune().catch((error) => {
       // eslint-disable-next-line no-console
       console.warn(
@@ -528,7 +575,7 @@ export class FrickStore {
   }
 
   async #safeExpiredSessionPrune(): Promise<void> {
-    if (this.#closed) return;
+    if (this.#closed || !this.#schemaReady) return;
     try {
       const cutoffIso = new Date(Date.now() - this.#expiredSessionGraceMs).toISOString();
       await this.sessions.pruneExpired(cutoffIso);
@@ -665,7 +712,7 @@ export class FrickStore {
   }
 
   #safePrune(): void {
-    if (this.#closed) {
+    if (this.#closed || !this.#schemaReady) {
       return;
     }
     try {
@@ -1334,5 +1381,15 @@ export class FrickStore {
           VALUES (?, ?, ?)`,
       )
       .run(this.schema.hash, Buffer.from(encode(this.schema)), new Date().toISOString());
+  }
+
+  /** Portable `#recordSchema` for the async (Postgres) init path. */
+  async #recordSchemaAsync(): Promise<void> {
+    await this.#sqlDriver.run(
+      `INSERT INTO schema_versions (schema_hash, manifest, created_at)
+          VALUES (?, ?, ?)
+          ON CONFLICT (schema_hash) DO NOTHING`,
+      [this.schema.hash, Buffer.from(encode(this.schema)), new Date().toISOString()],
+    );
   }
 }

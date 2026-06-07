@@ -1,9 +1,8 @@
 import {
-  SqliteBlobBytesDriver,
+  SqlBlobBytesDriver,
   type BlobBytesDriver,
 } from "./blob-bytes-driver.js";
 import type { SqlDriver } from "./sql-driver.js";
-import type { SqliteSqlDriver } from "./sql-driver.js";
 
 export interface BlobMetadataInput {
   blobId: string;
@@ -43,14 +42,9 @@ export class BlobStore {
     private readonly sql: SqlDriver,
     bytes?: BlobBytesDriver,
   ) {
-    // Fall back to the SQLite bytes driver using the raw DatabaseSync handle
-    // exposed by SqliteSqlDriver. This keeps the bytes driver synchronous
-    // (BlobBytesDriver interface is sync) while the metadata path is async.
-    this.#bytes =
-      bytes ??
-      new SqliteBlobBytesDriver(
-        (sql as SqliteSqlDriver).rawDb,
-      );
+    // Default to the seam-backed bytes driver (blob_content via SqlDriver),
+    // which works on SQLite and Postgres alike.
+    this.#bytes = bytes ?? new SqlBlobBytesDriver(sql);
   }
 
   async create(tenantId: string, metadata: BlobMetadataInput): Promise<void> {
@@ -118,19 +112,19 @@ export class BlobStore {
     return row ? Number(row.total) : 0;
   }
 
-  writeContent(tenantId: string, blobId: string, content: Uint8Array): void {
-    this.#bytes.write(tenantId, blobId, content);
+  async writeContent(tenantId: string, blobId: string, content: Uint8Array): Promise<void> {
+    await this.#bytes.write(tenantId, blobId, content);
   }
 
-  readContent(tenantId: string, blobId: string): Uint8Array | undefined {
+  async readContent(tenantId: string, blobId: string): Promise<Uint8Array | undefined> {
     return this.#bytes.read(tenantId, blobId);
   }
 
-  deleteContent(tenantId: string, blobId: string): void {
-    this.#bytes.delete(tenantId, blobId);
+  async deleteContent(tenantId: string, blobId: string): Promise<void> {
+    await this.#bytes.delete(tenantId, blobId);
   }
 
-  hasContent(tenantId: string, blobId: string): boolean {
+  async hasContent(tenantId: string, blobId: string): Promise<boolean> {
     return this.#bytes.exists(tenantId, blobId);
   }
 }

@@ -466,6 +466,8 @@ export function createFrickServer(options: ServerOptions = {}) {
   }
   const store = new FrickStore({
     path: options.dbPath ?? process.env.FRICK_DB_PATH ?? defaultDatabasePath(),
+    dbDriver: config.dbDriver,
+    dbUrl: config.databaseUrl,
     schema: runtimeSchema,
     seed: false,
     projections,
@@ -2415,6 +2417,10 @@ export function createFrickServer(options: ServerOptions = {}) {
   }
 
   async function listen(): Promise<void> {
+    // Bring the storage schema up before accepting traffic. No-op on SQLite
+    // (initialized synchronously in the store constructor); runs the Postgres
+    // migration runner on the postgres driver.
+    await store.initialize();
     await startTelemetry();
     try {
       await new Promise<void>((resolve, reject) => {

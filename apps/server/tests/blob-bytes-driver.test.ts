@@ -13,9 +13,10 @@ import { DatabaseSync } from "node:sqlite";
 import {
   FilesystemBlobBytesDriver,
   FrickBlobStorageError,
-  SqliteBlobBytesDriver,
+  SqlBlobBytesDriver,
   createBlobBytesDriver,
 } from "../src/storage/blob-bytes-driver.js";
+import { SqliteSqlDriver } from "../src/storage/sql-driver.js";
 import { FrickStore } from "../src/store.js";
 import { loadFrickConfig } from "../src/config.js";
 
@@ -118,11 +119,11 @@ describe("FilesystemBlobBytesDriver", () => {
 
 describe("createBlobBytesDriver", () => {
   let root: string;
-  let db: DatabaseSync;
+  let db: SqliteSqlDriver;
 
   beforeEach(async () => {
     root = mkdtempSync(join(tmpdir(), "frick-blobs-factory-"));
-    db = new DatabaseSync(":memory:");
+    db = new SqliteSqlDriver(new DatabaseSync(":memory:"));
   });
 
   afterEach(async () => {
@@ -130,9 +131,9 @@ describe("createBlobBytesDriver", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it("defaults to the sqlite driver", async () => {
+  it("defaults to the seam-backed sql driver", async () => {
     const driver = createBlobBytesDriver({ driver: "sqlite", db });
-    expect(driver).toBeInstanceOf(SqliteBlobBytesDriver);
+    expect(driver).toBeInstanceOf(SqlBlobBytesDriver);
   });
 
   it("builds the filesystem driver when a path is provided", async () => {
@@ -175,7 +176,7 @@ describe("FrickStore blob driver wiring", () => {
         byteLength: HELLO.byteLength,
         mimeType: "text/plain",
       });
-      store.blobs.writeContent("tenant-a", "blob-1", HELLO);
+      await store.blobs.writeContent("tenant-a", "blob-1", HELLO);
 
       expect(await store.blobs.readContent("tenant-a", "blob-1")).toEqual(Buffer.from(HELLO));
       // No files are written to disk under the default driver.
@@ -207,7 +208,7 @@ describe("FrickStore blob driver wiring", () => {
         byteLength: HELLO.byteLength,
         mimeType: "text/plain",
       });
-      store.blobs.writeContent("tenant-a", "blob-1", HELLO);
+      await store.blobs.writeContent("tenant-a", "blob-1", HELLO);
 
       // Bytes round-trip via the store facade.
       expect(await store.blobs.readContent("tenant-a", "blob-1")).toEqual(Buffer.from(HELLO));
@@ -232,8 +233,8 @@ describe("FrickStore blob driver wiring", () => {
       blobStoragePath: root,
     });
     try {
-      store.blobs.writeContent("tenant-a", "shared", HELLO);
-      store.blobs.writeContent("tenant-b", "shared", WORLD);
+      await store.blobs.writeContent("tenant-a", "shared", HELLO);
+      await store.blobs.writeContent("tenant-b", "shared", WORLD);
       expect(await store.blobs.readContent("tenant-a", "shared")).toEqual(Buffer.from(HELLO));
       expect(await store.blobs.readContent("tenant-b", "shared")).toEqual(Buffer.from(WORLD));
       expect(await store.blobs.readContent("tenant-c", "shared")).toBeUndefined();

@@ -18,8 +18,11 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Pool as PgPool } from "pg";
 import { FrickConfigError } from "../config.js";
 import type { FrickDbDriver } from "../config.js";
+import { initializeStorage } from "./schema.js";
+import { PgSqlDriver } from "./pg-sql-driver.js";
 
 // ---------------------------------------------------------------------------
 // Interface
@@ -74,6 +77,16 @@ export interface SqlDriver {
    * callback would receive a tx-scoped driver bound to the same client.
    */
   transaction<T>(fn: (tx: SqlDriver) => Promise<T>): Promise<T>;
+
+  /**
+   * Create or upgrade the framework schema for this backend. Idempotent.
+   * SQLite runs the synchronous DDL bundle; Postgres runs the framework
+   * migration runner. Called once during store initialization.
+   */
+  initializeSchema(schemaRevision: number): Promise<void>;
+
+  /** Close the underlying connection (SQLite) or pool (Postgres). */
+  close(): void | Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -177,6 +190,23 @@ export class SqliteSqlDriver implements SqlDriver {
       this.#txDepth -= 1;
     }
   }
+
+  async initializeSchema(schemaRevision: number): Promise<void> {
+    initializeStorage(this.#db, schemaRevision);
+  }
+
+  close(): void {
+    this.#db.close();
+  }
+}
+
+/**
+ * Narrow a {@link SqlDriver} to {@link SqliteSqlDriver} — the only driver that
+ * exposes a synchronous `rawDb` handle. Use this before reaching for `rawDb`
+ * (raw-SQLite subsystems, synchronous DDL) instead of an unchecked cast.
+ */
+export function isSqliteSqlDriver(driver: SqlDriver): driver is SqliteSqlDriver {
+  return driver.dialect === "sqlite";
 }
 
 // ---------------------------------------------------------------------------
@@ -185,6 +215,8 @@ export class SqliteSqlDriver implements SqlDriver {
 
 export interface SqlDriverConfig {
   dbDriver: FrickDbDriver;
+  /** Postgres connection string. Required when `dbDriver === "postgres"`. */
+  dbUrl?: string | undefined;
   /** SQLite file path or `:memory:`. Used when `dbDriver === "sqlite"`. */
   dbPath: string;
 }
@@ -200,13 +232,18 @@ export interface SqlDriverConfig {
  * Previously, `store.ts` silently fell through to SQLite even when postgres was
  * configured. This factory restores fail-fast behaviour.
  */
-export function createSqlDriver(config: SqlDriverConfig): SqliteSqlDriver {
+export function createSqlDriver(config: SqlDriverConfig): SqlDriver {
   if (config.dbDriver === "postgres") {
-    throw new FrickConfigError(
-      "the Postgres SqlDriver (FR-119) is built — call createPgSqlDriver() to use it directly. " +
-        "Wiring it into the synchronous createFrickServer path (async construction + porting the " +
-        "SQLite-bound devtools/search/platform-event subsystems off rawDb) is tracked under FR-121.",
-    );
+    if (!config.dbUrl) {
+      throw new FrickConfigError(
+        "FRICK_DB_DRIVER=postgres requires FRICK_DATABASE_URL (the Postgres connection string).",
+      );
+    }
+    // The pg Pool is created synchronously and connects lazily on first query,
+    // so construction stays sync. The framework schema is created later via
+    // SqlDriver.initializeSchema() (awaited in the server's listen()).
+    const pool = new PgPool({ connectionString: config.dbUrl });
+    return new PgSqlDriver(pool);
   }
 
   // Ensure the parent directory exists for file-based databases.

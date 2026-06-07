@@ -157,6 +157,13 @@ export class PgSqlDriver implements SqlDriver {
     }
   }
 
+  async initializeSchema(schemaRevision: number): Promise<void> {
+    await runFrameworkMigrationsPostgres(this.#pool, {
+      supportedSchemaRevision: schemaRevision,
+      migrations: FRAMEWORK_MIGRATIONS_PG,
+    });
+  }
+
   /** Close the pool. Call from server shutdown / test teardown. */
   async close(): Promise<void> {
     if (this.#txClient) return; // tx-scoped drivers don't own the pool

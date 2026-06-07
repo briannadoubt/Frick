@@ -10,7 +10,6 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import type { SqlDriver } from "./sql-driver.js";
 
 /**
@@ -33,13 +32,16 @@ export type FrickBlobDriver = "sqlite" | "filesystem";
 
 export interface BlobBytesDriver {
   /** Persist (or overwrite) the bytes for `(tenantId, blobId)`. */
-  write(tenantId: string, blobId: string, content: Uint8Array): void;
+  write(tenantId: string, blobId: string, content: Uint8Array): void | Promise<void>;
   /** Read the bytes for `(tenantId, blobId)`, or `undefined` if absent. */
-  read(tenantId: string, blobId: string): Uint8Array | undefined;
+  read(
+    tenantId: string,
+    blobId: string,
+  ): (Uint8Array | undefined) | Promise<Uint8Array | undefined>;
   /** Delete the bytes for `(tenantId, blobId)`. No-op when absent. */
-  delete(tenantId: string, blobId: string): void;
+  delete(tenantId: string, blobId: string): void | Promise<void>;
   /** Whether bytes exist for `(tenantId, blobId)`. */
-  exists(tenantId: string, blobId: string): boolean;
+  exists(tenantId: string, blobId: string): boolean | Promise<boolean>;
 }
 
 interface BlobContentRow {
@@ -47,47 +49,50 @@ interface BlobContentRow {
 }
 
 /**
- * Default driver. Stores blob bytes in the SQLite `blob_content` table. This is
- * the historical behavior preserved verbatim: every SQL statement matches what
- * `BlobStore` issued before the seam was introduced, so the `sqlite` driver is
- * a pure refactor with no behavioral change.
+ * Default driver. Stores blob bytes in the `blob_content` table via the async
+ * {@link SqlDriver}, so it runs on both SQLite and Postgres. (Historically this
+ * was SQLite-only and took a raw `DatabaseSync`; it now goes through the seam
+ * like every other store — `INSERT … ON CONFLICT … DO UPDATE` is portable.)
  *
- * The blob-bytes driver is intentionally sync (it implements the pre-existing
- * `BlobBytesDriver` sync interface used by external filesystem and S3 adapters).
- * It receives the raw `DatabaseSync` handle so it can stay synchronous — this is
- * safe because `BlobStore` calls these methods from async contexts but the SQLite
- * driver's `async` wrappers are trivially synchronous underneath anyway.
+ * The `BlobBytesDriver` interface allows sync OR async returns, so synchronous
+ * adapters (filesystem, S3) still satisfy it; this one is async.
  */
-export class SqliteBlobBytesDriver implements BlobBytesDriver {
-  constructor(private readonly db: DatabaseSync) {}
+export class SqlBlobBytesDriver implements BlobBytesDriver {
+  constructor(private readonly sql: SqlDriver) {}
 
-  write(tenantId: string, blobId: string, content: Uint8Array): void {
-    this.db
-      .prepare(
-        `INSERT OR REPLACE INTO blob_content (blob_id, content, updated_at, tenant_id)
-          VALUES (?, ?, ?, ?)`,
-      )
-      .run(blobId, Buffer.from(content), new Date().toISOString(), tenantId);
+  async write(tenantId: string, blobId: string, content: Uint8Array): Promise<void> {
+    await this.sql.run(
+      `INSERT INTO blob_content (blob_id, content, updated_at, tenant_id)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT (blob_id) DO UPDATE SET
+            content = excluded.content,
+            updated_at = excluded.updated_at,
+            tenant_id = excluded.tenant_id`,
+      [blobId, Buffer.from(content), new Date().toISOString(), tenantId],
+    );
   }
 
-  read(tenantId: string, blobId: string): Uint8Array | undefined {
-    const row = this.db
-      .prepare("SELECT content FROM blob_content WHERE tenant_id = ? AND blob_id = ?")
-      .get(tenantId, blobId) as BlobContentRow | undefined;
+  async read(tenantId: string, blobId: string): Promise<Uint8Array | undefined> {
+    const row = await this.sql.get<BlobContentRow>(
+      "SELECT content FROM blob_content WHERE tenant_id = ? AND blob_id = ?",
+      [tenantId, blobId],
+    );
     return row ? Buffer.from(row.content) : undefined;
   }
 
-  delete(tenantId: string, blobId: string): void {
-    this.db
-      .prepare("DELETE FROM blob_content WHERE tenant_id = ? AND blob_id = ?")
-      .run(tenantId, blobId);
+  async delete(tenantId: string, blobId: string): Promise<void> {
+    await this.sql.run("DELETE FROM blob_content WHERE tenant_id = ? AND blob_id = ?", [
+      tenantId,
+      blobId,
+    ]);
   }
 
-  exists(tenantId: string, blobId: string): boolean {
-    const row = this.db
-      .prepare("SELECT 1 AS ok FROM blob_content WHERE tenant_id = ? AND blob_id = ?")
-      .get(tenantId, blobId) as { ok?: number } | undefined;
-    return row?.ok === 1;
+  async exists(tenantId: string, blobId: string): Promise<boolean> {
+    const row = await this.sql.get<{ ok?: number }>(
+      "SELECT 1 AS ok FROM blob_content WHERE tenant_id = ? AND blob_id = ?",
+      [tenantId, blobId],
+    );
+    return Number(row?.ok ?? 0) === 1;
   }
 }
 
@@ -209,7 +214,7 @@ export class FilesystemBlobBytesDriver implements BlobBytesDriver {
  */
 export function createBlobBytesDriver(options: {
   driver: FrickBlobDriver;
-  db: DatabaseSync | SqlDriver;
+  db: SqlDriver;
   blobStoragePath?: string | undefined;
 }): BlobBytesDriver {
   if (options.driver === "filesystem") {
@@ -221,17 +226,9 @@ export function createBlobBytesDriver(options: {
     }
     return new FilesystemBlobBytesDriver(path);
   }
-  // Unwrap SqliteSqlDriver → DatabaseSync if needed.
-  const rawDb =
-    options.db instanceof DatabaseSync
-      ? options.db
-      : (options.db as { rawDb?: DatabaseSync }).rawDb;
-  if (!rawDb) {
-    throw new FrickBlobStorageError(
-      "SqliteBlobBytesDriver requires a DatabaseSync handle; the provided SqlDriver does not expose rawDb",
-    );
-  }
-  return new SqliteBlobBytesDriver(rawDb);
+  // Default: store bytes in `blob_content` via the seam — works on SQLite and
+  // Postgres without reaching for a raw handle.
+  return new SqlBlobBytesDriver(options.db);
 }
 
 /**
