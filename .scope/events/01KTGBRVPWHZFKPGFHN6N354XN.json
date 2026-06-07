@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTGBRVPWHZFKPGFHN6N354XN",
+  "ts": "2026-06-07T06:19:24.252Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTG6GQX3D64EHBZ8H2S80RBY",
+    "field": "branch",
+    "value": "feat/fr128-app-route-kit"
+  }
+}

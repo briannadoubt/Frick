@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTGBS1PT6548YD310E2JWJYS",
+  "ts": "2026-06-07T06:19:30.394Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTG6GQX3D64EHBZ8H2S80RBY",
+    "commentId": "01KTGBS1PT6548YD310E2JWJYR",
+    "author": "claude",
+    "body": "Shipped @fricken/server app-route kit: setCors/handlePreflight, sendJson, readJsonBody (1MiB cap + JsonBodyTooLargeError), matchPath (:param), authenticateRequest (bearer→session→Principal; role left to app). 8 tests in app-route-kit.test.ts; full server suite 760 green. aquariusyacht + Zavro can drop their runtime/http.ts copies and FrickStore-derived Principal type."
+  }
+}
