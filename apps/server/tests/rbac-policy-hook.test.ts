@@ -49,12 +49,12 @@ const matrix: RbacMatrix = {
 const hook = makeRbacPolicyHook(matrix);
 
 describe("makeRbacPolicyHook", () => {
-  it("allows (no opinion) for an 'all' rule", () => {
+  it("allows (no opinion) for an 'all' rule", async () => {
     expect(hook(input("admin-1", "object.write", "WorkOrder"))).toBeNull();
     expect(hook(input("admin-1", "blob.write"))).toBeNull();
   });
 
-  it("denies outright for a 'none' rule", () => {
+  it("denies outright for a 'none' rule", async () => {
     const decision = hook(input("cust-1", "object.write", "WorkOrder"));
     expect(decision).not.toBeNull();
     expect(decision?.allow).toBe(false);
@@ -64,20 +64,20 @@ describe("makeRbacPolicyHook", () => {
     expect(hook(input("cust-1", "blob.write"))?.allow).toBe(false);
   });
 
-  it("enforces an allow-list: permitted types pass, others deny", () => {
+  it("enforces an allow-list: permitted types pass, others deny", async () => {
     expect(hook(input("tech-1", "object.write", "WorkOrder"))).toBeNull();
     expect(hook(input("tech-1", "object.write", "Note"))).toBeNull();
     expect(hook(input("tech-1", "object.write", "Invoice"))?.allow).toBe(false);
   });
 
-  it("enforces a deny-list: listed types deny, others pass", () => {
+  it("enforces a deny-list: listed types deny, others pass", async () => {
     expect(hook(input("cust-1", "object.read", "Invoice"))?.allow).toBe(false);
     expect(hook(input("cust-1", "object.read", "Quote"))?.allow).toBe(false);
     // A type not on the deny list reads fine.
     expect(hook(input("cust-1", "object.read", "Vessel"))).toBeNull();
   });
 
-  it("offers no opinion for ungoverned actions, roles, and principals", () => {
+  it("offers no opinion for ungoverned actions, roles, and principals", async () => {
     // Action not in the role's entry.
     expect(hook(input("tech-1", "stream.append"))).toBeNull();
     // Role the matrix doesn't list.
@@ -88,7 +88,7 @@ describe("makeRbacPolicyHook", () => {
     ).toBeNull();
   });
 
-  it("uses a custom deny message when provided", () => {
+  it("uses a custom deny message when provided", async () => {
     const custom = makeRbacPolicyHook({
       ...matrix,
       denyMessage: ({ role, resourceName }) => `nope: ${role}/${resourceName}`,

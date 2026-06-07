@@ -70,25 +70,25 @@ export type OnAccountDelete = (
  * the order — framework data first, then app cascade — is explicit and the hook
  * can read the returned counts) and for closing any live gateway connections.
  */
-export function deleteAccountData(
+export async function deleteAccountData(
   store: FrickStore,
   principal: Principal,
   options: AccountDeleteOptions = {},
-): AccountDeleteResult {
+): Promise<AccountDeleteResult> {
   const ownerFields = options.ownerFields ?? DEFAULT_OWNER_FIELDS;
   const deletedObjects: Record<string, number> = {};
 
   for (const objectDef of store.schema.objects) {
-    const owned = store
-      .listObjects(principal.tenantId, objectDef.name)
-      .filter((record) => isOwnedBy(record, principal.userId, ownerFields));
+    const owned = (await store.listObjects(principal.tenantId, objectDef.name)).filter((record) =>
+      isOwnedBy(record, principal.userId, ownerFields),
+    );
     let removed = 0;
     for (const record of owned) {
       const id = record.id;
       if (typeof id !== "string") {
         continue;
       }
-      if (store.deleteObject(principal.tenantId, objectDef.name, id)) {
+      if (await store.deleteObject(principal.tenantId, objectDef.name, id)) {
         removed += 1;
       }
     }
@@ -98,11 +98,11 @@ export function deleteAccountData(
   // Sessions before the account row: once the account is gone the principal can
   // no longer authenticate anyway, but removing sessions first keeps the
   // invariant that a live session never points at a missing account.
-  const deletedSessions = store.deleteSessionsForUser(
+  const deletedSessions = await store.deleteSessionsForUser(
     principal.userId,
     principal.tenantId,
   );
-  const accountDeleted = store.deleteAccount(principal.tenantId, principal.userId);
+  const accountDeleted = await store.deleteAccount(principal.tenantId, principal.userId);
 
   return {
     tenantId: principal.tenantId,

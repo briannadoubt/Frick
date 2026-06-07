@@ -1,5 +1,5 @@
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { SqlDriver } from "./sql-driver.js";
 
 export interface StoredAccount {
   tenantId: string;
@@ -28,29 +28,20 @@ interface AccountRow {
 }
 
 export class AccountStore {
-  constructor(private readonly db: DatabaseSync) {}
+  constructor(private readonly sql: SqlDriver) {}
 
-  create(input: CreateAccountInput): StoredAccount {
+  async create(input: CreateAccountInput): Promise<StoredAccount> {
     const now = new Date().toISOString();
     const passwordSalt = randomBytes(16).toString("base64url");
     const passwordHash = hashPassword(input.password, passwordSalt);
 
     try {
-      this.db
-        .prepare(
-          `INSERT INTO auth_accounts
+      await this.sql.run(
+        `INSERT INTO auth_accounts
             (user_id, tenant_id, handle, display_name, password_salt, password_hash, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          input.userId,
-          input.tenantId,
-          input.handle,
-          input.displayName,
-          passwordSalt,
-          passwordHash,
-          now,
-        );
+        [input.userId, input.tenantId, input.handle, input.displayName, passwordSalt, passwordHash, now],
+      );
     } catch (error) {
       if (error instanceof Error && /constraint/i.test(error.message)) {
         throw new Error("Handle is already taken");
@@ -67,20 +58,19 @@ export class AccountStore {
     };
   }
 
-  list(tenantId: string, limit = 100): StoredAccount[] {
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM auth_accounts
+  async list(tenantId: string, limit = 100): Promise<StoredAccount[]> {
+    const rows = await this.sql.all<AccountRow>(
+      `SELECT * FROM auth_accounts
           WHERE tenant_id = ?
           ORDER BY created_at ASC, handle ASC
           LIMIT ?`,
-      )
-      .all(tenantId, limit) as unknown as AccountRow[];
+      [tenantId, limit],
+    );
     return rows.map(fromRow);
   }
 
-  readByIdentity(tenantId: string, identity: string): StoredAccount | undefined {
-    const row = this.readRowByIdentity(tenantId, identity);
+  async readByIdentity(tenantId: string, identity: string): Promise<StoredAccount | undefined> {
+    const row = await this.readRowByIdentity(tenantId, identity);
     return row ? fromRow(row) : undefined;
   }
 
@@ -89,21 +79,24 @@ export class AccountStore {
    * reset flow once a token has validated. Returns true when a row was
    * updated (the account exists), false when no row matched.
    */
-  setPassword(tenantId: string, userId: string, newPassword: string): boolean {
+  async setPassword(tenantId: string, userId: string, newPassword: string): Promise<boolean> {
     const passwordSalt = randomBytes(16).toString("base64url");
     const passwordHash = hashPassword(newPassword, passwordSalt);
-    const result = this.db
-      .prepare(
-        `UPDATE auth_accounts
+    const result = await this.sql.run(
+      `UPDATE auth_accounts
            SET password_salt = ?, password_hash = ?
            WHERE tenant_id = ? AND user_id = ?`,
-      )
-      .run(passwordSalt, passwordHash, tenantId, userId);
+      [passwordSalt, passwordHash, tenantId, userId],
+    );
     return result.changes > 0;
   }
 
-  verifyPassword(tenantId: string, identity: string, password: string): StoredAccount | undefined {
-    const row = this.readRowByIdentity(tenantId, identity);
+  async verifyPassword(
+    tenantId: string,
+    identity: string,
+    password: string,
+  ): Promise<StoredAccount | undefined> {
+    const row = await this.readRowByIdentity(tenantId, identity);
     if (!row) {
       return undefined;
     }
@@ -124,21 +117,24 @@ export class AccountStore {
    * stable principal identifier; the tenant scope keeps the delete from ever
    * reaching across tenants.
    */
-  delete(tenantId: string, userId: string): boolean {
-    const result = this.db
-      .prepare("DELETE FROM auth_accounts WHERE tenant_id = ? AND user_id = ?")
-      .run(tenantId, userId);
+  async delete(tenantId: string, userId: string): Promise<boolean> {
+    const result = await this.sql.run(
+      "DELETE FROM auth_accounts WHERE tenant_id = ? AND user_id = ?",
+      [tenantId, userId],
+    );
     return result.changes > 0;
   }
 
-  private readRowByIdentity(tenantId: string, identity: string): AccountRow | undefined {
-    return this.db
-      .prepare(
-        `SELECT * FROM auth_accounts
+  private async readRowByIdentity(
+    tenantId: string,
+    identity: string,
+  ): Promise<AccountRow | undefined> {
+    return this.sql.get<AccountRow>(
+      `SELECT * FROM auth_accounts
           WHERE tenant_id = ? AND (handle = ? COLLATE NOCASE OR user_id = ?)
           LIMIT 1`,
-      )
-      .get(tenantId, identity, identity) as AccountRow | undefined;
+      [tenantId, identity, identity],
+    );
   }
 }
 

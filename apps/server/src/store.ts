@@ -1,6 +1,3 @@
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { encode } from "@msgpack/msgpack";
 import {
   foundationSchema,
@@ -28,6 +25,8 @@ import { ObjectStore, type ObjectUpsertResult } from "./storage/object-store.js"
 import { PresenceStore } from "./storage/presence-store.js";
 import { PushRegistrationStore } from "./storage/push-registration-store.js";
 import { initializeStorage } from "./storage/schema.js";
+import { createSqlDriver, type SqliteSqlDriver } from "./storage/sql-driver.js";
+import type { DatabaseSync } from "node:sqlite";
 import { SessionStore, type StoredSession } from "./storage/session-store.js";
 import { TenantStore } from "./storage/tenant-store.js";
 import { InvitationStore } from "./storage/invitation-store.js";
@@ -113,6 +112,11 @@ export interface PruneResult {
 
 export interface StoreOptions {
   path: string;
+  /**
+   * Storage driver selector. Defaults to `"sqlite"`. `"postgres"` is not yet
+   * implemented (FR-119) and will throw `FrickConfigError` at construction.
+   */
+  dbDriver?: "sqlite" | "postgres";
   schema?: FrickSchema;
   seed?: boolean;
   /**
@@ -309,7 +313,8 @@ export class FrickStore {
   readonly searchIndexes: FrickSearchIndexRegistry;
   readonly #logger: FrickLogger;
 
-  readonly #db: DatabaseSync;
+  readonly #sqlDriver: SqliteSqlDriver;
+
   /**
    * Narrow accessor for the underlying SQLite handle. Exposed for the
    * compliance module which needs raw cross-table read/write access for
@@ -318,9 +323,17 @@ export class FrickStore {
    * private extension point: do not reach in from feature code, and never
    * cross tenant boundaries without resolving them through the existing
    * stores' tenant validation first.
+   *
+   * NOTE: This is SQLite-only. The 6 subsystems that use this handle directly
+   * (devtools/event-store, platform-events/sqlite, backup/dump, backup/restore,
+   * analytics/summary, compliance/data-subject-erase) are out of scope for the
+   * async seam refactor (FR-118). Postgres support for those subsystems is
+   * tracked separately. The `createSqlDriver` factory already throws if
+   * `dbDriver === "postgres"`, so `rawDatabase()` will only ever be called on a
+   * SQLite-backed store.
    */
   get db(): DatabaseSync {
-    return this.#db;
+    return this.#sqlDriver.rawDb;
   }
   readonly #idempotencyCacheCapacity: number;
   readonly #idempotencyKeyRetentionMs: number;
@@ -342,13 +355,15 @@ export class FrickStore {
   #writeListener: FrickStoreWriteListener | undefined;
 
   constructor(options: StoreOptions) {
-    if (options.path !== ":memory:") {
-      mkdirSync(dirname(options.path), { recursive: true });
-    }
-
     this.schema = validateSchema(options.schema ?? foundationSchema);
-    this.#db = new DatabaseSync(options.path);
-    initializeStorage(this.#db, this.schema.schemaRevision);
+
+    // Build the async storage driver. The factory handles path creation and
+    // throws FrickConfigError for unsupported drivers (e.g. "postgres" until FR-119).
+    this.#sqlDriver = createSqlDriver({
+      dbDriver: options.dbDriver ?? "sqlite",
+      dbPath: options.path,
+    });
+    initializeStorage(this.#sqlDriver.rawDb, this.schema.schemaRevision);
     this.#recordSchema();
 
     this.#idempotencyCacheCapacity =
@@ -363,45 +378,48 @@ export class FrickStore {
     this.idempotencyCache = new BoundedIdempotencyCache<CachedIdempotentEvent>(
       this.#idempotencyCacheCapacity,
     );
-    this.objects = new ObjectStore(this.#db, this.schema);
-    this.streams = new StreamStore(this.#db, this.schema, this.idempotencyCache, {
+    const sql = this.#sqlDriver;
+    this.objects = new ObjectStore(sql, this.schema);
+    this.streams = new StreamStore(sql, this.schema, this.idempotencyCache, {
       replayWindowMs: this.#idempotencyReplayWindowMs,
     });
-    this.presence = new PresenceStore(this.#db, this.schema);
-    this.signals = new SignalStore(this.#db, this.schema);
+    this.presence = new PresenceStore(sql, this.schema);
+    this.signals = new SignalStore(sql, this.schema);
     this.blobs = new BlobStore(
-      this.#db,
+      sql,
       createBlobBytesDriver({
         driver: options.blobDriver ?? "sqlite",
-        db: this.#db,
+        db: sql,
         blobStoragePath: options.blobStoragePath,
       }),
     );
-    this.blobDerivatives = new BlobDerivativeStore(this.#db);
+    this.blobDerivatives = new BlobDerivativeStore(sql);
     this.blobProcessors = createFrickBlobProcessorRegistry();
-    this.jobs = new JobStore(this.#db);
-    this.sessions = new SessionStore(this.#db);
-    this.accounts = new AccountStore(this.#db);
-    this.passwordResetTokens = new PasswordResetTokenStore(this.#db);
-    this.tenants = new TenantStore(this.#db);
-    this.invitations = new InvitationStore(this.#db);
-    this.grants = new GrantStore(this.#db);
-    this.tenantSettings = new TenantSettingsStore(this.#db);
-    this.adminAudit = new AdminAuditStore(this.#db);
-    this.pushRegistrations = new PushRegistrationStore(this.#db);
-    this.devtoolsEvents = new DevToolsEventStore(this.#db, {
+    this.jobs = new JobStore(sql);
+    this.sessions = new SessionStore(sql);
+    this.accounts = new AccountStore(sql);
+    this.passwordResetTokens = new PasswordResetTokenStore(sql);
+    this.tenants = new TenantStore(sql);
+    this.invitations = new InvitationStore(sql);
+    this.grants = new GrantStore(sql);
+    this.tenantSettings = new TenantSettingsStore(sql);
+    this.adminAudit = new AdminAuditStore(sql);
+    this.pushRegistrations = new PushRegistrationStore(sql);
+    // These stores take raw DatabaseSync handles (out-of-scope raw-SQLite subsystems).
+    const rawDb = sql.rawDb;
+    this.devtoolsEvents = new DevToolsEventStore(rawDb, {
       retentionMs:
         options.devtoolsEventsRetentionMs ?? DEFAULT_DEVTOOLS_EVENTS_RETENTION_MS,
       maxRows: options.devtoolsEventsMaxRows ?? DEFAULT_DEVTOOLS_EVENTS_MAX_ROWS,
     });
-    this.platformEvents = new SqlitePlatformEventPipeline(this.#db, {
+    this.platformEvents = new SqlitePlatformEventPipeline(rawDb, {
       retentionMs:
         options.platformEventsRetentionMs ?? DEFAULT_PLATFORM_EVENTS_RETENTION_MS,
       maxRows: options.platformEventsMaxRows ?? DEFAULT_PLATFORM_EVENTS_MAX_ROWS,
     });
-    this.analyticsEvents = new AnalyticsEventStore(this.#db);
+    this.analyticsEvents = new AnalyticsEventStore(rawDb);
     this.projections = options.projections ?? createFrickProjectionRegistry();
-    this.searchAdapter = options.searchAdapter ?? createSqliteFtsSearchAdapter(this.#db);
+    this.searchAdapter = options.searchAdapter ?? createSqliteFtsSearchAdapter(rawDb);
     this.searchIndexes = options.searchIndexes ?? createFrickSearchIndexRegistry();
     this.#logger = options.logger ?? createNoopLogger();
     void options.seed;
@@ -482,7 +500,7 @@ export class FrickStore {
       clearInterval(this.#expiredSessionPruneTimer);
       this.#expiredSessionPruneTimer = undefined;
     }
-    this.#db.close();
+    this.#sqlDriver.rawDb.close();
   }
 
   #safeDevToolsPrune(): void {
@@ -513,11 +531,11 @@ export class FrickStore {
     }
   }
 
-  #safeExpiredSessionPrune(): void {
+  async #safeExpiredSessionPrune(): Promise<void> {
     if (this.#closed) return;
     try {
       const cutoffIso = new Date(Date.now() - this.#expiredSessionGraceMs).toISOString();
-      this.sessions.pruneExpired(cutoffIso);
+      await this.sessions.pruneExpired(cutoffIso);
     } catch (error) {
       // Never let a maintenance failure tear down the process.
       // eslint-disable-next-line no-console
@@ -552,7 +570,7 @@ export class FrickStore {
     const globalCutoffIso = new Date(now - this.#idempotencyKeyRetentionMs).toISOString();
     // Per-tenant retention overrides: any tenant with a `retentionMs` row in
     // tenant_settings uses its own cutoff instead of the global one.
-    const overrides = this.#db
+    const overrides = this.db
       .prepare(
         `SELECT tenant_id, setting_value FROM tenant_settings
           WHERE setting_key = 'retentionMs'`,
@@ -571,12 +589,12 @@ export class FrickStore {
       }
       tenantCutoffs.set(row.tenant_id, new Date(now - parsed).toISOString());
     }
-    this.#db.exec("BEGIN IMMEDIATE");
+    this.db.exec("BEGIN IMMEDIATE");
     let prunedByAge = 0;
     let prunedByCap = 0;
     try {
       for (const [tenantId, cutoffIso] of tenantCutoffs) {
-        const r = this.#db
+        const r = this.db
           .prepare(
             "DELETE FROM idempotency_keys WHERE tenant_id = ? AND created_at < ?",
           )
@@ -587,12 +605,12 @@ export class FrickStore {
       // clause; with no overrides this collapses to a plain WHERE clause.
       let ageResult;
       if (tenantCutoffs.size === 0) {
-        ageResult = this.#db
+        ageResult = this.db
           .prepare("DELETE FROM idempotency_keys WHERE created_at < ?")
           .run(globalCutoffIso);
       } else {
         const placeholders = Array.from(tenantCutoffs.keys()).map(() => "?").join(",");
-        ageResult = this.#db
+        ageResult = this.db
           .prepare(
             `DELETE FROM idempotency_keys
               WHERE created_at < ?
@@ -602,12 +620,12 @@ export class FrickStore {
       }
       prunedByAge += Number(ageResult.changes ?? 0);
 
-      const remaining = this.#db
+      const remaining = this.db
         .prepare("SELECT COUNT(*) AS count FROM idempotency_keys")
         .get() as { count: number };
       const overflow = Number(remaining.count) - this.#idempotencyKeyMaxRows;
       if (overflow > 0) {
-        const capResult = this.#db
+        const capResult = this.db
           .prepare(
             `DELETE FROM idempotency_keys
               WHERE rowid IN (
@@ -619,10 +637,10 @@ export class FrickStore {
           .run(overflow);
         prunedByCap = Number(capResult.changes ?? 0);
       }
-      this.#db.exec("COMMIT");
+      this.db.exec("COMMIT");
     } catch (error) {
       try {
-        this.#db.exec("ROLLBACK");
+        this.db.exec("ROLLBACK");
       } catch {
         // Swallow — surface the original cause.
       }
@@ -634,7 +652,7 @@ export class FrickStore {
       this.idempotencyCache = new BoundedIdempotencyCache<CachedIdempotentEvent>(
         this.#idempotencyCacheCapacity,
       );
-      this.streams = new StreamStore(this.#db, this.schema, this.idempotencyCache, {
+      this.streams = new StreamStore(this.#sqlDriver, this.schema, this.idempotencyCache, {
         replayWindowMs: this.#idempotencyReplayWindowMs,
       });
     }
@@ -644,7 +662,7 @@ export class FrickStore {
 
   /** Current row count of the durable `idempotency_keys` table. Read-only. */
   idempotencyKeyRowCount(): number {
-    const row = this.#db
+    const row = this.db
       .prepare("SELECT COUNT(*) AS count FROM idempotency_keys")
       .get() as { count: number } | undefined;
     return Number(row?.count ?? 0);
@@ -674,7 +692,7 @@ export class FrickStore {
    */
   pingDatabase(): boolean {
     try {
-      const row = this.#db.prepare("SELECT 1 AS ok").get() as { ok?: number } | undefined;
+      const row = this.db.prepare("SELECT 1 AS ok").get() as { ok?: number } | undefined;
       return row?.ok === 1;
     } catch {
       return false;
@@ -683,7 +701,7 @@ export class FrickStore {
 
   /** List applied migrations recorded in the `frick_migrations` ledger. */
   listAppliedMigrations(): AppliedMigrationRow[] {
-    return listAppliedMigrations(this.#db);
+    return listAppliedMigrations(this.db);
   }
 
   /**
@@ -698,7 +716,7 @@ export class FrickStore {
    * only consumer. Treat it like a `package private` member.
    */
   rawDatabase(): DatabaseSync {
-    return this.#db;
+    return this.db;
   }
 
   // ---- Tenant-scoped facades --------------------------------------------
@@ -710,15 +728,15 @@ export class FrickStore {
   // tests (which all operate in the default tenant) green while threading a
   // tenant boundary through every public surface.
 
-  upsertObject(type: string, id: string, value: PlainObject, version?: number): void;
-  upsertObject(tenantId: string, type: string, id: string, value: PlainObject, version?: number): void;
-  upsertObject(
+  async upsertObject(type: string, id: string, value: PlainObject, version?: number): Promise<void>;
+  async upsertObject(tenantId: string, type: string, id: string, value: PlainObject, version?: number): Promise<void>;
+  async upsertObject(
     a: string,
     b: string | PlainObject,
     c?: string | PlainObject | number,
     d?: PlainObject | number,
     e?: number,
-  ): void {
+  ): Promise<void> {
     if (typeof b === "string" && (typeof c === "string" || c === undefined)) {
       // 5-arg form: (tenantId, type, id, value, version?)
       const tenantId = a;
@@ -726,9 +744,9 @@ export class FrickStore {
       const id = c as string;
       const value = d as PlainObject;
       const version = (e as number | undefined) ?? 0;
-      this.objects.upsert(tenantId, type, id, value, version);
-      const stored = this.objects.read(tenantId, type, id) ?? value;
-      this.#notifyProjections({
+      await this.objects.upsert(tenantId, type, id, value, version);
+      const stored = (await this.objects.read(tenantId, type, id)) ?? value;
+      await this.#notifyProjections({
         kind: "objectUpsert",
         tenantId,
         objectType: type,
@@ -750,9 +768,9 @@ export class FrickStore {
     const id = b as string;
     const value = c as PlainObject;
     const version = (d as number | undefined) ?? 0;
-    this.objects.upsert(DEFAULT_TENANT_ID, type, id, value, version);
-    const stored = this.objects.read(DEFAULT_TENANT_ID, type, id) ?? value;
-    this.#notifyProjections({
+    await this.objects.upsert(DEFAULT_TENANT_ID, type, id, value, version);
+    const stored = (await this.objects.read(DEFAULT_TENANT_ID, type, id)) ?? value;
+    await this.#notifyProjections({
       kind: "objectUpsert",
       tenantId: DEFAULT_TENANT_ID,
       objectType: type,
@@ -789,19 +807,19 @@ export class FrickStore {
    * The legacy positional {@link upsertObject} signature still works for
    * existing callers — that path is unconditional (lastWriteWins semantics).
    */
-  upsertObjectWithPolicy(args: {
+  async upsertObjectWithPolicy(args: {
     tenantId?: string;
     type: string;
     id: string;
     value: PlainObject;
     expectedVersion?: number;
-  }): ObjectUpsertResult {
+  }): Promise<ObjectUpsertResult> {
     const tenantId = args.tenantId ?? DEFAULT_TENANT_ID;
     const mergePolicy: FrickObjectMergePolicy = resolveObjectMergePolicy(
       this.schema,
       args.type,
     );
-    const result = this.objects.upsertWithPolicy({
+    const result = await this.objects.upsertWithPolicy({
       tenantId,
       objectType: args.type,
       objectId: args.id,
@@ -815,8 +833,8 @@ export class FrickStore {
     // the `appendEvent` stream path — without it, object-sourced projections
     // and search indexes would never observe writes made through the HTTP
     // object route or the WebSocket ObjectUpsert frame.
-    const stored = this.objects.read(tenantId, args.type, args.id) ?? args.value;
-    this.#notifyProjections({
+    const stored = (await this.objects.read(tenantId, args.type, args.id)) ?? args.value;
+    await this.#notifyProjections({
       kind: "objectUpsert",
       tenantId,
       objectType: args.type,
@@ -844,13 +862,13 @@ export class FrickStore {
    * false when the (type, id) tuple was already absent — idempotent.
    * Mirrors the positional/tenant-aware overload set of {@link readObject}.
    */
-  deleteObject(type: string, id: string): boolean;
-  deleteObject(tenantId: string, type: string, id: string): boolean;
-  deleteObject(a: string, b: string, c?: string): boolean {
+  async deleteObject(type: string, id: string): Promise<boolean>;
+  async deleteObject(tenantId: string, type: string, id: string): Promise<boolean>;
+  async deleteObject(a: string, b: string, c?: string): Promise<boolean> {
     const tenantId = c !== undefined ? a : DEFAULT_TENANT_ID;
     const type = c !== undefined ? b : a;
     const id = c !== undefined ? c : b;
-    const existed = this.objects.delete(tenantId, type, id);
+    const existed = await this.objects.delete(tenantId, type, id);
     // Notify only when a row actually went away (parity with the upsert
     // path) so the sync gateway can broadcast the removal live — clients
     // drop the row immediately instead of waiting for the next cold
@@ -866,31 +884,32 @@ export class FrickStore {
     return existed;
   }
 
-  readObject(type: string, id: string): PlainObject | undefined;
-  readObject(tenantId: string, type: string, id: string): PlainObject | undefined;
-  readObject(a: string, b: string, c?: string): PlainObject | undefined {
+  async readObject(type: string, id: string): Promise<PlainObject | undefined>;
+  async readObject(tenantId: string, type: string, id: string): Promise<PlainObject | undefined>;
+  async readObject(a: string, b: string, c?: string): Promise<PlainObject | undefined> {
     if (c !== undefined) {
       return this.objects.read(a, b, c);
     }
     return this.objects.read(DEFAULT_TENANT_ID, a, b);
   }
 
-  listObjects(type: string): PlainObject[];
-  listObjects(tenantId: string, type: string): PlainObject[];
-  listObjects(a: string, b?: string): PlainObject[] {
+  async listObjects(type: string): Promise<PlainObject[]>;
+  async listObjects(tenantId: string, type: string): Promise<PlainObject[]>;
+  async listObjects(a: string, b?: string): Promise<PlainObject[]> {
     if (b !== undefined) {
       return this.objects.list(a, b);
     }
     return this.objects.list(DEFAULT_TENANT_ID, a);
   }
 
-  listObjectsForUser(type: string, userId: string): PlainObject[];
-  listObjectsForUser(tenantId: string, type: string, userId: string): PlainObject[];
-  listObjectsForUser(a: string, b: string, c?: string): PlainObject[] {
+  async listObjectsForUser(type: string, userId: string): Promise<PlainObject[]>;
+  async listObjectsForUser(tenantId: string, type: string, userId: string): Promise<PlainObject[]>;
+  async listObjectsForUser(a: string, b: string, c?: string): Promise<PlainObject[]> {
     const tenantId = c !== undefined ? a : DEFAULT_TENANT_ID;
     const type = c !== undefined ? b : a;
     const userId = c !== undefined ? c : b;
-    return this.listObjects(tenantId, type).filter((object) =>
+    const objects = await this.listObjects(tenantId, type);
+    return objects.filter((object) =>
       this.isObjectVisibleToUser(tenantId, type, object, userId),
     );
   }
@@ -919,13 +938,13 @@ export class FrickStore {
     return true;
   }
 
-  appendEvent(input: Omit<AppendInput, "tenantId"> & { tenantId?: string }): AppendResult {
-    const result = this.streams.append({
+  async appendEvent(input: Omit<AppendInput, "tenantId"> & { tenantId?: string }): Promise<AppendResult> {
+    const result = await this.streams.append({
       ...input,
       tenantId: input.tenantId ?? DEFAULT_TENANT_ID,
     });
     if (result.created) {
-      this.#notifyProjections({
+      await this.#notifyProjections({
         kind: "streamEvent",
         tenantId: result.event.tenantId,
         streamType: result.event.stream,
@@ -999,13 +1018,13 @@ export class FrickStore {
    * the construction of {@link FrickProjectionContext} lives in a single
    * spot — easier to extend (e.g. attach request-scoped logger fields) later.
    */
-  #notifyProjections(event: FrickProjectionWriteEvent): void {
+  async #notifyProjections(event: FrickProjectionWriteEvent): Promise<void> {
     const ctx: FrickProjectionContext = {
       tenantId: event.tenantId,
       store: this,
       logger: this.#logger,
     };
-    this.projections.notify(event, ctx);
+    await this.projections.notify(event, ctx);
   }
 
   /**
@@ -1039,21 +1058,21 @@ export class FrickStore {
     }
   }
 
-  readEvents(stream: string, streamId: string, after: number, limit?: number): StoredEvent[];
-  readEvents(
+  async readEvents(stream: string, streamId: string, after: number, limit?: number): Promise<StoredEvent[]>;
+  async readEvents(
     tenantId: string,
     stream: string,
     streamId: string,
     after: number,
     limit?: number,
-  ): StoredEvent[];
-  readEvents(
+  ): Promise<StoredEvent[]>;
+  async readEvents(
     a: string,
     b: string,
     c: string | number,
     d?: number,
     e?: number,
-  ): StoredEvent[] {
+  ): Promise<StoredEvent[]> {
     if (typeof c === "number") {
       return this.streams.read(DEFAULT_TENANT_ID, a, b, c, d);
     }
@@ -1065,13 +1084,13 @@ export class FrickStore {
    * to {@link StreamStore.readBefore}. `before` is exclusive; `limit` is
    * clamped server-side to `[1, 500]`.
    */
-  readEventsBefore(
+  async readEventsBefore(
     tenantId: string,
     stream: string,
     streamId: string,
     before: number,
     limit: number,
-  ): StoredEvent[] {
+  ): Promise<StoredEvent[]> {
     return this.streams.readBefore(tenantId, stream, streamId, before, limit);
   }
 
@@ -1080,100 +1099,96 @@ export class FrickStore {
    * total event count within a tenant, no payloads unpacked. Forwards to
    * {@link StreamStore.head}.
    */
-  streamHead(
+  async streamHead(
     tenantId: string,
     stream: string,
     streamId: string,
-  ): { headSequence: number; count: number } {
+  ): Promise<{ headSequence: number; count: number }> {
     return this.streams.head(tenantId, stream, streamId);
   }
 
-  setPresence(type: string, key: string, value: PlainObject, ttlMs: number): void;
-  setPresence(
+  async setPresence(type: string, key: string, value: PlainObject, ttlMs: number): Promise<void>;
+  async setPresence(
     tenantId: string,
     type: string,
     key: string,
     value: PlainObject,
     ttlMs: number,
-  ): void;
-  setPresence(
+  ): Promise<void>;
+  async setPresence(
     a: string,
     b: string,
     c: string | PlainObject,
     d: PlainObject | number,
     e?: number,
-  ): void {
+  ): Promise<void> {
     if (e !== undefined) {
-      this.presence.set(a, b, c as string, d as PlainObject, e);
-      return;
+      return this.presence.set(a, b, c as string, d as PlainObject, e);
     }
-    this.presence.set(DEFAULT_TENANT_ID, a, b, c as PlainObject, d as number);
+    return this.presence.set(DEFAULT_TENANT_ID, a, b, c as PlainObject, d as number);
   }
 
-  readPresence(type: string, key: string): PlainObject | undefined;
-  readPresence(tenantId: string, type: string, key: string): PlainObject | undefined;
-  readPresence(a: string, b: string, c?: string): PlainObject | undefined {
+  async readPresence(type: string, key: string): Promise<PlainObject | undefined>;
+  async readPresence(tenantId: string, type: string, key: string): Promise<PlainObject | undefined>;
+  async readPresence(a: string, b: string, c?: string): Promise<PlainObject | undefined> {
     if (c !== undefined) {
       return this.presence.read(a, b, c);
     }
     return this.presence.read(DEFAULT_TENANT_ID, a, b);
   }
 
-  clearPresence(type: string, key: string): void;
-  clearPresence(tenantId: string, type: string, key: string): void;
-  clearPresence(a: string, b: string, c?: string): void {
+  async clearPresence(type: string, key: string): Promise<void>;
+  async clearPresence(tenantId: string, type: string, key: string): Promise<void>;
+  async clearPresence(a: string, b: string, c?: string): Promise<void> {
     if (c !== undefined) {
-      this.presence.clear(a, b, c);
-      return;
+      return this.presence.clear(a, b, c);
     }
-    this.presence.clear(DEFAULT_TENANT_ID, a, b);
+    return this.presence.clear(DEFAULT_TENANT_ID, a, b);
   }
 
-  enqueueSignal(type: string, key: string, value: PlainObject, ttlMs?: number): void;
-  enqueueSignal(
+  async enqueueSignal(type: string, key: string, value: PlainObject, ttlMs?: number): Promise<void>;
+  async enqueueSignal(
     tenantId: string,
     type: string,
     key: string,
     value: PlainObject,
     ttlMs?: number,
-  ): void;
-  enqueueSignal(
+  ): Promise<void>;
+  async enqueueSignal(
     a: string,
     b: string,
     c: string | PlainObject,
     d?: PlainObject | number,
     e?: number,
-  ): void {
+  ): Promise<void> {
     // Disambiguate: 5-arg overload has `c: string`; 4-arg overload has `c: PlainObject`.
     if (typeof c === "string") {
-      this.signals.enqueue(a, b, c, d as PlainObject, e ?? 30_000);
-      return;
+      return this.signals.enqueue(a, b, c, d as PlainObject, e ?? 30_000);
     }
-    this.signals.enqueue(DEFAULT_TENANT_ID, a, b, c, (d as number | undefined) ?? 30_000);
+    return this.signals.enqueue(DEFAULT_TENANT_ID, a, b, c, (d as number | undefined) ?? 30_000);
   }
 
-  drainSignals(type: string, key: string): PlainObject[];
-  drainSignals(tenantId: string, type: string, key: string): PlainObject[];
-  drainSignals(a: string, b: string, c?: string): PlainObject[] {
+  async drainSignals(type: string, key: string): Promise<PlainObject[]>;
+  async drainSignals(tenantId: string, type: string, key: string): Promise<PlainObject[]>;
+  async drainSignals(a: string, b: string, c?: string): Promise<PlainObject[]> {
     if (c !== undefined) {
       return this.signals.drain(a, b, c);
     }
     return this.signals.drain(DEFAULT_TENANT_ID, a, b);
   }
 
-  createBlobMetadata(metadata: BlobMetadataInput): void;
-  createBlobMetadata(tenantId: string, metadata: BlobMetadataInput): void;
-  createBlobMetadata(a: string | BlobMetadataInput, b?: BlobMetadataInput): void {
+  async createBlobMetadata(metadata: BlobMetadataInput): Promise<void>;
+  async createBlobMetadata(tenantId: string, metadata: BlobMetadataInput): Promise<void>;
+  async createBlobMetadata(a: string | BlobMetadataInput, b?: BlobMetadataInput): Promise<void> {
     if (typeof a === "string" && b) {
-      this.blobs.create(a, b);
-      return;
+      return this.blobs.create(a, b);
     }
-    this.blobs.create(DEFAULT_TENANT_ID, a as BlobMetadataInput);
+    return this.blobs.create(DEFAULT_TENANT_ID, a as BlobMetadataInput);
   }
 
-  readBlobMetadata(blobId: string): BlobMetadata | undefined;
-  readBlobMetadata(tenantId: string, blobId: string): BlobMetadata | undefined;
-  readBlobMetadata(a: string, b?: string): BlobMetadata | undefined {
+  async readBlobMetadata(blobId: string): Promise<BlobMetadata | undefined>;
+  async readBlobMetadata(tenantId: string, blobId: string): Promise<BlobMetadata | undefined>;
+  async readBlobMetadata(a: string, b?: string): Promise<BlobMetadata | undefined> {
     if (b !== undefined) {
       return this.blobs.read(a, b);
     }
@@ -1185,45 +1200,44 @@ export class FrickStore {
    * filter within {@link DEFAULT_TENANT_ID}. For explicit tenant scoping
    * call `store.blobs.list(tenantId, ownerId)` directly.
    */
-  listBlobMetadata(ownerId?: string): BlobMetadata[] {
+  async listBlobMetadata(ownerId?: string): Promise<BlobMetadata[]> {
     return this.blobs.list(DEFAULT_TENANT_ID, ownerId);
   }
 
-  writeBlobContent(blobId: string, content: Uint8Array): void;
-  writeBlobContent(tenantId: string, blobId: string, content: Uint8Array): void;
-  writeBlobContent(a: string, b: string | Uint8Array, c?: Uint8Array): void {
+  writeBlobContent(blobId: string, content: Uint8Array): Promise<void>;
+  writeBlobContent(tenantId: string, blobId: string, content: Uint8Array): Promise<void>;
+  async writeBlobContent(a: string, b: string | Uint8Array, c?: Uint8Array): Promise<void> {
     if (c !== undefined) {
-      this.blobs.writeContent(a, b as string, c);
-      return;
+      return this.blobs.writeContent(a, b as string, c);
     }
-    this.blobs.writeContent(DEFAULT_TENANT_ID, a, b as Uint8Array);
+    return this.blobs.writeContent(DEFAULT_TENANT_ID, a, b as Uint8Array);
   }
 
-  readBlobContent(blobId: string): Uint8Array | undefined;
-  readBlobContent(tenantId: string, blobId: string): Uint8Array | undefined;
-  readBlobContent(a: string, b?: string): Uint8Array | undefined {
+  readBlobContent(blobId: string): Promise<Uint8Array | undefined>;
+  readBlobContent(tenantId: string, blobId: string): Promise<Uint8Array | undefined>;
+  async readBlobContent(a: string, b?: string): Promise<Uint8Array | undefined> {
     if (b !== undefined) {
       return this.blobs.readContent(a, b);
     }
     return this.blobs.readContent(DEFAULT_TENANT_ID, a);
   }
 
-  hasUser(userId: string): boolean;
-  hasUser(tenantId: string, userId: string): boolean;
-  hasUser(a: string, b?: string): boolean {
+  hasUser(userId: string): Promise<boolean>;
+  hasUser(tenantId: string, userId: string): Promise<boolean>;
+  async hasUser(a: string, b?: string): Promise<boolean> {
     if (b !== undefined) {
-      return this.accounts.readByIdentity(a, b) !== undefined;
+      return (await this.accounts.readByIdentity(a, b)) !== undefined;
     }
-    return this.accounts.readByIdentity(DEFAULT_TENANT_ID, a) !== undefined;
+    return (await this.accounts.readByIdentity(DEFAULT_TENANT_ID, a)) !== undefined;
   }
 
-  createAccountUser(input: {
+  async createAccountUser(input: {
     userId: string;
     handle: string;
     displayName: string;
     password: string;
     tenantId?: string;
-  }): StoredAccount {
+  }): Promise<StoredAccount> {
     const tenantId = input.tenantId ?? DEFAULT_TENANT_ID;
     return this.accounts.create({
       tenantId,
@@ -1234,42 +1248,42 @@ export class FrickStore {
     });
   }
 
-  verifyAccountPassword(identity: string, password: string): StoredAccount | undefined;
+  verifyAccountPassword(identity: string, password: string): Promise<StoredAccount | undefined>;
   verifyAccountPassword(
     tenantId: string,
     identity: string,
     password: string,
-  ): StoredAccount | undefined;
-  verifyAccountPassword(a: string, b: string, c?: string): StoredAccount | undefined {
+  ): Promise<StoredAccount | undefined>;
+  async verifyAccountPassword(a: string, b: string, c?: string): Promise<StoredAccount | undefined> {
     if (c !== undefined) {
       return this.accounts.verifyPassword(a, b, c);
     }
     return this.accounts.verifyPassword(DEFAULT_TENANT_ID, a, b);
   }
 
-  createSession(input: {
+  async createSession(input: {
     sessionToken: string;
     userId: string;
     deviceId: string;
     replicaId: string;
     expiresAt: string;
     tenantId?: string;
-  }): StoredSession {
+  }): Promise<StoredSession> {
     return this.sessions.create({
       ...input,
       tenantId: input.tenantId ?? DEFAULT_TENANT_ID,
     });
   }
 
-  readActiveSession(sessionToken: string): StoredSession | undefined {
+  async readActiveSession(sessionToken: string): Promise<StoredSession | undefined> {
     return this.sessions.readActive(sessionToken);
   }
 
-  readAnySession(sessionToken: string): StoredSession | undefined {
+  async readAnySession(sessionToken: string): Promise<StoredSession | undefined> {
     return this.sessions.readAny(sessionToken);
   }
 
-  deleteSession(sessionToken: string): boolean {
+  async deleteSession(sessionToken: string): Promise<boolean> {
     return this.sessions.delete(sessionToken);
   }
 
@@ -1280,7 +1294,7 @@ export class FrickStore {
    *
    * Scope optionally to a single tenant; omit `tenantId` to kill all.
    */
-  deleteSessionsForUser(userId: string, tenantId?: string): number {
+  async deleteSessionsForUser(userId: string, tenantId?: string): Promise<number> {
     return this.sessions.deleteForUser(userId, tenantId);
   }
 
@@ -1289,23 +1303,23 @@ export class FrickStore {
    * account-deletion flow ({@link deleteAccountData}). Returns true when a row
    * was removed, false when no `(tenantId, userId)` match existed — idempotent.
    */
-  deleteAccount(tenantId: string, userId: string): boolean {
+  async deleteAccount(tenantId: string, userId: string): Promise<boolean> {
     return this.accounts.delete(tenantId, userId);
   }
 
-  enqueueJob(type: string, value: PlainObject): void;
-  enqueueJob(tenantId: string, type: string, value: PlainObject): void;
-  enqueueJob(a: string, b: string | PlainObject, c?: PlainObject): void {
+  enqueueJob(type: string, value: PlainObject): Promise<void>;
+  enqueueJob(tenantId: string, type: string, value: PlainObject): Promise<void>;
+  async enqueueJob(a: string, b: string | PlainObject, c?: PlainObject): Promise<void> {
     if (c !== undefined) {
-      this.jobs.enqueue(a, b as string, c);
+      await this.jobs.enqueue(a, b as string, c);
       return;
     }
-    this.jobs.enqueue(DEFAULT_TENANT_ID, a, b as PlainObject);
+    await this.jobs.enqueue(DEFAULT_TENANT_ID, a, b as PlainObject);
   }
 
-  nextJob(type: string): StoredJob | undefined;
-  nextJob(tenantId: string, type: string): StoredJob | undefined;
-  nextJob(a: string, b?: string): StoredJob | undefined {
+  nextJob(type: string): Promise<StoredJob | undefined>;
+  nextJob(tenantId: string, type: string): Promise<StoredJob | undefined>;
+  async nextJob(a: string, b?: string): Promise<StoredJob | undefined> {
     if (b !== undefined) {
       return this.jobs.next(a, b);
     }
@@ -1313,7 +1327,7 @@ export class FrickStore {
   }
 
   #recordSchema(): void {
-    this.#db
+    this.db
       .prepare(
         `INSERT OR IGNORE INTO schema_versions (schema_hash, manifest, created_at)
           VALUES (?, ?, ?)`,

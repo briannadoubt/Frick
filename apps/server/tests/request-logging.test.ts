@@ -118,14 +118,14 @@ describe("per-request logging", () => {
     });
   });
 
-  it("child logger redacts sensitive inherited fields", () => {
+  it("child logger redacts sensitive inherited fields", async () => {
     const { logger, entries } = createCapturingLogger();
     logger.child({ password: "supersecret", credentials: { privateKey: "pem", publicKey: "pub" } }).info("login");
     expect(entries[0].fields.password).toBe("<redacted>");
     expect(entries[0].fields.credentials).toEqual({ privateKey: "<redacted>", publicKey: "pub" });
   });
 
-  it("child logger merges parent and per-emission fields", () => {
+  it("child logger merges parent and per-emission fields", async () => {
     const { logger, entries } = createCapturingLogger();
     logger.child({ a: 1 }).info("msg", { b: 2 });
     expect(entries[0].fields).toMatchObject({ a: 1, b: 2 });

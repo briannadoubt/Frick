@@ -46,7 +46,7 @@ describe("FR-114 server-originated live push", () => {
 
     // Simulate a background job / app route writing through the store. No WS
     // frame and no HTTP request — the gateway must still fan this out.
-    app.store.upsertObject(ada.tenantId, CONVERSATION, "conversation-general", {
+    await app.store.upsertObject(ada.tenantId, CONVERSATION, "conversation-general", {
       kind: "group",
       title: "Ops standup",
       createdBy: "user-ada",
@@ -79,7 +79,7 @@ describe("FR-114 server-originated live push", () => {
     const deltas = collectDeltas(socket);
     await subscribeStream(socket, "sub-stream", MESSAGE_STREAM, CONVERSATION_KEY);
 
-    const result = app.store.appendEvent({
+    const result = await app.store.appendEvent({
       tenantId: ada.tenantId,
       requestId: "server-append-1",
       replicaId: "server-job",
@@ -114,7 +114,7 @@ describe("FR-114 server-originated live push", () => {
     await subscribeObjects(socketA, "sub-conv-a", CONVERSATION);
 
     // A server-side write in tenant B must NOT reach tenant A's subscriber.
-    app.store.upsertObject(b.tenantId, CONVERSATION, "conversation-b", {
+    await app.store.upsertObject(b.tenantId, CONVERSATION, "conversation-b", {
       kind: "group",
       title: "Tenant B room",
       createdBy: "user-bravo",
@@ -122,7 +122,7 @@ describe("FR-114 server-originated live push", () => {
     expect(await deltasA.maybeNext(150)).toBeUndefined();
 
     // A server-side write in tenant A does reach tenant A's subscriber.
-    app.store.upsertObject(a.tenantId, CONVERSATION, "conversation-a", {
+    await app.store.upsertObject(a.tenantId, CONVERSATION, "conversation-a", {
       kind: "group",
       title: "Tenant A room",
       createdBy: "user-alpha",

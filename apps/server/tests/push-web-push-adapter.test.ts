@@ -3,6 +3,7 @@
  * so we don't dial real push services; the adapter is exercised
  * end-to-end (parse subscription, sign JWT, POST, translate response).
  */
+import { SqliteSqlDriver } from "../src/storage/sql-driver.js";
 import { createECDH, generateKeyPairSync, randomBytes } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
@@ -36,11 +37,11 @@ function generateP256Pem(): string {
   return privateKey;
 }
 
-function setupTenant(env: NodeJS.ProcessEnv): { tenantSettings: TenantSettingsStore } {
+async function setupTenant(env: NodeJS.ProcessEnv): Promise<{ tenantSettings: TenantSettingsStore }> {
   const db = new DatabaseSync(":memory:");
   runFrameworkMigrations(db, { supportedSchemaRevision: foundationSchema.schemaRevision });
-  const tenantSettings = new TenantSettingsStore(db);
-  saveWebPushCredentials(
+  const tenantSettings = new TenantSettingsStore(new SqliteSqlDriver(db));
+  await saveWebPushCredentials(
     tenantSettings,
     "tenant-1",
     {
@@ -91,7 +92,7 @@ describe("web push adapter", () => {
     const env = { FRICK_PUSH_CRED_KEY: freshKey() };
     const db = new DatabaseSync(":memory:");
     runFrameworkMigrations(db, { supportedSchemaRevision: foundationSchema.schemaRevision });
-    const tenantSettings = new TenantSettingsStore(db);
+    const tenantSettings = new TenantSettingsStore(new SqliteSqlDriver(db));
     const adapter = createFrickWebPushAdapter({
       env,
       fetch: (async () => new Response()) as typeof fetch,
@@ -103,7 +104,7 @@ describe("web push adapter", () => {
 
   it("delivers a 201 response as success, sending an empty body when the subscription has no keys", async () => {
     const env = { FRICK_PUSH_CRED_KEY: freshKey() };
-    const { tenantSettings } = setupTenant(env);
+    const { tenantSettings } = await setupTenant(env);
     let observedAuth = "";
     let observedBody: BodyInit | null | undefined;
     const fetchImpl: typeof fetch = async (url, init) => {
@@ -131,7 +132,7 @@ describe("web push adapter", () => {
 
   it("encrypts the payload (aes128gcm) when the subscription carries p256dh + auth", async () => {
     const env = { FRICK_PUSH_CRED_KEY: freshKey() };
-    const { tenantSettings } = setupTenant(env);
+    const { tenantSettings } = await setupTenant(env);
     const subscriberEcdh = generateP256Ecdh();
     let observedHeaders: Record<string, string> = {};
     let observedBody: BodyInit | null | undefined;
@@ -167,7 +168,7 @@ describe("web push adapter", () => {
 
   it("translates 410 Gone to push.unregistered", async () => {
     const env = { FRICK_PUSH_CRED_KEY: freshKey() };
-    const { tenantSettings } = setupTenant(env);
+    const { tenantSettings } = await setupTenant(env);
     const adapter = createFrickWebPushAdapter({
       env,
       fetch: (async () => new Response(null, { status: 410 })) as typeof fetch,
@@ -184,7 +185,7 @@ describe("web push adapter", () => {
 
   it("rejects malformed subscription tokens with push.badDeviceToken", async () => {
     const env = { FRICK_PUSH_CRED_KEY: freshKey() };
-    const { tenantSettings } = setupTenant(env);
+    const { tenantSettings } = await setupTenant(env);
     const adapter = createFrickWebPushAdapter({
       env,
       fetch: (async () => new Response()) as typeof fetch,
@@ -196,7 +197,7 @@ describe("web push adapter", () => {
 
   it("rejects non-https subscription endpoints before fetch", async () => {
     const env = { FRICK_PUSH_CRED_KEY: freshKey() };
-    const { tenantSettings } = setupTenant(env);
+    const { tenantSettings } = await setupTenant(env);
     let fetchCalled = false;
     const adapter = createFrickWebPushAdapter({
       env,
@@ -217,7 +218,7 @@ describe("web push adapter", () => {
 
   it("rejects loopback and private subscription endpoints before fetch", async () => {
     const env = { FRICK_PUSH_CRED_KEY: freshKey() };
-    const { tenantSettings } = setupTenant(env);
+    const { tenantSettings } = await setupTenant(env);
     let fetchCalled = false;
     const adapter = createFrickWebPushAdapter({
       env,
@@ -249,7 +250,7 @@ describe("web push adapter", () => {
 
   it("rejects hostnames that resolve to private addresses before fetch", async () => {
     const env = { FRICK_PUSH_CRED_KEY: freshKey() };
-    const { tenantSettings } = setupTenant(env);
+    const { tenantSettings } = await setupTenant(env);
     let fetchCalled = false;
     const adapter = createFrickWebPushAdapter({
       env,
@@ -270,7 +271,7 @@ describe("web push adapter", () => {
     expect(fetchCalled).toBe(false);
   });
 
-  it("signs a VAPID JWT parseable as {typ, alg, aud, exp, sub} with a 64-byte signature", () => {
+  it("signs a VAPID JWT parseable as {typ, alg, aud, exp, sub} with a 64-byte signature", async () => {
     const token = signVapidJwt(
       { subject: "mailto:ops@example.com", publicKey: "pub", privateKey: generateP256Pem() },
       "https://push.example.test",

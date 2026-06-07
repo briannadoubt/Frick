@@ -3,7 +3,7 @@ import { FrameKind, foundationSchema } from "@fricken/protocol";
 import { sendFrame } from "../src/sync/wire.js";
 
 describe("sync wire outbound backpressure", () => {
-  it("closes and skips websocket sends when the outbound buffer is over the limit", () => {
+  it("closes and skips websocket sends when the outbound buffer is over the limit", async () => {
     const calls: string[] = [];
     const socket = {
       readyState: 1,

@@ -70,7 +70,7 @@ describe("POST /push/registrations", () => {
     expect(body.registration.platform).toBe("test");
 
     // Stored row reflects the same fields.
-    const list = app.store.pushRegistrations.listByUser(session.tenantId, session.userId);
+    const list = await app.store.pushRegistrations.listByUser(session.tenantId, session.userId);
     expect(list).toHaveLength(1);
     expect(list[0]?.registrationId).toBe(body.registration.registrationId);
   });
@@ -108,7 +108,7 @@ describe("POST /push/registrations", () => {
       }),
     });
     expect(response.status).toBe(400);
-    expect(app.store.pushRegistrations.listByUser(session.tenantId, session.userId)).toEqual([]);
+    expect(await app.store.pushRegistrations.listByUser(session.tenantId, session.userId)).toEqual([]);
   });
 
   it("accepts webPush registration tokens with public https endpoints", async () => {
@@ -180,7 +180,7 @@ describe("POST /push/registrations", () => {
     };
     expect(secondBody.registration.registrationId).toBe(firstBody.registration.registrationId);
     expect(secondBody.registration.token).toBe("tok-2");
-    const list = app.store.pushRegistrations.listByUser(session.tenantId, session.userId);
+    const list = await app.store.pushRegistrations.listByUser(session.tenantId, session.userId);
     expect(list).toHaveLength(1);
   });
 });
@@ -209,8 +209,8 @@ describe("DELETE /push/registrations/:id", () => {
       },
     );
     expect(del.status).toBe(204);
-    expect(app.store.pushRegistrations.listByUser(session.tenantId, session.userId)).toHaveLength(0);
-    const stored = app.store.pushRegistrations.getById(registration.registrationId, session.tenantId);
+    expect(await app.store.pushRegistrations.listByUser(session.tenantId, session.userId)).toHaveLength(0);
+    const stored = await app.store.pushRegistrations.getById(registration.registrationId, session.tenantId);
     expect(stored?.revokedAt).toBeDefined();
   });
 
@@ -244,7 +244,7 @@ describe("DELETE /push/registrations/:id", () => {
     );
     expect(del.status).toBe(404);
     // Tenant-b's row is still active.
-    const stored = app.store.pushRegistrations.getById(registration.registrationId, "tenant-b");
+    const stored = await app.store.pushRegistrations.getById(registration.registrationId, "tenant-b");
     expect(stored?.revokedAt).toBeUndefined();
   });
 
@@ -283,7 +283,7 @@ describe("DELETE /push/registrations/:id", () => {
       method: "DELETE",
       headers: { authorization: `Bearer ${session.sessionToken}` },
     });
-    const list = app.store.pushRegistrations.listByUser(session.tenantId, session.userId);
+    const list = await app.store.pushRegistrations.listByUser(session.tenantId, session.userId);
     expect(list.map((r) => r.registrationId)).toEqual([r2Body.registration.registrationId]);
   });
 });

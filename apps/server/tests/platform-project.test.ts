@@ -6,7 +6,7 @@ import {
 } from "../src/platform/project.js";
 
 describe("Frick project module contract", () => {
-  it("normalizes a valid project module", () => {
+  it("normalizes a valid project module", async () => {
     const project = createFrickProjectModule({
       manifest: {
         id: "crm",
@@ -26,7 +26,7 @@ describe("Frick project module contract", () => {
     expect(project.schema.schemaId).toBe(foundationSchema.schemaId);
   });
 
-  it("rejects invalid project ids before the server boots", () => {
+  it("rejects invalid project ids before the server boots", async () => {
     expect(() =>
       createFrickProjectModule({
         manifest: { id: "Bad Project!", name: "bad" },
@@ -35,7 +35,7 @@ describe("Frick project module contract", () => {
     ).toThrow(/manifest.id/);
   });
 
-  it("validates the supplied schema", () => {
+  it("validates the supplied schema", async () => {
     expect(() =>
       createFrickProjectModule({
         manifest: { id: "broken", name: "broken" },
@@ -44,7 +44,7 @@ describe("Frick project module contract", () => {
     ).toThrow(/Unsupported protocol/);
   });
 
-  it("can convert a project into the root app definition", () => {
+  it("can convert a project into the root app definition", async () => {
     const project = createFrickProjectModule({
       manifest: { id: "crm", name: "crm" },
       schema: foundationSchema,

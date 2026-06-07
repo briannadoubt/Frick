@@ -63,10 +63,10 @@ async function uploadBlob(
   );
 }
 
-async function waitFor<T>(predicate: () => T | undefined, timeoutMs = 2000): Promise<T> {
+async function waitFor<T>(predicate: () => T | undefined | Promise<T | undefined>, timeoutMs = 2000): Promise<T> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    const value = predicate();
+    const value = await predicate();
     if (value !== undefined && value !== null && (!Array.isArray(value) || value.length > 0)) {
       return value;
     }
@@ -106,7 +106,7 @@ describe("blob processor pipeline", () => {
     expect(body.error.details?.rejectionReason).toBe("text uploads forbidden");
 
     // The metadata row must not have been created.
-    expect(app.store.blobs.read(session.tenantId, "blob-reject-1")).toBeUndefined();
+    expect(await app.store.blobs.read(session.tenantId, "blob-reject-1")).toBeUndefined();
   });
 
   it("runs async processors and persists derivative rows", async () => {
@@ -141,8 +141,8 @@ describe("blob processor pipeline", () => {
     expect(upload.status).toBe(201);
 
     // Wait for the worker to claim and complete the blob.process job.
-    const derivatives = await waitFor(() => {
-      const list = app!.store.blobDerivatives.listForParent("blob-async-1", session.tenantId);
+    const derivatives = await waitFor(async () => {
+      const list = await app!.store.blobDerivatives.listForParent("blob-async-1", session.tenantId);
       return list.length > 0 ? list : undefined;
     });
     expect(derivatives).toHaveLength(1);
@@ -200,8 +200,8 @@ describe("blob processor pipeline", () => {
       owner.userId,
     );
     expect(upload.status).toBe(201);
-    await waitFor(() => {
-      const list = app!.store.blobDerivatives.listForParent("blob-iso-1", owner.tenantId);
+    await waitFor(async () => {
+      const list = await app!.store.blobDerivatives.listForParent("blob-iso-1", owner.tenantId);
       return list.length > 0 ? list : undefined;
     });
 
@@ -250,8 +250,8 @@ describe("blob processor pipeline", () => {
     );
     expect(upload.status).toBe(201);
 
-    const derivatives = await waitFor(() => {
-      const list = app!.store.blobDerivatives.listForParent("blob-meta-1", session.tenantId);
+    const derivatives = await waitFor(async () => {
+      const list = await app!.store.blobDerivatives.listForParent("blob-meta-1", session.tenantId);
       return list.length > 0 ? list : undefined;
     });
     expect(derivatives[0]?.metadata).toEqual({ byteLength: 7 });

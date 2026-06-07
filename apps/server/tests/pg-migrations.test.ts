@@ -224,7 +224,7 @@ describe.skipIf(skip)("Postgres migration runner (requires FRICK_DATABASE_URL)",
     expect(tables).toContain("test_extra_pg");
   });
 
-  it("FRAMEWORK_TABLES_PG covers the same logical set as FRAMEWORK_MIGRATIONS_PG", () => {
+  it("FRAMEWORK_TABLES_PG covers the same logical set as FRAMEWORK_MIGRATIONS_PG", async () => {
     // Every table created across all migrations should appear in FRAMEWORK_TABLES_PG.
     // This is a static consistency check — no DB needed — so it runs regardless of skip.
     // (We're inside a skipIf block, so it still needs a DB. Extract to a separate suite
@@ -235,7 +235,7 @@ describe.skipIf(skip)("Postgres migration runner (requires FRICK_DATABASE_URL)",
     expect(FRAMEWORK_TABLES_PG).toContain("grants");
   });
 
-  it("each migration's checksum is a valid sha256- prefixed hex string", () => {
+  it("each migration's checksum is a valid sha256- prefixed hex string", async () => {
     for (const migration of FRAMEWORK_MIGRATIONS_PG) {
       const checksum = computeMigrationChecksum(migration);
       expect(checksum).toMatch(/^sha256-[0-9a-f]{64}$/);
@@ -265,19 +265,19 @@ describe("FRAMEWORK_MIGRATIONS_PG static checks", () => {
     );
   });
 
-  it("each migration has a non-empty description", () => {
+  it("each migration has a non-empty description", async () => {
     for (const migration of FRAMEWORK_MIGRATIONS_PG) {
       expect(migration.description.trim().length).toBeGreaterThan(0);
     }
   });
 
-  it("each migration has non-empty SQL", () => {
+  it("each migration has non-empty SQL", async () => {
     for (const migration of FRAMEWORK_MIGRATIONS_PG) {
       expect(migration.sql.trim().length).toBeGreaterThan(0);
     }
   });
 
-  it("FRAMEWORK_TABLES_PG has no duplicates", () => {
+  it("FRAMEWORK_TABLES_PG has no duplicates", async () => {
     const unique = new Set(FRAMEWORK_TABLES_PG);
     expect(unique.size).toBe(FRAMEWORK_TABLES_PG.length);
   });

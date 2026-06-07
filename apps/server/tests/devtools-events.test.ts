@@ -54,10 +54,10 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitFor<T>(predicate: () => T | undefined, timeoutMs = 2000): Promise<T> {
+async function waitFor<T>(predicate: () => T | undefined | Promise<T | undefined>, timeoutMs = 2000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const value = predicate();
+    const value = await predicate();
     if (value !== undefined && value !== null && value !== false) {
       return value as T;
     }
@@ -72,8 +72,8 @@ describe("devtools event feed", () => {
     const response = await fetch(`${app.httpUrl}/health`);
     expect(response.status).toBe(200);
 
-    const events = await waitFor(() => {
-      const list = app!.server.store.devtoolsEvents.list();
+    const events = await waitFor(async () => {
+      const list = await app!.server.store.devtoolsEvents.list();
       return list.some((row) => row.kind === "http.request") ? list : undefined;
     });
     const request = events.find(
@@ -102,18 +102,18 @@ describe("devtools event feed", () => {
       pollIntervalMs: 10,
     });
     worker.start();
-    const row = standaloneStore.jobs.enqueue({
+    const row = await standaloneStore.jobs.enqueue({
       tenantId: "_default",
       jobType: "BoomJob",
       payload: {},
       maxAttempts: 1,
     });
-    await waitFor(() => standaloneStore!.jobs.getById(row.id)?.status === "dead_lettered");
-    const events = standaloneStore.devtoolsEvents.list({ kind: "job.failed" });
+    await waitFor(async () => (await standaloneStore!.jobs.getById(row.id))?.status === "dead_lettered");
+    const events = await standaloneStore.devtoolsEvents.list({ kind: "job.failed" });
     expect(events.length).toBeGreaterThanOrEqual(0);
     // The single-attempt path goes straight to dead-letter so we check both
     // failure kinds — at least one must capture the error.
-    const dl = standaloneStore.devtoolsEvents.list({ kind: "job.dead_lettered" });
+    const dl = await standaloneStore.devtoolsEvents.list({ kind: "job.dead_lettered" });
     const failureRow = events[0] ?? dl[0];
     expect(failureRow).toBeDefined();
     expect(failureRow?.fields).toMatchObject({
@@ -143,11 +143,11 @@ describe("devtools event feed", () => {
     standaloneStore.devtoolsEvents.record({ kind: "http.request", tenantId: "tenant-b" });
     standaloneStore.devtoolsEvents.record({ kind: "http.request" });
 
-    const tenantA = standaloneStore.devtoolsEvents.list({ tenantId: "tenant-a" });
+    const tenantA = await standaloneStore.devtoolsEvents.list({ tenantId: "tenant-a" });
     expect(tenantA).toHaveLength(1);
     expect(tenantA[0]?.tenantId).toBe("tenant-a");
 
-    const tenantB = standaloneStore.devtoolsEvents.list({ tenantId: "tenant-b" });
+    const tenantB = await standaloneStore.devtoolsEvents.list({ tenantId: "tenant-b" });
     expect(tenantB).toHaveLength(1);
     expect(tenantB[0]?.tenantId).toBe("tenant-b");
   });

@@ -126,7 +126,7 @@ export function createBlobProcessorJobHandler(
       // a registry change between enqueue and run could leave a stale job.
       return { status: "completed", result: { derivatives: 0 } };
     }
-    const metadata = store.blobs.read(ctx.tenantId, blobId);
+    const metadata = await store.blobs.read(ctx.tenantId, blobId);
     if (!metadata) {
       return {
         status: "failed",

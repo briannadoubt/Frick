@@ -4,7 +4,7 @@ import { FrickStore } from "../src/store.js";
 
 let store: FrickStore | undefined;
 
-afterEach(() => {
+afterEach(async () => {
   store?.close();
   store = undefined;
 });
@@ -38,7 +38,7 @@ describe("FrickStore idempotency_keys retention", () => {
       idempotencyKeyPruneIntervalMs: 0, // disable timer; we drive prune manually
     });
 
-    const first = store.appendEvent(makeAppend("request-A", "hello"));
+    const first = await store.appendEvent(makeAppend("request-A", "hello"));
     expect(first.created).toBe(true);
     expect(store.idempotencyKeyRowCount()).toBe(1);
 
@@ -52,12 +52,12 @@ describe("FrickStore idempotency_keys retention", () => {
 
     // After retention has lapsed and pruning has run, a replay must NOT be
     // deduplicated by the cache — it should produce a brand new event.
-    const replay = store.appendEvent(makeAppend("request-A", "hello"));
+    const replay = await store.appendEvent(makeAppend("request-A", "hello"));
     expect(replay.created).toBe(true);
     expect(replay.event.eventId).not.toBe(first.event.eventId);
   });
 
-  it("enforces the maxRows cap after the age sweep", () => {
+  it("enforces the maxRows cap after the age sweep", async () => {
     store = new FrickStore({
       path: ":memory:",
       seed: true,
@@ -68,7 +68,7 @@ describe("FrickStore idempotency_keys retention", () => {
     });
 
     for (let i = 0; i < 10; i++) {
-      store.appendEvent(makeAppend(`request-${i}`, `body-${i}`));
+      await store.appendEvent(makeAppend(`request-${i}`, `body-${i}`));
     }
     expect(store.idempotencyKeyRowCount()).toBe(10);
 
@@ -78,12 +78,12 @@ describe("FrickStore idempotency_keys retention", () => {
     expect(store.idempotencyKeyRowCount()).toBe(5);
   });
 
-  it("preserves idempotency for replays within the default retention window", () => {
+  it("preserves idempotency for replays within the default retention window", async () => {
     store = new FrickStore({ path: ":memory:", seed: true, idempotencyKeyPruneIntervalMs: 0 , schema: productTestSchema });
 
     const input = makeAppend("request-stable", "once");
-    const first = store.appendEvent(input);
-    const second = store.appendEvent(input);
+    const first = await store.appendEvent(input);
+    const second = await store.appendEvent(input);
 
     expect(first.created).toBe(true);
     expect(second.created).toBe(false);
@@ -101,14 +101,14 @@ describe("FrickStore idempotency_keys retention", () => {
         idempotencyKeyPruneIntervalMs: 50,
       });
 
-      const first = store.appendEvent(makeAppend("request-timer", "first"));
+      const first = await store.appendEvent(makeAppend("request-timer", "first"));
       expect(first.created).toBe(true);
 
       // Wait long enough for at least one timer tick after the row's
       // `created_at` ages past the 10ms retention window.
       await new Promise((resolve) => setTimeout(resolve, 200));
 
-      const replay = store.appendEvent(makeAppend("request-timer", "second"));
+      const replay = await store.appendEvent(makeAppend("request-timer", "second"));
       expect(replay.created).toBe(true);
       expect(replay.event.eventId).not.toBe(first.event.eventId);
     },

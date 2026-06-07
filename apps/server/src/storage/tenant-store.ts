@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { SqlDriver } from "./sql-driver.js";
 
 /**
  * A row in the `tenants` ledger. The ledger was added by migration
@@ -29,44 +29,47 @@ export class TenantAlreadyExistsError extends Error {
 }
 
 export class TenantStore {
-  constructor(private readonly db: DatabaseSync) {}
+  constructor(private readonly sql: SqlDriver) {}
 
-  list(includeArchived = false): TenantRow[] {
-    const sql = includeArchived
+  async list(includeArchived = false): Promise<TenantRow[]> {
+    const query = includeArchived
       ? "SELECT * FROM tenants ORDER BY created_at ASC, tenant_id ASC"
       : "SELECT * FROM tenants WHERE archived_at IS NULL ORDER BY created_at ASC, tenant_id ASC";
-    const rows = this.db.prepare(sql).all() as unknown as TenantSqlRow[];
+    const rows = await this.sql.all<TenantSqlRow>(query);
     return rows.map(toTenantRow);
   }
 
-  get(tenantId: string): TenantRow | undefined {
-    const row = this.db
-      .prepare("SELECT * FROM tenants WHERE tenant_id = ?")
-      .get(tenantId) as unknown as TenantSqlRow | undefined;
+  async get(tenantId: string): Promise<TenantRow | undefined> {
+    const row = await this.sql.get<TenantSqlRow>(
+      "SELECT * FROM tenants WHERE tenant_id = ?",
+      [tenantId],
+    );
     return row ? toTenantRow(row) : undefined;
   }
 
-  create(tenantId: string, displayName?: string): TenantRow {
-    const existing = this.get(tenantId);
+  async create(tenantId: string, displayName?: string): Promise<TenantRow> {
+    const existing = await this.get(tenantId);
     if (existing && !existing.archivedAt) {
       throw new TenantAlreadyExistsError(tenantId);
     }
     const createdAt = new Date().toISOString();
     if (existing && existing.archivedAt) {
       // Reviving an archived tenant: clear archived_at, refresh display_name.
-      this.db
-        .prepare(
-          "UPDATE tenants SET display_name = ?, archived_at = NULL WHERE tenant_id = ?",
-        )
-        .run(displayName ?? null, tenantId);
-      return { tenantId, ...(displayName !== undefined ? { displayName } : {}), createdAt: existing.createdAt };
+      await this.sql.run(
+        "UPDATE tenants SET display_name = ?, archived_at = NULL WHERE tenant_id = ?",
+        [displayName ?? null, tenantId],
+      );
+      return {
+        tenantId,
+        ...(displayName !== undefined ? { displayName } : {}),
+        createdAt: existing.createdAt,
+      };
     }
-    this.db
-      .prepare(
-        `INSERT INTO tenants (tenant_id, display_name, created_at)
+    await this.sql.run(
+      `INSERT INTO tenants (tenant_id, display_name, created_at)
           VALUES (?, ?, ?)`,
-      )
-      .run(tenantId, displayName ?? null, createdAt);
+      [tenantId, displayName ?? null, createdAt],
+    );
     return {
       tenantId,
       ...(displayName !== undefined ? { displayName } : {}),
@@ -75,15 +78,16 @@ export class TenantStore {
   }
 
   /** Soft-delete. Idempotent: archiving an already-archived row is a no-op. */
-  archive(tenantId: string): void {
-    const existing = this.get(tenantId);
+  async archive(tenantId: string): Promise<void> {
+    const existing = await this.get(tenantId);
     if (!existing || existing.archivedAt) {
       return;
     }
     const archivedAt = new Date().toISOString();
-    this.db
-      .prepare("UPDATE tenants SET archived_at = ? WHERE tenant_id = ?")
-      .run(archivedAt, tenantId);
+    await this.sql.run("UPDATE tenants SET archived_at = ? WHERE tenant_id = ?", [
+      archivedAt,
+      tenantId,
+    ]);
   }
 
   /**
@@ -91,14 +95,13 @@ export class TenantStore {
    * tenant-creation auth path so first-time use of a tenant id auto-registers
    * it (only when `FrickConfig.implicitTenantCreation` is true).
    */
-  ensure(tenantId: string): void {
+  async ensure(tenantId: string): Promise<void> {
     const createdAt = new Date().toISOString();
-    this.db
-      .prepare(
-        `INSERT OR IGNORE INTO tenants (tenant_id, display_name, created_at)
+    await this.sql.run(
+      `INSERT OR IGNORE INTO tenants (tenant_id, display_name, created_at)
           VALUES (?, NULL, ?)`,
-      )
-      .run(tenantId, createdAt);
+      [tenantId, createdAt],
+    );
   }
 }
 

@@ -25,9 +25,9 @@ export interface BuildDashboardObjectDataInput {
   readonly limit?: number;
 }
 
-export function buildDashboardObjectData(
+export async function buildDashboardObjectData(
   input: BuildDashboardObjectDataInput,
-): DashboardObjectData | undefined {
+): Promise<DashboardObjectData | undefined> {
   const objectDef = input.store.schema.objects.find((object) => object.name === input.type);
   if (!objectDef) {
     return undefined;
@@ -39,8 +39,8 @@ export function buildDashboardObjectData(
     : input.principal.tenantId;
   const limit = normalizeDashboardObjectLimit(input.limit);
   const visibleRows = scope === "admin"
-    ? input.store.listObjects(tenantId, input.type)
-    : input.store.listObjectsForUser(tenantId, input.type, input.principal.userId);
+    ? await input.store.listObjects(tenantId, input.type)
+    : await input.store.listObjectsForUser(tenantId, input.type, input.principal.userId);
   // Mask schema fields classified as `secret` / `pii` / `content` so raw
   // sensitive values never surface in admin/tenant inspection output. Fields
   // default to `private` when unannotated, which is not masked here (it is a

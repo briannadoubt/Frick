@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { NegativeCounterIncrementError, createInMemoryMetrics } from "../src/metrics.js";
 
 describe("in-memory metrics registry", () => {
-  it("counter inc defaults to +1 and accepts arbitrary positive numbers", () => {
+  it("counter inc defaults to +1 and accepts arbitrary positive numbers", async () => {
     const metrics = createInMemoryMetrics();
     const c = metrics.counter("frick.test.counter");
     c.inc();
@@ -11,13 +11,13 @@ describe("in-memory metrics registry", () => {
     expect(c.value).toBe(4);
   });
 
-  it("counter rejects negative increments with a typed error", () => {
+  it("counter rejects negative increments with a typed error", async () => {
     const metrics = createInMemoryMetrics();
     const c = metrics.counter("frick.test.counter");
     expect(() => c.inc(-1)).toThrow(NegativeCounterIncrementError);
   });
 
-  it("gauge set replaces the current value", () => {
+  it("gauge set replaces the current value", async () => {
     const metrics = createInMemoryMetrics();
     const g = metrics.gauge("frick.test.gauge");
     g.set(5);
@@ -28,7 +28,7 @@ describe("in-memory metrics registry", () => {
     expect(g.value).toBe(0);
   });
 
-  it("same name+fields returns the same counter handle regardless of field order", () => {
+  it("same name+fields returns the same counter handle regardless of field order", async () => {
     const metrics = createInMemoryMetrics();
     const a = metrics.counter("frick.http.requests.total", { method: "GET", status: "200" });
     const b = metrics.counter("frick.http.requests.total", { status: "200", method: "GET" });
@@ -38,7 +38,7 @@ describe("in-memory metrics registry", () => {
     expect(a.value).toBe(2);
   });
 
-  it("different field values yield different handles", () => {
+  it("different field values yield different handles", async () => {
     const metrics = createInMemoryMetrics();
     const a = metrics.counter("frick.http.requests.total", { method: "GET" });
     const b = metrics.counter("frick.http.requests.total", { method: "POST" });
@@ -49,7 +49,7 @@ describe("in-memory metrics registry", () => {
     expect(b.value).toBe(2);
   });
 
-  it("snapshot returns entries sorted by name then by stringified fields, stably across calls", () => {
+  it("snapshot returns entries sorted by name then by stringified fields, stably across calls", async () => {
     const metrics = createInMemoryMetrics();
     metrics.counter("frick.b.total", { x: "2" }).inc();
     metrics.counter("frick.a.total", { x: "1" }).inc(2);
@@ -71,7 +71,7 @@ describe("in-memory metrics registry", () => {
     expect(first.gauges.map((g) => g.name)).toEqual(["frick.a.current", "frick.b.current"]);
   });
 
-  it("snapshot omits fields key when the counter has no fields", () => {
+  it("snapshot omits fields key when the counter has no fields", async () => {
     const metrics = createInMemoryMetrics();
     metrics.counter("frick.plain").inc();
     const snap = metrics.snapshot();

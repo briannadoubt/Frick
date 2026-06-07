@@ -9,6 +9,7 @@
  *   - access-token cache (one token exchange across multiple sends within
  *     the same expiry window)
  */
+import { SqliteSqlDriver } from "../src/storage/sql-driver.js";
 import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
@@ -27,10 +28,10 @@ function freshKey(): string {
   return randomBytes(32).toString("base64");
 }
 
-function setupTenant(env: NodeJS.ProcessEnv): {
+async function setupTenant(env: NodeJS.ProcessEnv): Promise<{
   tenantSettings: TenantSettingsStore;
   privateKeyPem: string;
-} {
+}> {
   const { privateKey } = generateKeyPairSync("rsa", {
     modulusLength: 2048,
     publicKeyEncoding: { type: "spki", format: "pem" },
@@ -38,8 +39,8 @@ function setupTenant(env: NodeJS.ProcessEnv): {
   });
   const db = new DatabaseSync(":memory:");
   runFrameworkMigrations(db, { supportedSchemaRevision: foundationSchema.schemaRevision });
-  const tenantSettings = new TenantSettingsStore(db);
-  saveFcmCredentials(
+  const tenantSettings = new TenantSettingsStore(new SqliteSqlDriver(db));
+  await saveFcmCredentials(
     tenantSettings,
     "tenant-1",
     {
@@ -94,7 +95,7 @@ describe("FCM adapter", () => {
     const env = { FRICK_PUSH_CRED_KEY: freshKey() };
     const db = new DatabaseSync(":memory:");
     runFrameworkMigrations(db, { supportedSchemaRevision: foundationSchema.schemaRevision });
-    const tenantSettings = new TenantSettingsStore(db);
+    const tenantSettings = new TenantSettingsStore(new SqliteSqlDriver(db));
     const adapter = createFrickFcmAdapter({ env, fetch: (async () => new Response()) as typeof fetch });
     const delivery = await adapter.send(intent, registration, makeCtx(tenantSettings));
     expect(delivery.status).toBe("skipped");
@@ -103,7 +104,7 @@ describe("FCM adapter", () => {
 
   it("delivers and returns the message name as receiptId", async () => {
     const env = { FRICK_PUSH_CRED_KEY: freshKey() };
-    const { tenantSettings } = setupTenant(env);
+    const { tenantSettings } = await setupTenant(env);
     let tokenCalls = 0;
     let sendCalls = 0;
     const fetchImpl: typeof fetch = async (url, init) => {
@@ -141,7 +142,7 @@ describe("FCM adapter", () => {
 
   it("maps UNREGISTERED to push.unregistered", async () => {
     const env = { FRICK_PUSH_CRED_KEY: freshKey() };
-    const { tenantSettings } = setupTenant(env);
+    const { tenantSettings } = await setupTenant(env);
     const fetchImpl: typeof fetch = async (url) => {
       const u = typeof url === "string" ? url : url.toString();
       if (u.endsWith("/token")) {
@@ -172,7 +173,7 @@ describe("FCM adapter", () => {
 
   it("surfaces token-exchange failure as push.tokenExchangeFailed", async () => {
     const env = { FRICK_PUSH_CRED_KEY: freshKey() };
-    const { tenantSettings } = setupTenant(env);
+    const { tenantSettings } = await setupTenant(env);
     const fetchImpl: typeof fetch = async () =>
       new Response("invalid_grant", { status: 400 });
     const adapter = createFrickFcmAdapter({

@@ -217,8 +217,8 @@ describe("mounted dashboard", () => {
     app = await startServer();
     // No default seeding anymore — explicitly insert the User row the
     // assertion needs. A second row makes truncated=true meaningful.
-    app.store.upsertObject("_default", "User", "user-ada", { displayName: "Ada Lovelace" });
-    app.store.upsertObject("_default", "User", "user-grace", { displayName: "Grace Hopper" });
+    await app.store.upsertObject("_default", "User", "user-ada", { displayName: "Ada Lovelace" });
+    await app.store.upsertObject("_default", "User", "user-grace", { displayName: "Grace Hopper" });
     const response = await fetch(`${app.httpUrl}/_frick/dashboard/api/data/objects/User?limit=1`, {
       headers: await inspectHeaders(app.httpUrl),
     });
@@ -247,13 +247,13 @@ describe("mounted dashboard", () => {
     // Apps that want ownership filters must register a `object.read`
     // policy hook. This test pins the new "no built-in filter" contract.
     app = await startServer();
-    app.store.upsertObject("_default", "MessageDraft", "user-ada:conversation-general", {
+    await app.store.upsertObject("_default", "MessageDraft", "user-ada:conversation-general", {
       userId: "user-ada",
       conversationId: "conversation-general",
       body: "ada draft",
       updatedAt: 1_700_000_000_000,
     });
-    app.store.upsertObject("_default", "MessageDraft", "user-grace:conversation-general", {
+    await app.store.upsertObject("_default", "MessageDraft", "user-grace:conversation-general", {
       userId: "user-grace",
       conversationId: "conversation-general",
       body: "grace draft",
@@ -277,7 +277,7 @@ describe("mounted dashboard", () => {
     app = await startServer({
       config: { adminToken },
     });
-    app.store.upsertObject("tenant-x", "User", "user-tenant-x", {
+    await app.store.upsertObject("tenant-x", "User", "user-tenant-x", {
       displayName: "Tenant X",
       avatarBlobId: undefined,
     });
@@ -335,7 +335,7 @@ describe("mounted dashboard", () => {
     };
 
     app = await startServer({ schema: sensitiveSchema });
-    app.store.upsertObject("_default", "Credential", "cred-1", {
+    await app.store.upsertObject("_default", "Credential", "cred-1", {
       label: "Primary key",
       email: "ada@example.com",
       apiToken: "tok_live_secret",
@@ -360,14 +360,14 @@ describe("mounted dashboard", () => {
 
   it("serves tenant-scoped accounts through the mounted dashboard accounts API", async () => {
     app = await startServer();
-    app.store.createAccountUser({
+    await app.store.createAccountUser({
       tenantId: "_default",
       userId: "user-dashboard-one",
       handle: "dashboard-one",
       displayName: "Dashboard One",
       password: "supersecret",
     });
-    app.store.createAccountUser({
+    await app.store.createAccountUser({
       tenantId: "tenant-x",
       userId: "user-tenant-x",
       handle: "tenant-x",
@@ -415,14 +415,14 @@ describe("mounted dashboard", () => {
     app = await startServer({
       config: { adminToken },
     });
-    app.store.createAccountUser({
+    await app.store.createAccountUser({
       tenantId: "tenant-x",
       userId: "user-xfirst",
       handle: "xfirst",
       displayName: "X First",
       password: "supersecret",
     });
-    app.store.createAccountUser({
+    await app.store.createAccountUser({
       tenantId: "tenant-x",
       userId: "user-xsecond",
       handle: "xsecond",
@@ -458,7 +458,7 @@ describe("mounted dashboard", () => {
 
   it("serves only the current tenant through the dashboard tenants API for tenant sessions", async () => {
     app = await startServer();
-    app.store.tenants.create("tenant-other", "Other");
+    await app.store.tenants.create("tenant-other", "Other");
     const login = await fetch(`${app.httpUrl}/auth/dev-login`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -493,9 +493,9 @@ describe("mounted dashboard", () => {
     app = await startServer({
       config: { adminToken },
     });
-    app.store.tenants.create("tenant-alpha", "Alpha");
-    app.store.tenants.create("tenant-archived", "Archived");
-    app.store.tenants.archive("tenant-archived");
+    await app.store.tenants.create("tenant-alpha", "Alpha");
+    await app.store.tenants.create("tenant-archived", "Archived");
+    await app.store.tenants.archive("tenant-archived");
 
     const activeResponse = await fetch(`${app.httpUrl}/_frick/dashboard/api/tenants`, {
       headers: { authorization: `Bearer ${adminToken}` },
@@ -550,9 +550,9 @@ describe("mounted dashboard", () => {
 
   it("serves only the current tenant settings through the dashboard API for tenant sessions", async () => {
     app = await startServer();
-    app.store.tenants.create("tenant-other", "Other");
-    app.store.tenantSettings.set("tenant-other", "retentionMs", 12345);
-    app.store.tenantSettings.set("tenant-session", "limits", { maxBlobBytes: 8 });
+    await app.store.tenants.create("tenant-other", "Other");
+    await app.store.tenantSettings.set("tenant-other", "retentionMs", 12345);
+    await app.store.tenantSettings.set("tenant-session", "limits", { maxBlobBytes: 8 });
     const login = await fetch(`${app.httpUrl}/auth/dev-login`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -592,16 +592,16 @@ describe("mounted dashboard", () => {
     app = await startServer({
       config: { adminToken },
     });
-    app.store.tenants.create("tenant-settings", "Settings");
+    await app.store.tenants.create("tenant-settings", "Settings");
     app.store.tenantSettings.set("tenant-settings", "limits", {
       maxBlobBytes: 8,
       maxStreamAppendPayloadBytes: 16,
       ignoredGlobalLimit: 999,
     });
-    app.store.tenantSettings.set("tenant-settings", "retentionMs", 60000);
-    app.store.tenantSettings.set("tenant-settings", "push.apns.encrypted", "apns-secret-ciphertext");
-    app.store.tenantSettings.set("tenant-settings", "push.fcm.encrypted", "fcm-secret-ciphertext");
-    app.store.tenantSettings.set("tenant-settings", "customFeature", { enabled: true });
+    await app.store.tenantSettings.set("tenant-settings", "retentionMs", 60000);
+    await app.store.tenantSettings.set("tenant-settings", "push.apns.encrypted", "apns-secret-ciphertext");
+    await app.store.tenantSettings.set("tenant-settings", "push.fcm.encrypted", "fcm-secret-ciphertext");
+    await app.store.tenantSettings.set("tenant-settings", "customFeature", { enabled: true });
 
     const response = await fetch(
       `${app.httpUrl}/_frick/dashboard/api/tenant-settings?tenantId=tenant-settings`,
@@ -644,7 +644,7 @@ describe("mounted dashboard", () => {
 
   it("serves tenant-owned blob metadata through the dashboard API without content bytes", async () => {
     app = await startServer();
-    app.store.blobs.create("_default", {
+    await app.store.blobs.create("_default", {
       blobId: "blob-dashboard-ada",
       ownerId: "user-ada",
       contentHash: "sha256-dashboard-ada",
@@ -657,7 +657,7 @@ describe("mounted dashboard", () => {
       "blob-dashboard-ada",
       Buffer.from("secret blob bytes"),
     );
-    app.store.blobs.create("_default", {
+    await app.store.blobs.create("_default", {
       blobId: "blob-dashboard-grace",
       ownerId: "user-grace",
       contentHash: "sha256-dashboard-grace",
@@ -712,7 +712,7 @@ describe("mounted dashboard", () => {
     app = await startServer({
       config: { adminToken },
     });
-    app.store.blobs.create("tenant-x", {
+    await app.store.blobs.create("tenant-x", {
       blobId: "blob-x-first",
       ownerId: "user-x",
       contentHash: "sha256-x-first",
@@ -720,7 +720,7 @@ describe("mounted dashboard", () => {
       mimeType: "image/png",
       storageKey: "tenant-x/first",
     });
-    app.store.blobs.create("tenant-x", {
+    await app.store.blobs.create("tenant-x", {
       blobId: "blob-x-second",
       ownerId: "user-x",
       contentHash: "sha256-x-second",
@@ -728,7 +728,7 @@ describe("mounted dashboard", () => {
       mimeType: "image/png",
       storageKey: "tenant-x/second",
     });
-    app.store.blobs.create("tenant-x", {
+    await app.store.blobs.create("tenant-x", {
       blobId: "blob-x-other",
       ownerId: "user-other",
       contentHash: "sha256-x-other",
@@ -783,7 +783,7 @@ describe("mounted dashboard", () => {
     app = await startServer({
       config: { adminToken },
     });
-    app.store.blobs.create("tenant-x", {
+    await app.store.blobs.create("tenant-x", {
       blobId: "blob-with-derivatives",
       ownerId: "user-x",
       contentHash: "sha256-parent",
@@ -791,7 +791,7 @@ describe("mounted dashboard", () => {
       mimeType: "image/png",
       storageKey: "tenant-x/parent-storage-key",
     });
-    app.store.blobDerivatives.record({
+    await app.store.blobDerivatives.record({
       parentBlobId: "blob-with-derivatives",
       derivativeId: "thumb",
       tenantId: "tenant-x",
@@ -806,7 +806,7 @@ describe("mounted dashboard", () => {
         privateExif: "gps secret",
       },
     });
-    app.store.blobDerivatives.record({
+    await app.store.blobDerivatives.record({
       parentBlobId: "blob-with-derivatives",
       derivativeId: "ocr",
       tenantId: "tenant-x",
@@ -821,7 +821,7 @@ describe("mounted dashboard", () => {
         text: "sensitive sidecar metadata",
       },
     });
-    app.store.blobDerivatives.record({
+    await app.store.blobDerivatives.record({
       parentBlobId: "blob-other-tenant",
       derivativeId: "thumb",
       tenantId: "tenant-other",
@@ -867,7 +867,7 @@ describe("mounted dashboard", () => {
 
   it("serves tenant-scoped dashboard jobs without payloads or secret errors", async () => {
     app = await startServer();
-    const row = app.store.jobs.enqueue({
+    const row = await app.store.jobs.enqueue({
       tenantId: "tenant-session",
       jobType: "EmailDigest",
       payload: {
@@ -876,8 +876,8 @@ describe("mounted dashboard", () => {
       },
       idempotencyKey: "secret-idempotency-key",
     });
-    app.store.jobs.fail(row.id, "email.provider_error", "smtp password leaked in error", false);
-    app.store.jobs.enqueue({
+    await app.store.jobs.fail(row.id, "email.provider_error", "smtp password leaked in error", false);
+    await app.store.jobs.enqueue({
       tenantId: "tenant-other",
       jobType: "EmailDigest",
       payload: { recipient: "other@example.com" },
@@ -933,22 +933,22 @@ describe("mounted dashboard", () => {
     app = await startServer({
       config: { adminToken },
     });
-    app.store.jobs.enqueue({
+    await app.store.jobs.enqueue({
       tenantId: "tenant-jobs",
       jobType: "Digest",
       payload: { batch: 1 },
     });
-    app.store.jobs.enqueue({
+    await app.store.jobs.enqueue({
       tenantId: "tenant-jobs",
       jobType: "Digest",
       payload: { batch: 2 },
     });
-    app.store.jobs.enqueue({
+    await app.store.jobs.enqueue({
       tenantId: "tenant-jobs",
       jobType: "Cleanup",
       payload: { batch: 3 },
     });
-    app.store.jobs.enqueue({
+    await app.store.jobs.enqueue({
       tenantId: "tenant-other",
       jobType: "Digest",
       payload: { batch: 4 },

@@ -57,19 +57,19 @@ function defaultToken(): string {
  * Authorization (e.g. "is this user a member of the target tenant?") is the
  * caller's responsibility and must run BEFORE this call.
  */
-export function deriveSiblingSession(
+export async function deriveSiblingSession(
   store: FrickStore,
   options: DeriveSiblingSessionOptions,
-): StoredSession {
+): Promise<StoredSession> {
   if (!(options.ttlSeconds > 0) || !Number.isFinite(options.ttlSeconds)) {
     throw new RangeError(`ttlSeconds must be a positive number, got ${options.ttlSeconds}`);
   }
-  const current = store.readActiveSession(options.fromSessionToken);
+  const current = await store.readActiveSession(options.fromSessionToken);
   if (!current) {
     throw new SourceSessionNotActiveError();
   }
   if (options.ensureTenant !== false) {
-    store.tenants.ensure(options.tenantId);
+    await store.tenants.ensure(options.tenantId);
   }
   const now = (options.now ?? (() => new Date()))();
   const expiresAt = new Date(now.getTime() + options.ttlSeconds * 1000).toISOString();

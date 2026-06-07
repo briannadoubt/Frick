@@ -34,11 +34,11 @@ export interface DataSubjectEraseReport {
  * Returns a report listing the row counts touched, so an admin endpoint
  * can return it verbatim.
  */
-export function eraseDataSubject(
+export async function eraseDataSubject(
   store: FrickStore,
   tenantId: string,
   userId: string,
-): DataSubjectEraseReport {
+): Promise<DataSubjectEraseReport> {
   const db = store.db;
   const deleted: Record<string, number> = {};
   const pseudonymized: Record<string, number> = {};
@@ -57,9 +57,9 @@ export function eraseDataSubject(
       .run(tenantId, userId).changes,
   );
 
-  const authoredEvents = store.streams
-    .listAll(tenantId)
-    .filter((event) => (event.payload as { senderId?: unknown }).senderId === userId);
+  const authoredEvents = (await store.streams.listAll(tenantId)).filter(
+    (event) => (event.payload as { senderId?: unknown }).senderId === userId,
+  );
   const authoredEventIds = authoredEvents.map((event) => event.eventId);
   const oldSearchDocs = collectProjectedSearchDocs(store, tenantId, authoredEvents);
 

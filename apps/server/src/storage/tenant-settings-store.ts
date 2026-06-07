@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { SqlDriver } from "./sql-driver.js";
 
 /**
  * Per-tenant runtime config knobs.
@@ -20,7 +20,7 @@ import type { DatabaseSync } from "node:sqlite";
  */
 export class TenantSettingsStore {
   constructor(
-    private readonly db: DatabaseSync,
+    private readonly sql: SqlDriver,
     private readonly now: () => Date = () => new Date(),
   ) {}
 
@@ -28,13 +28,12 @@ export class TenantSettingsStore {
    * Read a single setting. Returns the decoded value, or `undefined` if the
    * key is unset (or the stored JSON is malformed — see above).
    */
-  get(tenantId: string, key: string): unknown | undefined {
-    const row = this.db
-      .prepare(
-        `SELECT setting_value FROM tenant_settings
+  async get(tenantId: string, key: string): Promise<unknown | undefined> {
+    const row = await this.sql.get<{ setting_value: string }>(
+      `SELECT setting_value FROM tenant_settings
           WHERE tenant_id = ? AND setting_key = ?`,
-      )
-      .get(tenantId, key) as { setting_value: string } | undefined;
+      [tenantId, key],
+    );
     if (!row) return undefined;
     try {
       return JSON.parse(row.setting_value) as unknown;
@@ -47,41 +46,38 @@ export class TenantSettingsStore {
    * Upsert a single setting. The value is JSON-encoded; callers should pass
    * JSON-compatible data (plain objects, numbers, strings, arrays, null).
    */
-  set(tenantId: string, key: string, value: unknown): void {
+  async set(tenantId: string, key: string, value: unknown): Promise<void> {
     const encoded = JSON.stringify(value);
     const updatedAt = this.now().toISOString();
-    this.db
-      .prepare(
-        `INSERT INTO tenant_settings (tenant_id, setting_key, setting_value, updated_at)
+    await this.sql.run(
+      `INSERT INTO tenant_settings (tenant_id, setting_key, setting_value, updated_at)
           VALUES (?, ?, ?, ?)
           ON CONFLICT(tenant_id, setting_key) DO UPDATE SET
             setting_value = excluded.setting_value,
             updated_at = excluded.updated_at`,
-      )
-      .run(tenantId, key, encoded, updatedAt);
+      [tenantId, key, encoded, updatedAt],
+    );
   }
 
   /** Remove a single setting. Idempotent: deleting a missing row is a no-op. */
-  delete(tenantId: string, key: string): void {
-    this.db
-      .prepare(
-        `DELETE FROM tenant_settings WHERE tenant_id = ? AND setting_key = ?`,
-      )
-      .run(tenantId, key);
+  async delete(tenantId: string, key: string): Promise<void> {
+    await this.sql.run(
+      `DELETE FROM tenant_settings WHERE tenant_id = ? AND setting_key = ?`,
+      [tenantId, key],
+    );
   }
 
   /**
    * Return every setting for a tenant as a plain object. Keys with malformed
    * JSON are omitted (matching {@link get}'s policy). Order is unspecified.
    */
-  list(tenantId: string): Record<string, unknown> {
-    const rows = this.db
-      .prepare(
-        `SELECT setting_key, setting_value FROM tenant_settings
+  async list(tenantId: string): Promise<Record<string, unknown>> {
+    const rows = await this.sql.all<{ setting_key: string; setting_value: string }>(
+      `SELECT setting_key, setting_value FROM tenant_settings
           WHERE tenant_id = ?
           ORDER BY setting_key ASC`,
-      )
-      .all(tenantId) as Array<{ setting_key: string; setting_value: string }>;
+      [tenantId],
+    );
     const out: Record<string, unknown> = {};
     for (const row of rows) {
       try {

@@ -5,7 +5,7 @@ import {
 } from "../src/extensions.js";
 
 describe("frick extension registry", () => {
-  it("creates empty extension groups by default", () => {
+  it("creates empty extension groups by default", async () => {
     expect(createFrickExtensionRegistry()).toEqual({
       policies: [],
       projections: [],
@@ -17,7 +17,7 @@ describe("frick extension registry", () => {
     });
   });
 
-  it("normalizes provided extension groups without sharing mutable arrays", () => {
+  it("normalizes provided extension groups without sharing mutable arrays", async () => {
     const input: FrickExtensionRegistryInput = {
       policies: [{ id: "policy.test" }],
       projections: [{ id: "projection.test" }],

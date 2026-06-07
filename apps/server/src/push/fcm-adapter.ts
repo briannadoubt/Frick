@@ -98,7 +98,7 @@ export function createFrickFcmAdapter(options: FcmAdapterOptions = {}): FrickFcm
     registration: PushDeviceRegistration,
     ctx: FrickNotificationContext,
   ): Promise<FrickPushDelivery> {
-    const credentialResult = loadFcmCredentials(ctx.store.tenantSettings, ctx.tenantId, env);
+    const credentialResult = await loadFcmCredentials(ctx.store.tenantSettings, ctx.tenantId, env);
     if (!credentialResult.ok) {
       return {
         registration,

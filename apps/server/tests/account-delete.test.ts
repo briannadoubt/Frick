@@ -54,8 +54,8 @@ describe("DELETE /account", () => {
     app = await startServer();
     const ada = await devLogin(app.httpUrl, "user-ada");
 
-    app.store.upsertObject(ada.tenantId, "Note", "note-1", { ownerId: "user-ada", body: "a" });
-    app.store.upsertObject(ada.tenantId, "Note", "note-2", { ownerId: "user-ada", body: "b" });
+    await app.store.upsertObject(ada.tenantId, "Note", "note-1", { ownerId: "user-ada", body: "a" });
+    await app.store.upsertObject(ada.tenantId, "Note", "note-2", { ownerId: "user-ada", body: "b" });
 
     const { status, body } = await deleteAccount(`${app.httpUrl}/account`, ada.sessionToken);
     expect(status).toBe(200);
@@ -67,9 +67,9 @@ describe("DELETE /account", () => {
     expect(body.deletedObjects.Note).toBe(2);
 
     // Owned objects are gone from storage.
-    expect(app.store.listObjects(ada.tenantId, "Note")).toHaveLength(0);
+    expect(await app.store.listObjects(ada.tenantId, "Note")).toHaveLength(0);
     // Account row is gone.
-    expect(app.store.hasUser(ada.tenantId, "user-ada")).toBe(false);
+    expect(await app.store.hasUser(ada.tenantId, "user-ada")).toBe(false);
     // The caller's session no longer authenticates: a follow-up protected
     // request is rejected.
     const after = await fetch(`${app.httpUrl}/account/export`, {
@@ -91,7 +91,7 @@ describe("DELETE /account", () => {
     };
     app = await startServer({ onAccountDelete });
     const ada = await devLogin(app.httpUrl, "user-ada");
-    app.store.upsertObject(ada.tenantId, "Note", "note-1", { ownerId: "user-ada", body: "x" });
+    await app.store.upsertObject(ada.tenantId, "Note", "note-1", { ownerId: "user-ada", body: "x" });
 
     const { status } = await deleteAccount(`${app.httpUrl}/account`, ada.sessionToken);
     expect(status).toBe(200);
@@ -107,18 +107,18 @@ describe("DELETE /account", () => {
     const ada = await devLogin(app.httpUrl, "user-ada");
     const grace = await devLogin(app.httpUrl, "user-grace");
 
-    app.store.upsertObject(ada.tenantId, "Note", "note-ada", { ownerId: "user-ada", body: "ada" });
-    app.store.upsertObject(grace.tenantId, "Note", "note-grace", { ownerId: "user-grace", body: "grace" });
+    await app.store.upsertObject(ada.tenantId, "Note", "note-ada", { ownerId: "user-ada", body: "ada" });
+    await app.store.upsertObject(grace.tenantId, "Note", "note-grace", { ownerId: "user-grace", body: "grace" });
 
     const { status } = await deleteAccount(`${app.httpUrl}/account`, ada.sessionToken);
     expect(status).toBe(200);
 
     // Grace's object survives; Ada's is gone.
-    const notes = app.store.listObjects(grace.tenantId, "Note");
+    const notes = await app.store.listObjects(grace.tenantId, "Note");
     expect(notes).toHaveLength(1);
     expect(notes[0]?.id).toBe("note-grace");
     // Grace's account + session still work.
-    expect(app.store.hasUser(grace.tenantId, "user-grace")).toBe(true);
+    expect(await app.store.hasUser(grace.tenantId, "user-grace")).toBe(true);
     const graceExport = await fetch(`${app.httpUrl}/account/export`, {
       headers: { authorization: `Bearer ${grace.sessionToken}` },
     });
@@ -131,12 +131,12 @@ describe("DELETE /account", () => {
     const t1 = await devLogin(app.httpUrl, "user-alpha", "tenant-one");
     const t2 = await devLogin(app.httpUrl, "user-bravo", "tenant-two");
 
-    app.store.upsertObject("tenant-one", "Note", "note-t1", { ownerId: "user-alpha", body: "t1" });
-    app.store.upsertObject("tenant-two", "Note", "note-t2", { ownerId: "user-bravo", body: "t2" });
+    await app.store.upsertObject("tenant-one", "Note", "note-t1", { ownerId: "user-alpha", body: "t1" });
+    await app.store.upsertObject("tenant-two", "Note", "note-t2", { ownerId: "user-bravo", body: "t2" });
     // Cross-tenant decoy: tenant-two owns a Note whose ownerId matches
     // tenant-one's principal. Tenant scoping (not just owner scoping) must keep
     // the deletion from reaching it.
-    app.store.upsertObject("tenant-two", "Note", "note-decoy", { ownerId: "user-alpha", body: "leak?" });
+    await app.store.upsertObject("tenant-two", "Note", "note-decoy", { ownerId: "user-alpha", body: "leak?" });
 
     const { status, body } = await deleteAccount(`${app.httpUrl}/account`, t1.sessionToken);
     expect(status).toBe(200);
@@ -144,13 +144,10 @@ describe("DELETE /account", () => {
 
     // tenant-one's data gone; tenant-two fully intact (both its own row and the
     // decoy whose ownerId collided with tenant-one's principal).
-    expect(app.store.listObjects("tenant-one", "Note")).toHaveLength(0);
-    const t2Notes = app.store
-      .listObjects("tenant-two", "Note")
-      .map((n) => n.id)
-      .sort();
+    expect(await app.store.listObjects("tenant-one", "Note")).toHaveLength(0);
+    const t2Notes = (await app.store.listObjects("tenant-two", "Note")).map((n) => n.id).sort();
     expect(t2Notes).toEqual(["note-decoy", "note-t2"]);
-    expect(app.store.hasUser("tenant-two", "user-bravo")).toBe(true);
+    expect(await app.store.hasUser("tenant-two", "user-bravo")).toBe(true);
   });
 
   it("accepts POST /account as an alias for DELETE", async () => {
@@ -161,24 +158,24 @@ describe("DELETE /account", () => {
       headers: { authorization: `Bearer ${ada.sessionToken}` },
     });
     expect(response.status).toBe(200);
-    expect(app.store.hasUser(ada.tenantId, "user-ada")).toBe(false);
+    expect(await app.store.hasUser(ada.tenantId, "user-ada")).toBe(false);
   });
 
   it("records an account.delete audit row", async () => {
     app = await startServer();
     const ada = await devLogin(app.httpUrl, "user-ada");
-    app.store.upsertObject(ada.tenantId, "Note", "note-1", { ownerId: "user-ada", body: "x" });
+    await app.store.upsertObject(ada.tenantId, "Note", "note-1", { ownerId: "user-ada", body: "x" });
 
     const { status } = await deleteAccount(`${app.httpUrl}/account`, ada.sessionToken);
     expect(status).toBe(200);
 
-    const entries = app.store.adminAudit.list({ action: "account.delete" });
+    const entries = await app.store.adminAudit.list({ action: "account.delete" });
     expect(entries).toHaveLength(1);
     expect(entries[0]?.action).toBe("account.delete");
     expect(entries[0]?.target).toBe("user-ada");
     expect(entries[0]?.outcome).toBe("allow");
     // Chain stays intact after the deletion-driven append.
-    expect(app.store.adminAudit.verifyChain().valid).toBe(true);
+    expect((await app.store.adminAudit.verifyChain()).valid).toBe(true);
   });
 });
 

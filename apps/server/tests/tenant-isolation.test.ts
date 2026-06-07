@@ -27,7 +27,7 @@ describe("tenant isolation", () => {
     // Tenant-a writes a Conversation directly via the store (the
     // `/conversations` convenience route is gone). Tenant-b reading the
     // same object type must see nothing.
-    app.store.upsertObject("tenant-a", "Conversation", "conv-a-1", {
+    await app.store.upsertObject("tenant-a", "Conversation", "conv-a-1", {
       kind: "group",
       title: "Tenant A Group",
       createdBy: "user-a-shared",
@@ -185,12 +185,12 @@ describe("tenant isolation", () => {
     expect(login.body.tenantId).toBe("tenant-pinned");
 
     // The session reads back the tenant from storage.
-    const session = app.store.readActiveSession(login.body.sessionToken);
+    const session = await app.store.readActiveSession(login.body.sessionToken);
     expect(session?.tenantId).toBe("tenant-pinned");
 
     // Requests with this token are scoped to tenant-pinned — tenant-a's
     // objects are invisible from this session.
-    app.store.upsertObject("tenant-a", "Conversation", "conv-a-only", {
+    await app.store.upsertObject("tenant-a", "Conversation", "conv-a-only", {
       kind: "group",
       title: "A Only",
       createdBy: "user-other",

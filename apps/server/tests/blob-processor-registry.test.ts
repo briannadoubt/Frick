@@ -14,7 +14,7 @@ function stubProcessor(overrides: Partial<FrickBlobProcessor>): FrickBlobProcess
 }
 
 describe("FrickBlobProcessorRegistry", () => {
-  it("registers and lists processors", () => {
+  it("registers and lists processors", async () => {
     const registry = createFrickBlobProcessorRegistry();
     const a = stubProcessor({ id: "a" });
     const b = stubProcessor({ id: "b" });
@@ -23,7 +23,7 @@ describe("FrickBlobProcessorRegistry", () => {
     expect(registry.list().map((p) => p.id)).toEqual(["a", "b"]);
   });
 
-  it("throws on duplicate id", () => {
+  it("throws on duplicate id", async () => {
     const registry = createFrickBlobProcessorRegistry();
     registry.register(stubProcessor({ id: "dup" }));
     expect(() => registry.register(stubProcessor({ id: "dup" }))).toThrow(
@@ -31,7 +31,7 @@ describe("FrickBlobProcessorRegistry", () => {
     );
   });
 
-  it("matches by MIME prefix", () => {
+  it("matches by MIME prefix", async () => {
     const registry = createFrickBlobProcessorRegistry();
     const imageProc = stubProcessor({
       id: "image",
@@ -56,7 +56,7 @@ describe("FrickBlobProcessorRegistry", () => {
     expect(pdfMatches).toEqual(["any"]);
   });
 
-  it("skips processors when byteLength exceeds maxByteLength", () => {
+  it("skips processors when byteLength exceeds maxByteLength", async () => {
     const registry = createFrickBlobProcessorRegistry();
     registry.register(
       stubProcessor({

@@ -84,18 +84,18 @@ export interface FrickProjectionHandler {
   apply(
     event: FrickProjectionWriteEvent,
     ctx: FrickProjectionContext,
-  ): void | ProjectionApplyResult;
+  ): void | ProjectionApplyResult | Promise<void | ProjectionApplyResult>;
   /**
    * Optional: rebuild the projection's state from source data for the given
    * tenant. Called by the admin `/_frick/admin/projections/:name/rebuild`
-   * route.
+   * route. May be async (e.g. to read the store).
    */
-  rebuild?(ctx: FrickProjectionContext): void;
+  rebuild?(ctx: FrickProjectionContext): void | Promise<void>;
   /**
    * Optional: serve `GET /projections/:name?<query>`. Projections that omit
-   * this method receive 405 from the framework.
+   * this method receive 405 from the framework. May be async.
    */
-  read?(ctx: FrickProjectionContext, query: Record<string, string>): unknown;
+  read?(ctx: FrickProjectionContext, query: Record<string, string>): unknown | Promise<unknown>;
 }
 
 export interface FrickProjection {
@@ -114,13 +114,13 @@ export interface FrickProjectionRegistry {
    * Dispatch a write event to every registered projection whose `sources`
    * match its kind+type. Projections fire in registration order.
    */
-  notify(event: FrickProjectionWriteEvent, ctx: FrickProjectionContext): void;
+  notify(event: FrickProjectionWriteEvent, ctx: FrickProjectionContext): Promise<void>;
   /**
    * Invoke `rebuild(...)` on every registered projection that implements it.
    * Returns the names of projections that were actually rebuilt (skipping
    * those without a `rebuild` method).
    */
-  rebuildAll(ctx: FrickProjectionContext): { rebuilt: string[] };
+  rebuildAll(ctx: FrickProjectionContext): Promise<{ rebuilt: string[] }>;
   /**
    * Install a delta listener. The registry forwards every
    * {@link ProjectionDeltaNotice} produced by a handler's `apply(...)` return
@@ -201,11 +201,11 @@ export function createFrickProjectionRegistry(
     return source.type === event.streamType;
   }
 
-  function notify(event: FrickProjectionWriteEvent, ctx: FrickProjectionContext): void {
+  async function notify(event: FrickProjectionWriteEvent, ctx: FrickProjectionContext): Promise<void> {
     for (const projection of projections) {
       if (projection.sources.some((source) => matches(source, event))) {
         try {
-          const result = projection.handler.apply(event, ctx);
+          const result = await projection.handler.apply(event, ctx);
           if (result && result.changes.length > 0) {
             // Materialize the row change into the tenant-scoped snapshot
             // state regardless of whether a listener is attached, so a
@@ -238,11 +238,11 @@ export function createFrickProjectionRegistry(
     }
   }
 
-  function rebuildAll(ctx: FrickProjectionContext): { rebuilt: string[] } {
+  async function rebuildAll(ctx: FrickProjectionContext): Promise<{ rebuilt: string[] }> {
     const rebuilt: string[] = [];
     for (const projection of projections) {
       if (projection.handler.rebuild) {
-        projection.handler.rebuild(ctx);
+        await projection.handler.rebuild(ctx);
         rebuilt.push(projection.name);
       }
     }

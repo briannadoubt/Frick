@@ -64,7 +64,7 @@ describe("sync gateway object upserts", () => {
       }),
     });
     expect(roomMember.status).toBe(201);
-    expect(app.store.readObject("_default", "RoomMember", "member-allowed-http")).toMatchObject({
+    expect(await app.store.readObject("_default", "RoomMember", "member-allowed-http")).toMatchObject({
       conversationId: "conversation-general",
       userId: "user-mallory",
     });
@@ -75,7 +75,7 @@ describe("sync gateway object upserts", () => {
       body: JSON.stringify({ body: "custom objects are app-owned" }),
     });
     expect(note.status).toBe(201);
-    expect(app.store.readObject("_default", "Note", "note-http")).toMatchObject({
+    expect(await app.store.readObject("_default", "Note", "note-http")).toMatchObject({
       body: "custom objects are app-owned",
     });
   });

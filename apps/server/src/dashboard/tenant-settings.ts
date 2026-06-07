@@ -45,14 +45,14 @@ export interface BuildDashboardTenantSettingsInput {
   readonly tenantId?: string;
 }
 
-export function buildDashboardTenantSettings(
+export async function buildDashboardTenantSettings(
   input: BuildDashboardTenantSettingsInput,
-): DashboardTenantSettings {
+): Promise<DashboardTenantSettings> {
   const scope = input.principal.scope === "admin" ? "admin" : "tenant";
   const tenantId = scope === "admin"
     ? input.tenantId || input.principal.tenantId
     : input.principal.tenantId;
-  const rawSettings = input.store.tenantSettings.list(tenantId);
+  const rawSettings = await input.store.tenantSettings.list(tenantId);
 
   return {
     schemaHash: input.store.schema.hash,

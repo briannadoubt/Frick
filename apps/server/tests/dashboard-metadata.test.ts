@@ -5,7 +5,7 @@ import { buildDashboardMetadata } from "../src/dashboard/metadata.js";
 import { createFrickProjectModule } from "../src/platform/project.js";
 
 describe("dashboard metadata", () => {
-  it("summarizes project identity and schema resources", () => {
+  it("summarizes project identity and schema resources", async () => {
     const project = createFrickProjectModule({
       manifest: { id: "foundation", name: "foundation", displayName: "Foundation" },
       schema: productTestSchema,

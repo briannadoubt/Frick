@@ -14,7 +14,7 @@ import {
 } from "../src/push/types.js";
 
 describe("FrickNotificationIntent", () => {
-  it("round-trips through JSON without losing fields", () => {
+  it("round-trips through JSON without losing fields", async () => {
     const intent: FrickNotificationIntent = {
       intent: "message.new",
       tenantId: "tenant-a",
@@ -38,7 +38,7 @@ describe("FrickNotificationIntent", () => {
     expect(decoded.deepLink).toBe(intent.deepLink);
   });
 
-  it("isPushRevocationError recognizes documented codes", () => {
+  it("isPushRevocationError recognizes documented codes", async () => {
     for (const code of PUSH_REVOCATION_ERROR_CODES) {
       expect(isPushRevocationError(code)).toBe(true);
     }

@@ -19,7 +19,7 @@ describe("tenant existence check on auth", () => {
       body: JSON.stringify({ userId: "user-ada", tenantId: "tenant-new-implicit" }),
     });
     expect(response.status).toBe(200);
-    const row = app.store.tenants.get("tenant-new-implicit");
+    const row = await app.store.tenants.get("tenant-new-implicit");
     expect(row?.tenantId).toBe("tenant-new-implicit");
   });
 

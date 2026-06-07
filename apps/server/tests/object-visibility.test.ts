@@ -11,7 +11,7 @@ describe("FrickStore.isObjectVisibleToUser — framework default", () => {
   // These tests pin that "deferred to app" contract so a future refactor
   // that re-adds opinionated behavior to the framework primitive shows up
   // as a deliberate failure.
-  it("returns true for any (object, viewer) by default", () => {
+  it("returns true for any (object, viewer) by default", async () => {
     const store = new FrickStore({ path: ":memory:", schema: productTestSchema });
     try {
       const draft = {
@@ -30,23 +30,23 @@ describe("FrickStore.isObjectVisibleToUser — framework default", () => {
     }
   });
 
-  it("listObjectsForUser returns every row by default (app policy filters)", () => {
+  it("listObjectsForUser returns every row by default (app policy filters)", async () => {
     const store = new FrickStore({ path: ":memory:", schema: productTestSchema });
     try {
-      store.upsertObject("_default", "MessageDraft", "user-ada:conv-1", {
+      await store.upsertObject("_default", "MessageDraft", "user-ada:conv-1", {
         userId: "user-ada",
         conversationId: "conv-1",
         body: "ada typing",
         updatedAt: 1_700_000_000_000,
       });
-      store.upsertObject("_default", "MessageDraft", "user-grace:conv-1", {
+      await store.upsertObject("_default", "MessageDraft", "user-grace:conv-1", {
         userId: "user-grace",
         conversationId: "conv-1",
         body: "grace typing",
         updatedAt: 1_700_000_000_001,
       });
 
-      const adaVisible = store.listObjectsForUser("_default", "MessageDraft", "user-ada");
+      const adaVisible = await store.listObjectsForUser("_default", "MessageDraft", "user-ada");
       // Both rows are visible by default; apps wire ownership filtering in
       // through a policy hook over the `object.read` action.
       expect(adaVisible.map((row) => row.userId).sort()).toEqual(["user-ada", "user-grace"]);

@@ -177,7 +177,7 @@ describe("Frick identityProviders.apple", () => {
     const res = await post("/auth/apple/notifications", { payload: jwt });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ applied: true, type: "email-updated" });
-    const user = app.store.readObject("_default", "User", userId) as { email?: string };
+    const user = await app.store.readObject("_default", "User", userId) as { email?: string };
     expect(user.email).toBe("carol-new@example.test");
   });
 

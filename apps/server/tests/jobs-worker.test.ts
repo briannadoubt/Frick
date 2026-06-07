@@ -25,10 +25,10 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitFor<T>(predicate: () => T | undefined, timeoutMs = 2000): Promise<T> {
+async function waitFor<T>(predicate: () => T | undefined | Promise<T | undefined>, timeoutMs = 2000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const value = predicate();
+    const value = await predicate();
     if (value !== undefined && value !== null && value !== false) {
       return value as T;
     }
@@ -52,13 +52,13 @@ describe("FrickJobWorker", () => {
       telemetry,
     });
     worker.start();
-    const row = store.jobs.enqueue({
+    const row = await store.jobs.enqueue({
       tenantId: "_default",
       jobType: "TelemetryJob",
       payload: { value: 42 },
     });
 
-    await waitFor(() => store!.jobs.getById(row.id)?.status === "completed");
+    await waitFor(async () => (await store!.jobs.getById(row.id))?.status === "completed");
 
     expect(telemetry.jobs).toEqual([
       expect.objectContaining({
@@ -92,14 +92,14 @@ describe("FrickJobWorker", () => {
       telemetry,
     });
     worker.start();
-    const row = store.jobs.enqueue({
+    const row = await store.jobs.enqueue({
       tenantId: "_default",
       jobType: "BoomTelemetryJob",
       payload: {},
       maxAttempts: 1,
     });
 
-    await waitFor(() => store!.jobs.getById(row.id)?.status === "dead_lettered");
+    await waitFor(async () => (await store!.jobs.getById(row.id))?.status === "dead_lettered");
 
     expect(telemetry.jobs).toEqual([
       expect.objectContaining({
@@ -128,13 +128,13 @@ describe("FrickJobWorker", () => {
       telemetry: new ThrowingTelemetryRuntime(),
     });
     worker.start();
-    const row = store.jobs.enqueue({
+    const row = await store.jobs.enqueue({
       tenantId: "_default",
       jobType: "TelemetryThrowsJob",
       payload: {},
     });
 
-    await waitFor(() => store!.jobs.getById(row.id)?.status === "completed");
+    await waitFor(async () => (await store!.jobs.getById(row.id))?.status === "completed");
   });
 
   it("picks up a job, runs the handler, and marks it completed", async () => {
@@ -152,13 +152,13 @@ describe("FrickJobWorker", () => {
       pollIntervalMs: 25,
     });
     worker.start();
-    const row = store.jobs.enqueue({
+    const row = await store.jobs.enqueue({
       tenantId: "_default",
       jobType: "TestJob",
       payload: { value: 42 },
     });
 
-    await waitFor(() => store!.jobs.getById(row.id)?.status === "completed");
+    await waitFor(async () => (await store!.jobs.getById(row.id))?.status === "completed");
     expect(called).toBe(1);
   });
 
@@ -177,14 +177,14 @@ describe("FrickJobWorker", () => {
     worker.start();
     // Use max_attempts: 1 and available_at in the past so backoff doesn't
     // stall the test — one claim, one fail, one dead-letter.
-    const row = store.jobs.enqueue({
+    const row = await store.jobs.enqueue({
       tenantId: "_default",
       jobType: "BoomJob",
       payload: {},
       maxAttempts: 1,
     });
-    await waitFor(() => store!.jobs.getById(row.id)?.status === "dead_lettered");
-    const final = store.jobs.getById(row.id)!;
+    await waitFor(async () => (await store!.jobs.getById(row.id))?.status === "dead_lettered");
+    const final = await store.jobs.getById(row.id)!;
     expect(final.lastErrorCode).toBe("server.internal");
     expect(final.lastErrorMessage).toContain("kaboom");
   });
@@ -199,14 +199,14 @@ describe("FrickJobWorker", () => {
       pollIntervalMs: 10,
     });
     worker.start();
-    const row = store.jobs.enqueue({
+    const row = await store.jobs.enqueue({
       tenantId: "_default",
       jobType: "MissingType",
       payload: {},
       maxAttempts: 5,
     });
-    await waitFor(() => store!.jobs.getById(row.id)?.status === "dead_lettered");
-    const final = store.jobs.getById(row.id)!;
+    await waitFor(async () => (await store!.jobs.getById(row.id))?.status === "dead_lettered");
+    const final = await store.jobs.getById(row.id)!;
     expect(final.lastErrorCode).toBe("jobs.unknownHandler");
     // Non-retryable: dead-lettered on attempt 1 even though max_attempts = 5.
     expect(final.attemptCount).toBe(1);
@@ -230,14 +230,14 @@ describe("FrickJobWorker", () => {
       gracefulShutdownTimeoutMs: 2000,
     });
     worker.start();
-    store.jobs.enqueue({
+    await store.jobs.enqueue({
       tenantId: "_default",
       jobType: "SlowJob",
       payload: {},
     });
     // Let the worker pick the job up.
-    await waitFor(() => {
-      const rows = store!.jobs.list({ status: "running" });
+    await waitFor(async () => {
+      const rows = await store!.jobs.list({ status: "running" });
       return rows.length > 0 ? rows : undefined;
     });
     await worker.stop();

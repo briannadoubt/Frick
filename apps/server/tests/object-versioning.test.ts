@@ -168,14 +168,14 @@ describe("object versioning", () => {
     expect(body.version).toBe(2);
   });
 
-  it("FrickObjectVersionConflictError carries tenant/object/version metadata", () => {
+  it("FrickObjectVersionConflictError carries tenant/object/version metadata", async () => {
     const store = new FrickStore({
       path: ":memory:",
       schema: schemaWithNote("versionPrecondition"),
       seed: false,
     });
     try {
-      store.upsertObjectWithPolicy({
+      await store.upsertObjectWithPolicy({
         type: "Note",
         id: "note-storage",
         value: { body: "v1" },
@@ -183,7 +183,7 @@ describe("object versioning", () => {
 
       let captured: FrickObjectVersionConflictError | undefined;
       try {
-        store.upsertObjectWithPolicy({
+        await store.upsertObjectWithPolicy({
           type: "Note",
           id: "note-storage",
           value: { body: "v2" },

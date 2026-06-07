@@ -8,7 +8,7 @@ import { FrickStore, SourceSessionNotActiveError, deriveSiblingSession } from ".
 
 let store: FrickStore | undefined;
 
-afterEach(() => {
+afterEach(async () => {
   store?.close();
   store = undefined;
 });
@@ -31,11 +31,11 @@ function seedSession(s: FrickStore, token: string, expiresAt: string): void {
 const FUTURE = new Date(Date.now() + 60_000).toISOString();
 
 describe("deriveSiblingSession", () => {
-  it("mints a new session in the target tenant reusing the caller identity", () => {
+  it("mints a new session in the target tenant reusing the caller identity", async () => {
     store = makeStore();
     seedSession(store, "src-token", FUTURE);
 
-    const derived = deriveSiblingSession(store, {
+    const derived = await deriveSiblingSession(store, {
       fromSessionToken: "src-token",
       tenantId: "tenant-b",
       ttlSeconds: 3600,
@@ -50,30 +50,30 @@ describe("deriveSiblingSession", () => {
 
     // The derived token resolves to a live session in the new tenant; the
     // original is untouched.
-    expect(store.readActiveSession(derived.sessionToken)?.tenantId).toBe("tenant-b");
-    expect(store.readActiveSession("src-token")?.tenantId).toBe("tenant-a");
+    expect((await store.readActiveSession(derived.sessionToken))?.tenantId).toBe("tenant-b");
+    expect((await store.readActiveSession("src-token"))?.tenantId).toBe("tenant-a");
   });
 
-  it("ensures the target tenant exists in the ledger by default", () => {
+  it("ensures the target tenant exists in the ledger by default", async () => {
     store = makeStore();
     seedSession(store, "src-token", FUTURE);
-    expect(store.tenants.get("tenant-b")).toBeUndefined();
+    expect(await store.tenants.get("tenant-b")).toBeUndefined();
 
-    deriveSiblingSession(store, {
+    await deriveSiblingSession(store, {
       fromSessionToken: "src-token",
       tenantId: "tenant-b",
       ttlSeconds: 3600,
     });
 
-    expect(store.tenants.get("tenant-b")).toBeDefined();
+    expect(await store.tenants.get("tenant-b")).toBeDefined();
   });
 
-  it("honors a custom token factory and now()", () => {
+  it("honors a custom token factory and now()", async () => {
     store = makeStore();
     seedSession(store, "src-token", FUTURE);
 
     const fixedNow = new Date("2026-06-06T00:00:00.000Z");
-    const derived = deriveSiblingSession(store, {
+    const derived = await deriveSiblingSession(store, {
       fromSessionToken: "src-token",
       tenantId: "tenant-b",
       ttlSeconds: 100,
@@ -85,23 +85,23 @@ describe("deriveSiblingSession", () => {
     expect(derived.expiresAt).toBe(new Date(fixedNow.getTime() + 100_000).toISOString());
   });
 
-  it("throws SourceSessionNotActiveError for a missing or expired source token", () => {
+  it("throws SourceSessionNotActiveError for a missing or expired source token", async () => {
     store = makeStore();
     seedSession(store, "dead-token", "2000-01-01T00:00:00.000Z");
 
-    expect(() =>
+    await expect(
       deriveSiblingSession(store!, { fromSessionToken: "nope", tenantId: "tenant-b", ttlSeconds: 60 }),
-    ).toThrow(SourceSessionNotActiveError);
-    expect(() =>
+    ).rejects.toThrow(SourceSessionNotActiveError);
+    await expect(
       deriveSiblingSession(store!, { fromSessionToken: "dead-token", tenantId: "tenant-b", ttlSeconds: 60 }),
-    ).toThrow(SourceSessionNotActiveError);
+    ).rejects.toThrow(SourceSessionNotActiveError);
   });
 
-  it("rejects a non-positive ttl", () => {
+  it("rejects a non-positive ttl", async () => {
     store = makeStore();
     seedSession(store, "src-token", FUTURE);
-    expect(() =>
+    await expect(
       deriveSiblingSession(store!, { fromSessionToken: "src-token", tenantId: "tenant-b", ttlSeconds: 0 }),
-    ).toThrow(RangeError);
+    ).rejects.toThrow(RangeError);
   });
 });

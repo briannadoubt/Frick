@@ -20,29 +20,29 @@ afterEach(async () => {
 });
 
 describe("tenant_settings store basics", () => {
-  it("set/get/delete/list round-trip with structured values", () => {
+  it("set/get/delete/list round-trip with structured values", async () => {
     const store = new FrickStore({ path: ":memory:", seed: false });
     try {
-      store.tenantSettings.set("tenant-a", "limits", { maxBlobBytes: 1024 });
-      store.tenantSettings.set("tenant-a", "retentionMs", 60_000);
-      store.tenantSettings.set("tenant-b", "limits", { maxBlobBytes: 9999 });
+      await store.tenantSettings.set("tenant-a", "limits", { maxBlobBytes: 1024 });
+      await store.tenantSettings.set("tenant-a", "retentionMs", 60_000);
+      await store.tenantSettings.set("tenant-b", "limits", { maxBlobBytes: 9999 });
 
-      expect(store.tenantSettings.get("tenant-a", "limits")).toEqual({
+      expect(await store.tenantSettings.get("tenant-a", "limits")).toEqual({
         maxBlobBytes: 1024,
       });
-      expect(store.tenantSettings.get("tenant-a", "retentionMs")).toBe(60_000);
-      expect(store.tenantSettings.get("tenant-b", "limits")).toEqual({
+      expect(await store.tenantSettings.get("tenant-a", "retentionMs")).toBe(60_000);
+      expect(await store.tenantSettings.get("tenant-b", "limits")).toEqual({
         maxBlobBytes: 9999,
       });
       // Missing key
-      expect(store.tenantSettings.get("tenant-a", "nope")).toBeUndefined();
+      expect(await store.tenantSettings.get("tenant-a", "nope")).toBeUndefined();
 
-      const listA = store.tenantSettings.list("tenant-a");
+      const listA = await store.tenantSettings.list("tenant-a");
       expect(listA).toEqual({ limits: { maxBlobBytes: 1024 }, retentionMs: 60_000 });
 
-      store.tenantSettings.delete("tenant-a", "limits");
-      expect(store.tenantSettings.get("tenant-a", "limits")).toBeUndefined();
-      expect(store.tenantSettings.list("tenant-a")).toEqual({ retentionMs: 60_000 });
+      await store.tenantSettings.delete("tenant-a", "limits");
+      expect(await store.tenantSettings.get("tenant-a", "limits")).toBeUndefined();
+      expect(await store.tenantSettings.list("tenant-a")).toEqual({ retentionMs: 60_000 });
     } finally {
       store.close();
     }
@@ -60,12 +60,12 @@ describe("per-tenant retention in FrickStore.prune", () => {
     });
     try {
       // tenant-fast: prune anything older than 0ms — i.e. immediately.
-      store.tenantSettings.set("tenant-fast", "retentionMs", 0);
+      await store.tenantSettings.set("tenant-fast", "retentionMs", 0);
 
       // Need users in each tenant so signup-free appends can proceed via
       // raw streams API. Use lower-level appendEvent which doesn't require
       // membership checks.
-      store.appendEvent({
+      await store.appendEvent({
         tenantId: "tenant-fast",
         requestId: "req-fast",
         replicaId: "replica-1",
@@ -79,7 +79,7 @@ describe("per-tenant retention in FrickStore.prune", () => {
           createdAt: "2026-05-10T00:00:00.000Z",
         },
       });
-      store.appendEvent({
+      await store.appendEvent({
         tenantId: "_default",
         requestId: "req-default",
         replicaId: "replica-1",
@@ -208,7 +208,7 @@ describe("admin /_frick/admin/tenants/:tenantId/settings", () => {
     );
 
     expect(response.status).toBe(500);
-    expect(app.store.tenantSettings.get("_default", "retentionMs")).toBeUndefined();
+    expect(await app.store.tenantSettings.get("_default", "retentionMs")).toBeUndefined();
   });
 });
 

@@ -15,7 +15,7 @@ describe("dumpFrickDatabase", () => {
     try {
       // Default seeding no longer populates the foundation; explicitly insert
       // an object so the dump contains an "objects" row.
-      store.upsertObject("_default", "User", "user-seed", { displayName: "Seed" });
+      await store.upsertObject("_default", "User", "user-seed", { displayName: "Seed" });
       const lines = await collect(dumpFrickDatabase(store, { tenantId: "_default" }));
       expect(lines.length).toBeGreaterThan(1);
       const header = JSON.parse(lines[0]!) as { type: string; row: FrickDumpHeader };
@@ -42,10 +42,10 @@ describe("dumpFrickDatabase", () => {
   it("per-tenant dump only includes rows for the chosen tenant", async () => {
     const store = new FrickStore({ path: ":memory:", schema: productTestSchema });
     try {
-      store.tenants.create("tenant-alpha");
-      store.tenants.create("tenant-beta");
-      store.upsertObject("tenant-alpha", "User", "user-alpha-1", { displayName: "Alpha" });
-      store.upsertObject("tenant-beta", "User", "user-beta-1", { displayName: "Beta" });
+      await store.tenants.create("tenant-alpha");
+      await store.tenants.create("tenant-beta");
+      await store.upsertObject("tenant-alpha", "User", "user-alpha-1", { displayName: "Alpha" });
+      await store.upsertObject("tenant-beta", "User", "user-beta-1", { displayName: "Beta" });
 
       const alphaLines = await collect(
         dumpFrickDatabase(store, { tenantId: "tenant-alpha" }),
@@ -65,14 +65,14 @@ describe("dumpFrickDatabase", () => {
   it("includes blob_content with base64-encoded bytes inline", async () => {
     const store = new FrickStore({ path: ":memory:", schema: productTestSchema });
     try {
-      store.createBlobMetadata({
+      await store.createBlobMetadata({
         blobId: "blob-1",
         ownerId: "user-ada",
         contentHash: "deadbeef",
         byteLength: 5,
         mimeType: "application/octet-stream",
       });
-      store.writeBlobContent("blob-1", new Uint8Array([1, 2, 3, 4, 5]));
+      await store.writeBlobContent("blob-1", new Uint8Array([1, 2, 3, 4, 5]));
       const lines = await collect(dumpFrickDatabase(store, { tenantId: "_default" }));
       const blobRows = lines
         .slice(1)
@@ -91,9 +91,9 @@ describe("dumpFrickDatabase", () => {
   it("per-tenant dump includes security-relevant framework tables for the chosen tenant", async () => {
     const store = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
     try {
-      store.tenants.create("tenant-alpha");
-      store.tenants.create("tenant-beta");
-      store.blobDerivatives.record({
+      await store.tenants.create("tenant-alpha");
+      await store.tenants.create("tenant-beta");
+      await store.blobDerivatives.record({
         tenantId: "tenant-alpha",
         parentBlobId: "blob-parent-alpha",
         derivativeId: "thumb",
@@ -105,7 +105,7 @@ describe("dumpFrickDatabase", () => {
         content: Buffer.from([1, 2, 3]),
         metadata: { width: 64 },
       });
-      store.blobDerivatives.record({
+      await store.blobDerivatives.record({
         tenantId: "tenant-beta",
         parentBlobId: "blob-parent-beta",
         derivativeId: "thumb",
@@ -126,8 +126,8 @@ describe("dumpFrickDatabase", () => {
         text: "beta secret",
         fields: { senderId: "user-beta" },
       });
-      store.tenantSettings.set("tenant-alpha", "retentionMs", 1234);
-      store.tenantSettings.set("tenant-beta", "retentionMs", 5678);
+      await store.tenantSettings.set("tenant-alpha", "retentionMs", 1234);
+      await store.tenantSettings.set("tenant-beta", "retentionMs", 5678);
 
       const lines = await collect(dumpFrickDatabase(store, { tenantId: "tenant-alpha" }));
       const rows = lines
@@ -161,8 +161,8 @@ describe("dumpFrickDatabase", () => {
   it("per-tenant dump includes platform events and only matching delivery state", async () => {
     const store = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
     try {
-      store.tenants.create("tenant-alpha");
-      store.tenants.create("tenant-beta");
+      await store.tenants.create("tenant-alpha");
+      await store.tenants.create("tenant-beta");
       const alpha = await store.platformEvents.publish({
         family: "analytics.user_event",
         name: "message.sent",
@@ -177,7 +177,7 @@ describe("dumpFrickDatabase", () => {
         tenantId: "tenant-beta",
         payload: { messageId: "beta-message" },
       });
-      await store.platformEvents.claim("analytics-worker", { batchSize: 10 });
+      await await store.platformEvents.claim("analytics-worker", { batchSize: 10 });
 
       const lines = await collect(dumpFrickDatabase(store, { tenantId: "tenant-alpha" }));
       const rows = lines
@@ -206,7 +206,7 @@ describe("dumpFrickDatabase", () => {
   it("whole-database dump includes admin_audit_log and frick_migrations", async () => {
     const store = new FrickStore({ path: ":memory:", schema: productTestSchema });
     try {
-      store.adminAudit.record({
+      await store.adminAudit.record({
         adminTokenFingerprint: "abc123def456",
         action: "tenants.create",
         outcome: "allow",

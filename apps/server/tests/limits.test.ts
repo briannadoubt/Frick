@@ -9,13 +9,13 @@ import {
 import { FrickConfigError } from "../src/config.js";
 
 describe("FrickLimits", () => {
-  it("returns a copy of defaults when no overrides are supplied", () => {
+  it("returns a copy of defaults when no overrides are supplied", async () => {
     const limits = mergeLimits();
     expect(limits).toEqual(DEFAULT_FRICK_LIMITS);
     expect(limits).not.toBe(DEFAULT_FRICK_LIMITS);
   });
 
-  it("exposes the expected set of limit keys with numeric values", () => {
+  it("exposes the expected set of limit keys with numeric values", async () => {
     const expectedKeys: ReadonlyArray<keyof typeof DEFAULT_FRICK_LIMITS> = [
       "maxHttpBodyBytes",
       "maxStreamAppendPayloadBytes",
@@ -50,20 +50,20 @@ describe("FrickLimits", () => {
     expect(DEFAULT_FRICK_LIMITS.maxWebSocketFrameBytes).toBe(524_288);
   });
 
-  it("merges partial overrides on top of defaults", () => {
+  it("merges partial overrides on top of defaults", async () => {
     const limits = mergeLimits({ maxHttpBodyBytes: 100, presenceTtlMaxSeconds: 30 });
     expect(limits.maxHttpBodyBytes).toBe(100);
     expect(limits.presenceTtlMaxSeconds).toBe(30);
     expect(limits.maxSubscriptionsPerConnection).toBe(DEFAULT_FRICK_LIMITS.maxSubscriptionsPerConnection);
   });
 
-  it("clamps TTL into [min, max]", () => {
+  it("clamps TTL into [min, max]", async () => {
     expect(clampTtlSeconds(5, 1, 10)).toBe(5);
     expect(clampTtlSeconds(0, 1, 10)).toBe(1);
     expect(clampTtlSeconds(999_999, 1, 10)).toBe(10);
   });
 
-  it("calls the clamp logger only when clamping happens", () => {
+  it("calls the clamp logger only when clamping happens", async () => {
     let calls = 0;
     clampTtlSeconds(5, 1, 10, () => {
       calls += 1;
@@ -75,43 +75,43 @@ describe("FrickLimits", () => {
     expect(calls).toBe(1);
   });
 
-  it("applies the default per-principal connection cap when unset", () => {
+  it("applies the default per-principal connection cap when unset", async () => {
     expect(DEFAULT_FRICK_LIMITS.maxConnectionsPerPrincipal).toBe(64);
     expect(mergeLimits().maxConnectionsPerPrincipal).toBe(64);
     expect(mergeLimits({ maxHttpBodyBytes: 1 }).maxConnectionsPerPrincipal).toBe(64);
   });
 
-  it("reads the per-principal connection cap from the environment", () => {
+  it("reads the per-principal connection cap from the environment", async () => {
     expect(limitsFromEnv({})).toEqual({});
     expect(limitsFromEnv({ FRICK_MAX_CONNECTIONS_PER_PRINCIPAL: "10" })).toEqual({
       maxConnectionsPerPrincipal: 10,
     });
   });
 
-  it("defaults the per-principal blob quota to effectively unlimited", () => {
+  it("defaults the per-principal blob quota to effectively unlimited", async () => {
     expect(DEFAULT_FRICK_LIMITS.maxBlobBytesPerPrincipal).toBe(Number.MAX_SAFE_INTEGER);
     expect(mergeLimits().maxBlobBytesPerPrincipal).toBe(Number.MAX_SAFE_INTEGER);
   });
 
-  it("reads the per-principal blob quota from the environment", () => {
+  it("reads the per-principal blob quota from the environment", async () => {
     expect(limitsFromEnv({ FRICK_MAX_BLOB_BYTES_PER_PRINCIPAL: "3000" })).toEqual({
       maxBlobBytesPerPrincipal: 3000,
     });
   });
 
-  it("rejects a non-positive-integer per-principal blob quota env value", () => {
+  it("rejects a non-positive-integer per-principal blob quota env value", async () => {
     expect(() => limitsFromEnv({ FRICK_MAX_BLOB_BYTES_PER_PRINCIPAL: "0" })).toThrow(FrickConfigError);
     expect(() => limitsFromEnv({ FRICK_MAX_BLOB_BYTES_PER_PRINCIPAL: "-5" })).toThrow(FrickConfigError);
     expect(() => limitsFromEnv({ FRICK_MAX_BLOB_BYTES_PER_PRINCIPAL: "x" })).toThrow(FrickConfigError);
   });
 
-  it("rejects a non-positive-integer per-principal connection cap env value", () => {
+  it("rejects a non-positive-integer per-principal connection cap env value", async () => {
     expect(() => limitsFromEnv({ FRICK_MAX_CONNECTIONS_PER_PRINCIPAL: "0" })).toThrow(FrickConfigError);
     expect(() => limitsFromEnv({ FRICK_MAX_CONNECTIONS_PER_PRINCIPAL: "-3" })).toThrow(FrickConfigError);
     expect(() => limitsFromEnv({ FRICK_MAX_CONNECTIONS_PER_PRINCIPAL: "abc" })).toThrow(FrickConfigError);
   });
 
-  it("carries limit metadata on FrickLimitError", () => {
+  it("carries limit metadata on FrickLimitError", async () => {
     const err = new FrickLimitError({ limit: "maxBlobBytes", actualValue: 99, configuredMax: 10 });
     expect(err.limit).toBe("maxBlobBytes");
     expect(err.actualValue).toBe(99);

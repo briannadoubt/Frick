@@ -49,13 +49,13 @@ export interface BuildDashboardJobsInput {
   readonly limit?: number;
 }
 
-export function buildDashboardJobs(input: BuildDashboardJobsInput): DashboardJobs {
+export async function buildDashboardJobs(input: BuildDashboardJobsInput): Promise<DashboardJobs> {
   const scope = input.principal.scope === "admin" ? "admin" : "tenant";
   const tenantId = scope === "admin" ? input.tenantId : input.principal.tenantId;
   const status = normalizeDashboardJobStatus(input.status);
   const jobType = normalizeDashboardJobType(input.jobType);
   const limit = normalizeDashboardJobLimit(input.limit);
-  const rows = input.store.jobs.list({
+  const rows = await input.store.jobs.list({
     ...(tenantId ? { tenantId } : {}),
     ...(status ? { status } : {}),
     ...(jobType ? { jobType } : {}),

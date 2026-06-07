@@ -40,7 +40,7 @@ function makeRequest(method: string, body?: string, headers: Record<string, stri
 }
 
 describe("app-route kit: CORS", () => {
-  it("setCors applies defaults and honors overrides", () => {
+  it("setCors applies defaults and honors overrides", async () => {
     const res = new FakeResponse();
     setCors(res as never);
     expect(res.headers["access-control-allow-origin"]).toBe("*");
@@ -52,7 +52,7 @@ describe("app-route kit: CORS", () => {
     expect(res2.headers["access-control-allow-credentials"]).toBe("true");
   });
 
-  it("handlePreflight answers OPTIONS with 204 and passes through others", () => {
+  it("handlePreflight answers OPTIONS with 204 and passes through others", async () => {
     const res = new FakeResponse();
     expect(handlePreflight(makeRequest("OPTIONS"), res as never)).toBe(true);
     expect(res.statusCode).toBe(204);
@@ -63,7 +63,7 @@ describe("app-route kit: CORS", () => {
     expect(res2.ended).toBe(false);
   });
 
-  it("sendJson writes a JSON body with CORS + content-type", () => {
+  it("sendJson writes a JSON body with CORS + content-type", async () => {
     const res = new FakeResponse();
     sendJson(res as never, 201, { ok: true });
     expect(res.statusCode).toBe(201);
@@ -90,7 +90,7 @@ describe("app-route kit: readJsonBody", () => {
 });
 
 describe("app-route kit: matchPath", () => {
-  it("captures :params and rejects mismatches", () => {
+  it("captures :params and rejects mismatches", async () => {
     expect(matchPath("/api/plan/:id/run", "/api/plan/42/run")).toEqual({ id: "42" });
     expect(matchPath("/api/plan/:id", "/api/plan/a%2Fb")).toEqual({ id: "a/b" });
     expect(matchPath("/api/plan/:id", "/api/plan/1/extra")).toBeNull();
@@ -100,14 +100,14 @@ describe("app-route kit: matchPath", () => {
 
 describe("app-route kit: authenticateRequest", () => {
   let store: FrickStore | undefined;
-  afterEach(() => {
+  afterEach(async () => {
     store?.close();
     store = undefined;
   });
 
-  it("resolves a live bearer token to the session principal", () => {
+  it("resolves a live bearer token to the session principal", async () => {
     store = new FrickStore({ path: ":memory:", seed: true, schema: productTestSchema });
-    store.sessions.create({
+    await store.sessions.create({
       sessionToken: "tok-live",
       tenantId: "_default",
       userId: "user-ada",
@@ -116,7 +116,7 @@ describe("app-route kit: authenticateRequest", () => {
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
     });
 
-    const principal = authenticateRequest(
+    const principal = await authenticateRequest(
       store,
       makeRequest("GET", undefined, { authorization: "Bearer tok-live" }),
     );
@@ -128,9 +128,9 @@ describe("app-route kit: authenticateRequest", () => {
     });
   });
 
-  it("returns null for a missing, malformed, or expired token", () => {
+  it("returns null for a missing, malformed, or expired token", async () => {
     store = new FrickStore({ path: ":memory:", seed: true, schema: productTestSchema });
-    store.sessions.create({
+    await store.sessions.create({
       sessionToken: "tok-dead",
       tenantId: "_default",
       userId: "user-ada",
@@ -139,12 +139,12 @@ describe("app-route kit: authenticateRequest", () => {
       expiresAt: "2000-01-01T00:00:00.000Z",
     });
 
-    expect(authenticateRequest(store, makeRequest("GET"))).toBeNull();
+    expect(await authenticateRequest(store, makeRequest("GET"))).toBeNull();
     expect(
-      authenticateRequest(store, makeRequest("GET", undefined, { authorization: "Basic xyz" })),
+      await authenticateRequest(store, makeRequest("GET", undefined, { authorization: "Basic xyz" })),
     ).toBeNull();
     expect(
-      authenticateRequest(store, makeRequest("GET", undefined, { authorization: "Bearer tok-dead" })),
+      await authenticateRequest(store, makeRequest("GET", undefined, { authorization: "Bearer tok-dead" })),
     ).toBeNull();
   });
 });

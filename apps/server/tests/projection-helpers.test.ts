@@ -13,13 +13,13 @@ import {
 
 let store: FrickStore | undefined;
 
-afterEach(() => {
+afterEach(async () => {
   store?.close();
   store = undefined;
 });
 
 describe("singleChange", () => {
-  it("wraps a single keyed row into an apply result", () => {
+  it("wraps a single keyed row into an apply result", async () => {
     expect(singleChange("counts", { open: 3 })).toEqual({
       changes: [{ key: "counts", value: { open: 3 } }],
     });
@@ -27,26 +27,26 @@ describe("singleChange", () => {
 });
 
 describe("listProjectionObjects", () => {
-  it("reads every object of a type in the context tenant, typed", () => {
+  it("reads every object of a type in the context tenant, typed", async () => {
     store = new FrickStore({ path: ":memory:", seed: true, schema: productTestSchema });
-    store.upsertObject("_default", "Conversation", "c1", { kind: "group", title: "One", createdBy: "u" });
-    store.upsertObject("_default", "Conversation", "c2", { kind: "group", title: "Two", createdBy: "u" });
+    await store.upsertObject("_default", "Conversation", "c1", { kind: "group", title: "One", createdBy: "u" });
+    await store.upsertObject("_default", "Conversation", "c2", { kind: "group", title: "Two", createdBy: "u" });
     // A different tenant's row must not leak in.
-    store.upsertObject("tenant-b", "Conversation", "c3", { kind: "group", title: "Other", createdBy: "u" });
+    await store.upsertObject("tenant-b", "Conversation", "c3", { kind: "group", title: "Other", createdBy: "u" });
 
     const ctx: FrickProjectionContext = {
       tenantId: "_default",
       store,
       logger: undefined as never,
     };
-    const rows = listProjectionObjects<{ id: string; title: string }>(ctx, "Conversation");
+    const rows = await listProjectionObjects<{ id: string; title: string }>(ctx, "Conversation");
     expect(rows.map((r) => r.id).sort()).toEqual(["c1", "c2"]);
     expect(rows.map((r) => r.title).sort()).toEqual(["One", "Two"]);
   });
 });
 
 describe("projectionSourceObjectTypes", () => {
-  it("returns distinct object source types and ignores stream sources", () => {
+  it("returns distinct object source types and ignores stream sources", async () => {
     const projections: FrickProjection[] = [
       {
         name: "p1",

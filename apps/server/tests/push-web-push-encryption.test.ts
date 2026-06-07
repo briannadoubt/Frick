@@ -82,7 +82,7 @@ function decryptWebPushPayload(
 }
 
 describe("web push RFC 8291 payload encryption", () => {
-  it("produces a well-formed aes128gcm body", () => {
+  it("produces a well-formed aes128gcm body", async () => {
     const sub = makeSubscriptionKeys();
     const body = encryptWebPushPayload("hello world", sub.p256dh, sub.auth);
 
@@ -98,7 +98,7 @@ describe("web push RFC 8291 payload encryption", () => {
     expect(keyid[0]).toBe(0x04); // valid uncompressed point prefix
   });
 
-  it("round-trips back to the plaintext", () => {
+  it("round-trips back to the plaintext", async () => {
     const sub = makeSubscriptionKeys();
     const uaPublic = Buffer.from(sub.p256dh, "base64url");
     const authSecret = Buffer.from(sub.auth, "base64url");
@@ -118,7 +118,7 @@ describe("web push RFC 8291 payload encryption", () => {
     expect(keyid[0]).toBe(0x04);
   });
 
-  it("uses a fresh ephemeral key + salt per call", () => {
+  it("uses a fresh ephemeral key + salt per call", async () => {
     const sub = makeSubscriptionKeys();
     const a = encryptWebPushPayload("same", sub.p256dh, sub.auth);
     const b = encryptWebPushPayload("same", sub.p256dh, sub.auth);
@@ -126,7 +126,7 @@ describe("web push RFC 8291 payload encryption", () => {
     expect(a.subarray(21, 21 + 65).equals(b.subarray(21, 21 + 65))).toBe(false); // keyid
   });
 
-  it("rejects a malformed p256dh", () => {
+  it("rejects a malformed p256dh", async () => {
     const sub = makeSubscriptionKeys();
     expect(() => encryptWebPushPayload("x", "AAAA", sub.auth)).toThrow();
   });

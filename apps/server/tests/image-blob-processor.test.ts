@@ -35,14 +35,14 @@ function ctx(overrides: Partial<FrickBlobValidateContext>): FrickBlobValidateCon
 }
 
 describe("sniffImageFormat", () => {
-  it("recognises the four supported formats", () => {
+  it("recognises the four supported formats", async () => {
     expect(sniffImageFormat(PNG)).toBe("png");
     expect(sniffImageFormat(JPEG)).toBe("jpeg");
     expect(sniffImageFormat(GIF)).toBe("gif");
     expect(sniffImageFormat(WEBP)).toBe("webp");
   });
 
-  it("returns null for non-image bytes and truncated previews", () => {
+  it("returns null for non-image bytes and truncated previews", async () => {
     expect(sniffImageFormat(Buffer.from("not an image", "ascii"))).toBeNull();
     expect(sniffImageFormat(Buffer.from([0x89, 0x50]))).toBeNull(); // too short for PNG
     expect(sniffImageFormat(Buffer.alloc(0))).toBeNull();
@@ -63,7 +63,7 @@ describe("imageBlobProcessor", () => {
     expect(result).toEqual({ ok: true, extractedMetadata: { format: "jpeg" } });
   });
 
-  it("defaults to matching every upload so non-images are rejected", () => {
+  it("defaults to matching every upload so non-images are rejected", async () => {
     expect(imageBlobProcessor().matches).toEqual({});
     expect(imageBlobProcessor().id).toBe("frick-image");
   });
@@ -94,7 +94,7 @@ describe("imageBlobProcessor", () => {
     expect(result.ok).toBe(false);
   });
 
-  it("honors a custom id and exposes the default cap constant", () => {
+  it("honors a custom id and exposes the default cap constant", async () => {
     expect(imageBlobProcessor({ id: "my-image" }).id).toBe("my-image");
     expect(DEFAULT_MAX_IMAGE_BYTES).toBe(10 * 1024 * 1024);
   });

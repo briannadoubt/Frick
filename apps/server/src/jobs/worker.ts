@@ -89,7 +89,7 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
   async function tick(): Promise<void> {
     if (stopRequested) return;
     try {
-      const claimed = store.jobs.claim(workerId, undefined, claimBatchSize);
+      const claimed = await store.jobs.claim(workerId, undefined, claimBatchSize);
       if (claimed.length > 0) {
         metrics?.counter("frick.jobs.claimed.total").inc(claimed.length);
         // Process serially so a slow handler doesn't starve the worker's
@@ -152,7 +152,7 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
           errorMessage: `No handler registered for job type "${job.jobType}"`,
           retryable: false,
         };
-        finishJobTelemetry(telemetrySpan, applyResult(job, result, startedAtMs));
+        finishJobTelemetry(telemetrySpan, await applyResult(job, result, startedAtMs));
         return;
       }
 
@@ -175,7 +175,7 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
           error: result.errorMessage,
         });
       }
-      finishJobTelemetry(telemetrySpan, applyResult(job, result, startedAtMs));
+      finishJobTelemetry(telemetrySpan, await applyResult(job, result, startedAtMs));
     } catch (error) {
       finishJobTelemetry(telemetrySpan, {
         status: "failed",
@@ -208,10 +208,10 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
     }
   }
 
-  function applyResult(job: JobRow, result: FrickJobResult, startedAtMs: number): FrickJobTelemetryResult {
+  async function applyResult(job: JobRow, result: FrickJobResult, startedAtMs: number): Promise<FrickJobTelemetryResult> {
     const durationMs = Date.now() - startedAtMs;
     if (result.status === "completed") {
-      store.jobs.complete(job.id, result.result);
+      await store.jobs.complete(job.id, result.result);
       metrics?.counter("frick.jobs.completed.total", { jobType: job.jobType }).inc();
       emitDevToolsEvent(store, {
         kind: "job.completed",
@@ -227,7 +227,7 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
     const retryable = result.retryable ?? false;
     const errorCode = result.errorCode ?? "server.internal";
     const errorMessage = result.errorMessage ?? "job handler returned failure";
-    store.jobs.fail(job.id, errorCode, errorMessage, retryable);
+    await store.jobs.fail(job.id, errorCode, errorMessage, retryable);
     metrics
       ?.counter("frick.jobs.failed.total", {
         jobType: job.jobType,
@@ -238,7 +238,7 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
     // a retry. The same `fail` returning that info would be tighter, but
     // keeping the store API symmetrical with `complete` is worth one extra
     // SELECT in the failure path.
-    const after = store.jobs.getById(job.id);
+    const after = await store.jobs.getById(job.id);
     const attemptCount = after?.attemptCount ?? job.attemptCount + 1;
     if (after?.status === "dead_lettered") {
       metrics?.counter("frick.jobs.dead_lettered.total", { jobType: job.jobType }).inc();

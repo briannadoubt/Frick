@@ -459,7 +459,7 @@ export function createIdentityRouter(
     const deviceId = typeof body.deviceId === "string" ? body.deviceId : undefined;
     const replicaId = typeof body.replicaId === "string" ? body.replicaId : undefined;
 
-    const existing = findUserBySubject(
+    const existing = await findUserBySubject(
       options.store,
       userObject,
       userObject.appleSubjectField,
@@ -480,7 +480,7 @@ export function createIdentityRouter(
       }
       const primaryTenantId =
         (existing[userObject.primaryTenantField] as string | undefined) ??
-        findPrimaryTenantForUser(options.store, existing.id as string);
+        await findPrimaryTenantForUser(options.store, existing.id as string);
       const session = mintSession({
         store: options.store,
         sessionTtlSeconds,
@@ -607,7 +607,7 @@ export function createIdentityRouter(
     const deviceId = typeof body.deviceId === "string" ? body.deviceId : undefined;
     const replicaId = typeof body.replicaId === "string" ? body.replicaId : undefined;
 
-    const existing = findUserBySubject(
+    const existing = await findUserBySubject(
       options.store,
       userObject,
       userObject.googleSubjectField,
@@ -628,7 +628,7 @@ export function createIdentityRouter(
       }
       const primaryTenantId =
         (existing[userObject.primaryTenantField] as string | undefined) ??
-        findPrimaryTenantForUser(options.store, existing.id as string);
+        await findPrimaryTenantForUser(options.store, existing.id as string);
       const session = mintSession({
         store: options.store,
         sessionTtlSeconds,
@@ -774,7 +774,7 @@ export function createIdentityRouter(
     // Subjects are scoped by provider id so two issuers that reuse the same
     // `sub` value never alias onto the same User row.
     const scopedSubject = `${providerId}:${verified.subject}`;
-    const existing = findUserBySubject(
+    const existing = await findUserBySubject(
       options.store,
       userObject,
       userObject.oidcSubjectField,
@@ -796,7 +796,7 @@ export function createIdentityRouter(
       }
       const primaryTenantId =
         (existing[userObject.primaryTenantField] as string | undefined) ??
-        findPrimaryTenantForUser(options.store, existing.id as string);
+        await findPrimaryTenantForUser(options.store, existing.id as string);
       const session = mintSession({
         store: options.store,
         sessionTtlSeconds,
@@ -925,7 +925,7 @@ export function createIdentityRouter(
     // Duplicate-email check via the schema User index. Frick's
     // auth_accounts has its own UNIQUE on (tenant_id, handle) so the
     // SQL layer also enforces — but we want a clean 409 before then.
-    const existing = findUserBySubject(
+    const existing = await findUserBySubject(
       options.store,
       userObject,
       userObject.emailField,
@@ -1042,7 +1042,7 @@ export function createIdentityRouter(
       return;
     }
 
-    const user = findUserBySubject(
+    const user = await findUserBySubject(
       options.store,
       userObject,
       userObject.emailField,
@@ -1064,8 +1064,8 @@ export function createIdentityRouter(
 
     const primaryTenantId =
       (user[userObject.primaryTenantField] as string | undefined) ??
-      findPrimaryTenantForUser(options.store, user.id);
-    const account = options.store.verifyAccountPassword(primaryTenantId, email, password);
+      await findPrimaryTenantForUser(options.store, user.id);
+    const account = await options.store.verifyAccountPassword(primaryTenantId, email, password);
     if (!account) {
       sendJson(res, 401, { error: "invalid_credentials" });
       return;
@@ -1129,7 +1129,7 @@ export function createIdentityRouter(
       return;
     }
 
-    const existing = findUserBySubject(
+    const existing = await findUserBySubject(
       options.store,
       userObject,
       userObject.appleSubjectField,
@@ -1187,12 +1187,12 @@ export function createIdentityRouter(
           ...existing,
           [userObject.revokedAtField]: now,
         });
-        const killed = options.store.deleteSessionsForUser(userId);
+        const killed = await options.store.deleteSessionsForUser(userId);
         if (options.config.onRevoke) {
           try {
             await options.config.onRevoke({
               userId,
-              tenantId: findPrimaryTenantForUser(options.store, userId),
+              tenantId: await findPrimaryTenantForUser(options.store, userId),
               provider: "apple",
               reason: revokeReason,
             });
@@ -1257,7 +1257,7 @@ export function createIdentityRouter(
     // hammered for one address; runs before lookup so it also caps unknown
     // emails without leaking whether an account exists.
     if (throttled({ req, res, route: "forgot-password", identifier: email })) return;
-    const user = findUserBySubject(
+    const user = await findUserBySubject(
       options.store,
       userObject,
       userObject.emailField,
@@ -1267,8 +1267,8 @@ export function createIdentityRouter(
       const userId = user.id as string;
       const tenantId =
         (user[userObject.primaryTenantField] as string | undefined) ??
-        findPrimaryTenantForUser(options.store, userId);
-      const issued = options.store.passwordResetTokens.issue({
+        await findPrimaryTenantForUser(options.store, userId);
+      const issued = await options.store.passwordResetTokens.issue({
         tenantId,
         userId,
       });
@@ -1368,7 +1368,7 @@ export function createIdentityRouter(
       });
       return;
     }
-    const consumed = options.store.passwordResetTokens.consume(token);
+    const consumed = await options.store.passwordResetTokens.consume(token);
     if (!consumed) {
       sendJson(res, 400, { error: "invalid_or_expired_token" });
       return;
@@ -1385,7 +1385,7 @@ export function createIdentityRouter(
     }
     // Kill outstanding sessions on a successful reset — common pattern
     // to invalidate cookies/JWTs an attacker might have squirreled away.
-    options.store.deleteSessionsForUser(consumed.userId);
+    await options.store.deleteSessionsForUser(consumed.userId);
     log.info("auth.email.password_reset_completed", {
       event: "auth.email.password_reset_completed",
       userId: consumed.userId,
@@ -1480,24 +1480,24 @@ async function sendWelcomeEmail(input: {
   }
 }
 
-function findUserBySubject(
+async function findUserBySubject(
   store: FrickStore,
   userObject: ResolvedUserObject,
   subjectField: string,
   subject: string,
-): UserRow | undefined {
-  const users = store.listObjects(SYSTEM_TENANT, userObject.type) as UserRow[];
+): Promise<UserRow | undefined> {
+  const users = (await store.listObjects(SYSTEM_TENANT, userObject.type)) as unknown as UserRow[];
   return users.find((u) => u[subjectField] === subject);
 }
 
-function findPrimaryTenantForUser(store: FrickStore, userId: string): string {
+async function findPrimaryTenantForUser(store: FrickStore, userId: string): Promise<string> {
   // Apps own the membership model — we look for a TenantMembership row
   // pointing at this user in the system tenant. Falls back to userId-
   // as-tenant when no membership exists (the app didn't define one).
   type MembershipRow = { tenantId: string; userId: string; joinedAt?: number };
   let memberships: MembershipRow[] = [];
   try {
-    memberships = store.listObjects(SYSTEM_TENANT, "TenantMembership") as MembershipRow[];
+    memberships = (await store.listObjects(SYSTEM_TENANT, "TenantMembership")) as unknown as MembershipRow[];
   } catch {
     // App doesn't have TenantMembership — fall through.
   }

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import type { SqlDriver } from "./sql-driver.js";
 
 export interface StoredSession {
   sessionToken: string;
@@ -33,17 +33,15 @@ interface SessionRow {
 }
 
 export class SessionStore {
-  constructor(private readonly db: DatabaseSync) {}
+  constructor(private readonly sql: SqlDriver) {}
 
-  create(input: CreateSessionInput): StoredSession {
+  async create(input: CreateSessionInput): Promise<StoredSession> {
     const now = new Date().toISOString();
-    this.db
-      .prepare(
-        `INSERT INTO auth_sessions
+    await this.sql.run(
+      `INSERT INTO auth_sessions
           (session_token_digest, tenant_id, user_id, device_id, replica_id, expires_at, created_at, last_seen_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
+      [
         sessionTokenDigest(input.sessionToken),
         input.tenantId,
         input.userId,
@@ -52,7 +50,8 @@ export class SessionStore {
         input.expiresAt,
         now,
         now,
-      );
+      ],
+    );
 
     return {
       sessionToken: input.sessionToken,
@@ -66,11 +65,12 @@ export class SessionStore {
     };
   }
 
-  readActive(sessionToken: string): StoredSession | undefined {
+  async readActive(sessionToken: string): Promise<StoredSession | undefined> {
     const digest = sessionTokenDigest(sessionToken);
-    const row = this.db
-      .prepare("SELECT * FROM auth_sessions WHERE session_token_digest = ?")
-      .get(digest) as SessionRow | undefined;
+    const row = await this.sql.get<SessionRow>(
+      "SELECT * FROM auth_sessions WHERE session_token_digest = ?",
+      [digest],
+    );
     if (!row) {
       return undefined;
     }
@@ -80,9 +80,10 @@ export class SessionStore {
     }
 
     const now = new Date().toISOString();
-    this.db
-      .prepare("UPDATE auth_sessions SET last_seen_at = ? WHERE session_token_digest = ?")
-      .run(now, digest);
+    await this.sql.run(
+      "UPDATE auth_sessions SET last_seen_at = ? WHERE session_token_digest = ?",
+      [now, digest],
+    );
 
     return fromRow({ ...row, last_seen_at: now }, sessionToken);
   }
@@ -92,17 +93,19 @@ export class SessionStore {
    * distinguish "no such session" from "session expired" so the server can
    * emit the correct {@link FrickErrorEnvelope} code.
    */
-  readAny(sessionToken: string): StoredSession | undefined {
-    const row = this.db
-      .prepare("SELECT * FROM auth_sessions WHERE session_token_digest = ?")
-      .get(sessionTokenDigest(sessionToken)) as SessionRow | undefined;
+  async readAny(sessionToken: string): Promise<StoredSession | undefined> {
+    const row = await this.sql.get<SessionRow>(
+      "SELECT * FROM auth_sessions WHERE session_token_digest = ?",
+      [sessionTokenDigest(sessionToken)],
+    );
     return row ? fromRow(row, sessionToken) : undefined;
   }
 
-  delete(sessionToken: string): boolean {
-    const result = this.db
-      .prepare("DELETE FROM auth_sessions WHERE session_token_digest = ?")
-      .run(sessionTokenDigest(sessionToken));
+  async delete(sessionToken: string): Promise<boolean> {
+    const result = await this.sql.run(
+      "DELETE FROM auth_sessions WHERE session_token_digest = ?",
+      [sessionTokenDigest(sessionToken)],
+    );
     return result.changes > 0;
   }
 
@@ -115,15 +118,19 @@ export class SessionStore {
    * Optionally scoped to a single tenant — pass `tenantId` to leave
    * sessions in other tenants alone. Omit to kill them all.
    */
-  deleteForUser(userId: string, tenantId?: string): number {
+  async deleteForUser(userId: string, tenantId?: string): Promise<number> {
     if (tenantId !== undefined) {
-      return this.db
-        .prepare("DELETE FROM auth_sessions WHERE user_id = ? AND tenant_id = ?")
-        .run(userId, tenantId).changes as number;
+      const result = await this.sql.run(
+        "DELETE FROM auth_sessions WHERE user_id = ? AND tenant_id = ?",
+        [userId, tenantId],
+      );
+      return result.changes;
     }
-    return this.db
-      .prepare("DELETE FROM auth_sessions WHERE user_id = ?")
-      .run(userId).changes as number;
+    const result = await this.sql.run(
+      "DELETE FROM auth_sessions WHERE user_id = ?",
+      [userId],
+    );
+    return result.changes;
   }
 
   /**
@@ -135,10 +142,12 @@ export class SessionStore {
    * `cutoffIso` is usually `now` (delete everything already expired); pass a
    * timestamp in the past to keep a grace window of recently-expired rows.
    */
-  pruneExpired(cutoffIso: string = new Date().toISOString()): number {
-    return this.db
-      .prepare("DELETE FROM auth_sessions WHERE expires_at <= ?")
-      .run(cutoffIso).changes as number;
+  async pruneExpired(cutoffIso: string = new Date().toISOString()): Promise<number> {
+    const result = await this.sql.run(
+      "DELETE FROM auth_sessions WHERE expires_at <= ?",
+      [cutoffIso],
+    );
+    return result.changes;
   }
 }
 

@@ -66,8 +66,8 @@ export function eachTenant(
   options: EachTenantOptions = {},
 ): FrickRecurringJob["resolveTargets"] {
   const { includeArchived = false, filter, payload } = options;
-  return ({ store }) => {
-    const tenants = store.tenants.list(includeArchived);
+  return async ({ store }) => {
+    const tenants = await store.tenants.list(includeArchived);
     const selected = filter ? tenants.filter(filter) : tenants;
     return selected.map((tenant) => {
       const built = payload?.(tenant);

@@ -36,7 +36,7 @@ class FakeResponse extends EventEmitter {
 }
 
 describe("SseRegistry", () => {
-  it("uses the caller-provided hasMore flag on the initial page", () => {
+  it("uses the caller-provided hasMore flag on the initial page", async () => {
     const registry = new SseRegistry(foundationSchema, { heartbeatMs: 0 });
     const response = new FakeResponse();
     const event: StoredEvent = {
@@ -70,7 +70,7 @@ describe("SseRegistry", () => {
     registry.closeAll();
   });
 
-  it("closes an SSE client when write reports backpressure", () => {
+  it("closes an SSE client when write reports backpressure", async () => {
     const registry = new SseRegistry(foundationSchema, { heartbeatMs: 0, maxBufferedBytes: 1_000 });
     const response = new FakeResponse();
     response.writeResults = [false];
@@ -87,7 +87,7 @@ describe("SseRegistry", () => {
     expect(response.ended || response.destroyed).toBe(true);
   });
 
-  it("closes an SSE client when writableLength exceeds the configured cap", () => {
+  it("closes an SSE client when writableLength exceeds the configured cap", async () => {
     const registry = new SseRegistry(foundationSchema, { heartbeatMs: 0, maxBufferedBytes: 8 });
     const response = new FakeResponse();
 

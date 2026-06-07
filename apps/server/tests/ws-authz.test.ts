@@ -53,7 +53,7 @@ describe("websocket authorization parity", () => {
     const socket = await connectAndHello(app.url, login.sessionToken);
     const closed = onceClosed(socket);
 
-    app.store.deleteSession(login.sessionToken);
+    await app.store.deleteSession(login.sessionToken);
     socket.send(
       encodeFrame([
         FrameKind.Append,
@@ -78,7 +78,7 @@ describe("websocket authorization parity", () => {
       requestId: "request-revoked-session-append",
       code: "auth.unauthenticated",
     });
-    expect(app.store.readEvents("MessageStream", "conversation-general", 0)).toHaveLength(0);
+    expect(await app.store.readEvents("MessageStream", "conversation-general", 0)).toHaveLength(0);
     await expect(withTimeout(closed, "expected revoked session to close websocket")).resolves.toEqual({
       code: 1008,
     });
@@ -116,7 +116,7 @@ describe("websocket authorization parity", () => {
       requestId: "request-pre-hello-append",
       code: "sync.protocolError",
     });
-    expect(app.store.readEvents("MessageStream", "conversation-general", 0)).toHaveLength(0);
+    expect(await app.store.readEvents("MessageStream", "conversation-general", 0)).toHaveLength(0);
     socket.close();
   });
 
@@ -244,7 +244,7 @@ describe("websocket authorization parity", () => {
       requestId: "req-archived-ws",
       code: "auth.unauthenticated",
     });
-    expect(app.store.readObject("tenant-archived-ws", "Note", "note-archived-ws")).toBeUndefined();
+    expect(await app.store.readObject("tenant-archived-ws", "Note", "note-archived-ws")).toBeUndefined();
     await closed;
     socket.close();
   });

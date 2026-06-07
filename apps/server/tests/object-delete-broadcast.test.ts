@@ -37,7 +37,7 @@ describe("FR-142 object-delete broadcast", () => {
     app = await startServer();
     const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
 
-    app.store.upsertObject(ada.tenantId, CONVERSATION, "conversation-general", {
+    await app.store.upsertObject(ada.tenantId, CONVERSATION, "conversation-general", {
       kind: "group",
       title: "Ops standup",
       createdBy: "user-ada",
@@ -47,7 +47,7 @@ describe("FR-142 object-delete broadcast", () => {
     const deltas = collectDeltas(socket);
     await subscribeObjects(socket, "sub-conv", CONVERSATION);
 
-    const existed = app.store.deleteObject(ada.tenantId, CONVERSATION, "conversation-general");
+    const existed = await app.store.deleteObject(ada.tenantId, CONVERSATION, "conversation-general");
     expect(existed).toBe(true);
 
     const delta = await deltas.next();
@@ -69,12 +69,12 @@ describe("FR-142 object-delete broadcast", () => {
     const a = await devLogin(app.httpUrl, { userId: "user-alpha", tenantId: "tenant-a" });
     const b = await devLogin(app.httpUrl, { userId: "user-bravo", tenantId: "tenant-b" });
 
-    app.store.upsertObject(a.tenantId, CONVERSATION, "conversation-a", {
+    await app.store.upsertObject(a.tenantId, CONVERSATION, "conversation-a", {
       kind: "group",
       title: "Tenant A room",
       createdBy: "user-alpha",
     });
-    app.store.upsertObject(b.tenantId, CONVERSATION, "conversation-b", {
+    await app.store.upsertObject(b.tenantId, CONVERSATION, "conversation-b", {
       kind: "group",
       title: "Tenant B room",
       createdBy: "user-bravo",
@@ -85,11 +85,11 @@ describe("FR-142 object-delete broadcast", () => {
     await subscribeObjects(socketA, "sub-conv-a", CONVERSATION);
 
     // A delete in tenant B must NOT reach tenant A's subscriber.
-    app.store.deleteObject(b.tenantId, CONVERSATION, "conversation-b");
+    await app.store.deleteObject(b.tenantId, CONVERSATION, "conversation-b");
     expect(await deltasA.maybeNext(150)).toBeUndefined();
 
     // A delete in tenant A does reach tenant A's subscriber.
-    app.store.deleteObject(a.tenantId, CONVERSATION, "conversation-a");
+    await app.store.deleteObject(a.tenantId, CONVERSATION, "conversation-a");
     const delta = await deltasA.next();
     expect(delta.removed).toEqual([{ type: CONVERSATION, id: "conversation-a" }]);
 
@@ -104,7 +104,7 @@ describe("FR-142 object-delete broadcast", () => {
     const deltas = collectDeltas(socket);
     await subscribeObjects(socket, "sub-conv", CONVERSATION);
 
-    const existed = app.store.deleteObject(ada.tenantId, CONVERSATION, "never-existed");
+    const existed = await app.store.deleteObject(ada.tenantId, CONVERSATION, "never-existed");
     expect(existed).toBe(false);
     expect(await deltas.maybeNext(150)).toBeUndefined();
 

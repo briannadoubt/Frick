@@ -47,7 +47,7 @@ export interface NotificationRouter {
   /** Job handler — register with the job worker under {@link PUSH_DELIVER_JOB_TYPE}. */
   handler: FrickJobHandler;
   /** Enqueue an intent for asynchronous delivery. Returns the persisted job row. */
-  enqueueIntent(intent: FrickNotificationIntent): JobRow;
+  enqueueIntent(intent: FrickNotificationIntent): Promise<JobRow>;
   /**
    * Run the router inline against an intent. Exposed for tests and for the
    * rare caller that needs to fan out synchronously (e.g. an admin "send
@@ -70,7 +70,7 @@ export function createNotificationRouter(deps: NotificationRouterOptions): Notif
     const deliveries: FrickPushDelivery[] = [];
     const seen = new Set<string>();
     for (const userId of intent.recipientUserIds) {
-      const registrations = store.pushRegistrations.listByUser(intent.tenantId, userId);
+      const registrations = await store.pushRegistrations.listByUser(intent.tenantId, userId);
       for (const registration of registrations) {
         // De-dupe in the (rare) case a recipient list repeats a user — we
         // don't want two deliveries to the same registration just because
@@ -194,7 +194,7 @@ export function createNotificationRouter(deps: NotificationRouterOptions): Notif
     }
   };
 
-  function enqueueIntent(intent: FrickNotificationIntent): JobRow {
+  async function enqueueIntent(intent: FrickNotificationIntent): Promise<JobRow> {
     return store.jobs.enqueue({
       tenantId: intent.tenantId,
       jobType: PUSH_DELIVER_JOB_TYPE,

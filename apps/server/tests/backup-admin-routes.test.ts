@@ -123,7 +123,7 @@ describe("POST /_frick/admin/restore", () => {
 
   it("round-trips dump output back through restore", async () => {
     app = await startServer();
-    app.store.upsertObject("_default", "User", "user-backup", { displayName: "Backup" });
+    await app.store.upsertObject("_default", "User", "user-backup", { displayName: "Backup" });
     const backup = await fetch(`${app.httpUrl}/_frick/admin/backup`, {
       method: "POST",
       headers: {

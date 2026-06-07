@@ -285,7 +285,7 @@ async function startServer(
   // No `projections` option on createFrickServer; register on the store
   // before listening so the HTTP routes pick them up via the shared registry.
   for (const p of overrides.extraProjections ?? []) {
-    server.store.projections.register(p);
+    await server.store.projections.register(p);
   }
   await server.listen();
   const address = server.server.address();

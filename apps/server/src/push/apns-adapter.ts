@@ -123,7 +123,7 @@ export function createFrickApnsAdapter(options: ApnsAdapterOptions = {}): FrickA
     registration: PushDeviceRegistration,
     ctx: FrickNotificationContext,
   ): Promise<FrickPushDelivery> {
-    const credentialResult = loadApnsCredentials(ctx.store.tenantSettings, ctx.tenantId, env);
+    const credentialResult = await loadApnsCredentials(ctx.store.tenantSettings, ctx.tenantId, env);
     if (!credentialResult.ok) {
       return {
         registration,

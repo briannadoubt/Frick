@@ -80,7 +80,7 @@ describe("@fricken/server package entry", () => {
     });
   }, 30_000);
 
-  it("declares dist exports for the package root and documented push adapter subpaths", () => {
+  it("declares dist exports for the package root and documented push adapter subpaths", async () => {
     const body = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
       main?: string;
       types?: string;
@@ -140,7 +140,7 @@ describe("@fricken/server package entry", () => {
     });
     try {
       expect(app.store.schema.schemaId).toBe("empty-app");
-      expect(app.store.listObjects("User")).toEqual([]);
+      expect(await app.store.listObjects("User")).toEqual([]);
     } finally {
       await app.close();
     }

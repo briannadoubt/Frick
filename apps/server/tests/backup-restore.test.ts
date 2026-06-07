@@ -18,9 +18,9 @@ describe("restoreFrickDatabase", () => {
   it("round-trips object and stream rows through dump/restore", async () => {
     const source = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
     try {
-      source.tenants.create("tenant-alpha");
-      source.upsertObject("tenant-alpha", "User", "user-ada", { displayName: "Ada" });
-      source.appendEvent({
+      await source.tenants.create("tenant-alpha");
+      await source.upsertObject("tenant-alpha", "User", "user-ada", { displayName: "Ada" });
+      await source.appendEvent({
         tenantId: "tenant-alpha",
         requestId: "req-1",
         replicaId: "replica-1",
@@ -41,10 +41,10 @@ describe("restoreFrickDatabase", () => {
         expect(report.rowCountsByType.objects).toBe(1);
         expect(report.rowCountsByType.stream_events).toBe(1);
         expect(report.schemaCompatibility.matched).toBe(true);
-        expect(target.readObject("tenant-alpha", "User", "user-ada")?.displayName).toBe(
+        expect((await target.readObject("tenant-alpha", "User", "user-ada"))?.displayName).toBe(
           "Ada",
         );
-        const events = target.readEvents("tenant-alpha", "MessageStream", "conversation-1", 0);
+        const events = await target.readEvents("tenant-alpha", "MessageStream", "conversation-1", 0);
         expect(events).toHaveLength(1);
         expect(events[0]!.event).toBe("MessageSent");
       } finally {
@@ -58,8 +58,8 @@ describe("restoreFrickDatabase", () => {
   it("round-trips blob derivatives, search indexes, and tenant settings", async () => {
     const source = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
     try {
-      source.tenants.create("tenant-alpha");
-      source.blobDerivatives.record({
+      await source.tenants.create("tenant-alpha");
+      await source.blobDerivatives.record({
         tenantId: "tenant-alpha",
         parentBlobId: "blob-parent-alpha",
         derivativeId: "thumb",
@@ -76,7 +76,7 @@ describe("restoreFrickDatabase", () => {
         text: "alpha secret",
         fields: { senderId: "user-alpha" },
       });
-      source.tenantSettings.set("tenant-alpha", "retentionMs", 1234);
+      await source.tenantSettings.set("tenant-alpha", "retentionMs", 1234);
 
       const lines = await dumpToLines(source, "tenant-alpha");
       const target = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
@@ -90,7 +90,7 @@ describe("restoreFrickDatabase", () => {
         expect(report.rowCountsByType.search_indexes).toBe(1);
         expect(report.rowCountsByType.tenant_settings).toBe(1);
 
-        const derivative = target.blobDerivatives.read(
+        const derivative = await target.blobDerivatives.read(
           "blob-parent-alpha",
           "thumb",
           "tenant-alpha",
@@ -104,7 +104,7 @@ describe("restoreFrickDatabase", () => {
             limit: 10,
           }).total,
         ).toBe(1);
-        expect(target.tenantSettings.get("tenant-alpha", "retentionMs")).toBe(1234);
+        expect(await target.tenantSettings.get("tenant-alpha", "retentionMs")).toBe(1234);
       } finally {
         target.close();
       }
@@ -116,7 +116,7 @@ describe("restoreFrickDatabase", () => {
   it("round-trips platform events and delivery state", async () => {
     const source = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
     try {
-      source.tenants.create("tenant-alpha");
+      await source.tenants.create("tenant-alpha");
       const receipt = await source.platformEvents.publish({
         family: "analytics.user_event",
         name: "message.sent",
@@ -162,7 +162,7 @@ describe("restoreFrickDatabase", () => {
     try {
       // Default seeding no longer populates the foundation, so explicitly
       // make the target non-empty before attempting a no-overwrite restore.
-      target.upsertObject("_default", "User", "user-existing", { displayName: "Existing" });
+      await target.upsertObject("_default", "User", "user-existing", { displayName: "Existing" });
       const lines = await dumpToLines(source, "_default");
       await expect(
         restoreFrickDatabase({
@@ -181,8 +181,8 @@ describe("restoreFrickDatabase", () => {
     const source = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
     const target = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
     try {
-      source.upsertObject("_default", "User", "user-source", { displayName: "Source" });
-      target.upsertObject("_default", "User", "user-stale", { displayName: "Stale" });
+      await source.upsertObject("_default", "User", "user-source", { displayName: "Source" });
+      await target.upsertObject("_default", "User", "user-stale", { displayName: "Stale" });
       const lines = await dumpToLines(source, "_default");
       const report = await restoreFrickDatabase({
         target,
@@ -191,8 +191,8 @@ describe("restoreFrickDatabase", () => {
         overwrite: true,
       });
       expect(report.rowCountsByType.objects).toBe(1);
-      expect(target.readObject("_default", "User", "user-stale")).toBeUndefined();
-      expect(target.readObject("_default", "User", "user-source")?.displayName).toBe("Source");
+      expect(await target.readObject("_default", "User", "user-stale")).toBeUndefined();
+      expect((await target.readObject("_default", "User", "user-source"))?.displayName).toBe("Source");
     } finally {
       source.close();
       target.close();
@@ -241,7 +241,7 @@ describe("restoreFrickDatabase", () => {
   it("reports malformed rows in skipped without aborting", async () => {
     const source = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
     try {
-      source.upsertObject("_default", "User", "user-ok", { displayName: "OK" });
+      await source.upsertObject("_default", "User", "user-ok", { displayName: "OK" });
       const lines = await dumpToLines(source, "_default");
       // Inject one malformed row plus one row with an unknown table type.
       const withBadRows = [
@@ -272,8 +272,8 @@ describe("restoreFrickDatabase", () => {
   it("refuses a tenant-scoped restore row whose tenant_id does not match the header", async () => {
     const source = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
     try {
-      source.tenants.create("tenant-alpha");
-      source.upsertObject("tenant-alpha", "User", "user-alpha", { displayName: "Alpha" });
+      await source.tenants.create("tenant-alpha");
+      await source.upsertObject("tenant-alpha", "User", "user-alpha", { displayName: "Alpha" });
       const lines = await dumpToLines(source, "tenant-alpha");
       const mismatchedRow = JSON.stringify({
         type: "objects",
@@ -295,7 +295,7 @@ describe("restoreFrickDatabase", () => {
             confirm: "yes",
           }),
         ).rejects.toMatchObject({ reason: "tenantScopeMismatch" });
-        expect(target.readObject("tenant-beta", "User", "user-beta")).toBeUndefined();
+        expect(await target.readObject("tenant-beta", "User", "user-beta")).toBeUndefined();
       } finally {
         target.close();
       }
@@ -307,7 +307,7 @@ describe("restoreFrickDatabase", () => {
   it("skips rows with columns outside the target table schema before insert SQL is built", async () => {
     const source = new FrickStore({ path: ":memory:", seed: false, schema: productTestSchema });
     try {
-      source.tenants.create("tenant-alpha");
+      await source.tenants.create("tenant-alpha");
       const lines = await dumpToLines(source, "tenant-alpha");
       const invalidRow = JSON.stringify({
         type: "objects",
@@ -335,9 +335,9 @@ describe("restoreFrickDatabase", () => {
               "invalidColumn: objects.object_id\") VALUES ('x'); DROP TABLE objects; --",
           }),
         );
-        expect(target.readObject("tenant-alpha", "User", "user-bad")).toBeUndefined();
-        target.upsertObject("tenant-alpha", "User", "user-ok", { displayName: "OK" });
-        expect(target.readObject("tenant-alpha", "User", "user-ok")?.displayName).toBe("OK");
+        expect(await target.readObject("tenant-alpha", "User", "user-bad")).toBeUndefined();
+        await target.upsertObject("tenant-alpha", "User", "user-ok", { displayName: "OK" });
+        expect((await target.readObject("tenant-alpha", "User", "user-ok"))?.displayName).toBe("OK");
       } finally {
         target.close();
       }

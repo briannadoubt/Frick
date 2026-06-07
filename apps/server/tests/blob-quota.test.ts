@@ -94,13 +94,13 @@ describe("per-principal blob quota", () => {
     expect(body.error.details?.configuredMax).toBe(100);
 
     // The rejected blob must not have been persisted (metadata or bytes).
-    expect(app.store.blobs.read(session.tenantId, "a-2")).toBeUndefined();
+    expect(await app.store.blobs.read(session.tenantId, "a-2")).toBeUndefined();
     const get = await fetch(`${app.httpUrl}/blobs/a-2/content`, {
       headers: { authorization: `Bearer ${session.sessionToken}` },
     });
     expect(get.status).toBe(404);
     // Usage is unchanged by the rejected upload.
-    expect(app.store.blobs.totalBytesForOwner(session.tenantId, session.userId)).toBe(60);
+    expect(await app.store.blobs.totalBytesForOwner(session.tenantId, session.userId)).toBe(60);
   });
 
   it("accepts a blob that exactly fills the remaining budget but not one byte more", async () => {
@@ -134,14 +134,14 @@ describe("per-principal blob quota", () => {
     // the upload route trusts.
     app = await startServer({ maxBlobBytesPerPrincipal: 100 });
     const store = app.store;
-    store.blobs.create("tenant-a", {
+    await store.blobs.create("tenant-a", {
       blobId: "blob-1",
       ownerId: "user-1",
       contentHash: "hash-1",
       byteLength: 70,
       mimeType: "application/octet-stream",
     });
-    store.blobs.create("tenant-b", {
+    await store.blobs.create("tenant-b", {
       blobId: "blob-2",
       ownerId: "user-1",
       contentHash: "hash-2",
@@ -149,10 +149,10 @@ describe("per-principal blob quota", () => {
       mimeType: "application/octet-stream",
     });
 
-    expect(store.blobs.totalBytesForOwner("tenant-a", "user-1")).toBe(70);
-    expect(store.blobs.totalBytesForOwner("tenant-b", "user-1")).toBe(30);
+    expect(await store.blobs.totalBytesForOwner("tenant-a", "user-1")).toBe(70);
+    expect(await store.blobs.totalBytesForOwner("tenant-b", "user-1")).toBe(30);
     // A different owner in tenant-a has no usage.
-    expect(store.blobs.totalBytesForOwner("tenant-a", "user-2")).toBe(0);
+    expect(await store.blobs.totalBytesForOwner("tenant-a", "user-2")).toBe(0);
   });
 
   it("does not double-count a same-id re-upload", async () => {
@@ -165,7 +165,7 @@ describe("per-principal blob quota", () => {
     // new usage; the projected total stays 80, under the cap.
     const reupload = await uploadBlob(app.httpUrl, session.sessionToken, "a-1", bytes, session.userId);
     expect(reupload.status).toBe(200);
-    expect(app.store.blobs.totalBytesForOwner(session.tenantId, session.userId)).toBe(80);
+    expect(await app.store.blobs.totalBytesForOwner(session.tenantId, session.userId)).toBe(80);
   });
 
   it("leaves uploads unbounded by default and reports quota null in listing", async () => {

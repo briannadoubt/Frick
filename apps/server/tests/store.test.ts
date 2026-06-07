@@ -4,19 +4,19 @@ import { FrickStore } from "../src/store.js";
 
 let store: FrickStore | undefined;
 
-afterEach(() => {
+afterEach(async () => {
   store?.close();
   store = undefined;
 });
 
 describe("FrickStore foundation storage", () => {
-  it("backwards-paginates events via readEventsBefore for scrollback", () => {
+  it("backwards-paginates events via readEventsBefore for scrollback", async () => {
     store = new FrickStore({ path: ":memory:", seed: true , schema: productTestSchema });
     const DEFAULT_TENANT_ID = "_default";
 
     // Seed 8 message events on the same conversation.
     for (let i = 1; i <= 8; i++) {
-      store.appendEvent({
+      await store.appendEvent({
         requestId: `request-${i}`,
         replicaId: "replica-1",
         stream: "MessageStream",
@@ -32,7 +32,7 @@ describe("FrickStore foundation storage", () => {
     }
 
     // Latest 3 events (sequence 6, 7, 8) — oldest-first ordering.
-    const latest = store.readEventsBefore(
+    const latest = await store.readEventsBefore(
       DEFAULT_TENANT_ID,
       "MessageStream",
       "conversation-general",
@@ -43,7 +43,7 @@ describe("FrickStore foundation storage", () => {
     expect(latest.map((e) => e.sequence)).toEqual([6, 7, 8]);
 
     // Scrollback older than what we just read.
-    const older = store.readEventsBefore(
+    const older = await store.readEventsBefore(
       DEFAULT_TENANT_ID,
       "MessageStream",
       "conversation-general",
@@ -54,7 +54,7 @@ describe("FrickStore foundation storage", () => {
     expect(older.every((e) => e.stream === "MessageStream")).toBe(true);
 
     // Limit is clamped to >= 1.
-    const clamped = store.readEventsBefore(
+    const clamped = await store.readEventsBefore(
       DEFAULT_TENANT_ID,
       "MessageStream",
       "conversation-general",
@@ -64,17 +64,17 @@ describe("FrickStore foundation storage", () => {
     expect(clamped).toHaveLength(1);
   });
 
-  it("stores objects and appends ordered stream events", () => {
+  it("stores objects and appends ordered stream events", async () => {
     store = new FrickStore({ path: ":memory:", seed: true, schema: productTestSchema });
     // Default seeding no longer populates the foundation; explicitly upsert
     // a User so the readObject assertion below still exercises the round-
     // trip path it cares about.
-    store.upsertObject("User", "user-ada", { displayName: "Ada Lovelace" });
+    await store.upsertObject("User", "user-ada", { displayName: "Ada Lovelace" });
 
-    const user = store.readObject("User", "user-ada");
+    const user = await store.readObject("User", "user-ada");
     expect(user?.displayName).toBe("Ada Lovelace");
 
-    const result = store.appendEvent({
+    const result = await store.appendEvent({
       requestId: "request-1",
       replicaId: "replica-1",
       stream: "MessageStream",
@@ -90,14 +90,14 @@ describe("FrickStore foundation storage", () => {
 
     expect(result.created).toBe(true);
     expect(result.event.sequence).toBe(1);
-    expect(store.readEvents("MessageStream", "conversation-general", 0)).toHaveLength(1);
+    expect(await store.readEvents("MessageStream", "conversation-general", 0)).toHaveLength(1);
   });
 
-  it("bounds forward event reads when a limit is provided", () => {
+  it("bounds forward event reads when a limit is provided", async () => {
     store = new FrickStore({ path: ":memory:", seed: true , schema: productTestSchema });
 
     for (let i = 1; i <= 5; i++) {
-      store.appendEvent({
+      await store.appendEvent({
         requestId: `request-forward-${i}`,
         replicaId: "replica-1",
         stream: "MessageStream",
@@ -112,10 +112,10 @@ describe("FrickStore foundation storage", () => {
       });
     }
 
-    const events = store.readEvents("MessageStream", "conversation-general", 1, 2);
+    const events = await store.readEvents("MessageStream", "conversation-general", 1, 2);
     expect(events.map((event) => event.sequence)).toEqual([2, 3]);
 
-    const tenantEvents = store.readEvents(
+    const tenantEvents = await store.readEvents(
       "_default",
       "MessageStream",
       "conversation-general",
@@ -125,7 +125,7 @@ describe("FrickStore foundation storage", () => {
     expect(tenantEvents.map((event) => event.sequence)).toEqual([3, 4]);
   });
 
-  it("deduplicates appends by replica and request id", () => {
+  it("deduplicates appends by replica and request id", async () => {
     store = new FrickStore({ path: ":memory:", seed: true , schema: productTestSchema });
 
     const input = {
@@ -142,22 +142,22 @@ describe("FrickStore foundation storage", () => {
       },
     };
 
-    const first = store.appendEvent(input);
-    const second = store.appendEvent(input);
+    const first = await store.appendEvent(input);
+    const second = await store.appendEvent(input);
 
     expect(first.created).toBe(true);
     expect(second.created).toBe(false);
     expect(second.event.eventId).toBe(first.event.eventId);
-    expect(store.readEvents("MessageStream", "conversation-general", 0)).toHaveLength(1);
+    expect(await store.readEvents("MessageStream", "conversation-general", 0)).toHaveLength(1);
   });
 
-  it("preserves idempotency when the front cache evicts the entry", () => {
+  it("preserves idempotency when the front cache evicts the entry", async () => {
     // Capacity of 1 forces the original request's cache entry to be evicted
     // by the second distinct request. The repeated append of request-1 must
     // still resolve to the same eventId by falling through to SQLite.
     store = new FrickStore({ path: ":memory:", seed: true, idempotencyCacheCapacity: 1 , schema: productTestSchema });
 
-    const first = store.appendEvent({
+    const first = await store.appendEvent({
       requestId: "request-1",
       replicaId: "replica-1",
       stream: "MessageStream",
@@ -172,7 +172,7 @@ describe("FrickStore foundation storage", () => {
     });
 
     // Different requestId — evicts request-1 from the front cache.
-    store.appendEvent({
+    await store.appendEvent({
       requestId: "request-2",
       replicaId: "replica-1",
       stream: "MessageStream",
@@ -189,7 +189,7 @@ describe("FrickStore foundation storage", () => {
     expect(store.idempotencyCache.evictions).toBeGreaterThan(0);
 
     // Replaying request-1 must still hit the durable idempotency table.
-    const replay = store.appendEvent({
+    const replay = await store.appendEvent({
       requestId: "request-1",
       replicaId: "replica-1",
       stream: "MessageStream",
@@ -207,31 +207,31 @@ describe("FrickStore foundation storage", () => {
     expect(replay.event.sequence).toBe(first.event.sequence);
   });
 
-  it("stores presence leases, signal envelopes, blob metadata, and jobs", () => {
+  it("stores presence leases, signal envelopes, blob metadata, and jobs", async () => {
     store = new FrickStore({ path: ":memory:", seed: true , schema: productTestSchema });
 
-    store.setPresence("TypingState", "conversation-general:user-ada:device-1", { isTyping: true }, 5000);
-    store.enqueueSignal("WebRTCSignal", "call-1", {
+    await store.setPresence("TypingState", "conversation-general:user-ada:device-1", { isTyping: true }, 5000);
+    await store.enqueueSignal("WebRTCSignal", "call-1", {
       senderDeviceId: "device-1",
       kind: "offer",
       payload: new Uint8Array([1]),
     });
-    store.createBlobMetadata({
+    await store.createBlobMetadata({
       blobId: "blob-1",
       ownerId: "user-ada",
       contentHash: "sha256-demo",
       byteLength: 10,
       mimeType: "text/plain",
     });
-    store.enqueueJob("PushNotificationJob", {
+    await store.enqueueJob("PushNotificationJob", {
       recipientUserId: "user-grace",
       kind: "message",
       payload: "{}",
     });
 
-    expect(store.readPresence("TypingState", "conversation-general:user-ada:device-1")?.isTyping).toBe(true);
-    expect(store.drainSignals("WebRTCSignal", "call-1")).toHaveLength(1);
-    expect(store.readBlobMetadata("blob-1")?.mimeType).toBe("text/plain");
-    expect(store.nextJob("PushNotificationJob")?.name).toBe("PushNotificationJob");
+    expect((await store.readPresence("TypingState", "conversation-general:user-ada:device-1"))?.isTyping).toBe(true);
+    expect(await store.drainSignals("WebRTCSignal", "call-1")).toHaveLength(1);
+    expect((await store.readBlobMetadata("blob-1"))?.mimeType).toBe("text/plain");
+    expect((await store.nextJob("PushNotificationJob"))?.name).toBe("PushNotificationJob");
   });
 });
