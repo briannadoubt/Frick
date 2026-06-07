@@ -1065,7 +1065,7 @@ export function createIdentityRouter(
     const primaryTenantId =
       (user[userObject.primaryTenantField] as string | undefined) ??
       await findPrimaryTenantForUser(options.store, user.id);
-    const account = options.store.verifyAccountPassword(primaryTenantId, email, password);
+    const account = await options.store.verifyAccountPassword(primaryTenantId, email, password);
     if (!account) {
       sendJson(res, 401, { error: "invalid_credentials" });
       return;

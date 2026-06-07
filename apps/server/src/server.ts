@@ -3733,7 +3733,7 @@ async function handleAdminRoute(
   if (request.method === "GET" && settingsListMatch) {
     const tenantId = decodeURIComponent(settingsListMatch[1]!);
     try {
-      const settings = store.tenantSettings.list(tenantId);
+      const settings = await store.tenantSettings.list(tenantId);
       audit({ action: "tenants.settings.list", target: tenantId, outcome: "allow" });
       sendJson(response, 200, { tenantId, settings });
     } catch (error) {
@@ -3772,7 +3772,7 @@ async function handleAdminRoute(
         target: `${tenantId}/${settingKey}`,
         outcome: "allow",
       });
-      store.tenantSettings.set(tenantId, settingKey, value);
+      await store.tenantSettings.set(tenantId, settingKey, value);
       sendJson(response, 200, { tenantId, key: settingKey, value });
     } catch (error) {
       if (!(error instanceof AdminAuditWriteError)) {
