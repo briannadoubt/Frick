@@ -34,6 +34,8 @@ dependencies {
     implementation(project(":frick"))
     implementation("androidx.compose.runtime:runtime")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
+
+    testImplementation("junit:junit:4.13.2")
 }
 
 tasks.withType<KotlinJvmCompile>().configureEach {
