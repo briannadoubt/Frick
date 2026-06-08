@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJC2025ERBDMJ1D1HCCGW8N",
+  "ts": "2026-06-08T01:02:52.485Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTGAQ3TKFSGTCH5AEMMMDPTX",
+    "field": "branch",
+    "value": "feat/fr144-native-removed"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJC2JTQJHAWVACG5SHMKF6A",
+  "ts": "2026-06-08T01:03:11.703Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTGAQ3TKFSGTCH5AEMMMDPTX",
+    "commentId": "01KTJC2JTQJHAWVACG5SHMKF69",
+    "author": "claude",
+    "body": "Native parity for Delta.removed. Swift: handleDelta parses removed and yields additive FrickInboundEvent.objectsRemoved([FrickObjectRemoval], cursor) when non-empty (new FrickObjectRemoval struct type/id), alongside existing .objectsDelta. Android: FrickInboundEvent.Delta gains removed: List<ObjectRemoval> (new ObjectRemoval data class, default empty for back-compat), populated by the DELTA handler via decodeObjectRemoval. Both additive. Tests added on both sides. Gates: swift test 63 passed (was 62); gradle :frick:testDebugUnitTest BUILD SUCCESSFUL; pnpm typecheck exit 0."
+  }
+}
