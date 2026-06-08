@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJ8XF7TZTPQCZF2GZHWVGV2",
+  "ts": "2026-06-08T00:07:58.458Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3R",
+    "commentId": "01KTJ8XF7TZTPQCZF2GZHWVGV1",
+    "author": "claude",
+    "body": "Shipped perf-budget checker + NDJSON trend tracking on the FR-97/98 suites. Declarative thresholds (p99 ceilings, throughput floor, memory-growth ceiling) judged into a machine-readable PASS/FAIL verdict (missing metric fails closed); appendHistory/readHistory/compareToBaseline record + diff runs. New  CLI subcommand + pnpm bench:budget (--history/--no-history/--no-fail/--meta). Opt-in non-blocking CI step gated on workflow_dispatch. New apps/server/tests/perf-budget.test.ts (9 tests, <1.5s). typecheck clean; full vitest 1209 passed / 45 skipped."
+  }
+}
