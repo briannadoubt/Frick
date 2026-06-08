@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJSHKKPR5S5C43ETNKQSWCA",
+  "ts": "2026-06-08T04:58:35.510Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ34",
+    "field": "branch",
+    "value": "feat/fr15-phase2-swift-call-client"
+  }
+}
