@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJHXFEKJBTR8NDV9D43Q22F",
+  "ts": "2026-06-08T02:45:15.859Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3A",
+    "field": "branch",
+    "value": "feat/fr86-web-shell"
+  }
+}

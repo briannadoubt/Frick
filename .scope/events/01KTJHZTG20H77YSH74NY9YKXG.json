@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJHZTG20H77YSH74NY9YKXG",
+  "ts": "2026-06-08T02:46:32.706Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3A",
+    "commentId": "01KTJHZTG1EQ0VH5754NPNBFRF",
+    "author": "claude",
+    "body": "Verified the web WorkspaceShell against the workspace-shell spec: semantic slots (destinations/collection/content/inspector), accessible DOM order, nav aria-label='Workspace destinations' + aria-current='page', labelled inspector close, and three responsive CSS tiers (compact <=640px bottom bar + drawers via data-compact-collection-visible; tablet >=641px sidebar; desktop >=1041px rail+sidebar+content+inspector). Implementation already fully satisfied the spec; no component gap. Added test coverage in apps/web/src/workspace-shell.test.tsx for DOM order, inspector close label, no-inspector usability, and the breakpoint contract. Gate green: typecheck exit 0, design-web 73 passed, web source 28 passed. (apps/web/dist is gitignored build cruft re-emitted by tsc -b; source src/ tests authoritative.)"
+  }
+}
