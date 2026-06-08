@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJRJK5VP970261RS6VY7WKN",
+  "ts": "2026-06-08T04:41:39.259Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3X",
+    "commentId": "01KTJRJK5VP970261RS6VY7WKM",
+    "author": "claude",
+    "body": "Shipped design doc (docs/multi-region.md) + the federation adapter seam. Design: bus is single-region today (each region has its own intra-region Redis); chose a MESH transport (lowest latency, no SPOF, small region count) with the loop guard baked into the seam so hub-and-spoke also works; cross-region messages tagged with originRegionId for loop prevention; ordering/consistency deliberately weak (best-effort realtime fan-out, NOT replication). Seam (apps/server/src/cluster/region-bus.ts): FrickRegionBus (publish-to-peers/subscribe-from-peers, regionId), RegionEnvelope (wraps existing ClusterEnvelope + originRegionId), MemoryRegionBus+MemoryRegionFabric (in-memory federation harness = analogue of MemoryClusterBus/MemoryClusterChannel), and FederatingClusterBus which COMPOSES a region's intra-region FrickClusterBus with a FrickRegionBus and presents the same FrickClusterBus to the gateway (gateway unaware). Additive: single-region server wires no region bus, unchanged. Tests (region-bus.test.ts): A->B delivery, no re-delivery to origin region incl 3-region mesh, unchanged intra-region fan-out, no-region-bus path. Deferred: FR-106 (write-region routing + conflict handling / per-region-primary ownership) and FR-107 (region-aware failover + LB integration) — both referenced as explicit follow-ups in the doc; no real cross-region infra adapter in this deliverable. Gate green: typecheck exit 0, server vitest 1015 passed 0 failures."
+  }
+}
