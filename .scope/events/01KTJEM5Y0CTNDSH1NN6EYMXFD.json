@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJEM5Y0CTNDSH1NN6EYMXFD",
+  "ts": "2026-06-08T01:47:45.472Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTG9BWY3WPEVR56EHJ1E9XFY",
+    "commentId": "01KTJEM5Y0CTNDSH1NN6EYMXFC",
+    "author": "claude",
+    "body": "Reset to backlog: a parallel attempt was interrupted with incomplete/non-compiling work (never merged). Start fresh on top of FR-136's FrickStore<Model>."
+  }
+}

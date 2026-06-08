@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJE4EB856E791WZF8Q1S149",
+  "ts": "2026-06-08T01:39:09.800Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTG9BWY3WPEVR56EHJ1E9XFY",
+    "field": "branch",
+    "value": "feat/fr137-138-swift-registry-query"
+  }
+}
