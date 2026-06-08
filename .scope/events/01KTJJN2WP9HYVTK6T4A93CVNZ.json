@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJJN2WP9HYVTK6T4A93CVNZ",
+  "ts": "2026-06-08T02:58:09.430Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ17",
+    "commentId": "01KTJJN2WP9HYVTK6T4A93CVNY",
+    "author": null,
+    "body": "All children done (incl. FR-102 dynamic type/text scaling, a11y contract + localization). Native components honor platform text scaling; a11y contract documented in docs/accessibility.md."
+  }
+}

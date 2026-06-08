@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJJN2S0H1825481NJB1G92R",
+  "ts": "2026-06-08T02:58:09.312Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ15",
+    "commentId": "01KTJJN2S0H1825481NJB1G92Q",
+    "author": null,
+    "body": "All children done (incl. FR-91/92 iOS+Android Phase-1 component parity, FR-93/102/103). Native design packages now cover the Phase-1 component set consuming generated tokens; Dynamic Type honored."
+  }
+}
