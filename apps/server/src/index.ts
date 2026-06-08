@@ -3,6 +3,20 @@ export { createFrickServer, defaultDatabasePath, type FrickAppRoute, type Server
 // plus the SQLite implementation. Exported so out-of-tree adapters/tests can
 // construct stores; the Postgres adapter implements the same interface.
 export { SqliteSqlDriver, createSqlDriver, type SqlDriver } from "./storage/sql-driver.js";
+// Blob-bytes storage drivers (FR-53/FR-54). `createS3BlobBytesDriver` lazily
+// imports the optional `@aws-sdk/client-s3` SDK; build it and inject via
+// `createFrickServer({ blobBytesDriver })` when running `FRICK_BLOB_DRIVER=s3`.
+export {
+  SqlBlobBytesDriver,
+  FilesystemBlobBytesDriver,
+  S3BlobBytesDriver,
+  FrickBlobStorageError,
+  createBlobBytesDriver,
+  createS3BlobBytesDriver,
+  type BlobBytesDriver,
+  type S3LikeClient,
+  type S3BlobBytesDriverConfig,
+} from "./storage/blob-bytes-driver.js";
 // Postgres implementation of the same SqlDriver seam (FR-119).
 export {
   PgSqlDriver,

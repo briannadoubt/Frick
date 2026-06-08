@@ -20,6 +20,7 @@ import { AdminAuditStore } from "./storage/admin-audit-store.js";
 import { BlobStore, type BlobMetadata, type BlobMetadataInput } from "./storage/blob-store.js";
 import {
   createBlobBytesDriver,
+  type BlobBytesDriver,
   type FrickBlobDriver,
 } from "./storage/blob-bytes-driver.js";
 import { BlobDerivativeStore } from "./storage/blob-derivative-store.js";
@@ -156,10 +157,11 @@ export interface StoreOptions {
    */
   passwordHasher?: FrickPasswordHasherId | FrickPasswordHasher;
   /**
-   * Blob-bytes storage driver (FR-53). `sqlite` (the default) keeps blob bytes
-   * in the SQLite `blob_content` table; `filesystem` writes them under
-   * {@link StoreOptions.blobStoragePath}. Blob metadata always lives in SQLite
-   * regardless of this setting.
+   * Blob-bytes storage driver (FR-53/FR-54). `sqlite` (the default) keeps blob
+   * bytes in the SQLite `blob_content` table; `filesystem` writes them under
+   * {@link StoreOptions.blobStoragePath}; `s3` stores them in an S3-compatible
+   * object store (pass the pre-built driver via {@link StoreOptions.blobS3Driver}).
+   * Blob metadata always lives in SQLite regardless of this setting.
    */
   blobDriver?: FrickBlobDriver;
   /**
@@ -167,6 +169,14 @@ export interface StoreOptions {
    * when {@link StoreOptions.blobDriver} is `filesystem`; ignored otherwise.
    */
   blobStoragePath?: string;
+  /**
+   * Pre-built S3 bytes driver (FR-54). Required when
+   * {@link StoreOptions.blobDriver} is `s3`. The driver is built asynchronously
+   * (it lazily imports the AWS SDK) via `createS3BlobBytesDriver`, so it cannot
+   * be constructed inside this synchronous store constructor — the server builds
+   * it during its async setup and injects it here.
+   */
+  blobS3Driver?: BlobBytesDriver;
   /**
    * Capacity of the in-process LRU front cache for idempotency lookups.
    * Defaults to {@link DEFAULT_IDEMPOTENCY_CACHE_CAPACITY}. Eviction is purely
@@ -461,6 +471,7 @@ export class FrickStore {
         driver: options.blobDriver ?? "sqlite",
         db: sql,
         blobStoragePath: options.blobStoragePath,
+        s3Driver: options.blobS3Driver,
       }),
     );
     this.blobDerivatives = new BlobDerivativeStore(sql);

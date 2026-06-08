@@ -58,8 +58,12 @@ All variables are optional. Defaults match the runtime mode.
 | `FRICK_DB_DRIVER`           | `sqlite`                    | `sqlite`                              | Durable-storage driver selector. One of `sqlite` or `postgres`. `postgres` requires `FRICK_DATABASE_URL`, but the server runtime still constructs the SQLite-backed stores; Postgres currently covers the standalone migration/schema runner while runtime store ports are in progress. |
 | `FRICK_DB_PATH`             | `./frick.sqlite`            | `./frick.sqlite`                      | SQLite path (used by the `sqlite` driver). `":memory:"` is rejected in production. |
 | `FRICK_DATABASE_URL`        | unset                       | unset                                 | Postgres connection string for the standalone Postgres migration/schema runner. Required when `FRICK_DB_DRIVER=postgres`; ignored by the `sqlite` runtime store. |
-| `FRICK_BLOB_DRIVER`         | `sqlite`                    | `sqlite`                              | Blob-bytes storage driver. One of `sqlite` or `filesystem`. `sqlite` keeps blob bytes in the SQLite `blob_content` table; `filesystem` stores them under `FRICK_BLOB_STORAGE_PATH` in tenant-isolated, id-keyed files. Blob metadata always stays in SQLite. Selecting `filesystem` without a writable `FRICK_BLOB_STORAGE_PATH` fails fast at startup. |
+| `FRICK_BLOB_DRIVER`         | `sqlite`                    | `sqlite`                              | Blob-bytes storage driver. One of `sqlite`, `filesystem`, or `s3`. `sqlite` keeps blob bytes in the SQLite `blob_content` table; `filesystem` stores them under `FRICK_BLOB_STORAGE_PATH` in tenant-isolated, id-keyed files; `s3` stores them in an S3-compatible object store under a tenant-isolated key prefix (see "Object-storage blob driver" below). Blob metadata always stays in SQLite. Selecting `filesystem` without a writable `FRICK_BLOB_STORAGE_PATH`, or `s3` without `FRICK_BLOB_S3_BUCKET`, fails fast at startup. |
 | `FRICK_BLOB_STORAGE_PATH`   | `./frick-blobs/`            | `./frick-blobs/`                      | Filesystem root for blob bytes. Used by the `filesystem` blob driver; inert under the default `sqlite` driver. Must be a writable directory when `FRICK_BLOB_DRIVER=filesystem`. |
+| `FRICK_BLOB_S3_BUCKET`      | unset                       | unset                                 | Target bucket for the `s3` blob driver. Required when `FRICK_BLOB_DRIVER=s3`; inert otherwise. |
+| `FRICK_BLOB_S3_REGION`      | unset                       | unset                                 | AWS region for the `s3` blob driver. Optional for S3-compatible stores that ignore it. |
+| `FRICK_BLOB_S3_ENDPOINT`    | unset                       | unset                                 | Custom endpoint for an S3-compatible store (MinIO, Cloudflare R2, DigitalOcean Spaces, …). Omit for real AWS S3. Setting it defaults path-style addressing on. |
+| `FRICK_BLOB_S3_PREFIX`      | unset                       | unset                                 | Key prefix every blob object lives under in the bucket. Optional. |
 | `FRICK_LOG_LEVEL`           | `info`                      | `info`                                | One of `debug`, `info`, `warn`, `error`.                             |
 | `FRICK_OTEL_ENABLED`        | `true` when an OTLP endpoint is set; otherwise `false` | same | Enables the built-in OpenTelemetry SDK runtime.                      |
 | `FRICK_OTEL_SERVICE_NAME`   | `frick-server`              | `frick-server`                        | OTel service name. Falls back to `OTEL_SERVICE_NAME` when set.        |
@@ -86,6 +90,43 @@ All variables are optional. Defaults match the runtime mode.
 Validation errors throw `FrickConfigError` at startup, before any port is
 opened. Unknown env values (e.g. `FRICK_ENV=staging`) are fatal — the
 server refuses to boot.
+
+## Object-storage blob driver
+
+Setting `FRICK_BLOB_DRIVER=s3` (FR-54) moves blob *bytes* from SQLite into any
+S3-compatible object store — AWS S3, MinIO, Cloudflare R2, DigitalOcean Spaces,
+etc. — while blob *metadata* stays in SQLite. Bytes are written under a
+tenant-isolated, content-addressed key prefix (the same collision-free,
+traversal-proof encoding the `filesystem` driver uses), so a crafted blob id can
+never reach another tenant's objects.
+
+The AWS SDK (`@aws-sdk/client-s3`) is an **optional** dependency, imported lazily
+only when the s3 driver is built — `sqlite`/`filesystem` deployments never load
+it. Because the SDK import is asynchronous and the store constructor is
+synchronous, the s3 driver is built by the host process and injected, exactly
+like a `RedisClusterBus`:
+
+```ts
+import { createFrickServer, createS3BlobBytesDriver } from "@fricken/server";
+
+const blobBytesDriver = await createS3BlobBytesDriver({
+  bucket: process.env.FRICK_BLOB_S3_BUCKET!,
+  region: process.env.FRICK_BLOB_S3_REGION,
+  endpoint: process.env.FRICK_BLOB_S3_ENDPOINT, // omit for real AWS S3
+  prefix: process.env.FRICK_BLOB_S3_PREFIX,
+  // credentials default to the AWS provider chain; pass accessKeyId /
+  // secretAccessKey to override.
+});
+
+const server = createFrickServer({ blobBytesDriver });
+```
+
+`createS3BlobBytesDriver` also accepts `forcePathStyle` (defaults to `true` when
+a custom `endpoint` is set — most S3-compatible stores need it) and static
+`accessKeyId`/`secretAccessKey`. Selecting `FRICK_BLOB_DRIVER=s3` without
+injecting a driver throws at construction; selecting it without
+`FRICK_BLOB_S3_BUCKET` fails fast at config load. SQLite remains the default, so
+this is fully opt-in.
 
 ## Local runtime profiles
 

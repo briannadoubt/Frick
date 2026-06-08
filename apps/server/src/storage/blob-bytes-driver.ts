@@ -22,13 +22,19 @@ import type { SqlDriver } from "./sql-driver.js";
  *   as before this seam existed. Behavior is byte-for-byte unchanged.
  * - `filesystem`: bytes live under `FRICK_BLOB_STORAGE_PATH`, in
  *   tenant-isolated, id-keyed files. Metadata still lives in SQLite.
+ * - `s3` (FR-54): bytes live in an S3-compatible object store under a
+ *   tenant-isolated key prefix. Metadata still lives in SQLite. The AWS SDK is
+ *   an *optional* dependency, imported lazily by `createS3BlobBytesDriver`; the
+ *   driver itself only depends on a tiny injected client interface
+ *   ({@link S3LikeClient}) so it stays testable without real AWS.
  *
  * Every method is tenant-scoped. A driver MUST NOT let one tenant read, write,
  * or delete another tenant's bytes — the filesystem driver enforces this by
  * rooting each tenant under its own subdirectory and sanitizing identifiers
- * before they ever touch a path.
+ * before they ever touch a path; the S3 driver enforces it by deriving every
+ * object key from a content-addressed, per-tenant prefix.
  */
-export type FrickBlobDriver = "sqlite" | "filesystem";
+export type FrickBlobDriver = "sqlite" | "filesystem" | "s3";
 
 export interface BlobBytesDriver {
   /** Persist (or overwrite) the bytes for `(tenantId, blobId)`. */
@@ -216,6 +222,14 @@ export function createBlobBytesDriver(options: {
   driver: FrickBlobDriver;
   db: SqlDriver;
   blobStoragePath?: string | undefined;
+  /**
+   * Pre-built S3 bytes driver. The S3 driver needs the AWS SDK, which is
+   * imported asynchronously by {@link createS3BlobBytesDriver}; the store
+   * constructor is synchronous and cannot await, so when `driver === "s3"` the
+   * already-constructed driver is injected here (the server builds it during
+   * its async `listen()` setup and threads it through `StoreOptions`).
+   */
+  s3Driver?: BlobBytesDriver | undefined;
 }): BlobBytesDriver {
   if (options.driver === "filesystem") {
     const path = options.blobStoragePath?.trim();
@@ -226,9 +240,252 @@ export function createBlobBytesDriver(options: {
     }
     return new FilesystemBlobBytesDriver(path);
   }
+  if (options.driver === "s3") {
+    if (!options.s3Driver) {
+      throw new FrickBlobStorageError(
+        "the s3 blob driver must be constructed via createS3BlobBytesDriver and passed " +
+          "to the store as blobS3Driver (the AWS SDK is imported asynchronously)",
+      );
+    }
+    return options.s3Driver;
+  }
   // Default: store bytes in `blob_content` via the seam — works on SQLite and
   // Postgres without reaching for a raw handle.
   return new SqlBlobBytesDriver(options.db);
+}
+
+/**
+ * Minimal S3-compatible client surface the {@link S3BlobBytesDriver} needs
+ * (FR-54). The real `@aws-sdk/client-s3` is adapted to this shape by
+ * {@link createS3BlobBytesDriver}; tests inject a fake in-memory implementation.
+ * Keeping the driver behind this tiny interface (rather than the SDK's
+ * command-object API) is what makes the AWS dependency optional and the driver
+ * unit-testable without network access — exactly how {@link RedisClusterBus}
+ * decouples from `ioredis`.
+ *
+ * `getObject`/`headObject` MUST signal a missing key by returning `undefined`
+ * (not throwing) so the driver can map it to an absent blob.
+ */
+export interface S3LikeClient {
+  /** Persist (or overwrite) the bytes at `key`. */
+  putObject(key: string, body: Uint8Array): Promise<void>;
+  /** Read the bytes at `key`, or `undefined` when the key does not exist. */
+  getObject(key: string): Promise<Uint8Array | undefined>;
+  /** Delete the bytes at `key`. No-op when absent. */
+  deleteObject(key: string): Promise<void>;
+  /** Whether an object exists at `key`. */
+  headObject(key: string): Promise<boolean>;
+}
+
+/**
+ * Object-storage / S3-compatible blob-bytes driver (FR-54). Stores blob bytes
+ * in an S3 bucket under a tenant-isolated key prefix:
+ *
+ *   <prefix>/<tenantSegment>/<aa>/<blobSegment>
+ *
+ * where `<tenantSegment>`/`<blobSegment>` are the same content-addressed,
+ * collision-free encodings the filesystem driver uses and `<aa>` is a two-char
+ * fan-out. Because every key is a deterministic hash of the identifiers, an id
+ * containing `/`, `..`, or other metacharacters can never address another
+ * tenant's objects — cross-tenant access is structurally impossible.
+ *
+ * Metadata stays in SQLite; only the bytes live in object storage. The driver
+ * is fully async (every method returns a Promise), which the
+ * {@link BlobBytesDriver} interface permits.
+ */
+export class S3BlobBytesDriver implements BlobBytesDriver {
+  readonly #client: S3LikeClient;
+  readonly #prefix: string;
+
+  constructor(client: S3LikeClient, options: { prefix?: string } = {}) {
+    this.#client = client;
+    // Normalise the optional key prefix to a single trailing-slash-free segment
+    // chain so `#keyFor` can join unconditionally.
+    this.#prefix = (options.prefix ?? "")
+      .split("/")
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0)
+      .join("/");
+  }
+
+  async write(tenantId: string, blobId: string, content: Uint8Array): Promise<void> {
+    try {
+      await this.#client.putObject(this.#keyFor(tenantId, blobId), content);
+    } catch (error) {
+      throw new FrickBlobStorageError(
+        `failed to write blob bytes for ${blobId}: ${describeError(error)}`,
+      );
+    }
+  }
+
+  async read(tenantId: string, blobId: string): Promise<Uint8Array | undefined> {
+    try {
+      return await this.#client.getObject(this.#keyFor(tenantId, blobId));
+    } catch (error) {
+      throw new FrickBlobStorageError(
+        `failed to read blob bytes for ${blobId}: ${describeError(error)}`,
+      );
+    }
+  }
+
+  async delete(tenantId: string, blobId: string): Promise<void> {
+    try {
+      await this.#client.deleteObject(this.#keyFor(tenantId, blobId));
+    } catch (error) {
+      throw new FrickBlobStorageError(
+        `failed to delete blob bytes for ${blobId}: ${describeError(error)}`,
+      );
+    }
+  }
+
+  async exists(tenantId: string, blobId: string): Promise<boolean> {
+    try {
+      return await this.#client.headObject(this.#keyFor(tenantId, blobId));
+    } catch (error) {
+      throw new FrickBlobStorageError(
+        `failed to stat blob bytes for ${blobId}: ${describeError(error)}`,
+      );
+    }
+  }
+
+  /**
+   * Map `(tenantId, blobId)` to a bucket key. Identifiers are encoded into hex
+   * segments (see {@link encodeSegment}) so the key is always confined to this
+   * tenant's prefix regardless of the input characters.
+   */
+  #keyFor(tenantId: string, blobId: string): string {
+    const tenantSegment = encodeSegment(tenantId);
+    const blobSegment = encodeSegment(blobId);
+    const fanout = blobSegment.slice(0, 2);
+    const parts = [this.#prefix, tenantSegment, fanout, blobSegment].filter(
+      (part) => part.length > 0,
+    );
+    return parts.join("/");
+  }
+}
+
+/** Configuration for {@link createS3BlobBytesDriver}. */
+export interface S3BlobBytesDriverConfig {
+  /** Target bucket. Required. */
+  bucket: string;
+  /** AWS region. Optional for S3-compatible stores that ignore it. */
+  region?: string | undefined;
+  /**
+   * Custom endpoint for S3-compatible stores (MinIO, R2, Spaces, …). Omit for
+   * real AWS S3.
+   */
+  endpoint?: string | undefined;
+  /** Key prefix every object lives under. Optional. */
+  prefix?: string | undefined;
+  /**
+   * Force path-style addressing (`<endpoint>/<bucket>/<key>` instead of
+   * `<bucket>.<endpoint>/<key>`). Most S3-compatible stores need this; defaults
+   * to true when a custom `endpoint` is set, false otherwise.
+   */
+  forcePathStyle?: boolean | undefined;
+  /** Optional static credentials; omit to use the AWS default chain. */
+  accessKeyId?: string | undefined;
+  secretAccessKey?: string | undefined;
+}
+
+/**
+ * Build an {@link S3BlobBytesDriver} backed by the real AWS SDK. `@aws-sdk/client-s3`
+ * is imported dynamically so it stays an *optional* dependency — deployments
+ * using the sqlite/filesystem drivers never load it. Mirrors
+ * {@link createRedisClusterBus}'s lazy-import-of-an-optional-SDK pattern.
+ */
+export async function createS3BlobBytesDriver(
+  config: S3BlobBytesDriverConfig,
+): Promise<S3BlobBytesDriver> {
+  const bucket = config.bucket?.trim();
+  if (!bucket) {
+    throw new FrickBlobStorageError(
+      "the s3 blob driver requires FRICK_BLOB_S3_BUCKET to be set to a bucket name",
+    );
+  }
+
+  let sdk: {
+    S3Client: new (config: Record<string, unknown>) => S3RawClient;
+    PutObjectCommand: new (input: Record<string, unknown>) => unknown;
+    GetObjectCommand: new (input: Record<string, unknown>) => unknown;
+    DeleteObjectCommand: new (input: Record<string, unknown>) => unknown;
+    HeadObjectCommand: new (input: Record<string, unknown>) => unknown;
+  };
+  try {
+    sdk = (await import("@aws-sdk/client-s3")) as unknown as typeof sdk;
+  } catch (error) {
+    throw new FrickBlobStorageError(
+      `the s3 blob driver requires the optional "@aws-sdk/client-s3" dependency to be installed: ${describeError(error)}`,
+    );
+  }
+
+  const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, HeadObjectCommand } =
+    sdk;
+  const clientConfig: Record<string, unknown> = {};
+  if (config.region) clientConfig.region = config.region;
+  if (config.endpoint) clientConfig.endpoint = config.endpoint;
+  clientConfig.forcePathStyle = config.forcePathStyle ?? Boolean(config.endpoint);
+  if (config.accessKeyId && config.secretAccessKey) {
+    clientConfig.credentials = {
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey,
+    };
+  }
+  const raw = new S3Client(clientConfig);
+
+  const client: S3LikeClient = {
+    async putObject(key, body) {
+      await raw.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body }));
+    },
+    async getObject(key) {
+      try {
+        const out = await raw.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+        const body = out?.Body as
+          | { transformToByteArray?: () => Promise<Uint8Array> }
+          | undefined;
+        if (!body?.transformToByteArray) return undefined;
+        return await body.transformToByteArray();
+      } catch (error) {
+        if (isS3NotFound(error)) return undefined;
+        throw error;
+      }
+    },
+    async deleteObject(key) {
+      await raw.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+    },
+    async headObject(key) {
+      try {
+        await raw.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+        return true;
+      } catch (error) {
+        if (isS3NotFound(error)) return false;
+        throw error;
+      }
+    },
+  };
+
+  return new S3BlobBytesDriver(client, { ...(config.prefix ? { prefix: config.prefix } : {}) });
+}
+
+/** Minimal shape of the AWS `S3Client` we drive via `send(command)`. */
+interface S3RawClient {
+  send(command: unknown): Promise<{ Body?: unknown } | undefined>;
+}
+
+/**
+ * Whether an AWS SDK error denotes a missing key. S3 surfaces this as
+ * `NoSuchKey` / `NotFound` names or a 404 HTTP status; either maps to "absent".
+ */
+function isS3NotFound(error: unknown): boolean {
+  const e = error as
+    | { name?: string; Code?: string; $metadata?: { httpStatusCode?: number } }
+    | undefined;
+  const name = e?.name ?? e?.Code;
+  return (
+    name === "NoSuchKey" ||
+    name === "NotFound" ||
+    e?.$metadata?.httpStatusCode === 404
+  );
 }
 
 /**

@@ -30,12 +30,14 @@ export type FrickDbDriver = "sqlite" | "postgres";
  * Blob-bytes storage driver selector (FR-53). Mirrors {@link FrickDbDriver}:
  * `sqlite` is the default and keeps blob bytes in the SQLite `blob_content`
  * table; `filesystem` stores the bytes under {@link FrickConfig.blobStoragePath}
- * in tenant-isolated, id-keyed files. Blob *metadata* always lives in SQLite
- * regardless of this setting. Selecting `filesystem` without a writable
- * `FRICK_BLOB_STORAGE_PATH` fails fast at config validation; see the gate in
+ * in tenant-isolated, id-keyed files; `s3` (FR-54) stores the bytes in an
+ * S3-compatible object store under a tenant-isolated key prefix. Blob *metadata*
+ * always lives in SQLite regardless of this setting. Selecting `filesystem`
+ * without a writable `FRICK_BLOB_STORAGE_PATH`, or `s3` without
+ * `FRICK_BLOB_S3_BUCKET`, fails fast at config validation; see the gate in
  * {@link loadFrickConfig}.
  */
-export type FrickBlobDriver = "sqlite" | "filesystem";
+export type FrickBlobDriver = "sqlite" | "filesystem" | "s3";
 
 /**
  * Password-hashing algorithm selector (FR-35). `argon2` (Argon2id) is the
@@ -127,6 +129,24 @@ export interface FrickConfig {
    * (FR-53); parsed but inert under the default `sqlite` driver.
    */
   blobStoragePath: string;
+  /**
+   * Target bucket for the `s3` blob driver (FR-54). Sourced from
+   * `FRICK_BLOB_S3_BUCKET`. Required when `blobDriver === "s3"`; parsed but
+   * inert otherwise.
+   */
+  blobS3Bucket: string | undefined;
+  /** AWS region for the `s3` blob driver. Sourced from `FRICK_BLOB_S3_REGION`. */
+  blobS3Region: string | undefined;
+  /**
+   * Custom endpoint for an S3-compatible store (MinIO, R2, Spaces, …). Sourced
+   * from `FRICK_BLOB_S3_ENDPOINT`; omit for real AWS S3.
+   */
+  blobS3Endpoint: string | undefined;
+  /**
+   * Key prefix every blob object lives under in the bucket. Sourced from
+   * `FRICK_BLOB_S3_PREFIX`. Optional.
+   */
+  blobS3Prefix: string | undefined;
   /** Threshold for the structured logger. */
   logLevel: FrickLogLevel;
   /**
@@ -260,6 +280,7 @@ const VALID_DB_DRIVERS: ReadonlySet<FrickDbDriver> = new Set<FrickDbDriver>([
 const VALID_BLOB_DRIVERS: ReadonlySet<FrickBlobDriver> = new Set<FrickBlobDriver>([
   "sqlite",
   "filesystem",
+  "s3",
 ]);
 const VALID_PASSWORD_HASHERS: ReadonlySet<FrickPasswordHasherId> =
   new Set<FrickPasswordHasherId>(["argon2", "scrypt"]);
@@ -315,6 +336,14 @@ export function loadFrickConfig(
     overrides.passwordHasher ?? parsePasswordHasher(env.FRICK_PASSWORD_HASHER);
   const blobStoragePath =
     overrides.blobStoragePath ?? parseString(env.FRICK_BLOB_STORAGE_PATH) ?? DEFAULT_BLOB_STORAGE_PATH;
+  const blobS3Bucket =
+    "blobS3Bucket" in overrides ? overrides.blobS3Bucket : parseString(env.FRICK_BLOB_S3_BUCKET);
+  const blobS3Region =
+    "blobS3Region" in overrides ? overrides.blobS3Region : parseString(env.FRICK_BLOB_S3_REGION);
+  const blobS3Endpoint =
+    "blobS3Endpoint" in overrides ? overrides.blobS3Endpoint : parseString(env.FRICK_BLOB_S3_ENDPOINT);
+  const blobS3Prefix =
+    "blobS3Prefix" in overrides ? overrides.blobS3Prefix : parseString(env.FRICK_BLOB_S3_PREFIX);
   const logLevel = overrides.logLevel ?? parseLogLevel(env.FRICK_LOG_LEVEL, "info");
   const otelExporterOtlpEndpoint =
     "otelExporterOtlpEndpoint" in overrides
@@ -447,6 +476,11 @@ export function loadFrickConfig(
       "FRICK_BLOB_DRIVER=filesystem requires FRICK_BLOB_STORAGE_PATH to be set to a writable directory",
     );
   }
+  if (blobDriver === "s3" && (blobS3Bucket ?? "").trim() === "") {
+    throw new FrickConfigError(
+      "FRICK_BLOB_DRIVER=s3 requires FRICK_BLOB_S3_BUCKET to be set to a bucket name",
+    );
+  }
   if (runtimeEnv === "production" && demoAuthEnabled) {
     throw new FrickConfigError(
       "demoAuthEnabled=true is forbidden in production — unset FRICK_DEMO_AUTH_ENABLED or use a non-production FRICK_ENV",
@@ -482,6 +516,10 @@ export function loadFrickConfig(
     blobDriver,
     passwordHasher,
     blobStoragePath,
+    blobS3Bucket,
+    blobS3Region,
+    blobS3Endpoint,
+    blobS3Prefix,
     logLevel,
     otelEnabled,
     otelServiceName,
@@ -600,7 +638,7 @@ function parseBlobDriver(value: string | undefined): FrickBlobDriver {
     return value as FrickBlobDriver;
   }
   throw new FrickConfigError(
-    `FRICK_BLOB_DRIVER must be one of sqlite, filesystem (got ${JSON.stringify(value)})`,
+    `FRICK_BLOB_DRIVER must be one of sqlite, filesystem, s3 (got ${JSON.stringify(value)})`,
   );
 }
 

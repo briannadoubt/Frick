@@ -178,6 +178,7 @@ import { emitDevToolsEvent } from "./devtools/emit.js";
 import { createPlatformEventPipeline } from "./platform-events/factory.js";
 import type { PlatformEventPipeline } from "./platform-events/types.js";
 import type { FrickClusterBus } from "./cluster/bus.js";
+import type { BlobBytesDriver } from "./storage/blob-bytes-driver.js";
 
 export interface FrickAppRoute {
   /** URL pathname prefix this route claims. */
@@ -389,6 +390,18 @@ export interface ServerOptions {
    */
   clusterBus?: FrickClusterBus;
   /**
+   * Pre-built blob-bytes driver for the `s3` blob driver (FR-54). When
+   * `config.blobDriver === "s3"`, build the driver with
+   * `await createS3BlobBytesDriver({ bucket, region, endpoint, prefix })` and
+   * pass it here — exactly like {@link ServerOptions.clusterBus}. The store
+   * constructor is synchronous and the AWS SDK is imported asynchronously, so
+   * the s3 driver must be constructed by the caller and injected. When the
+   * config selects `s3` but no driver is provided here, the store factory
+   * throws a clear error at construction. Ignored for the `sqlite`/`filesystem`
+   * drivers.
+   */
+  blobBytesDriver?: BlobBytesDriver;
+  /**
    * App-owned HTTP routes. Each entry handles requests with `request.url`
    * starting with `pathPrefix` (and matching `method` when set). Returning
    * `true` from `handle` claims the request; `false` falls through to
@@ -493,6 +506,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     idempotencyReplayWindowMs: config.idempotencyReplayWindowMs,
     blobDriver: config.blobDriver,
     blobStoragePath: config.blobStoragePath,
+    ...(options.blobBytesDriver ? { blobS3Driver: options.blobBytesDriver } : {}),
     passwordHasher: config.passwordHasher,
   });
   const platformEvents =
