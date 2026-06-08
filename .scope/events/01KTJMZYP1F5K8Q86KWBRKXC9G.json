@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTJMZYP1F5K8Q86KWBRKXC9G",
+  "ts": "2026-06-08T03:39:02.721Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTJMZYP02AG2164DFPE54REW",
+    "number": 153,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Wire appId end-to-end: request boundary + all stores + per-app dispatch",
+    "description": "",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0T",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

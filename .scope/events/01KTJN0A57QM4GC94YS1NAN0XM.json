@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJN0A57QM4GC94YS1NAN0XM",
+  "ts": "2026-06-08T03:39:14.471Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTJMZYP02AG2164DFPE54REW",
+    "commentId": "01KTJN0A57QM4GC94YS1NAN0XK",
+    "author": "claude",
+    "body": "Completes the deferred end-to-end half of FR-37/FR-38. FR-36/37/38/40 landed the store+registry isolation PRIMITIVES (app_id column, object/stream appId threading, per-app registry container, proof suite) but the request boundary still resolves everything to '_default'. This story: (1) resolve appId on the request principal in gateway.ts/server.ts (from URL prefix / Hello schema id, mirroring tenantId); (2) thread appId through the FrickStore facades; (3) route projection notify + job dispatch through the per-app registry container; (4) extend appId scoping to the remaining stores (blobs, presence, jobs, search, auth); (5) end-to-end isolation tests over the HTTP/WS surface."
+  }
+}
