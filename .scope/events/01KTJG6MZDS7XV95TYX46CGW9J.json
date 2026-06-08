@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJG6MZDS7XV95TYX46CGW9J",
+  "ts": "2026-06-08T02:15:19.277Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTG9BWY3WPEVR56EHJ1E9XG4",
+    "field": "branch",
+    "value": "feat/fr140-swift-sharing-service"
+  }
+}

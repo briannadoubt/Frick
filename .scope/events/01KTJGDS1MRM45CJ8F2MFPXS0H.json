@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJGDS1MRM45CJ8F2MFPXS0H",
+  "ts": "2026-06-08T02:19:12.820Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTG9BWY3WPEVR56EHJ1E9XG4",
+    "commentId": "01KTJGDS1MRM45CJ8F2MFPXS0G",
+    "author": null,
+    "body": "Shipped FrickSharingService: @MainActor @Observable stateful sharing layer composing the raw verbs (createInvitation/acceptInvitation/listGrants/revokeGrant). Observable grants cache, invite/accept(token|url)/revoke/refreshGrants + pending-token-across-signin, synchronous read helpers. URL scheme injected via FrickSharingDeepLinkConfig (not hardcoded). Additive; gated behind canImport(Observation). swift test 116 passing 0 failures; pnpm typecheck exit 0."
+  }
+}
