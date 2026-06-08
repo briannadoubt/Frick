@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJ8EXCSD6S2DDS7P8G8D6R7",
+  "ts": "2026-06-08T00:00:01.433Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ22",
+    "field": "branch",
+    "value": "feat/fr46-service-principals"
+  }
+}

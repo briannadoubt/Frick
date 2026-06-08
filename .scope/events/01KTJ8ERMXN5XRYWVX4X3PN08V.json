@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJ8ERMXN5XRYWVX4X3PN08V",
+  "ts": "2026-06-07T23:59:56.573Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3R",
+    "field": "branch",
+    "value": "feat/fr100-perf-budgets"
+  }
+}
