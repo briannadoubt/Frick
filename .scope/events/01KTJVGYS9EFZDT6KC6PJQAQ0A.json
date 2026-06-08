@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJVGYS9EFZDT6KC6PJQAQ0A",
+  "ts": "2026-06-08T05:33:11.337Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ35",
+    "commentId": "01KTJVGYS9EFZDT6KC6PJQAQ09",
+    "author": "claude",
+    "body": "Shipped self-built P2P WebRTC media path: P2PWebRTCAdapter (coturn-REST ephemeral TURN creds, STUN-only fallback, p2p/max2 caps, idempotent allocate) + startP2PCall perfect-negotiation driver over the existing WebRTCSignal relay, browser-agnostic via injectable RTCPeerConnectionLike. Gate green: typecheck 0, core 59, server 1027 (+7)."
+  }
+}
