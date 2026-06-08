@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJZ4J32K2BZ3DV8B56ZHZG8",
+  "ts": "2026-06-08T06:36:19.426Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3Z",
+    "commentId": "01KTJZ4J32K2BZ3DV8B56ZHZG7",
+    "author": "claude",
+    "body": "Delivered: RegionFailoverCoordinator tracks region health (healthy/draining/down) and deterministically promotes a key's home to the lowest-regionId healthy survivor when its home goes down/drains (same total/symmetric tie-break as FR-106/154, coordination-free). Writes re-route to the promoted home via the unchanged routeWrite path. Recovered region rejoins as an eligible target without reverting promotions (no flapping); zero-healthy left as-is. Ops docs: docs/multi-region-operations.md (health-checking, graceful-drain vs hard-outage, rejoin, and the LB/DNS glue: decoupled client->region geo affinity vs write->home routing planes, health-based LB failover). apps/server/src/cluster/region-failover.ts; tests region-failover.test.ts. Server gate green (1075 pass)."
+  }
+}

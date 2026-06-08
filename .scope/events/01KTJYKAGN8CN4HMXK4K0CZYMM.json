@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJYKAGN8CN4HMXK4K0CZYMM",
+  "ts": "2026-06-08T06:26:54.613Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3Y",
+    "field": "branch",
+    "value": "feat/fr106-107-multiregion-routing-failover"
+  }
+}

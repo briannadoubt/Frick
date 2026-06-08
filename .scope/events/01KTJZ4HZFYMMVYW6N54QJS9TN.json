@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJZ4HZFYMMVYW6N54QJS9TN",
+  "ts": "2026-06-08T06:36:19.311Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3Y",
+    "commentId": "01KTJZ4HZFYMMVYW6N54QJS9TM",
+    "author": "claude",
+    "body": "Delivered: per-region-primary write-region routing on the FR-105 federation seam. RegionWriteRouter.routeWrite(tenantId) -> accept-locally (this region is the tenant's home) or proxy-to-home. Ownership = tenant-home via StaticRegionOwnership (config map + default, recommended) or ClaimRegionOwnership (dynamic claim/announce, lowest-regionId tie-break + TTL, mirroring FR-154). In-memory addressed proxy transport (MemoryRegionProxy over MemoryRegionRouterFabric) + ownership control channel. Convergence guarantee = home-region-authoritative: concurrent cross-region writes to one key serialize at the home (no merge rule). Additive: single-region is home for everything -> always local, zero proxying. apps/server/src/cluster/region-router.ts; tests region-router.test.ts. Server gate green (1075 pass)."
+  }
+}
