@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJMVPNBGGTSJCK26WGB08ZT",
+  "ts": "2026-06-08T03:36:43.435Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1W",
+    "commentId": "01KTJMVPNBGGTSJCK26WGB08ZS",
+    "author": "claude",
+    "body": "Added cross-app-tenant-isolation.test.ts (8 tests) — the proof suite for the FR-6 epic. Drives the {app-a,app-b}x{tenant-1,tenant-2} matrix over objects, streams, idempotency, projections, and per-app job/projection registries. Asserts each cell reads only its own data (probed against every foreign app+tenant + defaults), list/listAll cell-scoped, cross-app same-tenant write rejected (FrickCrossAppAccessError), projection in app A never fires for app B writes, snapshots tenant-scoped within app + never cross apps, job handler in app A unresolved in app B. No prod code change. Gate: typecheck exit 0; server vitest 984 passed / 0 failed / 45 skipped (976+8)."
+  }
+}
