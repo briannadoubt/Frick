@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJFWE0KFA4YXYSQEMR3ECYD",
+  "ts": "2026-06-08T02:09:44.467Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTG9BWY3WPEVR56EHJ1E9XFY",
+    "commentId": "01KTJFWE0KFA4YXYSQEMR3ECYC",
+    "author": null,
+    "body": "Shipped FrickStoreRegistry (@MainActor @Observable) in packages/swift/Sources/FrickSwift/FrickStoreRegistry.swift: type-keyed (by FrickModel.objectType), weak-holding index of live FrickStore<Model>. register(_:)/unregister(_:); store(for:) and items(for:) resolve generically; items(for:) returns [] for an unregistered/released type. Replaces RangerCRM's DataController+FrickStoresBridge + KeyPath<DataController,[Item]> coupling — no app object graph; folds in the old bridge weak-pointer so a released store falls out. 6 registry tests. typecheck exit 0; swift test 98 passing, 0 failures (was 84)."
+  }
+}

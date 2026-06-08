@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJFWE439GW9F7WPY4DAVPCQ",
+  "ts": "2026-06-08T02:09:44.579Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTG9BWY3WPEVR56EHJ1E9XG0",
+    "commentId": "01KTJFWE439GW9F7WPY4DAVPCP",
+    "author": null,
+    "body": "Shipped @FrickQuery in packages/swift/Sources/FrickSwift/SwiftUI/FrickQuery.swift: SwiftUI DynamicProperty completing the @FrickStream/@FrickPresence trio. Resolves a typed live array from the FR-137 registry via @Environment(\\.frickStoreRegistry); exposes FrickQueryResults<Item> (@preconcurrency RandomAccessCollection — ForEach/subscript) with write-through sortDescriptors/filter and a projectedValue Binding into the sort descriptors. FrickSort<Item> key-path comparator: String/Date/Double/Int/Comparable + closure overloads, first descriptor = primary key. Empty-collection fallback for previews. 8 query tests. typecheck exit 0; swift test 98 passing, 0 failures."
+  }
+}
