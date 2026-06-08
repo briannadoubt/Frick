@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJQVRP6Y8H6RK7FKEP59W1W",
+  "ts": "2026-06-08T04:29:11.238Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTJMZYP02AG2164DFPE54REW",
+    "commentId": "01KTJQVRP6Y8H6RK7FKEP59W1V",
+    "author": "claude",
+    "body": "Tail complete — FR-6 multi-app isolation now end-to-end across ALL framework stores. appId threaded (additive, default _default): blobs (metadata+bytes seam, cross-app clobber guard, fs/s3 path partitioning), presence/signals (store + WS fan-out), jobs (enqueue/claim/list/getById + migration 0022 app-scoped idempotency unique index). Per-app JOB DISPATCH wired: FrickJobWorker routes each job to perAppRegistries.for(job.appId).jobs; FrickAppDefinition gains per-app projections+jobs; server.ts builds the container + gateway delta routing. Auth (auth_sessions/auth_accounts) intentionally left app-shared: Frick auth is server-wide (root-mounted, not per-basePath) so identity must not fragment per app. Search covered transitively by object/stream scoping. Single-app byte-for-byte unchanged. Tests: app-scoping-tail-stores, app-job-dispatch, app-ws-isolation. Server gate 1004 pass 0 fail; typecheck 0."
+  }
+}
