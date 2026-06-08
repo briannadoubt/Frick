@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJP8RPYAD3Y06JDKW90VN9A",
+  "ts": "2026-06-08T04:01:20.094Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTJMZYP02AG2164DFPE54REW",
+    "field": "branch",
+    "value": "feat/fr153-tail-stores-dispatch"
+  }
+}

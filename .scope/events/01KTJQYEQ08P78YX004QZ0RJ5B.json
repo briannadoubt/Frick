@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJQYEQ08P78YX004QZ0RJ5B",
+  "ts": "2026-06-08T04:30:39.328Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0T",
+    "commentId": "01KTJQYEPZEWFB8K46SNCBXKJY",
+    "author": null,
+    "body": "All children done. Multi-app isolation complete end-to-end: additive app_id column across framework tables (SQLite+PG parity, default '_default' so single-app servers unchanged); request boundary resolves appId (WS Hello schemaId / HTTP path); objects, streams, blobs, presence/signals, and jobs are read-filtered + write-stamped by app_id with cross-app clobber guards; per-app projection + job-dispatch registries isolate handlers; HTTP + WS e2e isolation proof suites. Auth is intentionally server-wide (tenant-scoped, app-shared) by design. Known limitation: cross-node cluster-bus signal/presence receive defaults to '_default' (bus-protocol appId is a separate follow-up); within-node fan-out is fully app-isolated. Tenant-admin routes from the original epic description remain a separate concern."
+  }
+}
