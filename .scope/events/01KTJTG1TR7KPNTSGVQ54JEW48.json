@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJTG1TR7KPNTSGVQ54JEW48",
+  "ts": "2026-06-08T05:15:13.112Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ38",
+    "commentId": "01KTJTG1TR7KPNTSGVQ54JEW47",
+    "author": null,
+    "body": "Call UI shipped across platforms: web CallButton + CallControlBar (design-web), Swift FrickCallControlBar (design-swift) reusing FrickCallButton, Android FrickCallControlBar (:design) — all tokenized, no raw literals."
+  }
+}

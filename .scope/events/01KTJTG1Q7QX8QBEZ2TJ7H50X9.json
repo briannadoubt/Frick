@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJTG1Q7QX8QBEZ2TJ7H50X9",
+  "ts": "2026-06-08T05:15:12.999Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ36",
+    "commentId": "01KTJTG1Q7QX8QBEZ2TJ7H50X8",
+    "author": null,
+    "body": "Call presence (mic/camera/screenshare/speaking/networkQuality) surfaced on the participant model across web/Swift/Android, folded into each platform's observable call state."
+  }
+}

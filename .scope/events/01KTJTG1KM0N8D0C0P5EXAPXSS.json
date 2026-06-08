@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJTG1KM0N8D0C0P5EXAPXSS",
+  "ts": "2026-06-08T05:15:12.884Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ34",
+    "commentId": "01KTJTG1KKGB62H5H1MH1F6H7G",
+    "author": null,
+    "body": "Client call helpers shipped across all 3 platforms over the call wire protocol (CallCommand=21/CallCommandResult=22, Nack-by-requestId): TS core createCall/joinCall/acceptCall/leaveCall/endCall/setCallMediaState + observable callState + react useCallState/useCallActions; Swift FrickSyncSocket helpers + @Observable FrickCallSession; Android FrickCallManager suspend verbs + StateFlow<CallState>."
+  }
+}
