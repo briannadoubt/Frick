@@ -56,6 +56,13 @@ export {
   type SfuTransportParams,
 } from "./sfu-media-plane.js";
 
+// FR-154 — multi-box SFU placement (bus-coordinated home-node registry).
+export {
+  ClusterMediaPlacement,
+  MEDIA_PLACEMENT_TENANT,
+  type ClusterMediaPlacementOptions,
+} from "./cluster-media-placement.js";
+
 // FR-79 — call control-plane state machine + canonical schema fragment.
 export {
   CallControlPlane,

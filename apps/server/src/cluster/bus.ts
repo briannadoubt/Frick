@@ -78,6 +78,31 @@ export type ClusterEnvelope =
       name: string;
       records: ReadonlyArray<{ key: string; value: PlainObject | null }>;
       cleared: readonly string[];
+    }
+  | {
+      // FR-154 — multi-box SFU placement. A node that homes a call's media
+      // router announces the home over the bus so peers resolve the same
+      // home. Rides the existing bus rather than a new transport; the gateway
+      // ignores these (its dispatch switch has no `default` and only handles
+      // the sync kinds), so they reach only `ClusterMediaPlacement`
+      // subscribers. `tenantId` is a fixed sentinel — placement is keyed by
+      // `callId`, not tenant — so existing tenant filters treat it uniformly.
+      kind: "mediaPlacementClaim";
+      originNodeId: NodeId;
+      tenantId: string;
+      callId: string;
+      /** The node that homes the call's router (== `originNodeId`). */
+      homeNodeId: NodeId;
+      /** Announced media address clients ICE to for this call. */
+      announcedIp: string;
+    }
+  | {
+      // FR-154 — the home node announces a call's router was released so peers
+      // reclaim the registry entry.
+      kind: "mediaPlacementRelease";
+      originNodeId: NodeId;
+      tenantId: string;
+      callId: string;
     };
 
 /** Handler the gateway registers to receive peer publishes. */
