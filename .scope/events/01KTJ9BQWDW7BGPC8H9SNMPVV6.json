@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJ9BQWDW7BGPC8H9SNMPVV6",
+  "ts": "2026-06-08T00:15:46.061Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2B",
+    "field": "branch",
+    "value": "feat/fr55-blob-derivatives-validation"
+  }
+}

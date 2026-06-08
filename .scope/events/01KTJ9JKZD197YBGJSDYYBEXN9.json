@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJ9JKZD197YBGJSDYYBEXN9",
+  "ts": "2026-06-08T00:19:31.437Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2B",
+    "commentId": "01KTJ9JKZD197YBGJSDYYBEXN8",
+    "author": "claude",
+    "body": "Shipped derivative extraction (pluggable imageBlobProcessor.process + copyDerivativeGenerator default), generic mimeSizeValidator (allow-list + size cap), and moderationProcessor hook mechanism (verdict persisted as JSON sidecar derivative). Additive, behind existing processor registry. 895 server tests green, typecheck clean."
+  }
+}
