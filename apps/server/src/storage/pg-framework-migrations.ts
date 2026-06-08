@@ -736,6 +736,23 @@ export const FRAMEWORK_MIGRATIONS_PG: readonly FrameworkMigration[] = [
         ON idempotency_keys (app_id, tenant_id, replica_id, request_id);
     `,
   },
+  {
+    // FR-153 (tail) — Postgres mirror of the SQLite
+    // 0022_jobs_idempotency_app_scope migration. Rescope the job idempotency
+    // unique index to include `app_id` so two apps reusing the same
+    // idempotency key for the same job type never collide. See that migration
+    // for the full rationale.
+    id: "0022_jobs_idempotency_app_scope",
+    schemaRevision: 1,
+    description:
+      "Rescope the jobs idempotency unique index to include app_id so two apps' identical idempotency keys never collide (FR-153).",
+    sql: `
+      DROP INDEX IF EXISTS idx_jobs_idempotency_key;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency_key
+        ON jobs (app_id, tenant_id, job_type, idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
+    `,
+  },
 ];
 
 /** Names of all framework tables the Postgres runner manages. Used by dev-reset. */

@@ -520,6 +520,48 @@ export function createFrickServer(options: ServerOptions = {}) {
   for (const def of options.search?.indexes ?? []) {
     searchIndexes.register(def);
   }
+
+  // Per-app registries (FR-153): a multi-app server whose apps declare their
+  // own projections or job handlers gets one independent projection + job
+  // registry per app, so app A's projections/handlers never fire on app B's
+  // writes/jobs. We only activate this when at least one app declares per-app
+  // config — a single-app (or routing-only multi-app) server leaves the shared
+  // `projections` registry and single job registry in place, byte-for-byte
+  // unchanged. The gateway's projection-delta fan-out is routed per app through
+  // a late-bound reference set once the gateway is constructed below.
+  const appsWithPerAppConfig = (options.apps ?? []).some(
+    (app) =>
+      (app.projections && app.projections.length > 0) ||
+      (app.jobs && Object.keys(app.jobs).length > 0),
+  );
+  let gatewayRef: SyncGateway | undefined;
+  const perAppRegistries = appsWithPerAppConfig
+    ? createFrickPerAppRegistries({
+        projectionDeltaListenerFor: () => (notice) =>
+          gatewayRef?.publishProjectionDelta(notice),
+      })
+    : undefined;
+  if (perAppRegistries) {
+    // The default app's set carries the server-wide projections (the same ones
+    // registered into the shared `projections` registry above), so writes under
+    // `_default` keep firing them. Per-app projections register into each app's
+    // own set.
+    registerProjections(
+      perAppRegistries.for(DEFAULT_APP_ID).projections,
+      options.projections ?? [],
+      runtimeSchema,
+    );
+    for (const app of options.apps ?? []) {
+      if (app.projections && app.projections.length > 0) {
+        registerProjections(
+          perAppRegistries.for(app.id).projections,
+          app.projections,
+          app.schema,
+        );
+      }
+    }
+  }
+
   const store = new FrickStore({
     path: options.dbPath ?? process.env.FRICK_DB_PATH ?? defaultDatabasePath(),
     dbDriver: config.dbDriver,
@@ -527,6 +569,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     schema: runtimeSchema,
     seed: false,
     projections,
+    ...(perAppRegistries ? { perAppRegistries } : {}),
     searchIndexes,
     ...(options.search?.adapter !== undefined ? { searchAdapter: options.search.adapter } : {}),
     logger,
@@ -760,8 +803,19 @@ export function createFrickServer(options: ServerOptions = {}) {
     ...(options.clusterBus ? { clusterBus: options.clusterBus } : {}),
   });
   gateway.attach();
+  // Late-bind the gateway so the per-app projection-delta listeners installed
+  // on each app's projection registry (above) can fan deltas out to the right
+  // app's subscribers (FR-153). No-op when per-app registries are inactive.
+  gatewayRef = gateway;
 
-  const jobRegistry = createFrickJobRegistry();
+  // The shared job-handler registry. When per-app registries are active the
+  // worker dispatches through `perAppRegistries.for(job.appId).jobs` instead,
+  // so the server-wide handlers below are also registered into the default
+  // app's set (and per-app handlers into their own set) — see the per-app
+  // wiring after the framework handlers are registered.
+  const jobRegistry = perAppRegistries
+    ? perAppRegistries.for(DEFAULT_APP_ID).jobs
+    : createFrickJobRegistry();
   if (options.jobs?.handlers) {
     for (const [jobType, handler] of Object.entries(options.jobs.handlers)) {
       jobRegistry.register(jobType, handler);
@@ -830,6 +884,38 @@ export function createFrickServer(options: ServerOptions = {}) {
     );
   }
 
+  // Per-app job handlers (FR-153). When per-app registries are active, every
+  // non-default app gets the SAME framework handlers (push.deliver,
+  // blob.process, blob.gc) the default app already has — these are
+  // server-provided plumbing every app needs — PLUS that app's own declared
+  // `jobs` handlers. The worker then dispatches each claimed job through the
+  // originating app's set (`perAppRegistries.for(job.appId).jobs`), so a custom
+  // handler app A registered never runs app B's jobs. `jobRegistry` IS the
+  // default app's set, so the framework handlers registered above are already
+  // present there.
+  if (perAppRegistries) {
+    const frameworkHandlers: Array<[string, FrickJobHandler]> = [];
+    for (const jobType of jobRegistry.list()) {
+      const handler = jobRegistry.resolve(jobType);
+      if (handler) frameworkHandlers.push([jobType, handler]);
+    }
+    for (const app of options.apps ?? []) {
+      if (app.id === DEFAULT_APP_ID) continue;
+      const appJobs = perAppRegistries.for(app.id).jobs;
+      // Framework + server-wide handlers first.
+      for (const [jobType, handler] of frameworkHandlers) {
+        if (!appJobs.resolve(jobType)) appJobs.register(jobType, handler);
+      }
+      // Then the app's own handlers (override-by-precedence is impossible —
+      // the registry throws on duplicates, so app handlers must not collide
+      // with a framework job type; that is an app-config error worth failing
+      // loudly at boot).
+      for (const [jobType, handler] of Object.entries(app.jobs ?? {})) {
+        appJobs.register(jobType, handler);
+      }
+    }
+  }
+
   // Default: worker runs in non-test envs. Tests would otherwise have a
   // polling loop ticking during every spec, complicating shutdown ordering
   // and timer-based fixtures. Apps can flip `workerEnabled: true` per-suite
@@ -839,6 +925,7 @@ export function createFrickServer(options: ServerOptions = {}) {
   const worker = createFrickJobWorker({
     store,
     registry: jobRegistry,
+    ...(perAppRegistries ? { perAppRegistries } : {}),
     logger,
     metrics,
     telemetry,
@@ -2125,7 +2212,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         }
         const responseBody: Record<string, unknown> = {
           schemaHash: store.schema.hash,
-          data: await store.blobs.list(principal.tenantId, requestedOwnerId),
+          data: await store.blobs.list(principal.tenantId, requestedOwnerId, activeAppId),
         };
         // Quota-aware listing (FR-56): when scoped to a single owner, report
         // that owner's current usage and the effective per-principal cap.
@@ -2140,6 +2227,7 @@ export function createFrickServer(options: ServerOptions = {}) {
             usedBytes: await store.blobs.totalBytesForOwner(
               principal.tenantId,
               requestedOwnerId,
+              activeAppId,
             ),
             quotaBytes: quotaConfigured ? quota : null,
           };
@@ -2155,7 +2243,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     if (blobContentId && request.method === "PUT") {
       try {
         const content = await readRawBody(request, tenantLimits.maxBlobBytes, "maxBlobBytes");
-        const metadata = await store.blobs.read(principal.tenantId, blobContentId);
+        const metadata = await store.blobs.read(principal.tenantId, blobContentId, activeAppId);
         const contentHash = sha256ContentHash(content);
         let responseStatus = 200;
         let responseContentHash = metadata?.contentHash ?? contentHash;
@@ -2220,6 +2308,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           const currentBytes = await store.blobs.totalBytesForOwner(
             principal.tenantId,
             resolvedOwnerId,
+            activeAppId,
           );
           const existingBytes = metadata ? metadata.byteLength : 0;
           const projected = currentBytes - existingBytes + content.byteLength;
@@ -2242,11 +2331,15 @@ export function createFrickServer(options: ServerOptions = {}) {
             mimeType: resolvedMimeType,
             createdAt: new Date().toISOString(),
           };
-          store.blobs.create(principal.tenantId, createdMetadata);
+          // Awaited so the metadata row is committed before writeContent's
+          // FK (blob_content.blob_id → blob_metadata.blob_id) is checked. The
+          // cross-app guard added in FR-153 makes create() do an extra async
+          // round-trip, so the prior fire-and-forget would race the FK.
+          await store.blobs.create(principal.tenantId, createdMetadata, activeAppId);
           responseContentHash = createdMetadata.contentHash;
         }
 
-        store.blobs.writeContent(principal.tenantId, blobContentId, content);
+        await store.blobs.writeContent(principal.tenantId, blobContentId, content, activeAppId);
 
         // Enqueue async post-processing jobs. Each matching processor with a
         // `process` hook gets its own job — apps that want fan-in across
@@ -2255,6 +2348,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           if (!processor.process) continue;
           await store.jobs.enqueue({
             tenantId: principal.tenantId,
+            appId: activeAppId,
             jobType: BLOB_PROCESS_JOB_TYPE,
             payload: encodeBlobProcessPayload({
               blobId: blobContentId,
@@ -2278,8 +2372,8 @@ export function createFrickServer(options: ServerOptions = {}) {
 
     if (blobContentId && request.method === "GET") {
       try {
-        const metadata = await store.blobs.read(principal.tenantId, blobContentId);
-        const content = await store.blobs.readContent(principal.tenantId, blobContentId);
+        const metadata = await store.blobs.read(principal.tenantId, blobContentId, activeAppId);
+        const content = await store.blobs.readContent(principal.tenantId, blobContentId, activeAppId);
         if (!metadata || !content) {
           sendJson(response, 404, { error: "blob_content_not_found" });
           return;
@@ -2312,6 +2406,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         const metadata = await store.blobs.read(
           principal.tenantId,
           derivativeContentRoute.blobId,
+          activeAppId,
         );
         if (!metadata) {
           // Cross-tenant fetches and unknown ids share 404 semantics — we
@@ -2353,7 +2448,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     const derivativeListBlobId = parseDerivativeListPath(url);
     if (derivativeListBlobId && request.method === "GET") {
       try {
-        const metadata = await store.blobs.read(principal.tenantId, derivativeListBlobId);
+        const metadata = await store.blobs.read(principal.tenantId, derivativeListBlobId, activeAppId);
         if (!metadata) {
           sendJson(response, 404, { error: "blob_not_found" });
           return;
@@ -2379,7 +2474,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     if (request.method === "GET" && url.pathname.startsWith("/blobs/")) {
       try {
         const blobId = decodeURIComponent(url.pathname.slice("/blobs/".length));
-        const metadata = blobId ? await store.blobs.read(principal.tenantId, blobId) : undefined;
+        const metadata = blobId ? await store.blobs.read(principal.tenantId, blobId, activeAppId) : undefined;
         if (!metadata) {
           sendJson(response, 404, { error: "blob_not_found" });
           return;
@@ -2403,14 +2498,18 @@ export function createFrickServer(options: ServerOptions = {}) {
         const body = await readJsonBody(request, tenantLimits.maxHttpBodyBytes);
         const ownerId = requireString(body.ownerId, "ownerId");
         await assertBlobOwnership(principal, ownerId, policyHooks);
-        await store.blobs.create(principal.tenantId, {
-          blobId: requireString(body.blobId, "blobId"),
-          ownerId,
-          contentHash: requireString(body.contentHash, "contentHash"),
-          byteLength: requireNumber(body.byteLength, "byteLength"),
-          mimeType: requireString(body.mimeType, "mimeType"),
-          ...(typeof body.storageKey === "string" ? { storageKey: body.storageKey } : {}),
-        });
+        await store.blobs.create(
+          principal.tenantId,
+          {
+            blobId: requireString(body.blobId, "blobId"),
+            ownerId,
+            contentHash: requireString(body.contentHash, "contentHash"),
+            byteLength: requireNumber(body.byteLength, "byteLength"),
+            mimeType: requireString(body.mimeType, "mimeType"),
+            ...(typeof body.storageKey === "string" ? { storageKey: body.storageKey } : {}),
+          },
+          activeAppId,
+        );
         sendJson(response, 201, { ok: true, blobId: body.blobId });
       } catch (error) {
         sendErrorWithMetrics(response, error, "blob_rejected");
@@ -2429,8 +2528,15 @@ export function createFrickServer(options: ServerOptions = {}) {
           policyHooks,
         );
         const value = await readJsonBody(request, tenantLimits.maxHttpBodyBytes);
-        await store.enqueueSignal(principal.tenantId, signalRoute.name, signalRoute.key, value);
-        gateway.publishSignal(signalRoute.name, signalRoute.key, value, principal.tenantId);
+        await store.enqueueSignal(
+          principal.tenantId,
+          signalRoute.name,
+          signalRoute.key,
+          value,
+          undefined,
+          activeAppId,
+        );
+        gateway.publishSignal(signalRoute.name, signalRoute.key, value, principal.tenantId, activeAppId);
         sendJson(response, 200, { ok: true });
       } catch (error) {
         sendErrorWithMetrics(response, error, "signal_rejected");
@@ -2451,7 +2557,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           schemaHash: store.schema.hash,
           name: signalRoute.name,
           key: signalRoute.key,
-          data: await store.drainSignals(principal.tenantId, signalRoute.name, signalRoute.key),
+          data: await store.drainSignals(principal.tenantId, signalRoute.name, signalRoute.key, activeAppId),
         });
       } catch (error) {
         sendErrorWithMetrics(response, error, "signal_rejected");

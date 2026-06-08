@@ -1,11 +1,21 @@
 import type { FrickSchema } from "@fricken/protocol";
 import { FrickConfigError } from "../config.js";
+import type { FrickProjection } from "../projections/registry.js";
+import type { FrickJobHandler } from "../jobs/registry.js";
 
 /**
  * Declarative description of a Frick "app" — a distinct schema mounted at a
- * URL prefix on the multi-app server. V1 scopes this to URL routing only;
- * storage and per-app config (projections, processors, push, search) remain
- * server-shared. See `docs/operations.md` for the storage-partition follow-up.
+ * URL prefix on the multi-app server. Storage is server-shared but partitioned
+ * by `app_id` (FR-153); URL routing selects the active app at the request
+ * boundary.
+ *
+ * Per-app projections and job handlers (FR-153): an app MAY declare its own
+ * `projections` / `jobs` so its projection registry and job-handler registry
+ * are independent of every other app's — app A's projection never fires on app
+ * B's writes, and a handler app A registered never runs app B's jobs. When an
+ * app omits them, that app simply has no app-local projections/handlers (the
+ * server-wide `options.projections` / `options.jobs.handlers` still apply to
+ * the default app). Single-app servers declare neither and are unaffected.
  */
 export interface FrickAppDefinition {
   /** Stable identifier, e.g. "chat" or "docs". Surfaced in errors and inspection. */
@@ -17,6 +27,17 @@ export interface FrickAppDefinition {
    * The root app uses "" (empty string) to preserve the legacy single-app layout.
    */
   readonly basePath: string;
+  /**
+   * Projections scoped to THIS app (FR-153). Registered into the app's own
+   * projection registry, so they only observe writes made under this app's id.
+   */
+  readonly projections?: readonly FrickProjection[];
+  /**
+   * Background-job handlers scoped to THIS app (FR-153), keyed by job type.
+   * Registered into the app's own job-handler registry, so they only run jobs
+   * enqueued under this app's id.
+   */
+  readonly jobs?: Readonly<Record<string, FrickJobHandler>>;
 }
 
 /** Result of a successful path lookup against the registry. */

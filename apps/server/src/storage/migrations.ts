@@ -971,6 +971,29 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
         ON idempotency_keys (app_id, tenant_id, replica_id, request_id);
     `,
   },
+  {
+    // FR-153 (tail): the job idempotency uniqueness was scoped per
+    // `(tenant_id, job_type, idempotency_key)` (migration 0010). After the
+    // app boundary (0021) two distinct apps reusing the same idempotency key
+    // for the same job type would collide on that index — app A enqueuing
+    // `send`/`k-1` would wrongly dedupe app B's `send`/`k-1`, a cross-app
+    // leak through the dedupe path. Rescope the partial unique index to
+    // include `app_id`. Drop-and-recreate is safe: the index is derived, not
+    // data; and the existing single-app rows all carry `_default`, so the new
+    // index covers exactly the same rows for a single-app server.
+    //
+    // Schema revision stays at 1: the wire protocol is unchanged.
+    id: "0022_jobs_idempotency_app_scope",
+    schemaRevision: 1,
+    description:
+      "Rescope the jobs idempotency unique index to include app_id so two apps' identical idempotency keys never collide (FR-153).",
+    sql: `
+      DROP INDEX IF EXISTS idx_jobs_idempotency_key;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency_key
+        ON jobs (app_id, tenant_id, job_type, idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
+    `,
+  },
 ];
 
 /** Names of all framework tables (and indexes) the runner manages. Used by the

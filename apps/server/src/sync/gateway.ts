@@ -881,10 +881,22 @@ export class SyncGateway {
     }
   }
 
-  publishSignal(name: string, key: string, value: PlainObject, tenantId: string, requestId = "http"): void {
-    routeSignal(this.store, this.#subscriptions, { requestId, name, key, value }, tenantId, {
-      maxBufferedAmount: this.#limits.maxWebSocketOutboundBufferedBytes,
-    });
+  publishSignal(
+    name: string,
+    key: string,
+    value: PlainObject,
+    tenantId: string,
+    appId: string = DEFAULT_APP_ID,
+    requestId = "http",
+  ): void {
+    routeSignal(
+      this.store,
+      this.#subscriptions,
+      { requestId, name, key, value },
+      tenantId,
+      { maxBufferedAmount: this.#limits.maxWebSocketOutboundBufferedBytes },
+      appId,
+    );
     if (this.#clusterBus) {
       this.#clusterBus.publish({
         kind: "signal",
@@ -1494,10 +1506,18 @@ export class SyncGateway {
       this.#limits.presenceTtlMaxSeconds,
       (from, to) => console.warn(`Clamped presence TTL for ${payload.name} from ${from}s to ${to}s`),
     );
-    await this.store.setPresence(principal.tenantId, payload.name, payload.key, payload.value, clampedSeconds * 1000);
+    const presenceAppId = this.#appIdFor(client);
+    await this.store.setPresence(
+      principal.tenantId,
+      payload.name,
+      payload.key,
+      payload.value,
+      clampedSeconds * 1000,
+      presenceAppId,
+    );
     this.#fanOutPresenceDelta(principal.tenantId, payload.name, payload.key, [
       { key: payload.key, value: payload.value },
-    ], []);
+    ], [], presenceAppId);
     if (this.#clusterBus) {
       this.#clusterBus.publish({
         kind: "presenceDelta",
@@ -1530,8 +1550,9 @@ export class SyncGateway {
       }
       throw error;
     }
-    await this.store.clearPresence(principal.tenantId, payload.name, payload.key);
-    this.#fanOutPresenceDelta(principal.tenantId, payload.name, payload.key, [], [payload.key]);
+    const clearAppId = this.#appIdFor(client);
+    await this.store.clearPresence(principal.tenantId, payload.name, payload.key, clearAppId);
+    this.#fanOutPresenceDelta(principal.tenantId, payload.name, payload.key, [], [payload.key], clearAppId);
     if (this.#clusterBus) {
       this.#clusterBus.publish({
         kind: "presenceDelta",
@@ -1557,6 +1578,7 @@ export class SyncGateway {
     key: string,
     records: ReadonlyArray<{ key: string; value: PlainObject | null }>,
     cleared: readonly string[],
+    appId: string = DEFAULT_APP_ID,
   ): void {
     const packed = records
       .filter((r): r is { key: string; value: PlainObject } => r.value !== null)
@@ -1564,6 +1586,11 @@ export class SyncGateway {
     for (const { client: subscriber, subscription } of this.#subscriptions.presenceSubscribers(name, key)) {
       const principal = subscriber.principal;
       if (!principal || !this.#isPrincipalActive(principal) || principal.tenantId !== tenantId) {
+        continue;
+      }
+      // App isolation (FR-153): a presence delta produced under one app must
+      // never reach a subscriber pinned to a different app.
+      if (this.#appIdFor(subscriber) !== appId) {
         continue;
       }
       this.#sendFrame(subscriber, [
@@ -1592,10 +1619,23 @@ export class SyncGateway {
       }
       throw error;
     }
-    await this.store.enqueueSignal(principal.tenantId, payload.name, payload.key, payload.value);
-    await routeSignal(this.store, this.#subscriptions, payload, principal.tenantId, {
-      maxBufferedAmount: this.#limitsFor(client).maxWebSocketOutboundBufferedBytes,
-    });
+    const signalAppId = this.#appIdFor(client);
+    await this.store.enqueueSignal(
+      principal.tenantId,
+      payload.name,
+      payload.key,
+      payload.value,
+      undefined,
+      signalAppId,
+    );
+    await routeSignal(
+      this.store,
+      this.#subscriptions,
+      payload,
+      principal.tenantId,
+      { maxBufferedAmount: this.#limitsFor(client).maxWebSocketOutboundBufferedBytes },
+      signalAppId,
+    );
     this.#sendFrame(client, [FrameKind.Ack, { requestId: payload.requestId }]);
   }
 

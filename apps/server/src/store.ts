@@ -1340,6 +1340,7 @@ export class FrickStore {
     key: string,
     value: PlainObject,
     ttlMs: number,
+    appId?: string,
   ): Promise<void>;
   async setPresence(
     a: string,
@@ -1347,27 +1348,28 @@ export class FrickStore {
     c: string | PlainObject,
     d: PlainObject | number,
     e?: number,
+    f?: string,
   ): Promise<void> {
     if (e !== undefined) {
-      return this.presence.set(a, b, c as string, d as PlainObject, e);
+      return this.presence.set(a, b, c as string, d as PlainObject, e, f ?? DEFAULT_APP_ID);
     }
     return this.presence.set(DEFAULT_TENANT_ID, a, b, c as PlainObject, d as number);
   }
 
   async readPresence(type: string, key: string): Promise<PlainObject | undefined>;
-  async readPresence(tenantId: string, type: string, key: string): Promise<PlainObject | undefined>;
-  async readPresence(a: string, b: string, c?: string): Promise<PlainObject | undefined> {
+  async readPresence(tenantId: string, type: string, key: string, appId?: string): Promise<PlainObject | undefined>;
+  async readPresence(a: string, b: string, c?: string, d?: string): Promise<PlainObject | undefined> {
     if (c !== undefined) {
-      return this.presence.read(a, b, c);
+      return this.presence.read(a, b, c, d ?? DEFAULT_APP_ID);
     }
     return this.presence.read(DEFAULT_TENANT_ID, a, b);
   }
 
   async clearPresence(type: string, key: string): Promise<void>;
-  async clearPresence(tenantId: string, type: string, key: string): Promise<void>;
-  async clearPresence(a: string, b: string, c?: string): Promise<void> {
+  async clearPresence(tenantId: string, type: string, key: string, appId?: string): Promise<void>;
+  async clearPresence(a: string, b: string, c?: string, d?: string): Promise<void> {
     if (c !== undefined) {
-      return this.presence.clear(a, b, c);
+      return this.presence.clear(a, b, c, d ?? DEFAULT_APP_ID);
     }
     return this.presence.clear(DEFAULT_TENANT_ID, a, b);
   }
@@ -1379,6 +1381,7 @@ export class FrickStore {
     key: string,
     value: PlainObject,
     ttlMs?: number,
+    appId?: string,
   ): Promise<void>;
   async enqueueSignal(
     a: string,
@@ -1386,64 +1389,65 @@ export class FrickStore {
     c: string | PlainObject,
     d?: PlainObject | number,
     e?: number,
+    f?: string,
   ): Promise<void> {
     // Disambiguate: 5-arg overload has `c: string`; 4-arg overload has `c: PlainObject`.
     if (typeof c === "string") {
-      return this.signals.enqueue(a, b, c, d as PlainObject, e ?? 30_000);
+      return this.signals.enqueue(a, b, c, d as PlainObject, e ?? 30_000, f ?? DEFAULT_APP_ID);
     }
     return this.signals.enqueue(DEFAULT_TENANT_ID, a, b, c, (d as number | undefined) ?? 30_000);
   }
 
   async drainSignals(type: string, key: string): Promise<PlainObject[]>;
-  async drainSignals(tenantId: string, type: string, key: string): Promise<PlainObject[]>;
-  async drainSignals(a: string, b: string, c?: string): Promise<PlainObject[]> {
+  async drainSignals(tenantId: string, type: string, key: string, appId?: string): Promise<PlainObject[]>;
+  async drainSignals(a: string, b: string, c?: string, d?: string): Promise<PlainObject[]> {
     if (c !== undefined) {
-      return this.signals.drain(a, b, c);
+      return this.signals.drain(a, b, c, d ?? DEFAULT_APP_ID);
     }
     return this.signals.drain(DEFAULT_TENANT_ID, a, b);
   }
 
   async createBlobMetadata(metadata: BlobMetadataInput): Promise<void>;
-  async createBlobMetadata(tenantId: string, metadata: BlobMetadataInput): Promise<void>;
-  async createBlobMetadata(a: string | BlobMetadataInput, b?: BlobMetadataInput): Promise<void> {
+  async createBlobMetadata(tenantId: string, metadata: BlobMetadataInput, appId?: string): Promise<void>;
+  async createBlobMetadata(a: string | BlobMetadataInput, b?: BlobMetadataInput, c?: string): Promise<void> {
     if (typeof a === "string" && b) {
-      return this.blobs.create(a, b);
+      return this.blobs.create(a, b, c ?? DEFAULT_APP_ID);
     }
     return this.blobs.create(DEFAULT_TENANT_ID, a as BlobMetadataInput);
   }
 
   async readBlobMetadata(blobId: string): Promise<BlobMetadata | undefined>;
-  async readBlobMetadata(tenantId: string, blobId: string): Promise<BlobMetadata | undefined>;
-  async readBlobMetadata(a: string, b?: string): Promise<BlobMetadata | undefined> {
+  async readBlobMetadata(tenantId: string, blobId: string, appId?: string): Promise<BlobMetadata | undefined>;
+  async readBlobMetadata(a: string, b?: string, c?: string): Promise<BlobMetadata | undefined> {
     if (b !== undefined) {
-      return this.blobs.read(a, b);
+      return this.blobs.read(a, b, c ?? DEFAULT_APP_ID);
     }
     return this.blobs.read(DEFAULT_TENANT_ID, a);
   }
 
   /**
    * Legacy single-tenant facade. The single-arg form treats `ownerId` as a
-   * filter within {@link DEFAULT_TENANT_ID}. For explicit tenant scoping
-   * call `store.blobs.list(tenantId, ownerId)` directly.
+   * filter within {@link DEFAULT_TENANT_ID}. For explicit tenant/app scoping
+   * call `store.blobs.list(tenantId, ownerId, appId)` directly.
    */
   async listBlobMetadata(ownerId?: string): Promise<BlobMetadata[]> {
     return this.blobs.list(DEFAULT_TENANT_ID, ownerId);
   }
 
   writeBlobContent(blobId: string, content: Uint8Array): Promise<void>;
-  writeBlobContent(tenantId: string, blobId: string, content: Uint8Array): Promise<void>;
-  async writeBlobContent(a: string, b: string | Uint8Array, c?: Uint8Array): Promise<void> {
+  writeBlobContent(tenantId: string, blobId: string, content: Uint8Array, appId?: string): Promise<void>;
+  async writeBlobContent(a: string, b: string | Uint8Array, c?: Uint8Array, d?: string): Promise<void> {
     if (c !== undefined) {
-      return this.blobs.writeContent(a, b as string, c);
+      return this.blobs.writeContent(a, b as string, c, d ?? DEFAULT_APP_ID);
     }
     return this.blobs.writeContent(DEFAULT_TENANT_ID, a, b as Uint8Array);
   }
 
   readBlobContent(blobId: string): Promise<Uint8Array | undefined>;
-  readBlobContent(tenantId: string, blobId: string): Promise<Uint8Array | undefined>;
-  async readBlobContent(a: string, b?: string): Promise<Uint8Array | undefined> {
+  readBlobContent(tenantId: string, blobId: string, appId?: string): Promise<Uint8Array | undefined>;
+  async readBlobContent(a: string, b?: string, c?: string): Promise<Uint8Array | undefined> {
     if (b !== undefined) {
-      return this.blobs.readContent(a, b);
+      return this.blobs.readContent(a, b, c ?? DEFAULT_APP_ID);
     }
     return this.blobs.readContent(DEFAULT_TENANT_ID, a);
   }
@@ -1534,20 +1538,25 @@ export class FrickStore {
   }
 
   enqueueJob(type: string, value: PlainObject): Promise<void>;
-  enqueueJob(tenantId: string, type: string, value: PlainObject): Promise<void>;
-  async enqueueJob(a: string, b: string | PlainObject, c?: PlainObject): Promise<void> {
+  enqueueJob(tenantId: string, type: string, value: PlainObject, appId?: string): Promise<void>;
+  async enqueueJob(a: string, b: string | PlainObject, c?: PlainObject, d?: string): Promise<void> {
     if (c !== undefined) {
-      await this.jobs.enqueue(a, b as string, c);
+      await this.jobs.enqueue({
+        tenantId: a,
+        jobType: b as string,
+        payload: c,
+        appId: d ?? DEFAULT_APP_ID,
+      });
       return;
     }
     await this.jobs.enqueue(DEFAULT_TENANT_ID, a, b as PlainObject);
   }
 
   nextJob(type: string): Promise<StoredJob | undefined>;
-  nextJob(tenantId: string, type: string): Promise<StoredJob | undefined>;
-  async nextJob(a: string, b?: string): Promise<StoredJob | undefined> {
+  nextJob(tenantId: string, type: string, appId?: string): Promise<StoredJob | undefined>;
+  async nextJob(a: string, b?: string, c?: string): Promise<StoredJob | undefined> {
     if (b !== undefined) {
-      return this.jobs.next(a, b);
+      return this.jobs.next(a, b, c ?? DEFAULT_APP_ID);
     }
     return this.jobs.next(DEFAULT_TENANT_ID, a);
   }

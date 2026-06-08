@@ -10,6 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
+import { DEFAULT_APP_ID } from "../app-id.js";
 import type { SqlDriver } from "./sql-driver.js";
 
 /**
@@ -37,17 +38,28 @@ import type { SqlDriver } from "./sql-driver.js";
 export type FrickBlobDriver = "sqlite" | "filesystem" | "s3";
 
 export interface BlobBytesDriver {
-  /** Persist (or overwrite) the bytes for `(tenantId, blobId)`. */
-  write(tenantId: string, blobId: string, content: Uint8Array): void | Promise<void>;
-  /** Read the bytes for `(tenantId, blobId)`, or `undefined` if absent. */
+  /**
+   * Persist (or overwrite) the bytes for `(appId, tenantId, blobId)`. `appId`
+   * is optional and defaults to {@link DEFAULT_APP_ID} (FR-153), so single-app
+   * callers are byte-for-byte unaffected; a multi-app server's two apps storing
+   * the same blob id never collide because the app partitions the bytes.
+   */
+  write(
+    tenantId: string,
+    blobId: string,
+    content: Uint8Array,
+    appId?: string,
+  ): void | Promise<void>;
+  /** Read the bytes for `(appId, tenantId, blobId)`, or `undefined` if absent. */
   read(
     tenantId: string,
     blobId: string,
+    appId?: string,
   ): (Uint8Array | undefined) | Promise<Uint8Array | undefined>;
-  /** Delete the bytes for `(tenantId, blobId)`. No-op when absent. */
-  delete(tenantId: string, blobId: string): void | Promise<void>;
-  /** Whether bytes exist for `(tenantId, blobId)`. */
-  exists(tenantId: string, blobId: string): boolean | Promise<boolean>;
+  /** Delete the bytes for `(appId, tenantId, blobId)`. No-op when absent. */
+  delete(tenantId: string, blobId: string, appId?: string): void | Promise<void>;
+  /** Whether bytes exist for `(appId, tenantId, blobId)`. */
+  exists(tenantId: string, blobId: string, appId?: string): boolean | Promise<boolean>;
 }
 
 interface BlobContentRow {
@@ -66,37 +78,55 @@ interface BlobContentRow {
 export class SqlBlobBytesDriver implements BlobBytesDriver {
   constructor(private readonly sql: SqlDriver) {}
 
-  async write(tenantId: string, blobId: string, content: Uint8Array): Promise<void> {
+  async write(
+    tenantId: string,
+    blobId: string,
+    content: Uint8Array,
+    appId: string = DEFAULT_APP_ID,
+  ): Promise<void> {
     await this.sql.run(
-      `INSERT INTO blob_content (blob_id, content, updated_at, tenant_id)
-          VALUES (?, ?, ?, ?)
+      `INSERT INTO blob_content (app_id, blob_id, content, updated_at, tenant_id)
+          VALUES (?, ?, ?, ?, ?)
           ON CONFLICT (blob_id) DO UPDATE SET
+            app_id = excluded.app_id,
             content = excluded.content,
             updated_at = excluded.updated_at,
             tenant_id = excluded.tenant_id`,
-      [blobId, Buffer.from(content), new Date().toISOString(), tenantId],
+      [appId, blobId, Buffer.from(content), new Date().toISOString(), tenantId],
     );
   }
 
-  async read(tenantId: string, blobId: string): Promise<Uint8Array | undefined> {
+  async read(
+    tenantId: string,
+    blobId: string,
+    appId: string = DEFAULT_APP_ID,
+  ): Promise<Uint8Array | undefined> {
     const row = await this.sql.get<BlobContentRow>(
-      "SELECT content FROM blob_content WHERE tenant_id = ? AND blob_id = ?",
-      [tenantId, blobId],
+      "SELECT content FROM blob_content WHERE app_id = ? AND tenant_id = ? AND blob_id = ?",
+      [appId, tenantId, blobId],
     );
     return row ? Buffer.from(row.content) : undefined;
   }
 
-  async delete(tenantId: string, blobId: string): Promise<void> {
-    await this.sql.run("DELETE FROM blob_content WHERE tenant_id = ? AND blob_id = ?", [
-      tenantId,
-      blobId,
-    ]);
+  async delete(
+    tenantId: string,
+    blobId: string,
+    appId: string = DEFAULT_APP_ID,
+  ): Promise<void> {
+    await this.sql.run(
+      "DELETE FROM blob_content WHERE app_id = ? AND tenant_id = ? AND blob_id = ?",
+      [appId, tenantId, blobId],
+    );
   }
 
-  async exists(tenantId: string, blobId: string): Promise<boolean> {
+  async exists(
+    tenantId: string,
+    blobId: string,
+    appId: string = DEFAULT_APP_ID,
+  ): Promise<boolean> {
     const row = await this.sql.get<{ ok?: number }>(
-      "SELECT 1 AS ok FROM blob_content WHERE tenant_id = ? AND blob_id = ?",
-      [tenantId, blobId],
+      "SELECT 1 AS ok FROM blob_content WHERE app_id = ? AND tenant_id = ? AND blob_id = ?",
+      [appId, tenantId, blobId],
     );
     return Number(row?.ok ?? 0) === 1;
   }
@@ -144,8 +174,8 @@ export class FilesystemBlobBytesDriver implements BlobBytesDriver {
     assertWritable(this.#root);
   }
 
-  write(tenantId: string, blobId: string, content: Uint8Array): void {
-    const target = this.#pathFor(tenantId, blobId);
+  write(tenantId: string, blobId: string, content: Uint8Array, appId: string = DEFAULT_APP_ID): void {
+    const target = this.#pathFor(tenantId, blobId, appId);
     mkdirSync(dirnameOf(target), { recursive: true });
     // Write to a temp sibling then rename, so a concurrent reader never
     // observes a partially-written file and a crash mid-write leaves the old
@@ -166,8 +196,8 @@ export class FilesystemBlobBytesDriver implements BlobBytesDriver {
     }
   }
 
-  read(tenantId: string, blobId: string): Uint8Array | undefined {
-    const target = this.#pathFor(tenantId, blobId);
+  read(tenantId: string, blobId: string, appId: string = DEFAULT_APP_ID): Uint8Array | undefined {
+    const target = this.#pathFor(tenantId, blobId, appId);
     try {
       return readFileSync(target);
     } catch (error) {
@@ -180,13 +210,13 @@ export class FilesystemBlobBytesDriver implements BlobBytesDriver {
     }
   }
 
-  delete(tenantId: string, blobId: string): void {
-    const target = this.#pathFor(tenantId, blobId);
+  delete(tenantId: string, blobId: string, appId: string = DEFAULT_APP_ID): void {
+    const target = this.#pathFor(tenantId, blobId, appId);
     rmSync(target, { force: true });
   }
 
-  exists(tenantId: string, blobId: string): boolean {
-    const target = this.#pathFor(tenantId, blobId);
+  exists(tenantId: string, blobId: string, appId: string = DEFAULT_APP_ID): boolean {
+    const target = this.#pathFor(tenantId, blobId, appId);
     try {
       accessSync(target, fsConstants.F_OK);
       return true;
@@ -201,11 +231,19 @@ export class FilesystemBlobBytesDriver implements BlobBytesDriver {
    * `<root>/<tenant>/...` regardless of the characters in the input — there is
    * no way for a crafted id to climb out of its tenant directory.
    */
-  #pathFor(tenantId: string, blobId: string): string {
+  #pathFor(tenantId: string, blobId: string, appId: string = DEFAULT_APP_ID): string {
     const tenantSegment = encodeSegment(tenantId);
     const blobSegment = encodeSegment(blobId);
     const fanout = blobSegment.slice(0, 2);
-    return join(this.#root, tenantSegment, fanout, blobSegment);
+    // App partitioning (FR-153): non-default apps live under their own encoded
+    // segment so two apps' identically-named blobs never collide on disk. The
+    // `_default` app keeps the historical `<root>/<tenant>/...` layout, so
+    // existing single-app deployments' on-disk paths are byte-for-byte
+    // unchanged after upgrade.
+    if (appId === DEFAULT_APP_ID) {
+      return join(this.#root, tenantSegment, fanout, blobSegment);
+    }
+    return join(this.#root, encodeSegment(appId), tenantSegment, fanout, blobSegment);
   }
 }
 
@@ -308,9 +346,14 @@ export class S3BlobBytesDriver implements BlobBytesDriver {
       .join("/");
   }
 
-  async write(tenantId: string, blobId: string, content: Uint8Array): Promise<void> {
+  async write(
+    tenantId: string,
+    blobId: string,
+    content: Uint8Array,
+    appId: string = DEFAULT_APP_ID,
+  ): Promise<void> {
     try {
-      await this.#client.putObject(this.#keyFor(tenantId, blobId), content);
+      await this.#client.putObject(this.#keyFor(tenantId, blobId, appId), content);
     } catch (error) {
       throw new FrickBlobStorageError(
         `failed to write blob bytes for ${blobId}: ${describeError(error)}`,
@@ -318,9 +361,13 @@ export class S3BlobBytesDriver implements BlobBytesDriver {
     }
   }
 
-  async read(tenantId: string, blobId: string): Promise<Uint8Array | undefined> {
+  async read(
+    tenantId: string,
+    blobId: string,
+    appId: string = DEFAULT_APP_ID,
+  ): Promise<Uint8Array | undefined> {
     try {
-      return await this.#client.getObject(this.#keyFor(tenantId, blobId));
+      return await this.#client.getObject(this.#keyFor(tenantId, blobId, appId));
     } catch (error) {
       throw new FrickBlobStorageError(
         `failed to read blob bytes for ${blobId}: ${describeError(error)}`,
@@ -328,9 +375,13 @@ export class S3BlobBytesDriver implements BlobBytesDriver {
     }
   }
 
-  async delete(tenantId: string, blobId: string): Promise<void> {
+  async delete(
+    tenantId: string,
+    blobId: string,
+    appId: string = DEFAULT_APP_ID,
+  ): Promise<void> {
     try {
-      await this.#client.deleteObject(this.#keyFor(tenantId, blobId));
+      await this.#client.deleteObject(this.#keyFor(tenantId, blobId, appId));
     } catch (error) {
       throw new FrickBlobStorageError(
         `failed to delete blob bytes for ${blobId}: ${describeError(error)}`,
@@ -338,9 +389,13 @@ export class S3BlobBytesDriver implements BlobBytesDriver {
     }
   }
 
-  async exists(tenantId: string, blobId: string): Promise<boolean> {
+  async exists(
+    tenantId: string,
+    blobId: string,
+    appId: string = DEFAULT_APP_ID,
+  ): Promise<boolean> {
     try {
-      return await this.#client.headObject(this.#keyFor(tenantId, blobId));
+      return await this.#client.headObject(this.#keyFor(tenantId, blobId, appId));
     } catch (error) {
       throw new FrickBlobStorageError(
         `failed to stat blob bytes for ${blobId}: ${describeError(error)}`,
@@ -353,11 +408,15 @@ export class S3BlobBytesDriver implements BlobBytesDriver {
    * segments (see {@link encodeSegment}) so the key is always confined to this
    * tenant's prefix regardless of the input characters.
    */
-  #keyFor(tenantId: string, blobId: string): string {
+  #keyFor(tenantId: string, blobId: string, appId: string = DEFAULT_APP_ID): string {
     const tenantSegment = encodeSegment(tenantId);
     const blobSegment = encodeSegment(blobId);
     const fanout = blobSegment.slice(0, 2);
-    const parts = [this.#prefix, tenantSegment, fanout, blobSegment].filter(
+    // App partitioning (FR-153): non-default apps get their own encoded key
+    // segment so two apps' blobs never address the same object. The `_default`
+    // app keeps the historical key layout — existing buckets are unchanged.
+    const appSegment = appId === DEFAULT_APP_ID ? "" : encodeSegment(appId);
+    const parts = [this.#prefix, appSegment, tenantSegment, fanout, blobSegment].filter(
       (part) => part.length > 0,
     );
     return parts.join("/");

@@ -19,6 +19,7 @@ import type { FrickMetrics } from "../metrics.js";
 import type { PlatformEventPipeline } from "../platform-events/types.js";
 import type { FrickStore } from "../store.js";
 import type { JobRow } from "../storage/job-store.js";
+import type { FrickPerAppRegistries } from "../apps/per-app-registries.js";
 import { emitDevToolsEvent } from "../devtools/emit.js";
 import type {
   FrickJobTelemetryResult,
@@ -40,6 +41,15 @@ export interface FrickJobWorker {
 export interface FrickJobWorkerOptions {
   store: FrickStore;
   registry: FrickJobRegistry;
+  /**
+   * Per-app job-handler registries (FR-153). When supplied, the worker resolves
+   * each claimed job's handler from `perAppRegistries.for(job.appId).jobs` so a
+   * handler registered for app A never runs app B's jobs — even though both
+   * apps share the one `jobs` table and this one worker. When omitted (the
+   * single-app default) every job dispatches through the shared {@link registry}
+   * exactly as before, byte-for-byte unchanged.
+   */
+  perAppRegistries?: FrickPerAppRegistries;
   logger: FrickLogger;
   workerId?: string;
   pollIntervalMs?: number;
@@ -59,6 +69,7 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
   const {
     store,
     registry,
+    perAppRegistries,
     logger,
     metrics,
     telemetry,
@@ -117,7 +128,13 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
   async function runJob(job: JobRow): Promise<void> {
     inFlight += 1;
     const startedAtMs = Date.now();
-    const handler = registry.resolve(job.jobType);
+    // Per-app dispatch (FR-153): route to the originating app's handler
+    // registry so app A's handlers never fire on app B's jobs. Falls back to
+    // the shared registry for the single-app default.
+    const handlerRegistry = perAppRegistries
+      ? perAppRegistries.for(job.appId).jobs
+      : registry;
+    const handler = handlerRegistry.resolve(job.jobType);
     const ctx = {
       tenantId: job.tenantId,
       jobId: job.id,

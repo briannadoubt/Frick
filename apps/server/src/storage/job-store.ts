@@ -1,5 +1,6 @@
 import { decode, encode } from "@msgpack/msgpack";
 import type { PlainObject } from "@fricken/protocol";
+import { DEFAULT_APP_ID } from "../app-id.js";
 import type { SqlDriver } from "./sql-driver.js";
 
 /**
@@ -20,6 +21,8 @@ export type JobStatus = "ready" | "running" | "completed" | "dead_lettered";
 export interface JobRow {
   id: number;
   tenantId: string;
+  /** App partition (FR-153); {@link DEFAULT_APP_ID} for single-app servers. */
+  appId: string;
   jobType: string;
   payload: PlainObject;
   status: JobStatus;
@@ -52,6 +55,8 @@ export interface StoredJob {
 
 export interface EnqueueInput {
   tenantId: string;
+  /** App partition (FR-153). Defaults to {@link DEFAULT_APP_ID} when omitted. */
+  appId?: string;
   jobType: string;
   payload: unknown;
   idempotencyKey?: string;
@@ -61,6 +66,8 @@ export interface EnqueueInput {
 
 export interface ListJobsFilter {
   tenantId?: string;
+  /** Filter to a single app partition (FR-153). Omit to span all apps. */
+  appId?: string;
   status?: JobStatus;
   jobType?: string;
   limit?: number;
@@ -83,6 +90,7 @@ const BACKOFF_BASE_MS = 60 * 1000;
 interface RawJobRow {
   id: number;
   tenant_id: string;
+  app_id: string;
   job_type: string;
   packed: Uint8Array;
   status: string;
@@ -135,11 +143,14 @@ export class JobStore {
         ? { tenantId: a, jobType: b as string, payload: c as PlainObject }
         : a;
 
+    const appId = input.appId ?? DEFAULT_APP_ID;
+
     if (input.idempotencyKey !== undefined) {
       const existing = await this.findByIdempotencyKey(
         input.tenantId,
         input.jobType,
         input.idempotencyKey,
+        appId,
       );
       if (existing) return existing;
     }
@@ -151,11 +162,12 @@ export class JobStore {
 
     const result = await this.sql.run(
       `INSERT INTO jobs (
-            tenant_id, job_type, packed, status, created_at,
+            app_id, tenant_id, job_type, packed, status, created_at,
             available_at, max_attempts, attempt_count, idempotency_key
-          ) VALUES (?, ?, ?, 'ready', ?, ?, ?, 0, ?)
+          ) VALUES (?, ?, ?, ?, 'ready', ?, ?, ?, 0, ?)
           RETURNING id`,
       [
+        appId,
         input.tenantId,
         input.jobType,
         packed,
@@ -185,13 +197,27 @@ export class JobStore {
    * attempt_count += 1) is applied in the same statement; callers don't see
    * a window where a row is selected but not yet marked running.
    */
-  async claim(workerId: string, jobType?: string, limit: number = 10): Promise<JobRow[]> {
+  async claim(
+    workerId: string,
+    jobType?: string,
+    limit: number = 10,
+    appId?: string,
+  ): Promise<JobRow[]> {
     const now = new Date().toISOString();
     const params: Array<string | number> = [now, workerId, now];
     let typeClause = "";
     if (jobType !== undefined) {
       typeClause = "AND job_type = ?";
       params.push(jobType);
+    }
+    // Per-app dispatch (FR-153): when an appId is supplied, a worker claims
+    // ONLY that app's ready jobs, so app A's handlers never run app B's jobs.
+    // Omitting appId (the single-app default) claims across all apps exactly as
+    // before — byte-for-byte unchanged.
+    let appClause = "";
+    if (appId !== undefined) {
+      appClause = "AND app_id = ?";
+      params.push(appId);
     }
     params.push(limit);
 
@@ -212,7 +238,7 @@ export class JobStore {
             attempt_count = attempt_count + 1
           WHERE id IN (
             SELECT id FROM jobs
-            WHERE status = 'ready' AND available_at <= ? ${typeClause}
+            WHERE status = 'ready' AND available_at <= ? ${typeClause} ${appClause}
             ORDER BY available_at ASC, id ASC
             LIMIT ?
             ${lockClause}
@@ -300,6 +326,10 @@ export class JobStore {
       where.push("tenant_id = ?");
       params.push(filter.tenantId);
     }
+    if (filter.appId !== undefined) {
+      where.push("app_id = ?");
+      params.push(filter.appId);
+    }
     if (filter.status !== undefined) {
       where.push("status = ?");
       params.push(filter.status);
@@ -320,12 +350,16 @@ export class JobStore {
     return rows.map((row) => mapRow(row));
   }
 
-  async getById(jobId: number, tenantId?: string): Promise<JobRow | undefined> {
+  async getById(jobId: number, tenantId?: string, appId?: string): Promise<JobRow | undefined> {
     const params: Array<string | number> = [jobId];
     let where = "id = ?";
     if (tenantId !== undefined) {
       where += " AND tenant_id = ?";
       params.push(tenantId);
+    }
+    if (appId !== undefined) {
+      where += " AND app_id = ?";
+      params.push(appId);
     }
     const row = await this.sql.get<RawJobRow>(
       `SELECT * FROM jobs WHERE ${where} LIMIT 1`,
@@ -374,8 +408,12 @@ export class JobStore {
    * recorded — preserved so old call sites compile while the worker uses the
    * new lifecycle.
    */
-  async next(tenantId: string, type: string): Promise<StoredJob | undefined> {
-    const claimed = await this.claim(`legacy:${tenantId}`, type, 1);
+  async next(
+    tenantId: string,
+    type: string,
+    appId: string = DEFAULT_APP_ID,
+  ): Promise<StoredJob | undefined> {
+    const claimed = await this.claim(`legacy:${tenantId}`, type, 1, appId);
     const row = claimed[0];
     if (!row) return undefined;
     return { id: row.id, name: row.jobType, value: row.payload };
@@ -385,12 +423,13 @@ export class JobStore {
     tenantId: string,
     jobType: string,
     idempotencyKey: string,
+    appId: string = DEFAULT_APP_ID,
   ): Promise<JobRow | undefined> {
     const row = await this.sql.get<RawJobRow>(
       `SELECT * FROM jobs
-          WHERE tenant_id = ? AND job_type = ? AND idempotency_key = ?
+          WHERE app_id = ? AND tenant_id = ? AND job_type = ? AND idempotency_key = ?
           LIMIT 1`,
-      [tenantId, jobType, idempotencyKey],
+      [appId, tenantId, jobType, idempotencyKey],
     );
     return row ? mapRow(row) : undefined;
   }
@@ -400,6 +439,7 @@ function mapRow(row: RawJobRow): JobRow {
   const result: JobRow = {
     id: Number(row.id),
     tenantId: row.tenant_id,
+    appId: row.app_id ?? DEFAULT_APP_ID,
     jobType: row.job_type,
     payload: decode(row.packed) as PlainObject,
     status: row.status as JobStatus,

@@ -75,6 +75,7 @@ describe("framework migration runner", () => {
       "0019_service_principals",
       "0020_saml_seen_assertions",
       "0021_app_boundary",
+      "0022_jobs_idempotency_app_scope",
     ]);
     expect(result.applied[0]?.schemaRevision).toBe(1);
     expect(result.applied[0]?.checksum).toMatch(/^sha256-[0-9a-f]{64}$/);
@@ -103,6 +104,7 @@ describe("framework migration runner", () => {
       "0019_service_principals",
       "0020_saml_seen_assertions",
       "0021_app_boundary",
+      "0022_jobs_idempotency_app_scope",
     ]);
 
     const tables = listTables(db);
@@ -124,10 +126,10 @@ describe("framework migration runner", () => {
       supportedSchemaRevision: foundationSchema.schemaRevision,
     });
 
-    expect(first.applied).toHaveLength(21);
+    expect(first.applied).toHaveLength(22);
     expect(second.applied).toHaveLength(0);
-    expect(second.alreadyApplied).toHaveLength(21);
-    expect(listAppliedMigrations(db)).toHaveLength(21);
+    expect(second.alreadyApplied).toHaveLength(22);
+    expect(listAppliedMigrations(db)).toHaveLength(22);
 
     db.close();
   });
@@ -270,6 +272,7 @@ describe("framework migration runner", () => {
       "0019_service_principals",
       "0020_saml_seen_assertions",
       "0021_app_boundary",
+      "0022_jobs_idempotency_app_scope",
       "9000_test_extra",
     ]);
     expect(listTables(db)).toContain("test_extra");

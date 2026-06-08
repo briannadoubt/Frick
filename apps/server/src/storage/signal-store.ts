@@ -6,6 +6,7 @@ import {
   type PackedSignalEnvelope,
   type PlainObject,
 } from "@fricken/protocol";
+import { DEFAULT_APP_ID } from "../app-id.js";
 import type { SqlDriver } from "./sql-driver.js";
 
 interface SignalRow {
@@ -13,6 +14,13 @@ interface SignalRow {
   packed: Uint8Array;
 }
 
+/**
+ * App partitioning (FR-153): every method takes a trailing `appId` defaulting
+ * to {@link DEFAULT_APP_ID}, so single-app callers are byte-for-byte
+ * unaffected. enqueue() stamps `app_id`; drain() filters by it (and only
+ * deletes rows it drained), so app A can neither read nor consume app B's
+ * queued signals at the same (tenant, type, key).
+ */
 export class SignalStore {
   constructor(
     private readonly sql: SqlDriver,
@@ -25,21 +33,27 @@ export class SignalStore {
     key: string,
     value: PlainObject,
     ttlMs: number,
+    appId: string = DEFAULT_APP_ID,
   ): Promise<void> {
     const packed = packSignalEnvelope(this.schema, type, key, value);
     await this.sql.run(
-      `INSERT INTO signal_outbox (tenant_id, signal_type, signal_key, packed, expires_at)
-          VALUES (?, ?, ?, ?, ?)`,
-      [tenantId, type, key, Buffer.from(encode(packed)), Date.now() + ttlMs],
+      `INSERT INTO signal_outbox (app_id, tenant_id, signal_type, signal_key, packed, expires_at)
+          VALUES (?, ?, ?, ?, ?, ?)`,
+      [appId, tenantId, type, key, Buffer.from(encode(packed)), Date.now() + ttlMs],
     );
   }
 
-  async drain(tenantId: string, type: string, key: string): Promise<PlainObject[]> {
+  async drain(
+    tenantId: string,
+    type: string,
+    key: string,
+    appId: string = DEFAULT_APP_ID,
+  ): Promise<PlainObject[]> {
     const rows = await this.sql.all<SignalRow>(
       `SELECT id, packed FROM signal_outbox
-          WHERE tenant_id = ? AND signal_type = ? AND signal_key = ? AND expires_at > ?
+          WHERE app_id = ? AND tenant_id = ? AND signal_type = ? AND signal_key = ? AND expires_at > ?
           ORDER BY id ASC`,
-      [tenantId, type, key, Date.now()],
+      [appId, tenantId, type, key, Date.now()],
     );
     if (rows.length === 0) {
       return [];
