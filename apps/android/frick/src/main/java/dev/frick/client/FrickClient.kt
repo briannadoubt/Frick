@@ -153,6 +153,17 @@ private data class LoginRequest(
 )
 
 @Serializable
+private data class ForgotPasswordRequest(
+    val email: String,
+)
+
+@Serializable
+private data class ResetPasswordRequest(
+    val token: String,
+    val password: String,
+)
+
+@Serializable
 private data class AnalyticsTrackRequest(
     val name: String,
     val properties: Map<String, JsonElement>? = null,
@@ -764,7 +775,7 @@ class KtorFrickTransport(
 
 class FrickClient(
     baseUrl: String = DefaultBaseUrl,
-    private val replicaId: String = "android-demo",
+    val replicaId: String = "android-demo",
     private val requestIdFactory: () -> String = { UUID.randomUUID().toString() },
     private val storage: FrickStorage = NoopFrickStorage,
     private val transport: FrickTransport = KtorFrickTransport(
@@ -876,9 +887,50 @@ class FrickClient(
         parseSession(response).also(storage::saveSession)
     }
 
+    /**
+     * The session the client currently holds, restored from (and kept in sync
+     * with) the injected encrypted [FrickStorage]. `null` when signed out.
+     *
+     * Mirrors Swift `FrickClient.currentSession`. This is the durable session
+     * the auth verbs install — an observable auth-state holder
+     * ([FrickSessionManager]) seeds from it so a persisted session is reflected
+     * immediately on a warm launch without app-side restore code.
+     */
+    val currentSession: FrickSession?
+        get() = storage.loadSession()
+
     fun signOut() {
         storage.clearPendingAppends()
         storage.clearSession()
+    }
+
+    /**
+     * Kick off the email password-reset flow. The server always returns 200
+     * (privacy: no email-enumeration leak) — present the success UI regardless
+     * of whether the address is on file. Mirrors Swift
+     * `FrickClient.requestPasswordReset`. Stateless: does not touch the active
+     * session.
+     */
+    suspend fun requestPasswordReset(email: String) = withContext(Dispatchers.IO) {
+        transport.post(
+            path = "/auth/email/forgot-password",
+            body = frickJson.encodeToString(ForgotPasswordRequest(email = email)),
+        )
+        Unit
+    }
+
+    /**
+     * Complete the email password-reset flow with the one-time token and a new
+     * password. Mirrors Swift `FrickClient.resetPassword`. The server
+     * invalidates the user's sessions on success, so sign in again afterwards
+     * to re-establish one. Stateless: does not touch the active session.
+     */
+    suspend fun resetPassword(token: String, newPassword: String) = withContext(Dispatchers.IO) {
+        transport.post(
+            path = "/auth/email/reset-password",
+            body = frickJson.encodeToString(ResetPasswordRequest(token = token, password = newPassword)),
+        )
+        Unit
     }
 
     suspend fun fetchBlobMetadata(blobId: String): FrickBlobMetadata? = withContext(Dispatchers.IO) {

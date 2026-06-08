@@ -9,6 +9,7 @@ import dev.frick.client.ConversationDto
 import dev.frick.client.FrickClient
 import dev.frick.client.FrickInboundEvent
 import dev.frick.client.FrickSession
+import dev.frick.client.FrickSessionManager
 import dev.frick.client.FrickStreamEvent
 import dev.frick.client.FrickSyncSocket
 import dev.frick.client.FrickSyncStatus
@@ -118,6 +119,11 @@ internal data class FoundationUiState(
 internal class FoundationViewModel(application: Application) : AndroidViewModel(application) {
     private val storage = SQLiteFrickStorage(application)
     private val frick = FrickClient(baseUrl = DemoBaseUrl, storage = storage)
+    // Observable auth-state holder (FR-151) riding the client's encrypted
+    // session persistence. Seeds its session from `frick.currentSession`, so a
+    // session restored from the SQLite store is reflected immediately on a warm
+    // launch — no ad-hoc session read here.
+    private val sessionManager = FrickSessionManager(client = frick)
     private val prefs = application.getSharedPreferences(PrefsName, Context.MODE_PRIVATE)
     private var streamJob: Job? = null
     private var socket: FrickSyncSocket? = null
@@ -131,7 +137,7 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
     private var socketEventsJob: Job? = null
     private var typingJob: Job? = null
 
-    private val initialSession = storage.loadSession()
+    private val initialSession = sessionManager.state.value.session
     private val _uiState = MutableStateFlow(
         FoundationUiState(
             session = initialSession,
@@ -143,6 +149,19 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
     val uiState: StateFlow<FoundationUiState> = _uiState.asStateFlow()
 
     init {
+        // Mirror the session manager's observable auth state into the UI state
+        // so the gate (and the in-flight flag) ride the SDK holder rather than
+        // hand-tracked fields.
+        viewModelScope.launch {
+            sessionManager.state.collect { authState ->
+                _uiState.update { state ->
+                    state.copy(
+                        session = authState.session,
+                        isAuthenticating = authState.isAuthenticating,
+                    )
+                }
+            }
+        }
         if (initialSession != null) {
             connectSocket()
             startMessageStream()
@@ -388,7 +407,7 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
                 putBoolean(PrefPushEnabled, false)
             }
             FrickSyncWorker.cancel(getApplication())
-            frick.signOut()
+            sessionManager.signOut()
             _uiState.value = FoundationUiState()
         }
     }
@@ -409,27 +428,29 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
             _uiState.update { state -> state.copy(authError = "Enter a display name.") }
             return
         }
+        // `isAuthenticating` is now driven by the session manager's observable
+        // state (collected in `init`); only the demo-specific status/error
+        // fields are set here.
         _uiState.update { state ->
             state.copy(
-                isAuthenticating = true,
                 status = if (requestedMode == AuthMode.SignUp) "Creating account" else "Signing in",
                 authError = null,
             )
         }
         viewModelScope.launch {
             try {
-                val nextSession = when (requestedMode) {
-                    AuthMode.Login -> frick.login(
+                when (requestedMode) {
+                    AuthMode.Login -> sessionManager.signIn(
                         identity = normalizedHandle, password = requestedPassword,
                         deviceId = DemoDeviceId, replicaId = DemoReplicaId, platform = DemoPlatform,
                     )
-                    AuthMode.SignUp -> frick.signUp(
+                    AuthMode.SignUp -> sessionManager.signUp(
                         displayName = normalizedDisplayName, handle = normalizedHandle, password = requestedPassword,
                         deviceId = DemoDeviceId, replicaId = DemoReplicaId, platform = DemoPlatform,
                     )
                 }
                 _uiState.update { state ->
-                    state.copy(session = nextSession, password = "", status = "Signed in", threadListVisible = true)
+                    state.copy(password = "", status = "Signed in", threadListVisible = true)
                 }
                 connectSocket()
                 startMessageStream()
@@ -440,8 +461,6 @@ internal class FoundationViewModel(application: Application) : AndroidViewModel(
                         status = error.localizedMessage ?: "Authentication failed",
                     )
                 }
-            } finally {
-                _uiState.update { state -> state.copy(isAuthenticating = false) }
             }
         }
     }
