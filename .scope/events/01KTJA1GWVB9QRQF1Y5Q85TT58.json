@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJA1GWVB9QRQF1Y5Q85TT58",
+  "ts": "2026-06-08T00:27:39.803Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0Y",
+    "commentId": "01KTJA1GWVB9QRQF1Y5Q85TT57",
+    "author": "claude",
+    "body": "All children complete — closing epic. (Shipped via the parallel agent waves.)"
+  }
+}
