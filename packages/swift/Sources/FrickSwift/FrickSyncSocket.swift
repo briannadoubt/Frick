@@ -1253,18 +1253,18 @@ public actor FrickSyncSocket {
             eventContinuation?.yield(.objectsDelta(records: objectRecords, cursor: cursor))
         }
         // Object removals (FR-142/FR-144): the gateway carries a `removed`
-        // list of `{ type, id }` maps alongside the back-compat tombstone
-        // records in `objects`. Surface them so consumers drop the deleted
-        // rows directly without a refetch. Additive — emitted only when
-        // non-empty so existing consumers are unaffected.
+        // list alongside the back-compat tombstone records in `objects`.
+        // Surface them so consumers drop the deleted rows directly without a
+        // refetch. Emitted after the upserts so a delete wins over its own
+        // tombstone, and only when non-empty so existing consumers are
+        // unaffected. Accepts both the `{type,id}` map shape and the packed
+        // `[typeId, id]` tuple form (resolved via the schema descriptor).
         let removedArray = map["removed"]?.arrayValue ?? []
         var removals: [FrickObjectRemoval] = []
         for entry in removedArray {
-            guard let rm = entry.mapValue,
-                  let type = rm["type"]?.stringValue,
-                  let id = rm["id"]?.stringValue
-            else { continue }
-            removals.append(FrickObjectRemoval(type: type, id: id))
+            if let decoded = decodeObjectRemoval(entry) {
+                removals.append(decoded)
+            }
         }
         if !removals.isEmpty {
             eventContinuation?.yield(.objectsRemoved(removed: removals, cursor: cursor))
@@ -1323,6 +1323,26 @@ public actor FrickSyncSocket {
         }
         fields["id"] = id
         return FrickObjectRecord(type: typeName, id: id, value: fields)
+    }
+
+    /// Decode a single `Delta.removed` entry into a `FrickObjectRemoval`.
+    /// Accepts both the packed tuple form `[objectTypeId, recordId]` (type id
+    /// resolved via the schema descriptor) and the `{type, id}` map shape used
+    /// by JSON-ish fixtures. Returns `nil` for malformed entries or unknown
+    /// object type ids.
+    private func decodeObjectRemoval(_ value: FrickMsgPackValue) -> FrickObjectRemoval? {
+        if let tuple = value.arrayValue, tuple.count >= 2,
+           let typeId = tuple[0].intValue,
+           let id = tuple[1].stringValue,
+           let typeName = descriptor.objectNames[typeId] {
+            return FrickObjectRemoval(type: typeName, id: id)
+        }
+        if let map = value.mapValue,
+           let type = map["type"]?.stringValue,
+           let id = map["id"]?.stringValue {
+            return FrickObjectRemoval(type: type, id: id)
+        }
+        return nil
     }
 
     /// Decode a `PackedStreamEvent` tuple

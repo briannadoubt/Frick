@@ -844,4 +844,59 @@ final class FrickSyncSocketTests: XCTestCase {
         await socket.close()
     }
 
+    /// FR-144 parity: a Delta carrying a `removed` list surfaces as
+    /// `.objectsRemoved`, with packed `[typeId, id]` tuples resolved through
+    /// the injected descriptor. Caches consume this to drop deleted rows.
+    func testDeltaRemovedSurfacesObjectsRemoved() async throws {
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+
+        let descriptor = FrickSchemaDescriptorValues(
+            objectNames: [7: "Account"],
+            objectFields: [7: [1: "name"]],
+            streamNames: [:],
+            eventNames: [:],
+            eventFields: [:]
+        )
+        let socket = FrickSyncSocket(
+            baseURL: URL(string: "http://127.0.0.1:4099")!,
+            sessionToken: "token-1",
+            factory: factory,
+            sleepFor: { _ in },
+            descriptor: descriptor
+        )
+
+        let received = expectation(description: "objectsRemoved decoded")
+        let events = await socket.events
+        let listener = Task {
+            for try await event in events {
+                if case .objectsRemoved(let removals, _) = event,
+                   let first = removals.first, first.type == "Account", first.id == "acc-1" {
+                    received.fulfill()
+                    return
+                }
+            }
+        }
+
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+        task.deliver(.data(helloAckFrame()))
+
+        // Delta with a `removed` list — packed [typeId, id] tuple form.
+        let delta = FrickMsgPackCodec.encodeFrame(FrickFrame(kind: .delta, payload: .map([
+            (.string("cursor"), .int(2)),
+            (.string("objects"), .array([])),
+            (.string("removed"), .array([
+                .array([.int(7), .string("acc-1")]),
+            ])),
+            (.string("events"), .array([])),
+        ])))
+        task.deliver(.data(delta))
+
+        await fulfillment(of: [received], timeout: 2)
+        listener.cancel()
+        await socket.close()
+    }
+
 }

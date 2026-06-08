@@ -1,0 +1,269 @@
+import XCTest
+@testable import FrickSwift
+
+// MARK: - Test model
+
+/// A simple reference-type model conforming to `FrickModel`. Tracks how many
+/// times it was merged so tests can assert in-place merges (vs. replacement).
+@MainActor
+final class WidgetModel: FrickModel {
+    static let objectType = "Widget"
+
+    let id: String
+    private(set) var name: String
+    private(set) var mergeCount = 0
+
+    init?(record: FrickObjectRecord) {
+        guard let name = record.value["name"] else { return nil }
+        self.id = record.id
+        self.name = name
+    }
+
+    func merge(record: FrickObjectRecord) {
+        if let name = record.value["name"] { self.name = name }
+        mergeCount += 1
+    }
+}
+
+// MARK: - Stub event source
+
+/// Hand-feeds `FrickInboundEvent`s into a store so tests exercise the real
+/// reconciliation logic without a socket or server.
+final class StubEventSource: FrickStoreEventSource, @unchecked Sendable {
+    private let continuation: AsyncThrowingStream<FrickInboundEvent, Error>.Continuation
+    private let stream: AsyncThrowingStream<FrickInboundEvent, Error>
+
+    private let lock = NSLock()
+    private var _subscribedTypes: [String] = []
+
+    init() {
+        var cont: AsyncThrowingStream<FrickInboundEvent, Error>.Continuation!
+        self.stream = AsyncThrowingStream(bufferingPolicy: .unbounded) { c in cont = c }
+        self.continuation = cont
+    }
+
+    var events: AsyncThrowingStream<FrickInboundEvent, Error> {
+        get async { stream }
+    }
+
+    func subscribeObject(type: String) async throws {
+        lock.withLock { _subscribedTypes.append(type) }
+    }
+
+    var subscribedTypes: [String] {
+        lock.withLock { _subscribedTypes }
+    }
+
+    func emit(_ event: FrickInboundEvent) {
+        continuation.yield(event)
+    }
+
+    func finish() {
+        continuation.finish()
+    }
+}
+
+// MARK: - Helpers
+
+private func widget(_ id: String, name: String) -> FrickObjectRecord {
+    FrickObjectRecord(type: "Widget", id: id, value: ["id": id, "name": name])
+}
+
+/// Spin the run loop until `condition` holds or we time out. The store's
+/// listener consumes events on a detached Task, so tests must yield to let it
+/// drain before asserting.
+@MainActor
+private func waitUntil(
+    _ condition: @MainActor () -> Bool,
+    timeout: TimeInterval = 2.0
+) async {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !condition(), Date() < deadline {
+        try? await Task.sleep(nanoseconds: 5_000_000)
+    }
+}
+
+// MARK: - Tests
+
+@MainActor
+final class FrickStoreTests: XCTestCase {
+
+    func testSubscribesToModelObjectType() async {
+        let source = StubEventSource()
+        let store = FrickStore<WidgetModel>(source: source)
+        store.start()
+        await waitUntil { source.subscribedTypes == ["Widget"] }
+        XCTAssertEqual(source.subscribedTypes, ["Widget"])
+        XCTAssertFalse(store.hasBootstrapped)
+    }
+
+    func testInitialSnapshotPopulatesSortedCache() async {
+        let source = StubEventSource()
+        let store = FrickStore<WidgetModel>(source: source, sort: { $0.name < $1.name })
+        store.start()
+        await waitUntil { !source.subscribedTypes.isEmpty }
+
+        source.emit(.objectsDelta(records: [
+            widget("2", name: "Banana"),
+            widget("1", name: "Apple"),
+        ], cursor: 1))
+
+        await waitUntil { store.items.count == 2 }
+        XCTAssertTrue(store.hasBootstrapped)
+        XCTAssertEqual(store.items.map(\.id), ["1", "2"])
+        XCTAssertEqual(store.items.map(\.name), ["Apple", "Banana"])
+    }
+
+    func testLiveUpsertInsertsNewRow() async {
+        let source = StubEventSource()
+        let store = FrickStore<WidgetModel>(source: source, sort: { $0.name < $1.name })
+        store.start()
+        await waitUntil { !source.subscribedTypes.isEmpty }
+
+        source.emit(.objectsDelta(records: [widget("1", name: "Apple")], cursor: 1))
+        await waitUntil { store.items.count == 1 }
+
+        source.emit(.objectsDelta(records: [widget("2", name: "Cherry")], cursor: 2))
+        await waitUntil { store.items.count == 2 }
+
+        XCTAssertEqual(store.items.map(\.name), ["Apple", "Cherry"])
+    }
+
+    func testUpsertSameIdMergesInPlace() async {
+        let source = StubEventSource()
+        let store = FrickStore<WidgetModel>(source: source, sort: { $0.name < $1.name })
+        store.start()
+        await waitUntil { !source.subscribedTypes.isEmpty }
+
+        source.emit(.objectsDelta(records: [widget("1", name: "Apple")], cursor: 1))
+        await waitUntil { store.items.count == 1 }
+        let original = store.items[0]
+
+        // Update the same id — name changes, instance identity preserved.
+        source.emit(.objectsDelta(records: [widget("1", name: "Apricot")], cursor: 2))
+        await waitUntil { store.items.first?.name == "Apricot" }
+
+        XCTAssertEqual(store.items.count, 1)
+        XCTAssertTrue(store.items[0] === original, "same-id merge must preserve instance identity")
+        XCTAssertEqual(original.mergeCount, 1, "merge() should be called, not a fresh init")
+    }
+
+    func testReemitOnInPlaceEditTriggersObservation() async {
+        // Invariant (1): an in-place edit reassigns `items` so observation fires.
+        let source = StubEventSource()
+        let store = FrickStore<WidgetModel>(source: source)
+        store.start()
+        await waitUntil { !source.subscribedTypes.isEmpty }
+
+        source.emit(.objectsDelta(records: [widget("1", name: "A")], cursor: 1))
+        await waitUntil { store.items.count == 1 }
+        let arrayBefore = store.items
+
+        source.emit(.objectsDelta(records: [widget("1", name: "B")], cursor: 2))
+        await waitUntil { store.items.first?.name == "B" }
+
+        // The array was reassigned (re-emitted) even though membership is the
+        // same single id — the edited model is reflected.
+        XCTAssertEqual(arrayBefore.count, store.items.count)
+        XCTAssertEqual(store.items.first?.name, "B")
+    }
+
+    func testRemovalDropsRow() async {
+        let source = StubEventSource()
+        let store = FrickStore<WidgetModel>(source: source, sort: { $0.name < $1.name })
+        store.start()
+        await waitUntil { !source.subscribedTypes.isEmpty }
+
+        source.emit(.objectsDelta(records: [
+            widget("1", name: "Apple"),
+            widget("2", name: "Banana"),
+        ], cursor: 1))
+        await waitUntil { store.items.count == 2 }
+
+        source.emit(.objectsRemoved(removed: [FrickObjectRemoval(type: "Widget", id: "1")], cursor: 2))
+        await waitUntil { store.items.count == 1 }
+
+        XCTAssertEqual(store.items.map(\.id), ["2"])
+    }
+
+    func testRemovalOfUnknownIdIsNoOp() async {
+        let source = StubEventSource()
+        let store = FrickStore<WidgetModel>(source: source)
+        store.start()
+        await waitUntil { !source.subscribedTypes.isEmpty }
+
+        source.emit(.objectsDelta(records: [widget("1", name: "Apple")], cursor: 1))
+        await waitUntil { store.items.count == 1 }
+
+        source.emit(.objectsRemoved(removed: [FrickObjectRemoval(type: "Widget", id: "999")], cursor: 2))
+        // Give the loop a beat; nothing should change.
+        await waitUntil({ false }, timeout: 0.2)
+
+        XCTAssertEqual(store.items.map(\.id), ["1"])
+    }
+
+    func testIgnoresRecordsForOtherTypes() async {
+        let source = StubEventSource()
+        let store = FrickStore<WidgetModel>(source: source)
+        store.start()
+        await waitUntil { !source.subscribedTypes.isEmpty }
+
+        source.emit(.objectsDelta(records: [
+            FrickObjectRecord(type: "OtherType", id: "x", value: ["name": "nope"]),
+            widget("1", name: "Apple"),
+        ], cursor: 1))
+        await waitUntil { store.items.count == 1 }
+
+        XCTAssertEqual(store.items.map(\.id), ["1"])
+    }
+
+    func testResetClearsCacheAndAllowsRestart() async {
+        let source = StubEventSource()
+        let store = FrickStore<WidgetModel>(source: source)
+        store.start()
+        await waitUntil { !source.subscribedTypes.isEmpty }
+
+        source.emit(.objectsDelta(records: [widget("1", name: "Apple")], cursor: 1))
+        await waitUntil { store.items.count == 1 }
+
+        store.reset()
+        XCTAssertTrue(store.items.isEmpty)
+        XCTAssertFalse(store.hasBootstrapped)
+
+        // Restartable after reset.
+        let source2 = StubEventSource()
+        let store2 = FrickStore<WidgetModel>(source: source2)
+        store2.start()
+        await waitUntil { source2.subscribedTypes == ["Widget"] }
+        XCTAssertEqual(source2.subscribedTypes, ["Widget"])
+    }
+
+    func testStartIsIdempotent() async {
+        let source = StubEventSource()
+        let store = FrickStore<WidgetModel>(source: source)
+        store.start()
+        store.start()
+        store.start()
+        await waitUntil { !source.subscribedTypes.isEmpty }
+        // Only one subscription despite repeated start() calls.
+        XCTAssertEqual(source.subscribedTypes, ["Widget"])
+    }
+
+    func testStatusErrorSurfacesAsLastError() async {
+        let source = StubEventSource()
+        let store = FrickStore<WidgetModel>(source: source)
+        store.start()
+        await waitUntil { !source.subscribedTypes.isEmpty }
+
+        let status = FrickSyncStatus(
+            state: .reconnecting,
+            serverCapabilities: nil,
+            schemaCompatibility: nil,
+            lastError: "boom",
+            pendingAppendCount: 0
+        )
+        source.emit(.status(status))
+        await waitUntil { store.lastError == "boom" }
+        XCTAssertEqual(store.lastError, "boom")
+    }
+}
