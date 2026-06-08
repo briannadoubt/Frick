@@ -301,6 +301,18 @@ export {
   type RedisClusterBusOptions,
 } from "./cluster/redis-bus.js";
 export {
+  FederatingClusterBus,
+  MemoryRegionBus,
+  MemoryRegionFabric,
+  randomRegionId,
+  type FederatingClusterBusOptions,
+  type FrickRegionBus,
+  type MemoryRegionBusOptions,
+  type RegionEnvelope,
+  type RegionEnvelopeHandler,
+  type RegionId,
+} from "./cluster/region-bus.js";
+export {
   createFrickProjectModule,
   projectModuleToAppDefinition,
   type FrickProjectManifest,
