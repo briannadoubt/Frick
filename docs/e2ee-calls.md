@@ -1,0 +1,248 @@
+# End-to-end encrypted calls (E2EE)
+
+> Status: design + key-epoch seam (FR-85, part of the FR-15 calls epic).
+> This ticket delivers the **design** plus a clean, testable **client-side
+> key-epoch / SFrame-transform seam** ([`packages/core/src/e2ee.ts`](../packages/core/src/e2ee.ts)).
+> Wiring the transform into the real FR-83/FR-155 media path — and shipping a
+> production cipher suite + per-recipient key wrapping — is the explicit
+> follow-up **FR-156** (see [Follow-ups](#follow-ups)). Nothing in this ticket
+> changes existing call behavior: E2EE is opt-in per room and the seam is not
+> yet inserted into the media path.
+
+## Why calls need a second encryption layer
+
+Frick group calls run over an SFU (FR-83, mediasoup — see
+[`sfu-media-plane.ts`](../apps/server/src/calls/sfu-media-plane.ts) and the web
+driver [`packages/core/src/sfu.ts`](../packages/core/src/sfu.ts)). An SFU
+*forwards* each participant's media to the others. SRTP encrypts media on the
+wire, but the SFU terminates that transport encryption: it decrypts incoming
+RTP, inspects/repackages it, and re-encrypts it outbound. **So the media server
+— and anyone who controls it — can see the media.** That is fine for a
+trusted-server product; it is not fine when the threat model includes the server
+operator.
+
+End-to-end encryption adds a **second, inner layer**: each media frame is
+encrypted with a key the SFU never holds, *before* it reaches the SFU, and
+decrypted only by the other call participants *after* the SFU hands it back. The
+SFU forwards opaque ciphertext it cannot read. This frame-level scheme is
+**SFrame** (Secure Frames). The shared frame key is managed in **key epochs**
+that rotate on membership change.
+
+```
+  sender  ── encode ──▶ [SFrame encrypt] ──▶ SRTP ──▶ SFU ──▶ SRTP ──▶ [SFrame decrypt] ──▶ decode  receiver
+                              ▲                         (opaque)                  ▲
+                         epoch key                  forwards bytes          epoch key
+                       (SFU never sees)             it can't read         (SFU never sees)
+```
+
+## Threat model
+
+**E2EE for calls protects against an honest-but-curious media path:**
+
+- **The SFU / media server.** It forwards SFrame-encrypted payloads it cannot
+  decrypt. A compromised or subpoenaed SFU sees ciphertext, not media.
+- **The control-plane / signaling server.** Key epochs are distributed over the
+  call control plane (see below) wrapped per recipient; the relay carries opaque
+  blobs, never raw key material.
+- **The network / passive on-path attacker.** Already covered by SRTP/DTLS for
+  confidentiality on the wire; SFrame additionally denies the *terminating*
+  middlebox (the SFU) any plaintext.
+
+**It explicitly does NOT protect against:**
+
+- **Endpoint compromise.** If a participant's device is compromised, that
+  participant's keys and decrypted media are exposed. E2EE is about the path,
+  not the endpoints.
+- **Metadata.** Who is in a call, when, for how long, packet sizes/timing,
+  speaking activity, network-quality buckets (FR-82) — all still visible to the
+  server. E2EE encrypts media *content*, not call metadata.
+- **Traffic analysis.** Frame sizes and cadence leak (e.g. voice activity).
+  Mitigations (padding, constant-bitrate) are out of scope and not planned.
+- **A malicious participant.** Anyone admitted to the call's current epoch can
+  decrypt that epoch's media — E2EE assumes the participant set is the trust
+  boundary. Authenticating *who* may join is the call control plane's job
+  (FR-79 authz), not SFrame's.
+- **Active group-membership attacks by the server** in the simple (sender-key)
+  key-distribution mode — see the MLS trade-off below.
+
+## SFrame vs MLS: the decision
+
+The ticket names both SFrame and MLS. They solve **different** problems and are
+complementary, not alternatives:
+
+| | SFrame | MLS |
+|---|---|---|
+| What it is | A frame-level **encryption + framing** format (RFC 9605). | A group **key-agreement** protocol (RFC 9420). |
+| Job | Encrypt each media frame with a supplied key; carry the metadata (key id / epoch) a receiver needs. | Let a dynamic group continuously agree on a shared secret with forward secrecy + post-compromise security. |
+| Analogy | The cipher + on-the-wire frame. | How everyone learns the key the cipher uses. |
+
+SFrame needs *a key*; it does not say where the key comes from. The real
+decision is **how the per-epoch frame key is distributed**, and that admits a
+spectrum:
+
+- **Sender-key / hash-ratchet (simple, recommended starting point).** When
+  membership changes, one participant (deterministically chosen — e.g. the call
+  creator, or the lowest participant id, mirroring the P2P "polite peer"
+  tie-break in [`p2p.ts`](../packages/core/src/p2p.ts)) mints a fresh epoch key
+  and distributes it to each current member, wrapped to that member's device
+  key, over the call control plane. Cheap, easy to implement, no third-party
+  library, well-understood. Its weakness: it trusts the distributor to send the
+  same key to everyone and gives weaker *post-compromise* guarantees than a full
+  ratchet tree.
+- **MLS (target for stronger security).** MLS gives efficient (log-sized)
+  re-keying on membership change, forward secrecy, and post-compromise security
+  via its ratchet tree, and authenticates group membership cryptographically so
+  a malicious server can't silently inject a ghost member. The cost is
+  significant: a mature MLS library, credential/identity plumbing, and
+  considerably more protocol surface.
+
+**Recommendation.** Use **SFrame for the media framing/encryption**, keyed by
+**per-epoch secrets**, and start key distribution with the **simple sender-key /
+ratchet scheme over the existing control plane**, with the
+[`KeyDistributor`](../packages/core/src/e2ee.ts) seam abstract enough to swap in
+**MLS** later without touching the SFrame transform or the media path. This
+ships per-room E2EE sooner, keeps the dependency surface small, and leaves a
+clean upgrade path to MLS-grade group security when the threat model demands it.
+The seam in this ticket is built around exactly that split:
+`CallKeyEpochManager` + `KeyDistributor` (key agreement/distribution) are
+independent of `SFrameTransform` (framing/encryption).
+
+## Key-epoch lifecycle
+
+An **epoch** is an immutable `(epochId, key)` bound to a **membership snapshot**.
+`epochId` is a monotonic per-call counter; the `key` is the symmetric frame-key
+material every current member shares for that epoch. The model is implemented by
+[`CallKeyEpochManager`](../packages/core/src/e2ee.ts).
+
+### Rotation triggers
+
+The epoch rotates on **every membership change** — a participant joins or
+leaves (observed from the existing `CallParticipant` records / `CallEventStream`,
+FR-79). Rotation gives the two properties that motivate epochs:
+
+- **Forward secrecy at epoch granularity.** A member who *left* held only the
+  keys for epochs they were part of; after a leave triggers rotation, they can't
+  decrypt future media.
+- **Post-compromise / no-backfill.** A member who *joins* gets only the new
+  epoch's key, so they can't decrypt media from before they were admitted.
+
+### Distribution over the control plane
+
+The participant that triggers a rotation mints the new epoch and **announces** it
+to current members via the [`KeyDistributor`](../packages/core/src/e2ee.ts) seam.
+This rides the **existing call control plane / signal relay** — concretely a new
+`"keyEpoch"` kind on the `WebRTCSignalKind` union in
+[`packages/protocol/src/calls.ts`](../packages/protocol/src/calls.ts), carried by
+the same `SignalSend`/`SignalDeliver` relay that already moves SDP/ICE/`sfuToken`
+opaquely. **No new transport.** Every other member `adopt`s the announced epoch
+so the whole call converges on the same `(epochId, key)`. In production the key
+is **wrapped per recipient** (to each device's public key) so the relay and SFU
+only ever see opaque blobs; the in-memory reference distributor passes raw keys
+because the test fabric has no untrusted middlebox.
+
+### Which epoch a frame is under
+
+Each encrypted frame carries a small **SFrame header** that includes its
+`epochId` (and a per-epoch frame counter used as the nonce source). On receive,
+the transform reads the header, looks up the key for that `epochId` via
+`CallKeyEpochManager.keyFor`, and authenticates the header as AEAD associated
+data — so a frame can't be tricked into decrypting under the wrong epoch.
+
+### Transition window
+
+Media frames are in flight when a rotation happens; a receiver can get an
+epoch-N frame just after moving to epoch N+1. So the manager retains the
+**immediately-previous epoch** for a short **transition window**
+(`previousEpochWindowMs`, default 5 s) and accepts frames under either the
+current or previous epoch during that window. After the window the previous
+epoch's key is dropped — which is exactly what enforces forward secrecy for a
+departed member. The manager keeps **at most one** prior epoch.
+
+## Where it plugs into the media path (FR-83 / FR-155)
+
+The seam defines the insertion points; **FR-156 does the wiring**. It does not
+modify the media path today.
+
+- **Outbound** — in the FR-155 web driver
+  ([`packages/core/src/sfu.ts`](../packages/core/src/sfu.ts)), just before a
+  local track's frames reach the mediasoup send transport's producer, run
+  `SFrameTransform.encrypt` over each frame. The browser hook for this is an
+  **Encoded Transform** (`RTCRtpScriptTransform`, or the insertable-streams
+  `encodedInsertableStreams` fallback) attached to each `RTCRtpSender`. The
+  producer then sends SFrame ciphertext; the SFU forwards it opaquely.
+- **Inbound** — symmetrically, attach a receiver-side Encoded Transform to each
+  `RTCRtpReceiver` (the consumed track from `recvTransport.consume`) and run
+  `SFrameTransform.decrypt` just after the frame leaves the SFU consumer, before
+  it is decoded for playback.
+- **Key distribution** — drive `CallKeyEpochManager.rotate` from membership
+  changes already surfaced by the call control plane, and announce/adopt epochs
+  over the `KeyDistributor` (the `"keyEpoch"` signal kind).
+
+Because SFrame ciphertext is opaque application payload, **the server SFU
+(FR-83) needs no changes** — it already forwards encrypted RTP. The only server
+touch is the additive `"keyEpoch"` signal kind on the relay, which the control
+plane forwards byte-for-byte exactly as it does `sfuToken`.
+
+### What FR-156 (the implementation ticket) must do
+
+1. Replace the reference `AeadSFrameTransform` with a real **SFrame cipher
+   suite** (RFC 9605): proper key derivation (per-sender keys / ratchet), nonce
+   construction with salt, tag handling, and **replay protection** (the
+   reference counter is monotonic but not replay-checked on receive).
+2. Replace `MemoryKeyDistributor` with a control-plane-backed distributor that
+   **wraps the epoch key per recipient** (sender-key over device keys; MLS
+   later) and rides the new `"keyEpoch"` `WebRTCSignal` kind.
+3. Add the `"keyEpoch"` kind to `WebRTCSignalKind` in the protocol and relay it
+   (additive, opaque — like `sfuToken`).
+4. Insert the encrypt/decrypt Encoded Transforms into the FR-155 send/recv path
+   behind a per-room opt-in flag.
+5. Handle codec/SFU constraints: keep frame metadata the SFU still needs (e.g.
+   for SVC/simulcast) outside the encrypted body, per the SFrame spec.
+
+## Performance and UX
+
+- **Per-frame transform cost.** Encrypt/decrypt run on every media frame
+  (~50/s video, ~50/s audio per track). AES-GCM is hardware-accelerated and the
+  marginal cost is small, but it must run **off the main thread** — Encoded
+  Transforms run in a worker, which is why the seam is DOM-free and async.
+- **Key-rotation glitch avoidance.** The transition window is precisely the
+  glitch-avoidance mechanism: without it, every join/leave would drop a burst of
+  in-flight frames (a visible freeze / audio gap). 5 s comfortably covers
+  jitter-buffer + reorder depth while keeping the forward-secrecy window short.
+- **Opt-in, per room.** E2EE is a per-room toggle. A room with E2EE off behaves
+  exactly as today (no transform inserted, no epoch traffic). Turning it on is
+  additive and backward-compatible; a client that doesn't understand the
+  `"keyEpoch"` signal simply can't join an E2EE room's media (fail-closed),
+  rather than silently downgrading.
+- **UX.** Surface an explicit "encrypted" indicator only when *every* participant
+  is in the current epoch; rotation is invisible to the user beyond the
+  (avoided) glitch.
+
+## The seam (this ticket)
+
+[`packages/core/src/e2ee.ts`](../packages/core/src/e2ee.ts), exported from
+`@fricken/core`, framework-agnostic and DOM-free:
+
+- **`CallKeyEpochManager`** — current/previous epoch, `rotate(members)` on
+  membership change, `adopt(epoch)` for peers, `keyFor(epochId)` on receive with
+  the transition window.
+- **`SFrameTransform`** interface + **`AeadSFrameTransform`** reference impl over
+  an injectable **`AeadCryptoProvider`** (default `WebCryptoAeadProvider` lazily
+  using `globalThis.crypto.subtle`; tests inject a deterministic fake). The
+  header (`encodeSFrameHeader`/`decodeSFrameHeader`) carries the `epochId`.
+- **`KeyDistributor`** interface + **`MemoryKeyDistributor`**/
+  **`MemoryKeyDistributorFabric`** — the abstract announce/adopt seam, with an
+  in-process fake mirroring FR-105's `MemoryRegionBus`/`MemoryRegionFabric`.
+
+> ⚠️ The reference `AeadSFrameTransform` is for the **seam and its tests** — a
+> deterministic encrypt→decrypt path with no browser. It is **NOT a
+> production-grade SFrame cipher suite.** The real suite, replay protection, and
+> per-recipient key wrapping land in FR-156.
+
+## Follow-ups
+
+- **FR-156 — Wire SFrame E2EE transform into the SFU media path.** The
+  implementation ticket: real SFrame cipher suite, control-plane key
+  distribution with per-recipient wrapping, the `"keyEpoch"` signal kind, and
+  Encoded-Transform insertion into the FR-155 send/recv path behind a per-room
+  toggle. (Optional future hardening: swap the sender-key distributor for MLS.)

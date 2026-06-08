@@ -3,6 +3,7 @@ export * from "./analytics.js";
 export * from "./bindings.js";
 export * from "./cache.js";
 export * from "./calls.js";
+export * from "./e2ee.js";
 export * from "./http.js";
 export * from "./indexeddb-cache.js";
 export * from "./optimistic.js";
