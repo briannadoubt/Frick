@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTJXR0WZ1NNTYCFWXAMRVBF2",
+  "ts": "2026-06-08T06:12:00.031Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTJXR0WZ1NNTYCFWXAMRVBF1",
+    "number": 156,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Wire SFrame E2EE transform into the SFU media path",
+    "description": "",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ13",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

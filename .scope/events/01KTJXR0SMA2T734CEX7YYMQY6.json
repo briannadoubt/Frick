@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJXR0SMA2T734CEX7YYMQY6",
+  "ts": "2026-06-08T06:11:59.924Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ39",
+    "field": "branch",
+    "value": "feat/fr85-e2ee-design-keyepoch-seam"
+  }
+}

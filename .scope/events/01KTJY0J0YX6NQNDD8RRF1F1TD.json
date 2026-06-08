@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJY0J0YX6NQNDD8RRF1F1TD",
+  "ts": "2026-06-08T06:16:39.710Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ39",
+    "commentId": "01KTJY0J0YX6NQNDD8RRF1F1TC",
+    "author": "claude",
+    "body": "Design-first close (FR-105 pattern). DECISION: SFrame for media framing/encryption keyed by per-epoch secrets; key distribution starts simple (sender-key/ratchet over the EXISTING call control plane via a future additive \"keyEpoch\" WebRTCSignal kind — no new transport) with the KeyDistributor seam abstract enough to swap in MLS later. SEAM (packages/core/src/e2ee.ts, exported from @fricken/core, DOM-free): CallKeyEpochManager (rotate/adopt/keyFor + transition window → forward secrecy at epoch granularity); SFrameTransform interface + reference AeadSFrameTransform over an injectable AeadCryptoProvider (default WebCryptoAeadProvider, tests inject a deterministic fake) with an epochId-bearing authenticated SFrame header; abstract KeyDistributor + in-process MemoryKeyDistributor (FR-105 MemoryRegionBus analogue). Reference transform is explicitly NOT production crypto. Design doc docs/e2ee-calls.md covers threat model, SFrame-vs-MLS, epoch lifecycle, and FR-83/FR-155 insertion points. Additive/opt-in per room; nothing existing changes. Tests (12) prove rotation→fresh epoch, decrypt under N fails under N+1, transition-window accept-then-drop, header carries+authenticates epochId, peer convergence. FOLLOW-UP FR-156: real SFrame cipher suite + replay protection, per-recipient key wrapping, the keyEpoch signal kind, and Encoded-Transform insertion into the FR-155 media path behind a per-room toggle."
+  }
+}
