@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJY4J1QKG5J0A5Z6S63RGR2",
+  "ts": "2026-06-08T06:18:50.807Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ13",
+    "commentId": "01KTJY4J1QKG5J0A5Z6S63RGR1",
+    "author": "claude",
+    "body": "Epic complete. Delivered: FR-78/79 control plane + MediaPlaneAdapter, FR-80 client call helpers (TS/Swift/Android), FR-81 self-built P2P WebRTC (coturn-REST TURN, browser-free-testable driver), FR-82 presence, FR-83 single-box embedded mediasoup SFU (native dep isolated), FR-84 call UI (web/iOS/Android), FR-85 E2EE design + key-epoch seam, FR-154 bus-coordinated multi-box SFU placement, FR-155 web SFU produce/consume client driver. Future hardening tracked as FR-156 (production SFrame). All merged green."
+  }
+}

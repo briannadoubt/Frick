@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJY4HT4MYKNP2S37WZKSD4J",
+  "ts": "2026-06-08T06:18:50.564Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTJXR0WZ1NNTYCFWXAMRVBF1",
+    "commentId": "01KTJY4HT4MYKNP2S37WZKSD4H",
+    "author": "claude",
+    "body": "Reparented out of FR-15: the calls epic delivered its full scope (P2P, mediasoup SFU + multi-box placement, control plane, presence, UI) and the E2EE obligation (FR-85, deferred-design) shipped as design doc + key-epoch seam. FR-156 is net-new future hardening — the production SFrame cipher suite + Encoded-Transform wiring — tracked independently."
+  }
+}
