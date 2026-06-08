@@ -277,6 +277,32 @@ Call setup flow:
 6. Participant state is reflected through presence and durable call events.
 7. Reconnect resumes call state by call id, participant id, and device id.
 
+### Implementation status (FR-78 + FR-79)
+
+The control/signaling plane described above is implemented in
+`apps/server/src/calls/`:
+
+- **FR-78 — `MediaPlaneAdapter`** (`media-plane.ts`): the realized boundary is
+  intentionally slightly broader than the four-method sketch above so the same
+  interface fits both P2P and SFU futures — `describe()` returns static
+  `MediaPlaneCapabilities` (`transport`, `maxParticipants`,
+  `supportsRegionHint`); `allocateSession(callId, opts)` (idempotent per call
+  id, returns a `MediaSession`); `issueJoinToken(callId, participant, opts)`
+  (per-participant short-lived `MediaJoinGrant`); `releaseSession(callId)`
+  (idempotent). `receiveWebhook` is deferred to the real SFU adapter (FR-83).
+  `FakeMediaPlaneAdapter` (`fake-media-plane.ts`) is the deterministic,
+  no-networking implementation used by tests and local dev.
+- **FR-79 — `CallControlPlane`** (`call-control-plane.ts`): the server-side
+  state machine. It persists `CallRoom` / `CallInvite` / `CallParticipant` via
+  the existing object store (no new tables / migration) and appends the durable
+  call events to a `CallEventStream`, brokering the media plane on
+  create/join/end. Transitions are validated, tenant-scoped, and authz-aware
+  (only the creator invites + ends; only invitees join; no action on an ended
+  call; participants change only their own media state; auto-end on last leave).
+  The call object/stream/event/signal type definitions hosts must include in
+  their schema are exported from `call-schema.ts` (`callObjectDefs` etc., plus
+  `buildCallSchema()` for a call-only deployment).
+
 ## 9. Auth, Privacy, And Safety
 
 Authentication:

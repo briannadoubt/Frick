@@ -341,3 +341,9 @@ export {
   type FrickWebSocketConnectionTelemetrySpan,
   type FrickWebSocketFrameTelemetry,
 } from "./telemetry/runtime.js";
+// FR-78 + FR-79 — realtime call control plane: the media-plane adapter
+// boundary (`MediaPlaneAdapter` + deterministic `FakeMediaPlaneAdapter`), the
+// server-authoritative `CallControlPlane` state machine (CallRoom / CallInvite /
+// CallParticipant lifecycle + durable CallEventStream events), and the
+// canonical call schema fragment hosts splice into their schema.
+export * from "./calls/index.js";

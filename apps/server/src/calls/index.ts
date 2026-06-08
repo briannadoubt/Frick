@@ -1,0 +1,46 @@
+// FR-78 — media-plane adapter boundary + deterministic fake.
+export {
+  MediaPlaneError,
+  type AllocateSessionOptions,
+  type IssueJoinTokenOptions,
+  type MediaJoinGrant,
+  type MediaParticipant,
+  type MediaPlaneAdapter,
+  type MediaPlaneCapabilities,
+  type MediaPlaneTransport,
+  type MediaSession,
+} from "./media-plane.js";
+export { FakeMediaPlaneAdapter, type FakeMediaPlaneOptions } from "./fake-media-plane.js";
+
+// FR-79 — call control-plane state machine + canonical schema fragment.
+export {
+  CallControlPlane,
+  CallStateError,
+  CallAuthzError,
+  callActor,
+  type CallActor,
+  type CallAuthzErrorReason,
+  type CallControlPlaneOptions,
+  type CallInviteRecord,
+  type CallKind,
+  type CallParticipantRecord,
+  type CallRoomRecord,
+  type CallStateErrorReason,
+  type CreateCallInput,
+  type CreateCallResult,
+  type JoinCallResult,
+  type MediaState,
+} from "./call-control-plane.js";
+export {
+  DEFAULT_CALL_TYPE_NAMES,
+  CALL_ROOM_STATES,
+  CALL_INVITE_STATES,
+  buildCallSchema,
+  callObjectDefs,
+  callEventDefs,
+  callStreamDefs,
+  callSignalDefs,
+  type CallInviteState,
+  type CallRoomState,
+  type CallTypeNames,
+} from "./call-schema.js";
