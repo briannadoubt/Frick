@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJXWSG0Z543XMFZYT49GWZY",
+  "ts": "2026-06-08T06:14:36.288Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTJVY7DBQ4YFEQ8B0VM5Z623",
+    "commentId": "01KTJXWSG0Z543XMFZYT49GWZX",
+    "author": "claude",
+    "body": "Shipped ClusterMediaPlacement: bus-coordinated home-node registry over FrickClusterBus. claim/resolve/release protocol, lowest-nodeId tie-break (no split-brain), TTL self-heal on missed release. Additive variants on ClusterEnvelope; LocalMediaPlacement stays single-box default. 9 new tests, 1053 server tests green, 0 failures. Out of scope: SFU cascading (PipeTransport), cross-region (FR-105/106)."
+  }
+}

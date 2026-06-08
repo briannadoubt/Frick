@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJXQ6DJNQY9HRWMN75NG5FJ",
+  "ts": "2026-06-08T06:11:32.914Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTJVY7DBQ4YFEQ8B0VM5Z623",
+    "field": "branch",
+    "value": "feat/fr154-multibox-sfu-placement"
+  }
+}
