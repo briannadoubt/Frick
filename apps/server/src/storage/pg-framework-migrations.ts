@@ -657,6 +657,25 @@ export const FRAMEWORK_MIGRATIONS_PG: readonly FrameworkMigration[] = [
         ON service_principals (tenant_id, created_at DESC);
     `,
   },
+  {
+    // FR-31: SAML SP assertion-replay guard. See the SQLite migration for the
+    // full rationale. The composite PRIMARY KEY (provider_id, assertion_id)
+    // enforces single-use even under a concurrent double-submit.
+    id: "0020_saml_seen_assertions",
+    schemaRevision: 1,
+    description: "SAML SP assertion-replay guard: record consumed assertion IDs (FR-31).",
+    sql: `
+      CREATE TABLE IF NOT EXISTS auth_saml_seen_assertions (
+        provider_id TEXT NOT NULL,
+        assertion_id TEXT NOT NULL,
+        seen_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        PRIMARY KEY (provider_id, assertion_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_saml_seen_assertions_expiry
+        ON auth_saml_seen_assertions (expires_at);
+    `,
+  },
 ];
 
 /** Names of all framework tables the Postgres runner manages. Used by dev-reset. */
@@ -689,4 +708,5 @@ export const FRAMEWORK_TABLES_PG: readonly string[] = [
   "grants",
   "auth_refresh_tokens",
   "service_principals",
+  "auth_saml_seen_assertions",
 ];

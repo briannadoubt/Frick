@@ -259,6 +259,18 @@ export {
   type OidcDiscoveryDocument,
 } from "./auth/oidc.js";
 export {
+  createSamlProviderRuntime,
+  createXmlCryptoSignatureVerifier,
+  SamlValidationError,
+  type SamlProviderConfig,
+  type SamlAttributeMappings,
+  type SamlProviderRuntime,
+  type VerifiedSamlIdentity,
+  type VerifySamlOptions,
+  type SamlSignatureVerifier,
+  type SamlSignatureResult,
+} from "./auth/saml.js";
+export {
   createFrickAppRegistry,
   type FrickAppDefinition,
   type FrickAppRegistry,

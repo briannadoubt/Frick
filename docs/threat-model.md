@@ -627,10 +627,32 @@ a provider or reset route. Verify routes bucket by client IP; `forgot-password`
 buckets by email; `reset-password` by token. Tripping the limit returns `429`
 with a `Retry-After` header.
 
+SAML 2.0 SP routing is also supported via `identityProviders.saml` (FR-31).
+Each provider mounts an SP metadata endpoint and an Assertion Consumer Service
+(`POST /auth/saml/:id/acs`). Inbound assertions are validated as a hard auth
+boundary before any session is minted: the XML signature must verify against
+the provider's *configured* certificate (the document's embedded `KeyInfo` is
+never trusted to pick the key) and must cover the assertion the claims are read
+from (signature-wrapping guard) — unsigned and wrong-cert assertions are
+rejected; the `<Issuer>` must equal the configured IdP entityID; the
+`<AudienceRestriction>` must contain the SP entityID; the `Conditions` and
+`SubjectConfirmationData` validity windows must bound the current time within a
+configurable skew; a `Recipient`, when present, must equal the configured ACS
+URL; `InResponseTo` must match the expected AuthnRequest id on SP-initiated
+flows; and each assertion `ID` is recorded (scoped by provider id, in
+`auth_saml_seen_assertions`) so a replayed assertion is rejected. The verified
+NameID is the stable subject (stored scoped as `"<providerId>:<nameId>"`), and
+the XML-signature primitive is a vetted library (`xml-crypto`) behind a
+pluggable verifier seam.
+
 **Known gaps.**
 
-- SAML and arbitrary non-OIDC OAuth provider routing are not implemented
-  (generic OIDC issuers are now supported via `identityProviders.oidc`).
+- Arbitrary non-OIDC OAuth provider routing is not implemented (generic OIDC
+  issuers via `identityProviders.oidc` and SAML 2.0 SPs via
+  `identityProviders.saml` are supported). SAML SP-initiated AuthnRequest
+  *generation* / request signing is out of scope — Frick validates inbound
+  assertions but does not mint signed AuthnRequests; `InResponseTo` binding is
+  available when the app supplies the expected request id.
 
 ---
 
@@ -639,8 +661,9 @@ with a `Retry-After` header.
 The following are recognised threats the framework does not address and is
 not yet planning to:
 
-- Federated identity beyond the built-in Apple, Google, generic OIDC, and
-  email/password provider routes (SAML or arbitrary non-OIDC OAuth providers).
+- Federated identity beyond the built-in Apple, Google, generic OIDC, SAML 2.0
+  SP, and email/password provider routes (e.g. arbitrary non-OIDC OAuth
+  providers).
 - Side-channel attacks on the SQLite file (encryption at rest).
 - Hardware attestation for native clients.
 - End-to-end encryption of message payloads. The framework sees plaintext

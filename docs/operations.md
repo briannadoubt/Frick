@@ -429,8 +429,12 @@ per-(route, identity/IP) auth-attempt limiter, returning `429
 once `maxAuthAttemptsPerWindow` is exceeded; verify routes bucket by client IP,
 `forgot-password` by email, and `reset-password` by token.
 
-The framework now supports generic OpenID Connect issuers (above). SAML and
-arbitrary non-OIDC OAuth provider routing remain unimplemented.
+The framework now supports generic OpenID Connect issuers (above) and SAML 2.0
+Service Providers via `identityProviders.saml` (each provider mounts
+`GET /auth/saml/:id/metadata` and `POST /auth/saml/:id/acs`; inbound assertions
+are signature-verified against the configured IdP certificate with audience /
+validity-window / recipient / InResponseTo checks and assertion-replay
+protection). Arbitrary non-OIDC OAuth provider routing remains unimplemented.
 
 ## Sharing routes
 

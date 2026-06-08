@@ -14,6 +14,13 @@ import {
   type OidcProviderRuntime,
   type VerifyOidcOptions,
 } from "./oidc.js";
+import {
+  createSamlProviderRuntime,
+  SamlValidationError,
+  type SamlProviderConfig,
+  type SamlProviderRuntime,
+  type SamlSignatureVerifier,
+} from "./saml.js";
 import { createFrickEmailRouter, type FrickEmailRouter } from "../email/router.js";
 import type { FrickEmailAdapter } from "../email/types.js";
 
@@ -75,6 +82,32 @@ export interface IdentityProvidersConfig {
    * ids must be unique.
    */
   oidc?: OidcProviderConfig[];
+
+  /**
+   * Enable one or more SAML 2.0 Service Provider integrations (Okta, Entra,
+   * ADFS, Shibboleth, any standards-compliant IdP). Each entry mounts:
+   *   - `GET  /auth/saml/:id/metadata` — the SP metadata XML (entityID, ACS
+   *      URL, signing/encryption certs as configured).
+   *   - `POST /auth/saml/:id/acs` — the Assertion Consumer Service. The IdP
+   *      (or the browser) posts a base64 `SAMLResponse`; Frick verifies the
+   *      XML signature against the provider's configured certificate, checks
+   *      issuer / audience / validity window / recipient / InResponseTo, guards
+   *      against assertion replay, maps attributes onto the User object, and
+   *      mints a session via the same `onFirstSignIn` path Apple/Google/OIDC
+   *      use (provider:"saml", providerId:"<id>"). Provider ids must be unique.
+   *
+   * Backward compatible: with no `saml` entries the routes are absent and
+   * behavior is unchanged.
+   */
+  saml?: SamlProviderConfig[];
+
+  /**
+   * Test seam — per-SAML-provider signature-verifier overrides keyed by
+   * provider id. Each entry swaps the XML-signature primitive so tests can
+   * exercise assertion validation without minting real XML-DSIG. Production
+   * code leaves this undefined (the `xml-crypto` verifier is used).
+   */
+  samlVerifyOverrides?: Record<string, SamlSignatureVerifier>;
 
   /**
    * Schema object name + field mapping that points Frick at the app's
@@ -258,6 +291,12 @@ export interface UserObjectMapping {
    * Defaults to `oidcSubject`.
    */
   oidcSubjectField?: string;
+  /**
+   * Field that stores the SAML subject. Like OIDC, an app may wire several
+   * SAML IdPs, so Frick stores a composite `"<providerId>:<nameId>"` here so
+   * two IdPs that share a NameID never collide. Defaults to `samlSubject`.
+   */
+  samlSubjectField?: string;
   emailField?: string;
   displayNameField?: string;
   createdAtField?: string;
@@ -272,17 +311,18 @@ export interface UserObjectMapping {
 }
 
 export interface OnFirstSignInInput {
-  provider: "apple" | "google" | "email" | "oidc";
+  provider: "apple" | "google" | "email" | "oidc" | "saml";
   /**
    * Stable provider-side identifier:
    *   apple/google → the IdP's `sub` claim
    *   oidc         → the issuer's `sub` claim (scope it with `providerId`)
+   *   saml         → the assertion's NameID (scope it with `providerId`)
    *   email        → the lowercased email
    */
   subject: string;
   /**
-   * For `provider: "oidc"`, the configured provider id (e.g. "okta") this
-   * sign-in came through. Undefined for the built-in providers.
+   * For `provider: "oidc"` or `"saml"`, the configured provider id (e.g.
+   * "okta") this sign-in came through. Undefined for the built-in providers.
    */
   providerId?: string;
   email: string | undefined;
@@ -382,6 +422,7 @@ interface ResolvedUserObject {
   appleSubjectField: string;
   googleSubjectField: string;
   oidcSubjectField: string;
+  samlSubjectField: string;
   emailField: string;
   displayNameField: string;
   createdAtField: string;
@@ -394,6 +435,7 @@ const DEFAULT_USER_FIELDS: ResolvedUserObject = {
   appleSubjectField: "appleSubject",
   googleSubjectField: "googleSubject",
   oidcSubjectField: "oidcSubject",
+  samlSubjectField: "samlSubject",
   emailField: "email",
   displayNameField: "displayName",
   createdAtField: "createdAt",
@@ -457,6 +499,19 @@ export function createIdentityRouter(
       );
     }
     oidcRuntimes.set(providerConfig.id, createOidcProviderRuntime(providerConfig));
+  }
+
+  // SAML SP providers, built once and keyed by provider id. A SAML runtime is
+  // pure/synchronous (the IdP signing cert is configured directly, so there's
+  // no discovery/network step). A duplicate provider id is a hard config error.
+  const samlRuntimes = new Map<string, SamlProviderRuntime>();
+  for (const providerConfig of options.config.saml ?? []) {
+    if (samlRuntimes.has(providerConfig.id)) {
+      throw new Error(
+        `identityProviders.saml has duplicate provider id "${providerConfig.id}"`,
+      );
+    }
+    samlRuntimes.set(providerConfig.id, createSamlProviderRuntime(providerConfig));
   }
 
   // FR-29: one TTL knob for every provider session. Threaded from the server's
@@ -1007,6 +1062,243 @@ export function createIdentityRouter(
     sendJson(res, 200, await buildSessionResponse(session, {
       user: { id: userId, ...userRow },
       isNewUser: true,
+    }));
+  }
+
+  function handleSamlMetadata(
+    providerId: string,
+    res: ServerResponse,
+  ): void {
+    const runtime = samlRuntimes.get(providerId);
+    if (!runtime) {
+      sendJson(res, 404, { error: "saml_provider_not_configured", providerId });
+      return;
+    }
+    const xml = runtime.metadataXml();
+    res.statusCode = 200;
+    res.setHeader("content-type", "application/samlmetadata+xml; charset=utf-8");
+    res.setHeader("content-length", Buffer.byteLength(xml).toString());
+    res.setHeader("access-control-allow-origin", "*");
+    res.end(xml);
+  }
+
+  async function handleSamlAcs(
+    providerId: string,
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    const runtime = samlRuntimes.get(providerId);
+    if (!runtime) {
+      sendJson(res, 404, { error: "saml_provider_not_configured", providerId });
+      return;
+    }
+    // FR-29: throttle per provider id, by IP.
+    if (throttled({ req, res, route: `saml-acs:${providerId}`, identifier: "" })) return;
+
+    // The IdP/browser posts the assertion either as form-encoded `SAMLResponse`
+    // (the HTTP-POST binding) or as a JSON body { samlResponse, ... }.
+    let samlResponse = "";
+    let relayState: string | undefined;
+    let expectedInResponseTo: string | undefined;
+    let deviceId: string | undefined;
+    let replicaId: string | undefined;
+    const contentType = (req.headers["content-type"] ?? "").toLowerCase();
+    if (contentType.includes("application/json")) {
+      let body: {
+        samlResponse?: unknown;
+        SAMLResponse?: unknown;
+        relayState?: unknown;
+        expectedInResponseTo?: unknown;
+        deviceId?: unknown;
+        replicaId?: unknown;
+      };
+      try {
+        body = (await readJsonBody(req)) as typeof body;
+      } catch {
+        sendJson(res, 400, { error: "invalid_json" });
+        return;
+      }
+      samlResponse =
+        typeof body.samlResponse === "string"
+          ? body.samlResponse
+          : typeof body.SAMLResponse === "string"
+            ? body.SAMLResponse
+            : "";
+      relayState = typeof body.relayState === "string" ? body.relayState : undefined;
+      expectedInResponseTo =
+        typeof body.expectedInResponseTo === "string" ? body.expectedInResponseTo : undefined;
+      deviceId = typeof body.deviceId === "string" ? body.deviceId : undefined;
+      replicaId = typeof body.replicaId === "string" ? body.replicaId : undefined;
+    } else {
+      const form = await readFormBody(req);
+      samlResponse = form.get("SAMLResponse") ?? form.get("samlResponse") ?? "";
+      relayState = form.get("RelayState") ?? undefined;
+    }
+    if (!samlResponse) {
+      sendJson(res, 400, { error: "SAMLResponse required" });
+      return;
+    }
+
+    const override = options.config.samlVerifyOverrides?.[providerId];
+    let verified;
+    try {
+      verified = runtime.verify(samlResponse, {
+        ...(expectedInResponseTo !== undefined ? { expectedInResponseTo } : {}),
+        ...(override ? { signatureVerifierOverride: override } : {}),
+      });
+    } catch (err) {
+      const code =
+        err instanceof SamlValidationError ? err.code : "SamlVerifyError";
+      log.info("auth.saml.verify_failed", {
+        event: "auth.saml.verify_failed",
+        providerId,
+        code,
+      });
+      sendJson(res, 401, {
+        error: "saml_assertion_invalid",
+        providerId,
+        code,
+        message: err instanceof Error ? err.message : "verification failed",
+      });
+      return;
+    }
+
+    // Replay protection: record the assertion ID; a second presentation loses.
+    const fresh = await options.store.samlAssertions.markSeen({
+      providerId,
+      assertionId: verified.assertionId,
+      expiresAt: verified.notOnOrAfter,
+    });
+    if (!fresh) {
+      log.info("auth.saml.replay_blocked", {
+        event: "auth.saml.replay_blocked",
+        providerId,
+        assertionId: verified.assertionId,
+      });
+      sendJson(res, 401, {
+        error: "saml_assertion_invalid",
+        providerId,
+        code: "SamlAssertionReplay",
+        message: "This SAML assertion has already been consumed.",
+      });
+      return;
+    }
+
+    // Subjects are scoped by provider id so two IdPs reusing the same NameID
+    // never alias onto the same User row.
+    const scopedSubject = `${providerId}:${verified.subject}`;
+    const existing = await findUserBySubject(
+      options.store,
+      userObject,
+      userObject.samlSubjectField,
+      scopedSubject,
+    );
+
+    if (existing) {
+      if (existing[userObject.revokedAtField]) {
+        log.info("auth.saml.signin_blocked_revoked", {
+          event: "auth.saml.signin_blocked_revoked",
+          providerId,
+          userId: existing.id as string,
+        });
+        sendJson(res, 403, {
+          error: "user_revoked",
+          message: "This account has been revoked.",
+        });
+        return;
+      }
+      const primaryTenantId =
+        (existing[userObject.primaryTenantField] as string | undefined) ??
+        await findPrimaryTenantForUser(options.store, existing.id as string);
+      const session = await mintSession({
+        store: options.store,
+        sessionTtlSeconds: accessTtlSeconds,
+        userId: existing.id as string,
+        tenantId: primaryTenantId,
+        displayName: (existing[userObject.displayNameField] as string) ?? "Crate user",
+        deviceId,
+        replicaId,
+      });
+      log.info("auth.saml.signin_existing", {
+        event: "auth.saml.signin_existing",
+        providerId,
+        userId: existing.id,
+        tenantId: primaryTenantId,
+      });
+      sendJson(res, 200, await buildSessionResponse(session, {
+        user: existing,
+        isNewUser: false,
+        ...(relayState !== undefined ? { relayState } : {}),
+      }));
+      return;
+    }
+
+    // First sign-in. Mapped SAML attributes populate the User row; the app
+    // picks the tenant + userId via onFirstSignIn.
+    const defaultDisplayName =
+      verified.name ??
+      (verified.email ? verified.email.split("@")[0]! : verified.subject);
+    let hook: OnFirstSignInResult;
+    try {
+      const cb = options.config.onFirstSignIn;
+      const fullName = verified.name ? { givenName: verified.name } : undefined;
+      hook = cb
+        ? await cb({
+            provider: "saml",
+            providerId,
+            subject: verified.subject,
+            email: verified.email,
+            fullName,
+          })
+        : { tenantId: SYSTEM_TENANT };
+    } catch (err) {
+      log.error("auth.saml.onFirstSignIn_failed", {
+        event: "auth.saml.onFirstSignIn_failed",
+        providerId,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      sendJson(res, 500, { error: "first_sign_in_failed" });
+      return;
+    }
+
+    const userId = hook.userId ?? `user-${randomUUID()}`;
+    const displayName = hook.displayName ?? defaultDisplayName;
+    const now = Date.now();
+    const userRow: Record<string, unknown> = {
+      [userObject.displayNameField]: displayName,
+      [userObject.emailField]: verified.email,
+      [userObject.appleSubjectField]: undefined,
+      [userObject.googleSubjectField]: undefined,
+      [userObject.samlSubjectField]: scopedSubject,
+      [userObject.createdAtField]: now,
+      [userObject.revokedAtField]: undefined,
+      [userObject.primaryTenantField]: hook.tenantId,
+      // Mapped attributes first, so an explicit onFirstSignIn extraUserFields
+      // (app-authoritative) can still override a mapped attribute.
+      ...verified.extraUserFields,
+      ...(hook.extraUserFields ?? {}),
+    };
+    options.store.upsertObject(SYSTEM_TENANT, userObject.type, userId, userRow);
+
+    const session = await mintSession({
+      store: options.store,
+      sessionTtlSeconds: accessTtlSeconds,
+      userId,
+      tenantId: hook.tenantId,
+      displayName,
+      deviceId,
+      replicaId,
+    });
+    log.info("auth.saml.signin_new", {
+      event: "auth.saml.signin_new",
+      providerId,
+      userId,
+      tenantId: hook.tenantId,
+    });
+    sendJson(res, 200, await buildSessionResponse(session, {
+      user: { id: userId, ...userRow },
+      isNewUser: true,
+      ...(relayState !== undefined ? { relayState } : {}),
     }));
   }
 
@@ -1691,6 +1983,26 @@ export function createIdentityRouter(
         await handleOidcVerify(providerId, req, res);
         return true;
       }
+      // SAML SP metadata: GET /auth/saml/:providerId/metadata
+      const samlMetaMatch =
+        req.method === "GET"
+          ? /^\/auth\/saml\/([^/]+)\/metadata$/.exec(url.pathname)
+          : null;
+      if (samlMetaMatch) {
+        const providerId = decodeURIComponent(samlMetaMatch[1]!);
+        handleSamlMetadata(providerId, res);
+        return true;
+      }
+      // SAML SP ACS (assertion consumer): POST /auth/saml/:providerId/acs
+      const samlAcsMatch =
+        req.method === "POST"
+          ? /^\/auth\/saml\/([^/]+)\/acs$/.exec(url.pathname)
+          : null;
+      if (samlAcsMatch) {
+        const providerId = decodeURIComponent(samlAcsMatch[1]!);
+        await handleSamlAcs(providerId, req, res);
+        return true;
+      }
       return false;
     },
   };
@@ -1877,4 +2189,21 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
   const text = Buffer.concat(chunks).toString("utf8");
   if (!text) return {};
   return JSON.parse(text) as Record<string, unknown>;
+}
+
+/**
+ * Read an `application/x-www-form-urlencoded` body into a map. Used by the
+ * SAML ACS endpoint, which receives the HTTP-POST binding's `SAMLResponse` /
+ * `RelayState` form fields when the IdP auto-posts the browser back to the SP.
+ */
+async function readFormBody(req: IncomingMessage): Promise<Map<string, string>> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string));
+  }
+  const text = Buffer.concat(chunks).toString("utf8");
+  const params = new URLSearchParams(text);
+  const out = new Map<string, string>();
+  for (const [k, v] of params) out.set(k, v);
+  return out;
 }

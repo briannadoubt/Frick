@@ -351,8 +351,11 @@ The `session` shape is the same session object used by the TypeScript, Swift,
 and Android clients. The app still owns its User schema, tenant membership
 model, and any first-sign-in side effects through the mapping and hooks above.
 Email reset tokens are stored hashed at rest and expire after 60 minutes.
-Generic OpenID Connect issuers are supported via `identityProviders.oidc`;
-SAML and arbitrary non-OIDC OAuth provider routing are not implemented.
+Generic OpenID Connect issuers are supported via `identityProviders.oidc` and
+SAML 2.0 Service Providers via `identityProviders.saml` (signature-verified
+assertions with audience / validity / recipient / InResponseTo checks and
+replay protection); arbitrary non-OIDC OAuth provider routing is not
+implemented.
 
 ## Client telemetry
 

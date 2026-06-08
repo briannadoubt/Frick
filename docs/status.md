@@ -86,8 +86,10 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
   `FRICK_SESSION_TTL_SECONDS` lifetime, and Apple/Google/OIDC verify routes plus
   email password-reset routes share the built-in auth-attempt limiter. Apple,
   Google, generic OIDC issuers (`identityProviders.oidc`, with direct
-  `jwksUri` or discovery-resolved key sets), and email/password are supported;
-  SAML and arbitrary non-OIDC OAuth provider routing remain unimplemented.
+  `jwksUri` or discovery-resolved key sets), SAML 2.0 Service Providers
+  (`identityProviders.saml`, with signature-verified assertions + replay
+  protection), and email/password are supported; arbitrary non-OIDC OAuth
+  provider routing remains unimplemented.
 - Blob bytes default to SQLite but can use the local filesystem with
   `FRICK_BLOB_DRIVER=filesystem` and a writable `FRICK_BLOB_STORAGE_PATH`.
   Blob metadata remains in SQLite. Filesystem blob byte files are not yet part
