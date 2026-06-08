@@ -57,6 +57,7 @@ import { resolveTenantLimits } from "../tenant-config.js";
 import type { FrickMetrics, Gauge } from "../metrics.js";
 import { emitDevToolsEvent } from "../devtools/emit.js";
 import type { FrickAppRegistry } from "../apps/registry.js";
+import { DEFAULT_APP_ID } from "../app-id.js";
 import type { ClusterEnvelope, FrickClusterBus } from "../cluster/bus.js";
 import type {
   FrickTelemetryRuntime,
@@ -444,6 +445,31 @@ export class SyncGateway {
    * (matching `authAttemptKey`) so ids containing other delimiters can't
    * collide across the two key components.
    */
+  /**
+   * Storage app id for a connection (FR-153). Resolved at Hello and pinned on
+   * the client; reads/writes this connection makes are partitioned by it.
+   * Defaults to {@link DEFAULT_APP_ID} for pre-Hello frames and single-app
+   * servers, so a single-app deployment behaves byte-for-byte as before.
+   */
+  #appIdFor(client: SyncClient): string {
+    return client.appId ?? DEFAULT_APP_ID;
+  }
+
+  /**
+   * Map a matched app definition's id to its *storage* app id. A genuine
+   * multi-app server (registry with more than one app) partitions storage by
+   * the app's `id`; a single-app server (zero or one registered app) keeps
+   * every write under {@link DEFAULT_APP_ID} so existing rows and callers are
+   * unaffected.
+   */
+  #storageAppId(matchedAppId: string | undefined): string {
+    if (matchedAppId === undefined) {
+      return DEFAULT_APP_ID;
+    }
+    const apps = this.#appRegistry?.list() ?? [];
+    return apps.length > 1 ? matchedAppId : DEFAULT_APP_ID;
+  }
+
   #principalConnectionKey(principal: Principal): string {
     return `${principal.tenantId} ${principal.userId}`;
   }
@@ -533,13 +559,18 @@ export class SyncGateway {
   }
 
   /** Local-only projection-delta fan-out, also reused by the cluster handler. */
-  #fanOutProjectionDelta(notice: { tenantId: string; projection: string; changes: ProjectionDeltaNotice["changes"] }): void {
+  #fanOutProjectionDelta(notice: { tenantId: string; appId?: string; projection: string; changes: ProjectionDeltaNotice["changes"] }): void {
+    const scopedAppId = notice.appId ?? DEFAULT_APP_ID;
     for (const { client: subscriber } of this.#subscriptions.projectionSubscribers(notice.projection)) {
       const principal = subscriber.principal;
       if (!principal || !this.#isPrincipalActive(principal)) {
         continue;
       }
       if (principal.tenantId !== notice.tenantId) {
+        continue;
+      }
+      // App scoping (FR-153): app A's projection deltas never reach app B.
+      if (this.#appIdFor(subscriber) !== scopedAppId) {
         continue;
       }
       const changes = filterProjectionChangesForPrincipal(notice.projection, notice.changes, principal);
@@ -564,11 +595,11 @@ export class SyncGateway {
    */
   #handleStoreWrite(event: FrickStoreWriteEvent): void {
     if (event.kind === "objectUpsert") {
-      this.publishObjects(event.objectType, [event.object], event.tenantId);
+      this.publishObjects(event.objectType, [event.object], event.tenantId, event.appId);
       return;
     }
     if (event.kind === "objectDelete") {
-      this.publishObjectDeletes(event.objectType, [event.objectId], event.tenantId);
+      this.publishObjectDeletes(event.objectType, [event.objectId], event.tenantId, event.appId);
       return;
     }
     this.publishStreamEvent(event.event);
@@ -614,8 +645,8 @@ export class SyncGateway {
     }
   }
 
-  publishObjects(type: string, objects: PlainObject[], tenantId?: string): void {
-    void this.#fanOutObjects(type, objects, tenantId);
+  publishObjects(type: string, objects: PlainObject[], tenantId?: string, appId?: string): void {
+    void this.#fanOutObjects(type, objects, tenantId, appId);
     if (this.#clusterBus && tenantId !== undefined) {
       this.#clusterBus.publish({
         kind: "objects",
@@ -632,8 +663,8 @@ export class SyncGateway {
    * {@link publishObjects}: fan out locally, then forward over the cluster bus
    * so peer nodes drop the rows for their own subscribers too.
    */
-  publishObjectDeletes(type: string, ids: string[], tenantId?: string): void {
-    this.#fanOutObjectDeletes(type, ids, tenantId);
+  publishObjectDeletes(type: string, ids: string[], tenantId?: string, appId?: string): void {
+    this.#fanOutObjectDeletes(type, ids, tenantId, appId);
     if (this.#clusterBus && tenantId !== undefined) {
       this.#clusterBus.publish({
         kind: "objectDeletes",
@@ -646,10 +677,11 @@ export class SyncGateway {
   }
 
   /** Local-only delete fan-out, also reused by the cluster handler. */
-  #fanOutObjectDeletes(type: string, ids: string[], tenantId?: string): void {
+  #fanOutObjectDeletes(type: string, ids: string[], tenantId?: string, appId?: string): void {
     if (ids.length === 0) {
       return;
     }
+    const scopedAppId = appId ?? DEFAULT_APP_ID;
     const cursor = Date.now();
     // Emit each removed id two ways in one Delta frame: as a tombstone object
     // record (an id-only object — the current SDKs decode the delta and
@@ -672,6 +704,10 @@ export class SyncGateway {
       if (tenantId !== undefined && principal.tenantId !== tenantId) {
         continue;
       }
+      // App scoping (FR-153): only the originating app's subscribers.
+      if (this.#appIdFor(subscriber) !== scopedAppId) {
+        continue;
+      }
       this.#sendFrame(subscriber, [
         FrameKind.Delta,
         { objects: tombstones, events: [], removed, cursor },
@@ -680,10 +716,16 @@ export class SyncGateway {
   }
 
   /** Local-only stream-event fan-out, also reused by the cluster handler. */
-  #fanOutStreamEvent(event: { tenantId: string; stream: string; streamId: string; sequence: number }, packed: ReturnType<typeof packStreamEvent>): void {
+  #fanOutStreamEvent(event: { tenantId: string; appId?: string; stream: string; streamId: string; sequence: number }, packed: ReturnType<typeof packStreamEvent>): void {
+    const appId = event.appId ?? DEFAULT_APP_ID;
     for (const { client: subscriber } of this.#subscriptions.streamSubscribers(event.stream, event.streamId)) {
       const principal = subscriber.principal;
       if (!principal || !this.#isPrincipalActive(principal) || principal.tenantId !== event.tenantId) {
+        continue;
+      }
+      // App scoping (FR-153): a subscriber only sees stream events from its own
+      // app. Single-app servers are all `_default`, so this is a no-op there.
+      if (this.#appIdFor(subscriber) !== appId) {
         continue;
       }
       this.#sendFrame(subscriber, [FrameKind.Delta, { objects: [], events: [packed], cursor: event.sequence }]);
@@ -691,8 +733,9 @@ export class SyncGateway {
   }
 
   /** Local-only object fan-out, also reused by the cluster handler. */
-  async #fanOutObjects(type: string, objects: PlainObject[], tenantId?: string): Promise<void> {
+  async #fanOutObjects(type: string, objects: PlainObject[], tenantId?: string, appId?: string): Promise<void> {
     const cursor = Date.now();
+    const scopedAppId = appId ?? DEFAULT_APP_ID;
     // Short-circuit: per-record read authz only changes the row set when an
     // app registered a policy hook OR a grant has ever been issued. With
     // neither, the baseline decision allows every in-tenant row, so existing
@@ -704,6 +747,11 @@ export class SyncGateway {
         continue;
       }
       if (tenantId !== undefined && principal.tenantId !== tenantId) {
+        continue;
+      }
+      // App scoping (FR-153): a subscriber only receives objects from its own
+      // app. Single-app servers are all `_default`, so this never filters.
+      if (this.#appIdFor(subscriber) !== scopedAppId) {
         continue;
       }
       // Tenant scoping is already applied above. The store-level visibility
@@ -965,6 +1013,11 @@ export class SyncGateway {
           : undefined;
         const targetSchema = matchedApp?.schema ?? this.store.schema;
         const targetAppId = matchedApp?.id;
+        // Pin the storage app id for this connection (FR-153). In single-app
+        // mode this stays `_default`; in a genuine multi-app server it is the
+        // matched app's id, so every store read/write this connection makes is
+        // partitioned by the originating app.
+        client.appId = this.#storageAppId(targetAppId);
 
         if (!clientCaps) {
           try {
@@ -1170,7 +1223,7 @@ export class SyncGateway {
       const key = requireKey(payload);
       const cursor = payload.cursor ?? 0;
       const pageLimit = clientLimits.maxStreamPageSize;
-      const page = await this.store.readEvents(principal.tenantId, payload.name, key, cursor, pageLimit + 1);
+      const page = await this.store.readEvents(principal.tenantId, payload.name, key, cursor, pageLimit + 1, this.#appIdFor(client));
       const hasMore = page.length > pageLimit;
       const events = page.slice(0, pageLimit).map((event) => packStreamEvent(this.store.schema, event));
       this.#sendFrame(client, [
@@ -1197,6 +1250,7 @@ export class SyncGateway {
         principal.tenantId,
         payload.name,
         principal.userId,
+        this.#appIdFor(client),
       );
       let visibleRows: PlainObject[];
       if (await this.#perRecordReadAuthzActive()) {
@@ -1298,6 +1352,7 @@ export class SyncGateway {
       }
       const result = await this.store.appendEvent({
         tenantId: principal.tenantId,
+        appId: this.#appIdFor(client),
         requestId: payload.requestId,
         replicaId: principal.replicaId,
         stream: payload.stream,
@@ -1369,6 +1424,7 @@ export class SyncGateway {
       try {
         const result = await this.store.upsertObjectWithPolicy({
           tenantId: principal.tenantId,
+          appId: this.#appIdFor(client),
           type: payload.objectType,
           id: payload.objectId,
           value: payload.value,

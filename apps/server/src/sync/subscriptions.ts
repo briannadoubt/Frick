@@ -7,6 +7,14 @@ export interface SyncClient {
   subscriptions: Map<string, SubscribePayload>;
   principal?: Principal;
   sessionToken?: string;
+  /**
+   * Storage app id this connection is routed to (FR-153). Resolved at Hello
+   * from the advertised schemaId against the app registry, mirroring how
+   * `principal.tenantId` pins the tenant. Defaults to `_default` (single-app
+   * servers and pre-Hello connections) so every store call this connection
+   * makes is partitioned by the originating app.
+   */
+  appId?: string;
 }
 
 export class SubscriptionRegistry {

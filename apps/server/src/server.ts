@@ -51,6 +51,8 @@ import {
   type FrickAppDefinition,
   type FrickAppRegistry,
 } from "./apps/registry.js";
+import { DEFAULT_APP_ID } from "./app-id.js";
+import { createFrickPerAppRegistries } from "./apps/per-app-registries.js";
 import {
   createFrickProjectModule,
   projectModuleToAppDefinition,
@@ -1032,6 +1034,13 @@ export function createFrickServer(options: ServerOptions = {}) {
     const activeApp: FrickAppDefinition =
       resolution?.app ?? { id: "foundation", schema: store.schema, basePath: "" };
     const appSchema = activeApp.schema;
+    // Storage app id for this request (FR-153). A genuine multi-app server
+    // (registry with more than one app) partitions storage by the resolved
+    // app's id; a single-app server keeps every row under `_default` so
+    // existing data and callers are byte-for-byte unaffected. Mirrors the
+    // WS gateway's `#storageAppId`.
+    const activeAppId =
+      appRegistry.list().length > 1 ? activeApp.id : DEFAULT_APP_ID;
 
     if (request.method === "GET" && url.pathname === "/health") {
       sendJson(response, 200, { ok: true, service: "frick-server", status: "ok" });
@@ -1616,7 +1625,7 @@ export function createFrickServer(options: ServerOptions = {}) {
       sendJson(response, 200, {
         schemaHash: store.schema.hash,
         type,
-        data: await store.listObjectsForUser(principal.tenantId, type, principal.userId),
+        data: await store.listObjectsForUser(principal.tenantId, type, principal.userId, activeAppId),
       });
       return;
     }
@@ -1640,6 +1649,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           principal.tenantId,
           objectWriteRoute.type,
           objectWriteRoute.id,
+          activeAppId,
         );
         // 204 either way — idempotent semantics keep retries safe. The
         // optional `existed` field tells the caller whether the row was
@@ -1669,6 +1679,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         const expectedVersion = parseIfMatchHeader(request);
         const result = await store.upsertObjectWithPolicy({
           tenantId: principal.tenantId,
+          appId: activeAppId,
           type: objectWriteRoute.type,
           id: objectWriteRoute.id,
           value,
@@ -2485,7 +2496,7 @@ export function createFrickServer(options: ServerOptions = {}) {
             tenantLimits.maxStreamPageSize,
             tenantLimits.maxStreamPageSize,
           );
-          const events = await store.readEvents(principal.tenantId, stream, key, since, limit);
+          const events = await store.readEvents(principal.tenantId, stream, key, since, limit, activeAppId);
           sendJson(response, 200, { events });
           return;
         }
@@ -2506,6 +2517,7 @@ export function createFrickServer(options: ServerOptions = {}) {
             key,
             Number.isFinite(before) ? before : Number.MAX_SAFE_INTEGER,
             limit,
+            activeAppId,
           );
           cursor = events.at(-1)?.sequence ?? cursor;
         } else {
@@ -2514,7 +2526,7 @@ export function createFrickServer(options: ServerOptions = {}) {
             tenantLimits.maxStreamPageSize,
             tenantLimits.maxStreamPageSize,
           );
-          const page = await store.readEvents(principal.tenantId, stream, key, cursor, limit + 1);
+          const page = await store.readEvents(principal.tenantId, stream, key, cursor, limit + 1, activeAppId);
           hasMore = page.length > limit;
           events = page.slice(0, limit);
           cursor = events.at(-1)?.sequence ?? cursor;
@@ -2570,6 +2582,7 @@ export function createFrickServer(options: ServerOptions = {}) {
         );
         const result = await store.appendEvent({
           tenantId: principal.tenantId,
+          appId: activeAppId,
           requestId: requireString(body.requestId, "requestId"),
           replicaId: principal.replicaId,
           stream,

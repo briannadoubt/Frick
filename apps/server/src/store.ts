@@ -76,6 +76,8 @@ import {
   type FrickProjectionRegistry,
   type FrickProjectionWriteEvent,
 } from "./projections/registry.js";
+import { DEFAULT_APP_ID } from "./app-id.js";
+import type { FrickPerAppRegistries } from "./apps/per-app-registries.js";
 import {
   createFrickSearchIndexRegistry,
   type FrickSearchAdapter,
@@ -221,6 +223,15 @@ export interface StoreOptions {
    */
   projections?: FrickProjectionRegistry;
   /**
+   * Optional per-app registry container (FR-153). When supplied, every
+   * projection `notify(...)` is routed to the originating app's projection
+   * registry via `perAppRegistries.for(appId)` instead of the shared
+   * {@link FrickStore.projections}, so app A's projections never fire on app
+   * B's writes. When omitted (the single-app default), notifies go to the
+   * shared `projections` registry exactly as before — byte-for-byte unchanged.
+   */
+  perAppRegistries?: FrickPerAppRegistries;
+  /**
    * Optional search adapter. When omitted, the store constructs the default
    * {@link createSqliteFtsSearchAdapter} bound to its own SQLite handle.
    */
@@ -320,6 +331,8 @@ export type FrickStoreWriteEvent =
   | {
       kind: "objectUpsert";
       tenantId: string;
+      /** Storage app id of the write (FR-153); `_default` for single-app. */
+      appId?: string;
       objectType: string;
       objectId: string;
       /** Stored (post-merge) object state, including its `id` field. */
@@ -328,6 +341,8 @@ export type FrickStoreWriteEvent =
   | {
       kind: "objectDelete";
       tenantId: string;
+      /** Storage app id of the write (FR-153); `_default` for single-app. */
+      appId?: string;
       objectType: string;
       objectId: string;
     }
@@ -373,6 +388,12 @@ export class FrickStore {
   readonly platformEvents: SqlitePlatformEventPipeline;
   readonly analyticsEvents: AnalyticsEventStore;
   readonly projections: FrickProjectionRegistry;
+  /**
+   * Per-app projection/job registry container (FR-153). Undefined for
+   * single-app servers, in which case projection notifies use the shared
+   * {@link projections} registry.
+   */
+  readonly perAppRegistries?: FrickPerAppRegistries;
   readonly searchAdapter: FrickSearchAdapter;
   readonly searchIndexes: FrickSearchIndexRegistry;
   readonly #logger: FrickLogger;
@@ -503,6 +524,9 @@ export class FrickStore {
     });
     this.analyticsEvents = new AnalyticsEventStore(sql);
     this.projections = options.projections ?? createFrickProjectionRegistry();
+    if (options.perAppRegistries !== undefined) {
+      this.perAppRegistries = options.perAppRegistries;
+    }
     this.searchAdapter =
       options.searchAdapter ??
       (isSqliteSqlDriver(sql)
@@ -991,18 +1015,21 @@ export class FrickStore {
    */
   async upsertObjectWithPolicy(args: {
     tenantId?: string;
+    appId?: string;
     type: string;
     id: string;
     value: PlainObject;
     expectedVersion?: number;
   }): Promise<ObjectUpsertResult> {
     const tenantId = args.tenantId ?? DEFAULT_TENANT_ID;
+    const appId = args.appId ?? DEFAULT_APP_ID;
     const mergePolicy: FrickObjectMergePolicy = resolveObjectMergePolicy(
       this.schema,
       args.type,
     );
     const result = await this.objects.upsertWithPolicy({
       tenantId,
+      appId,
       objectType: args.type,
       objectId: args.id,
       value: args.value,
@@ -1015,10 +1042,11 @@ export class FrickStore {
     // the `appendEvent` stream path — without it, object-sourced projections
     // and search indexes would never observe writes made through the HTTP
     // object route or the WebSocket ObjectUpsert frame.
-    const stored = (await this.objects.read(tenantId, args.type, args.id)) ?? args.value;
+    const stored = (await this.objects.read(tenantId, args.type, args.id, appId)) ?? args.value;
     await this.#notifyProjections({
       kind: "objectUpsert",
       tenantId,
+      appId,
       objectType: args.type,
       objectId: args.id,
       object: stored,
@@ -1027,6 +1055,7 @@ export class FrickStore {
     this.#notifyWriteListener({
       kind: "objectUpsert",
       tenantId,
+      appId,
       objectType: args.type,
       objectId: args.id,
       object: stored,
@@ -1045,12 +1074,13 @@ export class FrickStore {
    * Mirrors the positional/tenant-aware overload set of {@link readObject}.
    */
   async deleteObject(type: string, id: string): Promise<boolean>;
-  async deleteObject(tenantId: string, type: string, id: string): Promise<boolean>;
-  async deleteObject(a: string, b: string, c?: string): Promise<boolean> {
+  async deleteObject(tenantId: string, type: string, id: string, appId?: string): Promise<boolean>;
+  async deleteObject(a: string, b: string, c?: string, d?: string): Promise<boolean> {
     const tenantId = c !== undefined ? a : DEFAULT_TENANT_ID;
     const type = c !== undefined ? b : a;
     const id = c !== undefined ? c : b;
-    const existed = await this.objects.delete(tenantId, type, id);
+    const appId = d ?? DEFAULT_APP_ID;
+    const existed = await this.objects.delete(tenantId, type, id, appId);
     // Notify only when a row actually went away (parity with the upsert
     // path) so the sync gateway can broadcast the removal live — clients
     // drop the row immediately instead of waiting for the next cold
@@ -1059,6 +1089,7 @@ export class FrickStore {
       this.#notifyWriteListener({
         kind: "objectDelete",
         tenantId,
+        appId,
         objectType: type,
         objectId: id,
       });
@@ -1067,30 +1098,31 @@ export class FrickStore {
   }
 
   async readObject(type: string, id: string): Promise<PlainObject | undefined>;
-  async readObject(tenantId: string, type: string, id: string): Promise<PlainObject | undefined>;
-  async readObject(a: string, b: string, c?: string): Promise<PlainObject | undefined> {
+  async readObject(tenantId: string, type: string, id: string, appId?: string): Promise<PlainObject | undefined>;
+  async readObject(a: string, b: string, c?: string, d?: string): Promise<PlainObject | undefined> {
     if (c !== undefined) {
-      return this.objects.read(a, b, c);
+      return this.objects.read(a, b, c, d ?? DEFAULT_APP_ID);
     }
     return this.objects.read(DEFAULT_TENANT_ID, a, b);
   }
 
   async listObjects(type: string): Promise<PlainObject[]>;
-  async listObjects(tenantId: string, type: string): Promise<PlainObject[]>;
-  async listObjects(a: string, b?: string): Promise<PlainObject[]> {
+  async listObjects(tenantId: string, type: string, appId?: string): Promise<PlainObject[]>;
+  async listObjects(a: string, b?: string, c?: string): Promise<PlainObject[]> {
     if (b !== undefined) {
-      return this.objects.list(a, b);
+      return this.objects.list(a, b, c ?? DEFAULT_APP_ID);
     }
     return this.objects.list(DEFAULT_TENANT_ID, a);
   }
 
   async listObjectsForUser(type: string, userId: string): Promise<PlainObject[]>;
-  async listObjectsForUser(tenantId: string, type: string, userId: string): Promise<PlainObject[]>;
-  async listObjectsForUser(a: string, b: string, c?: string): Promise<PlainObject[]> {
+  async listObjectsForUser(tenantId: string, type: string, userId: string, appId?: string): Promise<PlainObject[]>;
+  async listObjectsForUser(a: string, b: string, c?: string, d?: string): Promise<PlainObject[]> {
     const tenantId = c !== undefined ? a : DEFAULT_TENANT_ID;
     const type = c !== undefined ? b : a;
     const userId = c !== undefined ? c : b;
-    const objects = await this.listObjects(tenantId, type);
+    const appId = c !== undefined ? (d ?? DEFAULT_APP_ID) : DEFAULT_APP_ID;
+    const objects = await this.listObjects(tenantId, type, appId);
     return objects.filter((object) =>
       this.isObjectVisibleToUser(tenantId, type, object, userId),
     );
@@ -1129,6 +1161,7 @@ export class FrickStore {
       await this.#notifyProjections({
         kind: "streamEvent",
         tenantId: result.event.tenantId,
+        appId: result.event.appId,
         streamType: result.event.stream,
         streamId: result.event.streamId,
         streamEvent: result.event,
@@ -1201,12 +1234,20 @@ export class FrickStore {
    * spot — easier to extend (e.g. attach request-scoped logger fields) later.
    */
   async #notifyProjections(event: FrickProjectionWriteEvent): Promise<void> {
+    const appId = event.appId ?? DEFAULT_APP_ID;
     const ctx: FrickProjectionContext = {
       tenantId: event.tenantId,
+      appId,
       store: this,
       logger: this.#logger,
     };
-    await this.projections.notify(event, ctx);
+    // Route to the originating app's projection registry when a per-app
+    // container is configured (FR-153); otherwise fall back to the single
+    // shared registry, which is the only one a single-app server has.
+    const registry = this.perAppRegistries
+      ? this.perAppRegistries.for(appId).projections
+      : this.projections;
+    await registry.notify(event, ctx);
   }
 
   /**
@@ -1247,6 +1288,7 @@ export class FrickStore {
     streamId: string,
     after: number,
     limit?: number,
+    appId?: string,
   ): Promise<StoredEvent[]>;
   async readEvents(
     a: string,
@@ -1254,11 +1296,12 @@ export class FrickStore {
     c: string | number,
     d?: number,
     e?: number,
+    f?: string,
   ): Promise<StoredEvent[]> {
     if (typeof c === "number") {
       return this.streams.read(DEFAULT_TENANT_ID, a, b, c, d);
     }
-    return this.streams.read(a, b, c, d ?? 0, e);
+    return this.streams.read(a, b, c, d ?? 0, e, f ?? DEFAULT_APP_ID);
   }
 
   /**
@@ -1272,8 +1315,9 @@ export class FrickStore {
     streamId: string,
     before: number,
     limit: number,
+    appId: string = DEFAULT_APP_ID,
   ): Promise<StoredEvent[]> {
-    return this.streams.readBefore(tenantId, stream, streamId, before, limit);
+    return this.streams.readBefore(tenantId, stream, streamId, before, limit, appId);
   }
 
   /**

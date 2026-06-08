@@ -36,6 +36,13 @@ export type FrickProjectionSource =
 export interface FrickProjectionWriteEvent {
   kind: "objectUpsert" | "objectDelete" | "streamEvent";
   tenantId: string;
+  /**
+   * Storage app id the originating write belonged to (FR-153). Defaults to
+   * `_default` for single-app servers. Carried through so a per-app registry
+   * (see `apps/per-app-registries.ts`) tags the resulting delta with the
+   * originating app and the gateway only fans it out to that app's clients.
+   */
+  appId?: string;
   /** For `objectUpsert` / `objectDelete` events. */
   objectType?: string;
   objectId?: string;
@@ -49,6 +56,8 @@ export interface FrickProjectionWriteEvent {
 
 export interface FrickProjectionContext {
   tenantId: string;
+  /** Storage app id of the originating write (FR-153); `_default` single-app. */
+  appId?: string;
   store: FrickStore;
   logger: FrickLogger;
 }
@@ -67,6 +76,12 @@ export interface ProjectionApplyResult {
 export interface ProjectionDeltaNotice {
   projection: string;
   tenantId: string;
+  /**
+   * Storage app id the delta originated in (FR-153). Defaults to `_default`.
+   * The gateway uses this alongside `tenantId` to scope fan-out so app A's
+   * projection deltas never reach app B's subscribers.
+   */
+  appId?: string;
   changes: ProjectionChange[];
 }
 
@@ -217,6 +232,7 @@ export function createFrickProjectionRegistry(
               deltaListener({
                 projection: projection.name,
                 tenantId: ctx.tenantId,
+                ...(ctx.appId !== undefined ? { appId: ctx.appId } : {}),
                 changes: result.changes,
               });
             } catch (error) {
