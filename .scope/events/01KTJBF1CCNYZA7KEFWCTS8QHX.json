@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTJBF1CCNYZA7KEFWCTS8QHX",
+  "ts": "2026-06-08T00:52:31.244Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTJBF1CCNYZA7KEFWCTS8QHW",
+    "number": 151,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Android: observable session manager (StateFlow) + drop ad-hoc persistence",
+    "description": "Kotlin parity with FR-139. An observable auth-state holder (session/isAuthenticating/verbs) exposed as StateFlow, riding the existing FrickClient session persistence (encrypted, like the Keychain path on iOS) instead of ad-hoc SharedPreferences.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTJBF1C90WP52SG6SEQF780V",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

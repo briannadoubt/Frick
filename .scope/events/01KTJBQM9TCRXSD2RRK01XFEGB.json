@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJBQM9TCRXSD2RRK01XFEGB",
+  "ts": "2026-06-08T00:57:12.762Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTGAQ3TKFSGTCH5AEMMMDPTX",
+    "field": "branch",
+    "value": "feat/fr144-web-delta-removed"
+  }
+}

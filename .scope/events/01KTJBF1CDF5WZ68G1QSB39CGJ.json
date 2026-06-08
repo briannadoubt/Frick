@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTJBF1CDF5WZ68G1QSB39CGJ",
+  "ts": "2026-06-08T00:52:31.245Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTJBF1CDF5WZ68G1QSB39CGH",
+    "number": 152,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Android: stateful sharing service layer",
+    "description": "Kotlin parity with FR-140 (FrickSharingService). A stateful sharing layer over the grant/invitation surface, exposing shared-with-me / outgoing shares as observable state for Compose.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTJBF1C90WP52SG6SEQF780V",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

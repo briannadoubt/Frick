@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJBWV821R291P8JVMZ6KXAD",
+  "ts": "2026-06-08T01:00:03.714Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTJBF1CCNYZA7KEFWCTS8QHP",
+    "field": "branch",
+    "value": "feat/fr148-android-observable-store"
+  }
+}

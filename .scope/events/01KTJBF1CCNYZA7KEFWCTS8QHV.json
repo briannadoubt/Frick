@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTJBF1CCNYZA7KEFWCTS8QHV",
+  "ts": "2026-06-08T00:52:31.244Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTJBF1CCNYZA7KEFWCTS8QHT",
+    "number": 150,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Android: Compose object-collection state (FrickQuery equivalent via collectAsState)",
+    "description": "Kotlin/Compose parity with FR-138 (@FrickQuery SwiftUI property wrapper). A Compose-friendly helper (e.g. a rememberFrickQuery/composable or Flow) that subscribes to an object collection and surfaces it as Compose state, mirroring the SwiftUI @FrickQuery ergonomics.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTJBF1C90WP52SG6SEQF780V",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

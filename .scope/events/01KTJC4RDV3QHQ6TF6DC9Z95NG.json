@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJC4RDV3QHQ6TF6DC9Z95NG",
+  "ts": "2026-06-08T01:04:22.971Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTG9BWY3WPEVR56EHJ1E9XFW",
+    "commentId": "01KTJC4RDT9J7CK886VJ2C45GP",
+    "author": "claude",
+    "body": "Shipped generic FrickStore<Model> (@MainActor @Observable) + FrickModel protocol + FrickStoreEventSource seam in Sources/FrickSwift/FrickStore.swift. Subscribes to one object type over the sync socket, keyed in-memory cache, applies snapshot + .objectsDelta upserts (in-place same-id merge) + .objectsRemoved removals, re-sorts/re-emits items on every apply (both RangerCRM correctness fixes centralized), reconnect self-heals. Added FR-144 native parity: FrickSyncSocket decodes Delta.removed -> FrickInboundEvent.objectsRemoved/FrickObjectRemoval. Tests: 74 pass (11 store + 1 socket removed-decode). typecheck exit 0."
+  }
+}

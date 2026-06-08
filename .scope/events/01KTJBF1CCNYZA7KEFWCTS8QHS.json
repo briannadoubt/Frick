@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTJBF1CCNYZA7KEFWCTS8QHS",
+  "ts": "2026-06-08T00:52:31.244Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTJBF1CCNYZA7KEFWCTS8QHR",
+    "number": 149,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Android: generic store registry",
+    "description": "Kotlin parity with FR-137. A registry that owns the per-type observable stores so a Compose app resolves a typed store instead of wiring each one by hand.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTJBF1C90WP52SG6SEQF780V",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

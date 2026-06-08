@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJBW8NVCD6TW7VYD8B6SRKE",
+  "ts": "2026-06-08T00:59:44.699Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTG9BWY3WPEVR56EHJ1E9XFW",
+    "field": "branch",
+    "value": "feat/fr136-swift-observable-store"
+  }
+}

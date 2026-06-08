@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJC3JNCP5RDV6KSN3ETPA87",
+  "ts": "2026-06-08T01:03:44.300Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTJBF1CCNYZA7KEFWCTS8QHP",
+    "commentId": "01KTJC3JNCP5RDV6KSN3ETPA86",
+    "author": "claude",
+    "body": "Shipped FrickObservableStore<Model>: generic Compose-friendly observable object cache + sync loop over FrickSyncSocket. Subscribes to one object type, caches by id, exposes StateFlow<List<Model>>. Applies snapshot+live upserts, drops rows on decoder-null tombstone and on explicit removed:{type,id}[] (FR-144 forward-compat), re-subscribes on reconnect. 7 new unit tests (snapshot/upsert/append/tombstone/remove/re-snapshot/type-filter). Gradle :frick:testDebugUnitTest BUILD SUCCESSFUL, 7 tests 0 failures; pnpm typecheck exit 0."
+  }
+}

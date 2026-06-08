@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJC3Q6F8FH7J03PWCZAMTH9",
+  "ts": "2026-06-08T01:03:48.943Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTG9BWY3WPEVR56EHJ1E9XG2",
+    "commentId": "01KTJC3Q6F8FH7J03PWCZAMTH8",
+    "author": "claude",
+    "body": "Shipped reusable @Observable FrickSessionManager (Sources/FrickSwift/SwiftUI/FrickSessionManager.swift): session/isAuthenticated/isAuthenticating + signIn/signUp/signOut/requestPasswordReset/resetPassword delegating to FrickClient. Owns no persistence — rides FrickClient's existing Keychain auto-persist/restore; mirrors client.currentSession into the observable session. 9 new tests (FrickSessionManagerTests) green; full swift test 71/71 pass; pnpm typecheck exit 0. RangerCRM can now delete its UserDefaults session persistence and observe this holder."
+  }
+}

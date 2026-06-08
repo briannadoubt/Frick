@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTJBF1CCNYZA7KEFWCTS8QHN",
+  "ts": "2026-06-08T00:52:31.244Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTJBF1C90WP52SG6SEQF780V",
+    "number": 147,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "Android client observation tier: observable stores + Compose query + session (parity with FR-135)",
+    "description": "Android/Kotlin parity with the Swift observation tier (FR-135). FrickSwift is getting a reactive layer over the transport (observable object cache + sync loop, @FrickQuery, observable session manager, sharing service). Android currently exposes only the FrickSyncSocket transport + flows. Bring Compose/Kotlin idiomatic equivalents so Android apps get the same ergonomics as SwiftUI/web. Use StateFlow/Flow + collectAsState, not custom observation.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}
