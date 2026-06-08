@@ -82,6 +82,19 @@ sealed class FrickInboundEvent {
     ) : FrickInboundEvent()
     data class ProjectionDelta(val projection: String, val changes: List<ProjectionChange>) : FrickInboundEvent()
     data class ObjectUpsertResult(val requestId: String, val version: Int) : FrickInboundEvent()
+    /**
+     * FR-15 — the server's reply to a [FrameKindCodes.CALL_COMMAND] frame
+     * (`CallCommandResult`, kind 22). [op] echoes the issued command op; [result]
+     * is the raw decoded payload map (`room` / `invites` / `participant` /
+     * `mediaGrant` / `invite`), left untyped here so the call client layer
+     * (`FrickCallManager`) owns the record decoding. Correlated to the issuing
+     * verb by [requestId]; failures arrive as a [Nack] keyed by the same id.
+     */
+    data class CallCommandResult(
+        val requestId: String,
+        val op: String,
+        val result: Map<String, Any?>,
+    ) : FrickInboundEvent()
     data class Schema(val raw: Map<String, Any?>) : FrickInboundEvent()
     data class SyncStatus(val connected: Boolean, val cursors: Map<String, Int>, val inFlight: Int) : FrickInboundEvent()
     object Disconnected : FrickInboundEvent()
@@ -109,6 +122,16 @@ internal sealed class ObjectWriteResult {
     data class Failed(val envelope: FrickErrorEnvelope) : ObjectWriteResult()
 }
 
+/**
+ * FR-15 — the awaited outcome of a [FrickSyncSocket.callCommand]: either the
+ * decoded `CallCommandResult` payload ([op] + raw `result` map) or a server
+ * [FrickErrorEnvelope] from a `Nack` keyed by the same requestId.
+ */
+internal sealed class CallCommandResult {
+    data class Ok(val op: String, val result: Map<String, Any?>) : CallCommandResult()
+    data class Failed(val envelope: FrickErrorEnvelope) : CallCommandResult()
+}
+
 /** Mirrors `FrameKind` values from packages/protocol/src/frame.ts. Numbers are wire-stable. */
 internal object FrameKindCodes {
     const val HELLO = 0
@@ -132,6 +155,8 @@ internal object FrameKindCodes {
     const val HELLO_ACK = 18
     const val PROJECTION_DELTA = 19
     const val OBJECT_UPSERT = 20
+    const val CALL_COMMAND = 21
+    const val CALL_COMMAND_RESULT = 22
 }
 
 /**
@@ -163,6 +188,8 @@ internal fun frickFrameKindLabel(kind: Int): String =
         FrameKindCodes.HELLO_ACK -> "HelloAck"
         FrameKindCodes.PROJECTION_DELTA -> "ProjectionDelta"
         FrameKindCodes.OBJECT_UPSERT -> "ObjectUpsert"
+        FrameKindCodes.CALL_COMMAND -> "CallCommand"
+        FrameKindCodes.CALL_COMMAND_RESULT -> "CallCommandResult"
         else -> "unknown"
     }
 
@@ -424,6 +451,10 @@ class FrickSyncSocket internal constructor(
 
     // requestId -> awaitable result (Ack or Nack). Used by upsertObject().
     private val pendingObjectWrites = ConcurrentHashMap<String, CompletableDeferred<ObjectWriteResult>>()
+
+    // requestId -> awaitable result (CallCommandResult or Nack). Used by
+    // callCommand() (FR-15). Mirrors pendingObjectWrites' correlation plumbing.
+    private val pendingCallCommands = ConcurrentHashMap<String, CompletableDeferred<CallCommandResult>>()
 
     init {
         URI(buildSyncUrl(baseUrl))
@@ -739,6 +770,31 @@ class FrickSyncSocket internal constructor(
         }
     }
 
+    /**
+     * FR-15 — issue a call control-plane command (`CallCommand`, kind 21) and
+     * suspend until the server replies with a `CallCommandResult` (kind 22,
+     * returning [op] + the raw `result` map) or a `Nack` (thrown as
+     * [FrickHttpException] carrying the server envelope, keyed by the same
+     * requestId). Mirrors [upsertObject]'s request/response correlation exactly.
+     *
+     * [command] is the discriminated command body — `{ op, ... }` — packed
+     * verbatim under the frame's `command` field (the wire contract from
+     * `packages/protocol/src/calls.ts`). The higher-level verbs on
+     * [FrickCallManager] build these maps and decode the result records.
+     */
+    internal suspend fun callCommand(command: Map<String, Any?>): CallCommandResult {
+        val requestId = UUID.randomUUID().toString()
+        val payload = mapOf(
+            "requestId" to requestId,
+            "command" to command,
+        )
+        val frame = FrickMsgPack.encodeFrame(FrameKindCodes.CALL_COMMAND, payload)
+        val deferred = CompletableDeferred<CallCommandResult>()
+        pendingCallCommands[requestId] = deferred
+        sendOrQueue(FrameKindCodes.CALL_COMMAND, frame)
+        return deferred.await()
+    }
+
     private fun sendOrQueue(kind: Int, frame: ByteArray) {
         val ws = webSocket
         val ready = _status.value is FrickSyncStatus.Ready
@@ -813,6 +869,9 @@ class FrickSyncSocket internal constructor(
                 val requestId = payload.stringField("requestId") ?: return
                 val envelope = decodeErrorEnvelope(payload.mapField("error"), payload)
                 pendingObjectWrites.remove(requestId)?.complete(ObjectWriteResult.Failed(envelope))
+                // FR-15: a CallCommand failure reuses Nack keyed by the same
+                // requestId — route it to the awaiting callCommand() if any.
+                pendingCallCommands.remove(requestId)?.complete(CallCommandResult.Failed(envelope))
                 _events.tryEmit(FrickInboundEvent.Nack(requestId, envelope))
             }
             FrameKindCodes.DELTA -> {
@@ -846,6 +905,18 @@ class FrickSyncSocket internal constructor(
                     .mapNotNull(::decodePackedObjectRecord)
                 val cursor = payload.intField("cursor") ?: 0
                 _events.tryEmit(FrickInboundEvent.Delta(objects, emptyList(), cursor))
+            }
+            FrameKindCodes.CALL_COMMAND_RESULT -> {
+                // FR-15: the server's reply to a CallCommand (kind 21). Resolve
+                // the awaiting callCommand() by requestId with the raw result
+                // map (room/invites/participant/mediaGrant/invite), and fan the
+                // typed event out for any observer. Failures arrive as a Nack.
+                val requestId = payload.stringField("requestId") ?: return
+                val op = payload.stringField("op") ?: ""
+                pendingCallCommands.remove(requestId)?.complete(
+                    CallCommandResult.Ok(op, payload),
+                )
+                _events.tryEmit(FrickInboundEvent.CallCommandResult(requestId, op, payload))
             }
             FrameKindCodes.PRESENCE_DELTA -> {
                 val name = payload.stringField("name") ?: payload.stringField("presence") ?: ""

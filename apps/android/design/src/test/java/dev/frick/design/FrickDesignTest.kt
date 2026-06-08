@@ -169,6 +169,34 @@ public class FrickDesignTest {
         assertEquals(13.sp, typography.label)
     }
 
+    // FR-84 call control bar (mic/camera/screen toggles + leave).
+
+    @Test
+    public fun callControlBarLabelsFlipWithMediaState() {
+        assertEquals("Mute", FrickCallControlBarDefaults.micLabel(enabled = true))
+        assertEquals("Unmute", FrickCallControlBarDefaults.micLabel(enabled = false))
+
+        assertEquals("Stop video", FrickCallControlBarDefaults.cameraLabel(enabled = true))
+        assertEquals("Start video", FrickCallControlBarDefaults.cameraLabel(enabled = false))
+
+        assertEquals("Stop sharing", FrickCallControlBarDefaults.screenShareLabel(sharing = true))
+        assertEquals("Share screen", FrickCallControlBarDefaults.screenShareLabel(sharing = false))
+    }
+
+    @Test
+    public fun callControlToggleStatusReflectsActiveMedia() {
+        assertEquals(FrickStatus.Success, FrickCallControlBarDefaults.toggleStatus(active = true))
+        assertEquals(FrickStatus.Neutral, FrickCallControlBarDefaults.toggleStatus(active = false))
+    }
+
+    @Test
+    public fun callControlsDefaultToMicOnlyAudioCall() {
+        val controls = FrickCallControls()
+        assertEquals(true, controls.micEnabled)
+        assertEquals(false, controls.cameraEnabled)
+        assertEquals(false, controls.screenSharing)
+    }
+
     @Test
     public fun spTextUnitScalesWithFontScaleWhileSpReportsSp() {
         // A higher fontScale renders sp text larger (the scaling contract), while

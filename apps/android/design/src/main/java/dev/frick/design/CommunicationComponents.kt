@@ -342,6 +342,115 @@ public fun FrickCallButton(
     }
 }
 
+/**
+ * FR-84 — immutable view-state for the call control bar. Mirrors the per-self
+ * media surface the FR-82 participant model exposes (mic / camera / screen).
+ * Pure data so the toggle/labeling logic is unit-testable without a Compose
+ * runtime (see [FrickCallControlBarDefaults]).
+ */
+public data class FrickCallControls(
+    public val micEnabled: Boolean = true,
+    public val cameraEnabled: Boolean = false,
+    public val screenSharing: Boolean = false,
+)
+
+/** Tokenized labeling/state logic for [FrickCallControlBar], unit-testable. */
+public object FrickCallControlBarDefaults {
+    public fun micLabel(enabled: Boolean): String = if (enabled) "Mute" else "Unmute"
+
+    public fun cameraLabel(enabled: Boolean): String =
+        if (enabled) "Stop video" else "Start video"
+
+    public fun screenShareLabel(sharing: Boolean): String =
+        if (sharing) "Stop sharing" else "Share screen"
+
+    /** A toggle is "on" (accent-styled) when the underlying media is active. */
+    public fun toggleStatus(active: Boolean): FrickStatus =
+        if (active) FrickStatus.Success else FrickStatus.Neutral
+}
+
+/**
+ * FR-84 — the call control bar: mic / camera / screen-share toggles plus a
+ * leave (end-call) affordance, styled from design tokens. Reuses the existing
+ * [FrickCallButton] for leave and tokenized [FrickIconButton]s/labels for the
+ * media toggles. Stateless: the host owns [FrickCallControls] and reacts to the
+ * toggle callbacks (wiring them to `FrickCallManager.setMediaState`).
+ */
+@Composable
+public fun FrickCallControlBar(
+    controls: FrickCallControls,
+    onToggleMic: () -> Unit,
+    onToggleCamera: () -> Unit,
+    onToggleScreenShare: () -> Unit,
+    onLeave: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    FrickSurface(modifier = modifier.fillMaxWidth()) {
+        FrickInline(
+            modifier = Modifier.padding(FrickDesign.spacing.md),
+            spacing = FrickDesign.spacing.md,
+        ) {
+            FrickCallToggle(
+                label = FrickCallControlBarDefaults.micLabel(controls.micEnabled),
+                active = controls.micEnabled,
+                onClick = onToggleMic,
+                enabled = enabled,
+            )
+            FrickCallToggle(
+                label = FrickCallControlBarDefaults.cameraLabel(controls.cameraEnabled),
+                active = controls.cameraEnabled,
+                onClick = onToggleCamera,
+                enabled = enabled,
+            )
+            FrickCallToggle(
+                label = FrickCallControlBarDefaults.screenShareLabel(controls.screenSharing),
+                active = controls.screenSharing,
+                onClick = onToggleScreenShare,
+                enabled = enabled,
+            )
+            Box(modifier = Modifier.weight(1f))
+            // Reuse the existing FR-92 call affordance for leave/end (active =
+            // in-call -> danger-styled end button).
+            FrickCallButton(
+                onClick = onLeave,
+                active = true,
+                enabled = enabled,
+                contentDescription = "Leave call",
+            )
+        }
+    }
+}
+
+@Composable
+private fun FrickCallToggle(
+    label: String,
+    active: Boolean,
+    onClick: () -> Unit,
+    enabled: Boolean,
+) {
+    val background =
+        if (active) FrickDesign.colors.success else FrickDesign.colors.surfaceAlt
+    val tint = if (active) FrickDesign.colors.onPrimary else FrickDesign.colors.text
+    FrickStack(spacing = FrickDesign.spacing.xs) {
+        IconButton(
+            onClick = onClick,
+            modifier = Modifier
+                .size(FrickDesign.spacing.xl + FrickDesign.spacing.md)
+                .clip(CircleShape)
+                .background(background),
+            enabled = enabled,
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Call,
+                contentDescription = label,
+                tint = tint,
+            )
+        }
+        FrickLabel(text = label)
+    }
+}
+
 private fun String.initials(): String =
     split(" ")
         .filter { it.isNotBlank() }
