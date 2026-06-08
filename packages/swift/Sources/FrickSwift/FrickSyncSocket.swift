@@ -26,6 +26,8 @@ public enum FrickFrameKind: Int, Sendable {
     case helloAck = 18
     case projectionDelta = 19
     case objectUpsert = 20
+    case callCommand = 21
+    case callCommandResult = 22
 
     /// Telemetry frame-kind label. Mirrors the TS `frameKindLabel` helper in
     /// `packages/core/src/runtime.ts`, which returns the PascalCase
@@ -54,6 +56,8 @@ public enum FrickFrameKind: Int, Sendable {
         case .helloAck: return "HelloAck"
         case .projectionDelta: return "ProjectionDelta"
         case .objectUpsert: return "ObjectUpsert"
+        case .callCommand: return "CallCommand"
+        case .callCommandResult: return "CallCommandResult"
         }
     }
 }
@@ -699,6 +703,10 @@ public enum FrickInboundEvent: Sendable {
     case projectionDelta(projection: String, changes: [FrickProjectionChange])
     case ack(requestId: String, version: Int?, cursor: Int?)
     case nack(envelope: FrickErrorEnvelope?, requestId: String)
+    /// Inbound `CallCommandResult` (frame kind 22). Surfaced alongside being
+    /// resolved to the awaiting `callCommand` caller, so observers can also
+    /// react to call lifecycle results.
+    case callCommandResult(FrickCallCommandResult)
     case schema
     case syncStatus(connected: Bool, inFlight: Int)
     /// Inbound presence delta. `records` carry the live presence rows for the
@@ -883,6 +891,11 @@ public actor FrickSyncSocket {
     private var explicitlyClosed: Bool = false
     private var pending: [PendingSocketAppend] = []
     private var pendingResponders: [String: CheckedContinuation<Int?, Error>] = [:]
+    /// In-flight `CallCommand` requests keyed by `requestId`. Resolved by a
+    /// matching `CallCommandResult` frame, or failed by a `Nack` carrying the
+    /// same `requestId` — exactly the Append/ObjectUpsert↔Ack/Nack idiom, but
+    /// the success value is the typed result payload the plain Ack can't carry.
+    private var pendingCallResponders: [String: CheckedContinuation<FrickCallCommandResult, Error>] = [:]
 
     /// Subscribe frames keyed by a stable subscription identity, retained so
     /// they can be replayed after a reconnect. The server tracks
@@ -969,6 +982,10 @@ public actor FrickSyncSocket {
             cont.resume(throwing: CancellationError())
         }
         pendingResponders.removeAll()
+        for (_, cont) in pendingCallResponders {
+            cont.resume(throwing: CancellationError())
+        }
+        pendingCallResponders.removeAll()
         // Explicit close is a clean shutdown — finish the span with the
         // normal-closure code (1000), matching the TS normal-close path.
         finishConnectionTelemetry(closeCode: 1000)
@@ -1109,6 +1126,35 @@ public actor FrickSyncSocket {
 
     fileprivate func takeResponder(requestId: String) -> CheckedContinuation<Int?, Error>? {
         pendingResponders.removeValue(forKey: requestId)
+    }
+
+    fileprivate func takeCallResponder(requestId: String) -> CheckedContinuation<FrickCallCommandResult, Error>? {
+        pendingCallResponders.removeValue(forKey: requestId)
+    }
+
+    /// Issue a `CallCommand` (frame kind 21) and await the matching
+    /// `CallCommandResult` (frame kind 22) — or a `Nack` keyed by the same
+    /// `requestId`, which surfaces as a thrown `FrickServerError`. Mirrors the
+    /// TS `FrickClient.callCommand`. The command body is encoded exactly like
+    /// the wire contract in `packages/protocol/src/calls.ts`.
+    public func callCommand(_ command: FrickCallCommand) async throws -> FrickCallCommandResult {
+        let requestId = UUID().uuidString
+        let frame = FrickFrame(kind: .callCommand, payload: .map([
+            (.string("requestId"), .string(requestId)),
+            (.string("command"), command.asMsgPack()),
+        ]))
+        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<FrickCallCommandResult, Error>) in
+            pendingCallResponders[requestId] = cont
+            Task { [self] in
+                do {
+                    try await sendOrQueue(requestId: requestId, frame: frame, expectResponse: false)
+                } catch {
+                    if let pending = await self.takeCallResponder(requestId: requestId) {
+                        pending.resume(throwing: error)
+                    }
+                }
+            }
+        }
     }
 
     /// Number of frames buffered while disconnected (used by tests).
@@ -1287,6 +1333,8 @@ public actor FrickSyncSocket {
             handleProjectionDelta(payload: frame.payload)
         case .presenceDelta:
             handlePresenceDelta(payload: frame.payload)
+        case .callCommandResult:
+            handleCallCommandResult(payload: frame.payload)
         case .ack:
             handleAck(payload: frame.payload)
         case .nack:
@@ -1519,6 +1567,16 @@ public actor FrickSyncSocket {
         eventContinuation?.yield(.presenceDelta(name: name, records: records, cleared: cleared))
     }
 
+    private func handleCallCommandResult(payload: FrickMsgPackValue) {
+        guard let map = payload.mapValue,
+              let requestId = map["requestId"]?.stringValue else { return }
+        let result = FrickCallCommandResult(map: map)
+        if let cont = pendingCallResponders.removeValue(forKey: requestId) {
+            cont.resume(returning: result)
+        }
+        eventContinuation?.yield(.callCommandResult(result))
+    }
+
     private func handleAck(payload: FrickMsgPackValue) {
         guard let map = payload.mapValue, let requestId = map["requestId"]?.stringValue else { return }
         let version = map["version"]?.intValue
@@ -1542,6 +1600,13 @@ public actor FrickSyncSocket {
             }
         }
         if let cont = pendingResponders.removeValue(forKey: requestId) {
+            let serverError = FrickServerError(httpStatusCode: 0, envelope: envelope, body: Data())
+            cont.resume(throwing: serverError)
+        }
+        // A `CallCommand` failure reuses the `Nack` frame keyed by the same
+        // `requestId` (no separate error channel), so fail any in-flight call
+        // responder identically — mirroring the TS client.
+        if let cont = pendingCallResponders.removeValue(forKey: requestId) {
             let serverError = FrickServerError(httpStatusCode: 0, envelope: envelope, body: Data())
             cont.resume(throwing: serverError)
         }

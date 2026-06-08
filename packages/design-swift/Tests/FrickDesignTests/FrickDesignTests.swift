@@ -187,6 +187,29 @@ final class FrickDesignTests: XCTestCase {
         XCTAssertEqual(button.label, "Answer")
     }
 
+    func testCallControlBarStoresPresenceState() {
+        var toggled: [String] = []
+        let bar = FrickCallControlBar(
+            micEnabled: true,
+            cameraEnabled: false,
+            screenSharing: true,
+            onToggleMic: { toggled.append("mic") },
+            onToggleCamera: { toggled.append("camera") },
+            onToggleScreenShare: { toggled.append("screen") },
+            onLeave: { toggled.append("leave") }
+        )
+        XCTAssertTrue(bar.micEnabled)
+        XCTAssertFalse(bar.cameraEnabled)
+        XCTAssertTrue(bar.screenSharing)
+    }
+
+    func testCallControlToggleReflectsActiveStateAndIcon() {
+        let toggle = FrickCallControlToggle(icon: .microphone, isActive: true, label: "Mute microphone") {}
+        XCTAssertEqual(toggle.icon, .microphone)
+        XCTAssertTrue(toggle.isActive)
+        XCTAssertEqual(toggle.label, "Mute microphone")
+    }
+
     func testDateTimePickerStoresTitle() {
         let picker = FrickDateTimePicker("When", selection: .constant(Date(timeIntervalSince1970: 0)))
         XCTAssertEqual(picker.title, "When")

@@ -324,3 +324,93 @@ public struct FrickCallControls: View, Sendable {
         }
     }
 }
+
+/// FR-84 — in-call control bar. A tokenized row of mic / camera / screen-share
+/// toggle buttons plus a leave action, consuming the call-presence state
+/// (FR-82) the client exposes via `FrickCallSession`. Each toggle reflects its
+/// on/off state through tokenized fill + foreground (never a raw literal),
+/// mirroring the web `CallControlBar` (`aria-pressed` / `data-active`). The
+/// leave action reuses the existing `FrickCallButton` in its danger tone.
+public struct FrickCallControlBar: View, Sendable {
+    public let micEnabled: Bool
+    public let cameraEnabled: Bool
+    public let screenSharing: Bool
+    private let onToggleMic: () -> Void
+    private let onToggleCamera: () -> Void
+    private let onToggleScreenShare: () -> Void
+    private let onLeave: () -> Void
+
+    public init(
+        micEnabled: Bool = true,
+        cameraEnabled: Bool = false,
+        screenSharing: Bool = false,
+        onToggleMic: @escaping () -> Void,
+        onToggleCamera: @escaping () -> Void,
+        onToggleScreenShare: @escaping () -> Void,
+        onLeave: @escaping () -> Void
+    ) {
+        self.micEnabled = micEnabled
+        self.cameraEnabled = cameraEnabled
+        self.screenSharing = screenSharing
+        self.onToggleMic = onToggleMic
+        self.onToggleCamera = onToggleCamera
+        self.onToggleScreenShare = onToggleScreenShare
+        self.onLeave = onLeave
+    }
+
+    public var body: some View {
+        FrickInline(spacing: .md) {
+            FrickCallControlToggle(
+                icon: .microphone,
+                isActive: micEnabled,
+                label: micEnabled ? "Mute microphone" : "Unmute microphone",
+                action: onToggleMic
+            )
+            FrickCallControlToggle(
+                icon: .video,
+                isActive: cameraEnabled,
+                label: cameraEnabled ? "Turn camera off" : "Turn camera on",
+                action: onToggleCamera
+            )
+            FrickCallControlToggle(
+                icon: .more,
+                isActive: screenSharing,
+                label: screenSharing ? "Stop sharing screen" : "Share screen",
+                action: onToggleScreenShare
+            )
+            FrickCallButton(icon: .call, label: "Leave call", tone: .danger, action: onLeave)
+        }
+        .padding(FrickTokens.Spacing.md)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Call controls")
+    }
+}
+
+/// A single tokenized on/off call toggle. State is reflected through the
+/// generated palette tokens only — `accent`/`accentForeground` when active,
+/// `surfaceRaised`/`text` when off — never an inline color literal.
+public struct FrickCallControlToggle: View, Sendable {
+    public let icon: FrickIconName
+    public let isActive: Bool
+    public let label: String
+    private let action: () -> Void
+
+    public init(icon: FrickIconName, isActive: Bool, label: String, action: @escaping () -> Void) {
+        self.icon = icon
+        self.isActive = isActive
+        self.label = label
+        self.action = action
+    }
+
+    public var body: some View {
+        Button(action: action) {
+            FrickIcon(icon, size: 20)
+                .foregroundStyle(isActive ? FrickPalette.accentForeground : FrickPalette.text)
+                .frame(width: 48, height: 48)
+                .background(isActive ? FrickPalette.accent : FrickPalette.surfaceRaised, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
+    }
+}
