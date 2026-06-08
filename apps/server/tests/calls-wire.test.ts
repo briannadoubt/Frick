@@ -12,7 +12,14 @@ import {
   type NackPayload,
 } from "@fricken/protocol";
 import { createFrickServer } from "../src/server.js";
-import { buildCallSchema } from "../src/calls/index.js";
+import {
+  DEFAULT_SFU_MEDIA_CODECS,
+  FakeSfuBackend,
+  SfuMediaPlaneAdapter,
+  buildCallSchema,
+  type MediaPlaneAdapter,
+  type SfuTransportParams,
+} from "../src/calls/index.js";
 
 /**
  * FR-15 — call control-plane wire contract (Phase 1).
@@ -142,18 +149,110 @@ describe("FR-15 — call command wire", () => {
     expect((nack.error.details as { reason?: string }).reason).toBe("callsDisabled");
     socket.close();
   });
+
+  // -- FR-155: SFU media negotiation over the wire -------------------------
+
+  it("round-trips SFU connect/produce/consume against an SFU media plane", async () => {
+    const sfuPlane = new SfuMediaPlaneAdapter({
+      backend: new FakeSfuBackend(),
+      announcedIp: "203.0.113.9",
+      mediaCodecs: DEFAULT_SFU_MEDIA_CODECS,
+      tokenSecret: "wire-secret",
+    });
+    app = await startServer({ mediaPlane: sfuPlane });
+    const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const bob = await devLogin(app.httpUrl, { userId: "user-bob" });
+    const adaSocket = await connectAndHello(app.url, app.schemaHash, ada.sessionToken, "device-ada");
+    const created = await sendCommand(adaSocket, {
+      op: "create",
+      conversationId: "conversation-1",
+      inviteeUserIds: ["user-bob"],
+    });
+    const callId = created.room!.id;
+
+    const bobSocket = await connectAndHello(app.url, app.schemaHash, bob.sessionToken, "device-bob");
+    const joined = await sendCommand(bobSocket, { op: "join", callId });
+    const send = JSON.parse(joined.mediaGrant!.connection!["sendTransport"]!) as SfuTransportParams;
+    const recv = JSON.parse(joined.mediaGrant!.connection!["recvTransport"]!) as SfuTransportParams;
+
+    const connected = await sendCommand(bobSocket, {
+      op: "sfuConnectTransport",
+      callId,
+      transportId: send.id,
+      dtlsParameters: { fingerprints: [{ algorithm: "sha-256", value: "AA:BB" }] },
+    });
+    expect(connected.op).toBe("sfuConnectTransport");
+
+    const produced = await sendCommand(bobSocket, {
+      op: "sfuProduce",
+      callId,
+      transportId: send.id,
+      kind: "audio",
+      rtpParameters: { codecs: [] },
+    });
+    expect(produced.producer?.producerId).toBeTruthy();
+    expect(produced.producer?.kind).toBe("audio");
+
+    const consumed = await sendCommand(bobSocket, {
+      op: "sfuConsume",
+      callId,
+      transportId: recv.id,
+      producerId: produced.producer!.producerId,
+      rtpCapabilities: { codecs: [] },
+    });
+    expect(consumed.consumer?.producerId).toBe(produced.producer!.producerId);
+    expect(consumed.consumer?.kind).toBe("audio");
+    expect(consumed.consumer?.rtpParameters).toBeTruthy();
+
+    adaSocket.close();
+    bobSocket.close();
+  });
+
+  it("nacks SFU media ops on a non-SFU media plane", async () => {
+    // The default fake media plane has no produce/consume companion.
+    app = await startServer();
+    const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const bob = await devLogin(app.httpUrl, { userId: "user-bob" });
+    const adaSocket = await connectAndHello(app.url, app.schemaHash, ada.sessionToken, "device-ada");
+    const created = await sendCommand(adaSocket, {
+      op: "create",
+      conversationId: "conversation-1",
+      inviteeUserIds: ["user-bob"],
+    });
+    const callId = created.room!.id;
+    const bobSocket = await connectAndHello(app.url, app.schemaHash, bob.sessionToken, "device-bob");
+    await sendCommand(bobSocket, { op: "join", callId });
+
+    const nack = await sendCommandExpectingNack(bobSocket, {
+      op: "sfuProduce",
+      callId,
+      transportId: "t",
+      kind: "audio",
+      rtpParameters: {},
+    });
+    expect(nack.code).toBe("sync.protocolError");
+    expect((nack.error.details as { reason?: string }).reason).toBe("sfuUnsupported");
+    adaSocket.close();
+    bobSocket.close();
+  });
 });
 
 // ---------------------------------------------------------------------------
 // Harness
 // ---------------------------------------------------------------------------
 
-async function startServer(options: { disableCalls?: boolean } = {}) {
+async function startServer(
+  options: { disableCalls?: boolean; mediaPlane?: MediaPlaneAdapter } = {},
+) {
   const server = createFrickServer({
     port: 0,
     dbPath: ":memory:",
     schema: callSchema,
-    ...(options.disableCalls ? { calls: { enabled: false } } : {}),
+    ...(options.disableCalls
+      ? { calls: { enabled: false } }
+      : options.mediaPlane
+        ? { calls: { mediaPlane: options.mediaPlane } }
+        : {}),
   });
   await server.listen();
   const address = server.server.address();

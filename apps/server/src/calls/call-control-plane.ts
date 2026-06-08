@@ -12,6 +12,14 @@ import {
   type MediaJoinGrant,
   type MediaPlaneAdapter,
 } from "./media-plane.js";
+import type {
+  ConsumerHandle,
+  DtlsParameters,
+  MediaKind,
+  ProducerHandle,
+  RtpCapabilities,
+  RtpParameters,
+} from "./sfu-backend.js";
 
 /**
  * FR-79 — Call control-plane state machine.
@@ -137,6 +145,58 @@ export interface MediaState {
   readonly micEnabled: boolean;
   readonly cameraEnabled: boolean;
   readonly screenSharing: boolean;
+}
+
+/**
+ * FR-155 — the produce/consume companion an SFU media plane exposes alongside
+ * the four-method {@link MediaPlaneAdapter} seam. The control plane forwards a
+ * client's media negotiation to these when (and only when) its media plane
+ * supports them; a P2P plane has none, so {@link CallControlPlane} Nacks the SFU
+ * ops. Structurally matched (not by class) so the adapter stays decoupled and
+ * tests can inject any compatible double. Mirrors `SfuMediaPlaneAdapter`.
+ */
+export interface SfuMediaOperations {
+  connectTransport(
+    callId: string,
+    transportId: string,
+    dtlsParameters: DtlsParameters,
+  ): Promise<void>;
+  produce(
+    callId: string,
+    transportId: string,
+    kind: MediaKind,
+    rtpParameters: RtpParameters,
+  ): Promise<ProducerHandle>;
+  consume(
+    callId: string,
+    transportId: string,
+    producerId: string,
+    rtpCapabilities: RtpCapabilities,
+  ): Promise<ConsumerHandle>;
+}
+
+/**
+ * Structural guard: does this media plane expose the SFU produce/consume
+ * companion? True for `SfuMediaPlaneAdapter`, false for the P2P / fake planes.
+ */
+export function supportsSfuMedia(
+  plane: MediaPlaneAdapter,
+): plane is MediaPlaneAdapter & SfuMediaOperations {
+  const candidate = plane as Partial<SfuMediaOperations>;
+  return (
+    typeof candidate.connectTransport === "function" &&
+    typeof candidate.produce === "function" &&
+    typeof candidate.consume === "function"
+  );
+}
+
+/** Raised when an SFU-only media op is attempted on a non-SFU media plane. */
+export class CallMediaUnsupportedError extends Error {
+  readonly reason = "sfuUnsupported" as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "CallMediaUnsupportedError";
+  }
 }
 
 export interface CallControlPlaneOptions {
@@ -379,6 +439,80 @@ export class CallControlPlane {
       screenSharing: updated.screenSharing,
     });
     return updated;
+  }
+
+  // -- SFU media negotiation (FR-155) --------------------------------------
+  //
+  // After a participant `join`s an SFU-brokered call and receives its grant
+  // (router caps + transport params), the browser driver negotiates real media
+  // by forwarding these through the gateway. Each validates the actor is an
+  // active participant of a live call, then delegates to the media plane's
+  // produce/consume companion. A non-SFU media plane has no such companion, so
+  // these throw {@link CallMediaUnsupportedError} (→ Nack).
+
+  /** Complete the DTLS handshake for one of the participant's transports. */
+  async sfuConnectTransport(
+    actor: CallActor,
+    callId: string,
+    transportId: string,
+    dtlsParameters: DtlsParameters,
+  ): Promise<void> {
+    const ops = await this.#requireSfuParticipant(actor, callId);
+    await ops.connectTransport(callId, transportId, dtlsParameters);
+  }
+
+  /** Start producing one of the participant's tracks on its send transport. */
+  async sfuProduce(
+    actor: CallActor,
+    callId: string,
+    transportId: string,
+    kind: MediaKind,
+    rtpParameters: RtpParameters,
+  ): Promise<ProducerHandle> {
+    const ops = await this.#requireSfuParticipant(actor, callId);
+    return ops.produce(callId, transportId, kind, rtpParameters);
+  }
+
+  /** Consume another participant's producer onto this participant's recv transport. */
+  async sfuConsume(
+    actor: CallActor,
+    callId: string,
+    transportId: string,
+    producerId: string,
+    rtpCapabilities: RtpCapabilities,
+  ): Promise<ConsumerHandle> {
+    const ops = await this.#requireSfuParticipant(actor, callId);
+    return ops.consume(callId, transportId, producerId, rtpCapabilities);
+  }
+
+  /**
+   * Validate the actor is an active participant of a live, SFU-brokered call and
+   * return the media plane's produce/consume companion. Throws
+   * {@link CallStateError}/{@link CallMediaUnsupportedError} otherwise.
+   */
+  async #requireSfuParticipant(
+    actor: CallActor,
+    callId: string,
+  ): Promise<SfuMediaOperations> {
+    if (!supportsSfuMedia(this.#media)) {
+      throw new CallMediaUnsupportedError(
+        `Call ${callId} is not brokered over an SFU media plane; SFU media negotiation is unsupported`,
+      );
+    }
+    await this.#requireLiveRoom(actor.tenantId, callId);
+    const participant = await this.#readParticipant(
+      actor.tenantId,
+      callId,
+      actor.userId,
+      actor.deviceId,
+    );
+    if (!participant || participant.state !== "joined") {
+      throw new CallStateError(
+        "notParticipant",
+        `${actor.userId}/${actor.deviceId} is not an active participant of ${callId}`,
+      );
+    }
+    return this.#media;
   }
 
   // -- leave ---------------------------------------------------------------

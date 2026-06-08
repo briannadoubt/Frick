@@ -32,7 +32,9 @@ import {
   CallControlPlane,
   CallAuthzError,
   CallStateError,
+  CallMediaUnsupportedError,
   type CallActor,
+  type DtlsParameters,
 } from "../calls/index.js";
 import {
   assertCanAppend,
@@ -1741,6 +1743,54 @@ export class SyncGateway {
           result = { requestId: payload.requestId, op: "setMediaState", participant };
           break;
         }
+        case "sfuConnectTransport": {
+          // FR-155: forward DTLS handshake to the SFU media plane. Non-SFU
+          // planes throw CallMediaUnsupportedError → Nack.
+          await plane.sfuConnectTransport(
+            actor,
+            command.callId,
+            command.transportId,
+            // Opaque client-supplied DTLS params, forwarded verbatim to mediasoup.
+            command.dtlsParameters as unknown as DtlsParameters,
+          );
+          result = { requestId: payload.requestId, op: "sfuConnectTransport" };
+          break;
+        }
+        case "sfuProduce": {
+          const producer = await plane.sfuProduce(
+            actor,
+            command.callId,
+            command.transportId,
+            command.kind,
+            command.rtpParameters,
+          );
+          result = {
+            requestId: payload.requestId,
+            op: "sfuProduce",
+            producer: { producerId: producer.id, kind: producer.kind },
+          };
+          break;
+        }
+        case "sfuConsume": {
+          const consumer = await plane.sfuConsume(
+            actor,
+            command.callId,
+            command.transportId,
+            command.producerId,
+            command.rtpCapabilities,
+          );
+          result = {
+            requestId: payload.requestId,
+            op: "sfuConsume",
+            consumer: {
+              consumerId: consumer.id,
+              producerId: consumer.producerId,
+              kind: consumer.kind,
+              rtpParameters: consumer.rtpParameters,
+            },
+          };
+          break;
+        }
         default: {
           const _exhaustive: never = command;
           void _exhaustive;
@@ -1775,7 +1825,7 @@ export class SyncGateway {
       ]);
       return;
     }
-    if (error instanceof CallStateError) {
+    if (error instanceof CallStateError || error instanceof CallMediaUnsupportedError) {
       const envelope = createFrickErrorEnvelope({
         code: "sync.protocolError",
         message: error.message,

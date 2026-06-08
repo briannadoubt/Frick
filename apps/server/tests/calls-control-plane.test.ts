@@ -3,11 +3,16 @@ import { FrickStore } from "../src/store.js";
 import {
   CallAuthzError,
   CallControlPlane,
+  CallMediaUnsupportedError,
   CallStateError,
+  DEFAULT_SFU_MEDIA_CODECS,
   FakeMediaPlaneAdapter,
+  FakeSfuBackend,
+  SfuMediaPlaneAdapter,
   buildCallSchema,
   callActor,
   type CallActor,
+  type SfuTransportParams,
 } from "../src/calls/index.js";
 
 // ---------------------------------------------------------------------------
@@ -322,5 +327,98 @@ describe("FR-79 — CallControlPlane", () => {
     await plane.endCall(alice, "call-1");
     const ended = await plane.joinCall.bind(plane)(bob, "call-1").catch((e) => e);
     expect(ended).toBeInstanceOf(CallStateError);
+  });
+
+  // -- FR-155: SFU media negotiation forwarding ----------------------------
+
+  describe("FR-155 — SFU produce/consume forwarding", () => {
+    let backend: FakeSfuBackend;
+    let sfuPlane: CallControlPlane;
+
+    /** Pull a participant's transport ids out of their join grant. */
+    function grantTransports(connection: Readonly<Record<string, string>>): {
+      send: string;
+      recv: string;
+    } {
+      const send = JSON.parse(connection["sendTransport"]!) as SfuTransportParams;
+      const recv = JSON.parse(connection["recvTransport"]!) as SfuTransportParams;
+      return { send: send.id, recv: recv.id };
+    }
+
+    beforeEach(() => {
+      backend = new FakeSfuBackend();
+      const sfuMedia = new SfuMediaPlaneAdapter({
+        backend,
+        announcedIp: "203.0.113.9",
+        mediaCodecs: DEFAULT_SFU_MEDIA_CODECS,
+        tokenSecret: "test-secret",
+        now: () => 1_000,
+      });
+      idCounter = 0;
+      sfuPlane = new CallControlPlane({
+        store,
+        mediaPlane: sfuMedia,
+        generateId: () => `call-${++idCounter}`,
+        now: () => new Date(1_000),
+      });
+    });
+
+    async function joinedCall(): Promise<{ callId: string; send: string; recv: string }> {
+      await sfuPlane.createCall(alice, { conversationId: "conv-1", inviteeUserIds: ["bob"] });
+      const joined = await sfuPlane.joinCall(bob, "call-1");
+      const { send, recv } = grantTransports(joined.mediaGrant.connection!);
+      return { callId: "call-1", send, recv };
+    }
+
+    it("connects a transport, produces a track, and consumes a remote producer", async () => {
+      const { callId, send, recv } = await joinedCall();
+
+      // connectTransport forwards to the backend (transport becomes connected).
+      await sfuPlane.sfuConnectTransport(bob, callId, send, {
+        fingerprints: [{ algorithm: "sha-256", value: "AA:BB" }],
+      });
+
+      // produce → a server-assigned producer id.
+      const producer = await sfuPlane.sfuProduce(bob, callId, send, "audio", {
+        codecs: [{ payloadType: 111 }],
+      });
+      expect(producer.id).toMatch(/^fake-producer-/);
+      expect(producer.kind).toBe("audio");
+
+      // consume that producer onto the recv transport → a consumer w/ rtpParameters.
+      const consumer = await sfuPlane.sfuConsume(bob, callId, recv, producer.id, {
+        codecs: ["client-caps"],
+      });
+      expect(consumer.producerId).toBe(producer.id);
+      expect(consumer.kind).toBe("audio");
+      expect(consumer.rtpParameters).toMatchObject({ encodings: expect.any(Array) });
+    });
+
+    it("rejects SFU ops from a non-participant (notParticipant)", async () => {
+      const { callId, send } = await joinedCall();
+      await expect(
+        sfuPlane.sfuProduce(carol, callId, send, "audio", {}),
+      ).rejects.toMatchObject({ name: "CallStateError", reason: "notParticipant" });
+    });
+
+    it("rejects SFU ops on an ended call", async () => {
+      const { callId, send } = await joinedCall();
+      await sfuPlane.endCall(alice, callId);
+      await expect(
+        sfuPlane.sfuConnectTransport(bob, callId, send, { fingerprints: [] }),
+      ).rejects.toBeInstanceOf(CallStateError);
+    });
+
+    it("Nacks SFU ops on a non-SFU (P2P/fake) media plane", async () => {
+      // `plane` (from the outer suite) uses the FakeMediaPlaneAdapter, which has
+      // no produce/consume companion → CallMediaUnsupportedError.
+      await plane.createCall(alice, { conversationId: "conv-1", inviteeUserIds: ["bob"] });
+      await plane.joinCall(bob, "call-1");
+      const error = await plane
+        .sfuProduce(bob, "call-1", "t", "audio", {})
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(CallMediaUnsupportedError);
+      expect((error as CallMediaUnsupportedError).reason).toBe("sfuUnsupported");
+    });
   });
 });

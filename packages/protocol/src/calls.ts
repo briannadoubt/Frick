@@ -158,6 +158,68 @@ export interface SetCallMediaStateCommand {
   readonly media: CallMediaStatePatch;
 }
 
+// -- SFU media-negotiation commands (FR-155) --------------------------------
+//
+// The SFU media plane (FR-83) forwards real-time media through a server-side
+// mediasoup router. After a client `join`s and receives its grant (router RTP
+// capabilities + send/recv transport params), it negotiates media by driving
+// these server-authoritative ops over the SAME `CallCommand` frame: it loads a
+// mediasoup-client `Device`, builds its transports, and then completes the DTLS
+// handshake (`connectTransport`), starts producing its own tracks (`produce`),
+// and consumes other participants' producers (`consume`). These are no-ops on a
+// P2P media plane — a P2P server Nacks them. All structured params
+// (dtlsParameters, rtpParameters, rtpCapabilities) are carried as opaque
+// JSON-serializable objects, mirroring the server's `SfuBackend` shapes.
+
+/** Opaque, JSON-serializable DTLS parameters from a mediasoup-client transport. */
+export type CallSfuDtlsParameters = Record<string, unknown>;
+
+/** Opaque, JSON-serializable RTP parameters for a produced/consumed track. */
+export type CallSfuRtpParameters = Record<string, unknown>;
+
+/** Opaque, JSON-serializable RTP capabilities of the consuming client's Device. */
+export type CallSfuRtpCapabilities = Record<string, unknown>;
+
+/** Media kind a producer/consumer carries (mirrors the server's `MediaKind`). */
+export type CallSfuMediaKind = "audio" | "video";
+
+/**
+ * Complete the DTLS handshake for one of this participant's transports. Sent by
+ * the client when a mediasoup-client transport fires its `connect` event.
+ */
+export interface ConnectSfuTransportCommand {
+  readonly op: "sfuConnectTransport";
+  readonly callId: string;
+  readonly transportId: string;
+  readonly dtlsParameters: CallSfuDtlsParameters;
+}
+
+/**
+ * Start producing one of this participant's tracks on its send transport. Sent
+ * when a mediasoup-client send transport fires its `produce` event. The result
+ * carries the server-assigned `producerId` the client returns to the transport.
+ */
+export interface ProduceSfuCommand {
+  readonly op: "sfuProduce";
+  readonly callId: string;
+  readonly transportId: string;
+  readonly kind: CallSfuMediaKind;
+  readonly rtpParameters: CallSfuRtpParameters;
+}
+
+/**
+ * Consume another participant's producer onto this participant's recv transport.
+ * The result carries the consumer params the client feeds to
+ * `recvTransport.consume(...)`.
+ */
+export interface ConsumeSfuCommand {
+  readonly op: "sfuConsume";
+  readonly callId: string;
+  readonly transportId: string;
+  readonly producerId: string;
+  readonly rtpCapabilities: CallSfuRtpCapabilities;
+}
+
 /** Discriminated union of every call control-plane command. */
 export type CallCommandOp =
   | CreateCallCommand
@@ -165,7 +227,10 @@ export type CallCommandOp =
   | AcceptCallCommand
   | LeaveCallCommand
   | EndCallCommand
-  | SetCallMediaStateCommand;
+  | SetCallMediaStateCommand
+  | ConnectSfuTransportCommand
+  | ProduceSfuCommand
+  | ConsumeSfuCommand;
 
 /** Names of the supported command operations. */
 export type CallCommandName = CallCommandOp["op"];
@@ -188,8 +253,11 @@ export interface CallCommandPayload {
  *  - `create`        → `room`, `invites`
  *  - `join`          → `room`, `participant`, `mediaGrant`
  *  - `accept`        → `invite`
- *  - `leave` / `end` → `room`
- *  - `setMediaState` → `participant`
+ *  - `leave` / `end`     → `room`
+ *  - `setMediaState`     → `participant`
+ *  - `sfuConnectTransport` → (no payload — success is the absence of a Nack)
+ *  - `sfuProduce`        → `producer`
+ *  - `sfuConsume`        → `consumer`
  *
  * Failures come back as the existing `Nack` frame keyed by the same
  * `requestId` (no separate error channel), so clients reuse their Ack/Nack
@@ -203,6 +271,24 @@ export interface CallCommandResultPayload {
   readonly participant?: CallParticipantRecord;
   readonly mediaGrant?: CallMediaGrant;
   readonly invite?: CallInviteRecord;
+  /** `sfuProduce` → the server-assigned producer the client returns to the transport. */
+  readonly producer?: CallSfuProduceResult;
+  /** `sfuConsume` → the consumer params the client feeds to `recvTransport.consume`. */
+  readonly consumer?: CallSfuConsumeResult;
+}
+
+/** Result of a {@link ProduceSfuCommand}: the new server-side producer id. */
+export interface CallSfuProduceResult {
+  readonly producerId: string;
+  readonly kind: CallSfuMediaKind;
+}
+
+/** Result of a {@link ConsumeSfuCommand}: everything `recvTransport.consume` needs. */
+export interface CallSfuConsumeResult {
+  readonly consumerId: string;
+  readonly producerId: string;
+  readonly kind: CallSfuMediaKind;
+  readonly rtpParameters: CallSfuRtpParameters;
 }
 
 /**

@@ -43,6 +43,9 @@
     "@fricken/protocol": "workspace:*",
     "@opentelemetry/api": "^1.9.1"
   },
+  "optionalDependencies": {
+    "mediasoup-client": "^3.7.0"
+  },
   "devDependencies": {
     "fake-indexeddb": "^6.2.5",
     "typescript": "^5.9.3"
