@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJJMDCYVSSQD8MFBV57X220",
+  "ts": "2026-06-08T02:57:47.422Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3E",
+    "commentId": "01KTJJMDCYVSSQD8MFBV57X21Z",
+    "author": null,
+    "body": "Verify-and-close. Responsive layout coverage confirmed per platform: web breakpoint contract (640/641/1041 + inspector + compact-collection toggle) in workspace-shell.test.tsx; Android compact-vs-expanded adaptive-pane defaults + inspector pane width in FrickDesignTest.kt; iOS shell destination/selection + inspector-binding + disabled-destination contract in FrickDesignTests.swift (SwiftUI .sidebarAdaptable/.inspector adaptation is OS-delegated). All suites green."
+  }
+}

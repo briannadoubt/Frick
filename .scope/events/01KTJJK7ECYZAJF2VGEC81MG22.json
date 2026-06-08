@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJJK7ECYZAJF2VGEC81MG22",
+  "ts": "2026-06-08T02:57:08.556Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3E",
+    "field": "branch",
+    "value": "feat/fr90-responsive-tests"
+  }
+}
