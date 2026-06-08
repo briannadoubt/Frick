@@ -6,6 +6,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.prepareGet
@@ -40,6 +41,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -95,6 +97,72 @@ data class FrickAnalyticsTrackReceipt(
     val acceptedAt: String,
     val duplicate: Boolean,
 )
+
+/**
+ * Permission an invitation grants on accept. Wire values are `"read"` /
+ * `"write"`, matching `@fricken/protocol`'s `FrickSharingPermission`. Kept as
+ * a plain string-backed enum (not a Kotlin `enum class`) so an unknown future
+ * value from a newer server deserializes via [fromWire] without crashing the
+ * client.
+ */
+enum class FrickSharingPermission(val wire: String) {
+    READ("read"),
+    WRITE("write"),
+    ;
+
+    companion object {
+        fun fromWire(value: String): FrickSharingPermission =
+            entries.firstOrNull { it.wire == value }
+                ?: throw IllegalArgumentException("Unknown sharing permission: $value")
+    }
+}
+
+/**
+ * Transient, single-use token issued by an owner — Kotlin analogue of
+ * `@fricken/protocol`'s `FrickInvitation`. The opaque [token] is what the owner
+ * ships to a recipient out-of-band (deep link, message, whatever); the
+ * recipient redeems it via `acceptInvitation`. Returned by [FrickClient.createInvitation].
+ */
+@Serializable
+data class FrickInvitation(
+    val id: String,
+    val tenantId: String,
+    val ownerUserId: String,
+    val recordType: String,
+    val recordId: String,
+    val permission: String,
+    val token: String,
+    val createdAt: String,
+    val expiresAt: String,
+    val redeemedAt: String? = null,
+    val redeemedByUserId: String? = null,
+) {
+    val sharingPermission: FrickSharingPermission get() = FrickSharingPermission.fromWire(permission)
+}
+
+/**
+ * Durable "user G has permission P on record R until revoked" record — Kotlin
+ * analogue of `@fricken/protocol`'s `FrickGrant`. Created by `acceptInvitation`;
+ * owners list and revoke them. [revokedAt] is set once revoked, after which the
+ * framework's authz flow stops honoring it.
+ */
+@Serializable
+data class FrickGrant(
+    val id: String,
+    val tenantId: String,
+    val ownerUserId: String,
+    val recordType: String,
+    val recordId: String,
+    val granteeUserId: String,
+    val permission: String,
+    val createdAt: String,
+    val revokedAt: String? = null,
+) {
+    val sharingPermission: FrickSharingPermission get() = FrickSharingPermission.fromWire(permission)
+
+    /** `true` while this grant is still active (not revoked). */
+    val isActive: Boolean get() = revokedAt == null
+}
 
 @Serializable
 data class FrickSession(
@@ -172,6 +240,19 @@ private data class AnalyticsTrackRequest(
     val traceId: String? = null,
     val idempotencyKey: String? = null,
     val occurredAt: String? = null,
+)
+
+@Serializable
+private data class CreateInvitationRequest(
+    val recordType: String,
+    val recordId: String,
+    val permission: String,
+    val expiresInSeconds: Long? = null,
+)
+
+@Serializable
+private data class AcceptInvitationRequest(
+    val token: String,
 )
 
 class FrickSchemaMismatchException(
@@ -304,6 +385,15 @@ interface FrickTransport {
     suspend fun post(path: String, body: String): String
     suspend fun post(path: String, body: String, headers: Map<String, String>): String = post(path, body)
     suspend fun putBytes(path: String, mimeType: String, bytes: ByteArray): String
+
+    /**
+     * Issue an authenticated `DELETE`. Carries a default so existing
+     * [FrickTransport] implementations (and test fakes) stay source-compatible;
+     * the real [KtorFrickTransport] overrides it. The sharing revoke verb
+     * (`DELETE /share/grants/:id`) is the first caller.
+     */
+    suspend fun delete(path: String): String =
+        throw UnsupportedOperationException("DELETE is not supported by this transport")
 }
 
 interface FrickStorage {
@@ -761,6 +851,14 @@ class KtorFrickTransport(
         return response.bodyAsText()
     }
 
+    override suspend fun delete(path: String): String {
+        val response = httpClient.delete(resolve(path)) {
+            authorize()
+        }
+        requireSuccess(response)
+        return response.bodyAsText()
+    }
+
     override fun close() {
         httpClient.close()
     }
@@ -931,6 +1029,85 @@ class FrickClient(
             body = frickJson.encodeToString(ResetPasswordRequest(token = token, password = newPassword)),
         )
         Unit
+    }
+
+    // MARK: - Sharing (cross-user grants/invitations)
+    //
+    // Raw verbs over the server's `/share/*` routes, Kotlin parity with the
+    // Swift FrickSwift sharing surface. They marshal the same wire field names
+    // as `@fricken/protocol`'s sharing types. The stateful, observable layer a
+    // Compose app drives off lives in `FrickSharingService` (FR-152); these are
+    // the primitives it orchestrates.
+
+    /**
+     * Create a single-use invitation for a record and return it (the caller
+     * ships [FrickInvitation.token] out-of-band). Posts to `POST /share/invite`.
+     * [expiresInSeconds] is optional — the server applies its default (and a
+     * ceiling) when omitted.
+     */
+    suspend fun createInvitation(
+        recordType: String,
+        recordId: String,
+        permission: FrickSharingPermission,
+        expiresInSeconds: Long? = null,
+    ): FrickInvitation = withContext(Dispatchers.IO) {
+        requireAuthenticatedSession()
+        val raw = transport.post(
+            path = "/share/invite",
+            body = frickJson.encodeToString(
+                CreateInvitationRequest(
+                    recordType = recordType,
+                    recordId = recordId,
+                    permission = permission.wire,
+                    expiresInSeconds = expiresInSeconds,
+                ),
+            ),
+        )
+        parseInvitationEnvelope(raw)
+    }
+
+    /**
+     * Redeem an invitation token, producing a durable [FrickGrant]. Posts to
+     * `POST /share/accept`. The server rejects invalid/expired/already-redeemed
+     * tokens and self-accepts (owner redeeming their own invitation) with an
+     * authorization error.
+     */
+    suspend fun acceptInvitation(token: String): FrickGrant = withContext(Dispatchers.IO) {
+        requireAuthenticatedSession()
+        val raw = transport.post(
+            path = "/share/accept",
+            body = frickJson.encodeToString(AcceptInvitationRequest(token = token)),
+        )
+        parseGrantEnvelope(raw)
+    }
+
+    /**
+     * List active grants the signed-in user owns OR is the grantee of. Optional
+     * [recordType]/[recordId] narrow to one record; [includeRevoked] surfaces
+     * revoked grants too. `GET /share/grants`.
+     */
+    suspend fun listGrants(
+        recordType: String? = null,
+        recordId: String? = null,
+        includeRevoked: Boolean = false,
+    ): List<FrickGrant> = withContext(Dispatchers.IO) {
+        requireAuthenticatedSession()
+        val query = buildList {
+            if (recordType != null) add("recordType=${encodeQueryValue(recordType)}")
+            if (recordId != null) add("recordId=${encodeQueryValue(recordId)}")
+            if (includeRevoked) add("includeRevoked=true")
+        }.joinToString("&")
+        val path = if (query.isEmpty()) "/share/grants" else "/share/grants?$query"
+        parseGrantsEnvelope(transport.get(path))
+    }
+
+    /**
+     * Revoke a grant by id (owner-only on the server). `DELETE /share/grants/:id`.
+     * Returns the now-revoked grant.
+     */
+    suspend fun revokeGrant(grantId: String): FrickGrant = withContext(Dispatchers.IO) {
+        requireAuthenticatedSession()
+        parseGrantEnvelope(transport.delete("/share/grants/${encodePathSegment(grantId)}"))
     }
 
     suspend fun fetchBlobMetadata(blobId: String): FrickBlobMetadata? = withContext(Dispatchers.IO) {
@@ -1277,6 +1454,26 @@ fun parseSession(responseJson: String): FrickSession {
     parseResponseObject(responseJson)
     return frickJson.decodeFromString<FrickSession>(responseJson)
 }
+
+/** Parse a `{ invitation: {...} }` envelope from `POST /share/invite`. */
+fun parseInvitationEnvelope(responseJson: String): FrickInvitation =
+    frickJson.decodeFromJsonElement(
+        FrickInvitation.serializer(),
+        parseResponseObject(responseJson).requiredObject("invitation"),
+    )
+
+/** Parse a `{ grant: {...} }` envelope from `POST /share/accept` / `DELETE /share/grants/:id`. */
+fun parseGrantEnvelope(responseJson: String): FrickGrant =
+    frickJson.decodeFromJsonElement(
+        FrickGrant.serializer(),
+        parseResponseObject(responseJson).requiredObject("grant"),
+    )
+
+/** Parse a `{ grants: [...] }` envelope from `GET /share/grants`. */
+fun parseGrantsEnvelope(responseJson: String): List<FrickGrant> =
+    parseResponseObject(responseJson)
+        .requiredArray("grants")
+        .map { item -> frickJson.decodeFromJsonElement(FrickGrant.serializer(), item) }
 
 fun parseSignalPayloads(responseJson: String): List<Map<String, String>> =
     parseResponseObject(responseJson)
