@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJJCN3HWZMXYAWJA0AQCWPQ",
+  "ts": "2026-06-08T02:53:33.169Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3D",
+    "commentId": "01KTJJCN3HWZMXYAWJA0AQCWPP",
+    "author": "claude",
+    "body": "FR-89 demo cutover verified across web/iOS/Android. All three demos already render the chat experience inside the platform WorkspaceShell with the spec destination set: Chat (enabled, selected by default) + Files/Calls/Admin as visible, disabled 'Soon' placeholders rendering a minimal placeholder surface. Web: apps/web/src/App.tsx (workspaceDestinations + PlaceholderDestination); added a test in workspace-shell.test.tsx asserting the full 4-destination demo set (Chat active via aria-current, 3 disabled 'Soon' placeholders). iOS: apps/ios/FrickDemo/ContentView.swift lines 52-57 + 789-805 + PlaceholderDestination(1266) -- verified by CODE REVIEW only (apps/ios not buildable headlessly here). Android: MainActivity.kt lines 72-95 + 202-236 + PlaceholderDestination(561) -- verified by CODE REVIEW only (demo :app has pre-existing unrelated DTO breakage, CI-excluded). No demo behavior change required. Did not touch design-swift/swift/android-design packages, so those gates were not required. Gates green: pnpm typecheck exit 0; @fricken/web vitest 29 passed (was 28, +1 new test)."
+  }
+}

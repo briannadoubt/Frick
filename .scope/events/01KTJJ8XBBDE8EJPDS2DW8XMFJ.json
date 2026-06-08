@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJJ8XBBDE8EJPDS2DW8XMFJ",
+  "ts": "2026-06-08T02:51:30.539Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3D",
+    "field": "branch",
+    "value": "feat/fr89-demo-shell-cutover"
+  }
+}
