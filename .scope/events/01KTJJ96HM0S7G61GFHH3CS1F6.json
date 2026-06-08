@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJJ96HM0S7G61GFHH3CS1F6",
+  "ts": "2026-06-08T02:51:39.956Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3T",
+    "field": "branch",
+    "value": "feat/fr102-dynamic-type"
+  }
+}

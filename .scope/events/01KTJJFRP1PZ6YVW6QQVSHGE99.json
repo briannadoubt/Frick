@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJJFRP1PZ6YVW6QQVSHGE99",
+  "ts": "2026-06-08T02:55:15.137Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3T",
+    "commentId": "01KTJJFRP01CCJEDT8NGYVTWR9",
+    "author": null,
+    "body": "Native text scaling shipped. iOS: FrickTypography now applies roles via relative text styles (Font.system(_:design:weight:)) so they scale with Dynamic Type instead of the fixed Font.system(size:) generated tokens; FrickButton titles map to relative styles too; raw values kept as FrickTypography.Fixed.*, Generated/ untouched. Android: confirmed sp units already scale and nothing forces fontScale=1f; added regression coverage. Gate green: typecheck 0, swift 25/0, android 18 green. Documented in accessibility.md s6."
+  }
+}
