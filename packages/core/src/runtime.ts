@@ -16,6 +16,8 @@ import {
   type PlainObject,
   type SchemaCompatibilityResult,
   type StreamEventInput,
+  type CallCommandOp,
+  type CallCommandResultPayload,
 } from "@fricken/protocol";
 import {
   MemoryFrickCache,
@@ -199,6 +201,15 @@ export class FrickClient {
    * await the returned Promise behave identically.
    */
   #appendResolvers = new Map<string, { resolve: () => void; reject: (err: unknown) => void }>();
+  /**
+   * FR-15 — per-call-command resolve/reject hooks. A `callCommand(...)` returns
+   * a Promise the runtime settles when the matching `CallCommandResult` (resolve)
+   * or `Nack` (reject) arrives, correlated by `requestId`.
+   */
+  #callCommandResolvers = new Map<
+    string,
+    { resolve: (result: CallCommandResultPayload) => void; reject: (err: unknown) => void }
+  >();
   /** Optimistic overlay merged into stream + object signals at publish time. */
   readonly #overlay = new OptimisticOverlay();
   /**
@@ -267,6 +278,10 @@ export class FrickClient {
     for (const pending of this.#pendingUpserts.values()) {
       pending.reject(clearedError);
     }
+    for (const resolver of this.#callCommandResolvers.values()) {
+      resolver.reject(clearedError);
+    }
+    this.#callCommandResolvers.clear();
     this.#appendResolvers.clear();
     this.#pendingUpserts.clear();
     this.#pendingAppends.clear();
@@ -565,6 +580,26 @@ export class FrickClient {
     this.#send([FrameKind.SignalSend, { requestId: randomId(), name, key, value }]);
   }
 
+  /**
+   * FR-15 — issue a server-authoritative call control-plane command
+   * (create / join / leave / accept / end / setMediaState) over the sync
+   * WebSocket. Resolves with the typed {@link CallCommandResultPayload} on
+   * success, or rejects with a {@link FrickClientLimitError} carrying the
+   * server's error envelope on a `Nack` (e.g. `notInvitee`, `callEnded`).
+   *
+   * This is the wire primitive behind the `createCall` / `joinCall` /
+   * `leaveCall` helpers; most callers should reach for those (or `useCallState`
+   * in `@fricken/react`) rather than call this directly.
+   */
+  callCommand(command: CallCommandOp): Promise<CallCommandResultPayload> {
+    const requestId = randomId();
+    const promise = new Promise<CallCommandResultPayload>((resolve, reject) => {
+      this.#callCommandResolvers.set(requestId, { resolve, reject });
+    });
+    this.#send([FrameKind.CallCommand, { requestId, command }]);
+    return promise;
+  }
+
   track(
     name: string,
     properties: PlainObject = {},
@@ -734,6 +769,15 @@ export class FrickClient {
         channel?.set([...(channel.value ?? []), signal.value]);
         return;
       }
+      case FrameKind.CallCommandResult: {
+        const result = frame[1];
+        const resolver = this.#callCommandResolvers.get(result.requestId);
+        if (resolver) {
+          this.#callCommandResolvers.delete(result.requestId);
+          resolver.resolve(result);
+        }
+        return;
+      }
       case FrameKind.Ack: {
         const requestId = frame[1].requestId;
         const pendingUpsert = this.#pendingUpserts.get(requestId);
@@ -755,6 +799,13 @@ export class FrickClient {
       }
       case FrameKind.Nack: {
         const requestId = frame[1].requestId;
+        const callResolver = this.#callCommandResolvers.get(requestId);
+        if (callResolver) {
+          this.#callCommandResolvers.delete(requestId);
+          callResolver.reject(new FrickClientLimitError(frame[1].error));
+          this.#setStatus({ lastError: frame[1].error });
+          return;
+        }
         const pendingUpsert = this.#pendingUpserts.get(requestId);
         if (pendingUpsert) {
           this.#pendingUpserts.delete(requestId);

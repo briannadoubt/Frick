@@ -10,12 +10,29 @@ import {
 import {
   FrickClient,
   installBrowserAnalyticsTracking,
+  acceptCall,
+  callState,
+  createCall,
+  endCall,
+  joinCall,
+  leaveCall,
+  setCallMediaState,
   type AnalyticsTrackOptions,
   type AnalyticsTrackReceipt,
   type BrowserAnalyticsTrackingOptions,
+  type CallState,
+  type CreateCallOptions,
+  type CreateCallResult,
   type FrickSession,
+  type JoinCallResult,
   type SyncStatus,
 } from "@fricken/core";
+import type {
+  CallInviteRecord,
+  CallMediaStatePatch,
+  CallParticipantRecord,
+  CallRoomRecord,
+} from "@fricken/protocol";
 import {
   foundationSchema,
   type FrickSchema,
@@ -320,6 +337,49 @@ export function useUpsertObject<T extends PlainObject = PlainObject>(
 export function useSyncStatus(): SyncStatus {
   const client = useFrick();
   return useSignalValue(client.syncStatus);
+}
+
+/**
+ * FR-80 / FR-82 — reactive call state for `callId`. Composes the synced
+ * `CallRoom` + `CallParticipant` records into a single {@link CallState} (room
+ * snapshot + per-participant presence) that re-renders on every server delta
+ * (join, mute, screen-share, leave, end). Subscribes the underlying object
+ * types on mount and detaches on unmount.
+ */
+export function useCallState(callId: string): CallState {
+  const client = useFrick();
+  const { signal, dispose } = useMemo(() => callState(client, callId), [client, callId]);
+  useEffect(() => dispose, [dispose]);
+  return useSignalValue(signal);
+}
+
+/**
+ * FR-80 — stable call control-plane action callbacks bound to the active
+ * client. Each issues a server-authoritative command and resolves with the
+ * server's typed result (or rejects on a control-plane Nack).
+ */
+export interface UseCallActions {
+  createCall(options: CreateCallOptions): Promise<CreateCallResult>;
+  joinCall(callId: string): Promise<JoinCallResult>;
+  acceptCall(callId: string): Promise<CallInviteRecord>;
+  leaveCall(callId: string): Promise<CallRoomRecord>;
+  endCall(callId: string): Promise<CallRoomRecord>;
+  setMediaState(callId: string, media: CallMediaStatePatch): Promise<CallParticipantRecord>;
+}
+
+export function useCallActions(): UseCallActions {
+  const client = useFrick();
+  return useMemo<UseCallActions>(
+    () => ({
+      createCall: (options) => createCall(client, options),
+      joinCall: (callId) => joinCall(client, callId),
+      acceptCall: (callId) => acceptCall(client, callId),
+      leaveCall: (callId) => leaveCall(client, callId),
+      endCall: (callId) => endCall(client, callId),
+      setMediaState: (callId, media) => setCallMediaState(client, callId, media),
+    }),
+    [client],
+  );
 }
 
 export interface OptionalEndpointState<T> {

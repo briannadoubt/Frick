@@ -4,6 +4,7 @@ import type {
   PackedSignalEnvelope,
   PackedStreamEvent,
 } from "./codec.js";
+import type { CallCommandPayload, CallCommandResultPayload } from "./calls.js";
 import type { FrickClientCapabilities, FrickServerCapabilities } from "./capabilities.js";
 import type { SchemaCompatibilityResult } from "./compatibility.js";
 import type { FrickErrorCode, FrickErrorEnvelope } from "./errors.js";
@@ -33,6 +34,10 @@ export enum FrameKind {
   HelloAck = 18,
   ProjectionDelta = 19,
   ObjectUpsert = 20,
+  /** FR-15 — client→server call control-plane command (create/join/leave/...). */
+  CallCommand = 21,
+  /** FR-15 — server→client typed reply to a {@link FrameKind.CallCommand}. */
+  CallCommandResult = 22,
 }
 
 export type SubscriptionKind = "object" | "stream" | "presence" | "signal" | "projection";
@@ -203,7 +208,9 @@ export type FrickFrame =
   | [FrameKind.SyncStatus, { connected: boolean; cursors: Record<string, number>; inFlight: number }]
   | [FrameKind.HelloAck, HelloAckPayload]
   | [FrameKind.ProjectionDelta, ProjectionDeltaPayload]
-  | [FrameKind.ObjectUpsert, ObjectUpsertPayload];
+  | [FrameKind.ObjectUpsert, ObjectUpsertPayload]
+  | [FrameKind.CallCommand, CallCommandPayload]
+  | [FrameKind.CallCommandResult, CallCommandResultPayload];
 
 export function encodeFrame(frame: FrickFrame): Uint8Array {
   return encode(frame);

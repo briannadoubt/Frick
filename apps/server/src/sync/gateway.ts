@@ -25,7 +25,15 @@ import {
   type SchemaCompatibilityResult,
   type SignalPayload,
   type SubscribePayload,
+  type CallCommandPayload,
+  type CallCommandResultPayload,
 } from "@fricken/protocol";
+import {
+  CallControlPlane,
+  CallAuthzError,
+  CallStateError,
+  type CallActor,
+} from "../calls/index.js";
 import {
   assertCanAppend,
   assertCanSignal,
@@ -122,6 +130,8 @@ export class SyncGateway {
 
   readonly #projections: FrickProjectionRegistry | undefined;
   readonly #appRegistry: FrickAppRegistry | undefined;
+  /** FR-15 — call control plane; undefined when calls are disabled. */
+  readonly #callControlPlane: CallControlPlane | undefined;
   readonly #clusterBus: FrickClusterBus | undefined;
   #clusterUnsubscribe: (() => void) | undefined;
   // Refcount of currently-connected clients per tenant. Used to push
@@ -142,6 +152,13 @@ export class SyncGateway {
       projections?: FrickProjectionRegistry;
       appRegistry?: FrickAppRegistry;
       /**
+       * FR-15 — call control plane. When set, the gateway accepts
+       * {@link FrameKind.CallCommand} frames and routes them to this plane,
+       * replying with a {@link FrameKind.CallCommandResult} on success or a
+       * {@link FrameKind.Nack} on a state/authz failure.
+       */
+      callControlPlane?: CallControlPlane;
+      /**
        * Optional cluster bus for horizontal-scale fan-out. When set,
        * every locally-published stream event / object delta is also
        * forwarded to peer nodes; envelopes received from peers are
@@ -160,6 +177,7 @@ export class SyncGateway {
     this.#telemetry = options.telemetry;
     this.#projections = options.projections;
     this.#appRegistry = options.appRegistry;
+    this.#callControlPlane = options.callControlPlane;
     this.#clusterBus = options.clusterBus;
     if (this.#projections) {
       this.#projections.setDeltaListener((notice) => this.publishProjectionDelta(notice));
@@ -1142,6 +1160,9 @@ export class SyncGateway {
       case FrameKind.SignalSend:
         await this.#handleSignal(client, frame[1]);
         return;
+      case FrameKind.CallCommand:
+        await this.#handleCallCommand(client, frame[1]);
+        return;
       case FrameKind.CursorCommit:
         this.#sendFrame(client, [FrameKind.Ack, { requestId: frame[1].subscriptionId, cursor: frame[1].cursor }]);
         return;
@@ -1637,6 +1658,138 @@ export class SyncGateway {
       signalAppId,
     );
     this.#sendFrame(client, [FrameKind.Ack, { requestId: payload.requestId }]);
+  }
+
+  /**
+   * FR-15 — route a call control-plane command to the {@link CallControlPlane}.
+   *
+   * The principal supplies the {@link CallActor} (tenant + user + device), so
+   * the control plane enforces its own tenant-scoped authz on top of the
+   * connection's authentication. Success replies with a typed
+   * {@link FrameKind.CallCommandResult}; a `CallStateError`/`CallAuthzError`
+   * comes back as a {@link FrameKind.Nack} keyed by the same `requestId`, so
+   * clients reuse their existing Ack/Nack correlation. Calls disabled →
+   * `auth.forbidden` nack.
+   */
+  async #handleCallCommand(client: SyncClient, payload: CallCommandPayload): Promise<void> {
+    const principal = await this.#activePrincipalForFrame(client, payload.requestId);
+    if (!principal) {
+      return;
+    }
+    const plane = this.#callControlPlane;
+    if (!plane) {
+      const envelope = createFrickErrorEnvelope({
+        code: "auth.forbidden",
+        message: "Calls are not enabled on this server",
+        requestId: payload.requestId,
+        retryable: false,
+        details: { reason: "callsDisabled" },
+      });
+      this.#sendFrame(client, [
+        FrameKind.Nack,
+        { requestId: payload.requestId, error: envelope, code: envelope.code, message: envelope.message },
+      ]);
+      return;
+    }
+    const actor: CallActor = {
+      tenantId: principal.tenantId,
+      userId: principal.userId,
+      deviceId: principal.deviceId,
+    };
+    const command = payload.command;
+    try {
+      let result: CallCommandResultPayload;
+      switch (command.op) {
+        case "create": {
+          const created = await plane.createCall(actor, {
+            conversationId: command.conversationId,
+            inviteeUserIds: command.inviteeUserIds,
+            ...(command.kind !== undefined ? { kind: command.kind } : {}),
+            ...(command.regionHint !== undefined ? { regionHint: command.regionHint } : {}),
+          });
+          result = { requestId: payload.requestId, op: "create", room: created.room, invites: created.invites };
+          break;
+        }
+        case "join": {
+          const joined = await plane.joinCall(actor, command.callId);
+          result = {
+            requestId: payload.requestId,
+            op: "join",
+            room: joined.room,
+            participant: joined.participant,
+            mediaGrant: joined.mediaGrant,
+          };
+          break;
+        }
+        case "accept": {
+          const invite = await plane.acceptInvite(actor, command.callId);
+          result = { requestId: payload.requestId, op: "accept", invite };
+          break;
+        }
+        case "leave": {
+          const room = await plane.leaveCall(actor, command.callId);
+          result = { requestId: payload.requestId, op: "leave", room };
+          break;
+        }
+        case "end": {
+          const room = await plane.endCall(actor, command.callId);
+          result = { requestId: payload.requestId, op: "end", room };
+          break;
+        }
+        case "setMediaState": {
+          const participant = await plane.setMediaState(actor, command.callId, command.media);
+          result = { requestId: payload.requestId, op: "setMediaState", participant };
+          break;
+        }
+        default: {
+          const _exhaustive: never = command;
+          void _exhaustive;
+          return;
+        }
+      }
+      this.#sendFrame(client, [FrameKind.CallCommandResult, result]);
+    } catch (error) {
+      this.#sendCallCommandNack(client, payload.requestId, error);
+    }
+  }
+
+  /**
+   * Map a call control-plane failure to a {@link FrameKind.Nack}. State errors
+   * (`callNotFound`, `callEnded`, ...) and authz errors (`notCreator`,
+   * `notInvitee`, ...) carry a stable `reason` in `details` so the client can
+   * branch without parsing the message. Unexpected errors re-throw so the
+   * frame loop's outer catch surfaces them.
+   */
+  #sendCallCommandNack(client: SyncClient, requestId: string, error: unknown): void {
+    if (error instanceof CallAuthzError) {
+      const envelope = createFrickErrorEnvelope({
+        code: "auth.forbidden",
+        message: error.message,
+        requestId,
+        retryable: false,
+        details: { reason: error.reason },
+      });
+      this.#sendFrame(client, [
+        FrameKind.Nack,
+        { requestId, error: envelope, code: envelope.code, message: envelope.message },
+      ]);
+      return;
+    }
+    if (error instanceof CallStateError) {
+      const envelope = createFrickErrorEnvelope({
+        code: "sync.protocolError",
+        message: error.message,
+        requestId,
+        retryable: false,
+        details: { reason: error.reason },
+      });
+      this.#sendFrame(client, [
+        FrameKind.Nack,
+        { requestId, error: envelope, code: envelope.code, message: envelope.message },
+      ]);
+      return;
+    }
+    throw error;
   }
 
   #sendAuthNack(client: SyncClient, requestId: string, error: unknown): boolean {

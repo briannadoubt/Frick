@@ -47,6 +47,11 @@ import {
 } from "./extensions.js";
 import { SyncGateway } from "./sync/gateway.js";
 import {
+  CallControlPlane,
+  FakeMediaPlaneAdapter,
+  type MediaPlaneAdapter,
+} from "./calls/index.js";
+import {
   createFrickAppRegistry,
   type FrickAppDefinition,
   type FrickAppRegistry,
@@ -470,6 +475,21 @@ export interface ServerOptions {
     jobs?: readonly FrickRecurringJob[];
     tickIntervalMs?: number;
   };
+  /**
+   * FR-15 — realtime calls. When enabled, the server stands up a
+   * {@link CallControlPlane} over the active store and exposes it on the sync
+   * WebSocket via the {@link FrameKind.CallCommand} frame
+   * (create/join/leave/accept/end/setMediaState). Records sync as ordinary
+   * objects; WebRTC SDP/ICE rides the existing `WebRTCSignal` relay.
+   *
+   * Defaults to ON with the deterministic {@link FakeMediaPlaneAdapter} so the
+   * wire is testable without real media infra. Supply `mediaPlane` to plug in a
+   * real adapter, or set `enabled: false` to leave the surface off.
+   */
+  calls?: {
+    enabled?: boolean;
+    mediaPlane?: MediaPlaneAdapter;
+  };
 }
 
 export function createFrickServer(options: ServerOptions = {}) {
@@ -792,6 +812,22 @@ export function createFrickServer(options: ServerOptions = {}) {
       })
     : undefined;
 
+  // FR-15 — call control plane. Auto-enabled when the running schema declares
+  // the call types (so the control plane's object/stream writes don't throw
+  // `Unknown type`), using the deterministic fake media adapter so the call
+  // wire is exercisable without real media infra. Apps plug in a real adapter
+  // via `options.calls.mediaPlane`, force it on/off with `options.calls.enabled`
+  // (forcing it on without the call types in the schema will fail at write
+  // time — the schema must include `callObjectDefs`/`callStreamDefs`/etc.).
+  const schemaDeclaresCalls = store.schema.objects.some((object) => object.name === "CallRoom");
+  const callsEnabled = options.calls?.enabled ?? schemaDeclaresCalls;
+  const callControlPlane = callsEnabled
+    ? new CallControlPlane({
+        store,
+        mediaPlane: options.calls?.mediaPlane ?? new FakeMediaPlaneAdapter(),
+      })
+    : undefined;
+
   const gateway = new SyncGateway(wss, store, {
     onStreamEvent: (event) => sse.publishStreamEvent(event),
     limits,
@@ -800,6 +836,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     telemetry,
     projections: store.projections,
     appRegistry,
+    ...(callControlPlane ? { callControlPlane } : {}),
     ...(options.clusterBus ? { clusterBus: options.clusterBus } : {}),
   });
   gateway.attach();

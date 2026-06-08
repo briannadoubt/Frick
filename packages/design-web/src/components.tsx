@@ -655,6 +655,122 @@ export function Call({ title, status, actions, className, children, ...props }: 
   );
 }
 
+/**
+ * FR-84 — web call-action button. The `FrickCallButton` design family's web
+ * surface: a single tokenized button that starts/joins a call (`mode="start"`,
+ * a primary action that defaults to the `video` glyph) or ends/leaves one
+ * (`mode="end"`, the danger tone). Mirrors the native `FrickCallButton`. Fully
+ * tokenized — no raw color/spacing literals; it reuses the `frick-button` base.
+ */
+export interface CallButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "type"> {
+  mode?: "start" | "end";
+  /** Override the leading glyph; defaults to `video` for start, `live` for end. */
+  icon?: FrickIconName;
+  /** Visually-hidden + `aria-label` text when no children are supplied. */
+  label?: string;
+}
+
+export function CallButton({
+  mode = "start",
+  icon,
+  label,
+  className,
+  children,
+  ...props
+}: CallButtonProps) {
+  const tone = mode === "end" ? "danger" : "primary";
+  const glyph = icon ?? (mode === "end" ? "live" : "video");
+  const accessibleLabel = label ?? (mode === "end" ? "End call" : "Start call");
+  return (
+    <button
+      aria-label={children ? undefined : accessibleLabel}
+      className={cx("frick-button", "frick-call-button", `frick-call-button--${mode}`, `frick-button--${tone}`, className)}
+      data-call-mode={mode}
+      title={children ? undefined : accessibleLabel}
+      type="button"
+      {...props}
+    >
+      <FrickIconGlyph className="frick-button__icon" name={glyph} />
+      {children ? <span>{children}</span> : null}
+    </button>
+  );
+}
+
+/**
+ * FR-84 — in-call control bar. A tokenized row of mute / camera / screen-share
+ * toggle buttons plus a leave action, consuming the call-presence state (FR-82)
+ * the client exposes via `useCallState`. Each control reflects its on/off state
+ * through `aria-pressed` + a `data-active` attribute (styled, never inlined).
+ */
+export interface CallControlBarProps extends HTMLAttributes<HTMLDivElement> {
+  micEnabled?: boolean;
+  cameraEnabled?: boolean;
+  screenSharing?: boolean;
+  onToggleMic?: () => void;
+  onToggleCamera?: () => void;
+  onToggleScreenShare?: () => void;
+  onLeave?: () => void;
+}
+
+export function CallControlBar({
+  micEnabled = true,
+  cameraEnabled = false,
+  screenSharing = false,
+  onToggleMic,
+  onToggleCamera,
+  onToggleScreenShare,
+  onLeave,
+  className,
+  ...props
+}: CallControlBarProps) {
+  return (
+    <div className={cx("frick-call-controls", className)} role="group" aria-label="Call controls" {...props}>
+      <CallControlToggle
+        active={micEnabled}
+        icon="mic"
+        label={micEnabled ? "Mute microphone" : "Unmute microphone"}
+        onClick={onToggleMic}
+      />
+      <CallControlToggle
+        active={cameraEnabled}
+        icon="video"
+        label={cameraEnabled ? "Turn camera off" : "Turn camera on"}
+        onClick={onToggleCamera}
+      />
+      <CallControlToggle
+        active={screenSharing}
+        icon="details"
+        label={screenSharing ? "Stop sharing screen" : "Share screen"}
+        onClick={onToggleScreenShare}
+      />
+      {onLeave ? <CallButton mode="end" label="Leave call" onClick={onLeave} /> : null}
+    </div>
+  );
+}
+
+interface CallControlToggleProps {
+  active: boolean;
+  icon: FrickIconName;
+  label: string;
+  onClick?: (() => void) | undefined;
+}
+
+function CallControlToggle({ active, icon, label, onClick }: CallControlToggleProps) {
+  return (
+    <button
+      aria-label={label}
+      aria-pressed={active}
+      className={cx("frick-icon-button", "frick-call-controls__toggle")}
+      data-active={active ? "true" : "false"}
+      onClick={onClick}
+      title={label}
+      type="button"
+    >
+      <FrickIconGlyph name={icon} />
+    </button>
+  );
+}
+
 export interface ColumnProps<T extends UnknownRecord = UnknownRecord> {
   id: string;
   header: ReactNode;

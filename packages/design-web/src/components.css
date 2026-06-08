@@ -844,6 +844,39 @@
   gap: var(--frick-space-3);
 }
 
+/* FR-84 — call action button + in-call control bar. */
+.frick-call-button {
+  border-radius: var(--frick-radius-full);
+}
+
+.frick-call-button--end {
+  background: var(--frick-color-danger);
+  border-color: var(--frick-color-danger);
+  color: var(--frick-color-primary-fg);
+}
+
+.frick-call-controls {
+  align-items: center;
+  display: flex;
+  gap: var(--frick-space-2);
+  justify-content: center;
+}
+
+.frick-call-controls__toggle {
+  border-radius: var(--frick-radius-full);
+}
+
+.frick-call-controls__toggle[data-active="false"] {
+  background: var(--frick-color-bg-subtle);
+  color: var(--frick-color-fg-muted);
+}
+
+.frick-call-controls__toggle[data-active="true"] {
+  background: var(--frick-color-primary);
+  border-color: var(--frick-color-primary);
+  color: var(--frick-color-primary-fg);
+}
+
 .frick-data-table {
   border-collapse: collapse;
   inline-size: 100%;
