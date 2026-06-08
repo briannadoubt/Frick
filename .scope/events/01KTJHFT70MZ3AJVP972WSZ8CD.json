@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJHFT70MZ3AJVP972WSZ8CD",
+  "ts": "2026-06-08T02:37:48.128Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2Z",
+    "commentId": "01KTJHFT70MZ3AJVP972WSZ8CC",
+    "author": "claude",
+    "body": "Shipped native WS sync telemetry on Android: FrickSyncSocket now takes an optional FrickClientTelemetryRuntime (defaults to Noop) and FrickClient.connectSync threads its runtime through. Emits client span 'WebSocket /_frick/sync' (network.protocol.name/url.path/frick.schema_id/frick.schema_revision/frick.authenticated), finished on close with ok|error + frick.ws.close_code/close_category; per-frame sent/received counters labelled by kind; frick.client.ws.connection.duration_ms histogram on close — parity with TS runtime.ts and Swift FR-74. New FrickSyncSocketTelemetryTest. Gate green: pnpm typecheck exit 0, :frick:testDebugUnitTest BUILD SUCCESSFUL."
+  }
+}
