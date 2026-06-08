@@ -67,7 +67,19 @@ sealed class FrickSyncStatus {
 sealed class FrickInboundEvent {
     data class Ack(val requestId: String, val cursor: Int?, val version: Int?) : FrickInboundEvent()
     data class Nack(val requestId: String, val error: FrickErrorEnvelope) : FrickInboundEvent()
-    data class Delta(val objects: List<Map<String, Any?>>, val events: List<Map<String, Any?>>, val cursor: Int) : FrickInboundEvent()
+    data class Delta(
+        val objects: List<Map<String, Any?>>,
+        val events: List<Map<String, Any?>>,
+        val cursor: Int,
+        /**
+         * Object removals (FR-142/FR-144). Populated when a Delta frame carries
+         * a `removed` list so consumers can drop the deleted rows directly
+         * without a refetch. The server also emits a back-compat tombstone
+         * record in `objects`; apply removals after upserts so a delete wins
+         * over its own tombstone. Defaults to empty for back-compat.
+         */
+        val removed: List<ObjectRemoval> = emptyList(),
+    ) : FrickInboundEvent()
     data class ProjectionDelta(val projection: String, val changes: List<ProjectionChange>) : FrickInboundEvent()
     data class ObjectUpsertResult(val requestId: String, val version: Int) : FrickInboundEvent()
     data class Schema(val raw: Map<String, Any?>) : FrickInboundEvent()
@@ -84,6 +96,13 @@ sealed class FrickInboundEvent {
 }
 
 data class ProjectionChange(val key: String, val value: Map<String, Any?>?)
+
+/**
+ * A single object removal carried in a Delta frame's `removed` list
+ * (FR-142/FR-144). Identifies the deleted row by its object [type] and [id] so
+ * consumers can drop it directly without a refetch.
+ */
+data class ObjectRemoval(val type: String, val id: String)
 
 internal sealed class ObjectWriteResult {
     data class Ok(val version: Int) : ObjectWriteResult()
@@ -642,8 +661,14 @@ class FrickSyncSocket internal constructor(
                     .mapNotNull(::decodePackedObjectRecord)
                 val events = (payload.listField("events") ?: emptyList())
                     .mapNotNull(::decodePackedStreamEvent)
+                // Object removals (FR-142/FR-144): the gateway carries a
+                // `removed` list of `{ type, id }` maps alongside the
+                // back-compat tombstone records in `objects`. Surface them so
+                // consumers drop the deleted rows directly without a refetch.
+                val removed = (payload.listField("removed") ?: emptyList())
+                    .mapNotNull(::decodeObjectRemoval)
                 val cursor = payload.intField("cursor") ?: 0
-                _events.tryEmit(FrickInboundEvent.Delta(objects, events, cursor))
+                _events.tryEmit(FrickInboundEvent.Delta(objects, events, cursor, removed))
             }
             FrameKindCodes.SNAPSHOT -> {
                 // Snapshot is the server's response to a `subscribe { kind:
@@ -713,6 +738,19 @@ class FrickSyncSocket internal constructor(
         val value = unpackFields(packedFields, fieldTable).toMutableMap()
         value["id"] = id
         return mapOf("type" to typeName, "id" to id, "value" to value)
+    }
+
+    /**
+     * Decode a Delta `removed` entry — a `{ type, id }` map — into an
+     * [ObjectRemoval] (FR-142/FR-144). Returns null when either field is
+     * missing so a malformed entry is skipped rather than surfaced.
+     */
+    private fun decodeObjectRemoval(raw: Any?): ObjectRemoval? {
+        @Suppress("UNCHECKED_CAST")
+        val map = raw as? Map<String, Any?> ?: return null
+        val type = map.stringField("type") ?: return null
+        val id = map.stringField("id") ?: return null
+        return ObjectRemoval(type, id)
     }
 
     /**

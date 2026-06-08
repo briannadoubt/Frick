@@ -557,6 +557,49 @@ final class FrickSyncSocketTests: XCTestCase {
         await socket.close()
     }
 
+    func testDeltaRemovedSurfacesObjectsRemovedEvent() async throws {
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+        let socket = makeSocket(factory: factory)
+
+        let events = await socket.events
+        let receivedRemoval = expectation(description: "objectsRemoved surfaced")
+
+        let listener = Task {
+            for try await event in events {
+                if case .objectsRemoved(let removed, let cursor) = event {
+                    if cursor == 9, removed.count == 1,
+                       removed.first?.type == "Message", removed.first?.id == "msg-1" {
+                        receivedRemoval.fulfill()
+                        return
+                    }
+                }
+            }
+        }
+
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+        task.deliver(.data(helloAckFrame()))
+
+        let delta = FrickMsgPackCodec.encodeFrame(FrickFrame(kind: .delta, payload: .map([
+            (.string("cursor"), .int(9)),
+            (.string("objects"), .array([])),
+            (.string("events"), .array([])),
+            (.string("removed"), .array([
+                .map([
+                    (.string("type"), .string("Message")),
+                    (.string("id"), .string("msg-1")),
+                ]),
+            ])),
+        ])))
+        task.deliver(.data(delta))
+
+        await fulfillment(of: [receivedRemoval], timeout: 2)
+        listener.cancel()
+        await socket.close()
+    }
+
     func testProjectionDeltaIsSurfaced() async throws {
         let factory = MockWebSocketFactory()
         let task = MockWebSocketTask()

@@ -629,6 +629,12 @@ public enum FrickInboundEvent: Sendable {
     /// `FrickSchemaDescriptor`. Carried separately from `.delta` so existing
     /// stream-event consumers don't need to change.
     case objectsDelta(records: [FrickObjectRecord], cursor: Int)
+    /// Inbound object removals (FR-142/FR-144). Surfaced when a Delta frame
+    /// carries a non-empty `removed` list so consumers can drop the deleted
+    /// rows directly without a refetch. The server also emits a back-compat
+    /// tombstone record in `objects` (surfaced via `.objectsDelta`); consumers
+    /// should apply removals after upserts so a delete wins over its tombstone.
+    case objectsRemoved(removed: [FrickObjectRemoval], cursor: Int)
     case projectionDelta(projection: String, changes: [FrickProjectionChange])
     case ack(requestId: String, version: Int?, cursor: Int?)
     case nack(envelope: FrickErrorEnvelope?, requestId: String)
@@ -652,6 +658,19 @@ public struct FrickObjectRecord: Sendable, Equatable {
         self.type = type
         self.id = id
         self.value = value
+    }
+}
+
+/// A single object removal delivered in a Delta frame's `removed` list
+/// (FR-142/FR-144). Identifies the deleted row by its object `type` and `id`
+/// so consumers can drop it directly without a refetch.
+public struct FrickObjectRemoval: Sendable, Equatable {
+    public let type: String
+    public let id: String
+
+    public init(type: String, id: String) {
+        self.type = type
+        self.id = id
     }
 }
 
@@ -1232,6 +1251,23 @@ public actor FrickSyncSocket {
         }
         if !objectRecords.isEmpty {
             eventContinuation?.yield(.objectsDelta(records: objectRecords, cursor: cursor))
+        }
+        // Object removals (FR-142/FR-144): the gateway carries a `removed`
+        // list of `{ type, id }` maps alongside the back-compat tombstone
+        // records in `objects`. Surface them so consumers drop the deleted
+        // rows directly without a refetch. Additive — emitted only when
+        // non-empty so existing consumers are unaffected.
+        let removedArray = map["removed"]?.arrayValue ?? []
+        var removals: [FrickObjectRemoval] = []
+        for entry in removedArray {
+            guard let rm = entry.mapValue,
+                  let type = rm["type"]?.stringValue,
+                  let id = rm["id"]?.stringValue
+            else { continue }
+            removals.append(FrickObjectRemoval(type: type, id: id))
+        }
+        if !removals.isEmpty {
+            eventContinuation?.yield(.objectsRemoved(removed: removals, cursor: cursor))
         }
         let eventArray = map["events"]?.arrayValue ?? []
         var streamEvents: [FrickStreamEvent] = []

@@ -209,6 +209,55 @@ class FrickSyncSocketTest {
         }
     }
 
+    @Test
+    fun deltaRemovedSurfacesObjectRemovals() = runBlocking {
+        enqueueWebSocketHandler(
+            onMessage = { _, frame ->
+                if (frame.first == FrameKindCodes.HELLO) {
+                    sendFrame(
+                        FrameKindCodes.HELLO_ACK,
+                        mapOf(
+                            "schemaHash" to FRICK_SCHEMA_HASH,
+                            "schemaId" to FRICK_SCHEMA_ID,
+                            "schemaRevision" to FRICK_SCHEMA_REVISION,
+                            "schemaCompatibility" to mapOf("status" to "compatible"),
+                            "serverCapabilities" to emptyMap<String, Any?>(),
+                        ),
+                    )
+                }
+            },
+        )
+        val socket = newSocket()
+        try {
+            socket.awaitReady()
+            @OptIn(DelicateCoroutinesApi::class)
+            val deltaDeferred = GlobalScope.async {
+                withTimeout(2_000) {
+                    socket.events.filter { it is FrickInboundEvent.Delta }.first() as FrickInboundEvent.Delta
+                }
+            }
+            // Give the collector time to subscribe before we emit.
+            delay(50)
+            sendFrame(
+                FrameKindCodes.DELTA,
+                mapOf(
+                    "cursor" to 9,
+                    "objects" to emptyList<Any?>(),
+                    "events" to emptyList<Any?>(),
+                    "removed" to listOf(
+                        mapOf("type" to "Message", "id" to "msg-1"),
+                    ),
+                ),
+            )
+            val delta = deltaDeferred.await()
+            assertEquals(9, delta.cursor)
+            assertEquals(1, delta.removed.size)
+            assertEquals(ObjectRemoval("Message", "msg-1"), delta.removed[0])
+        } finally {
+            socket.close()
+        }
+    }
+
     // removed: `subscribeDeliversDelta` + `subscribeObjectDeliversSnapshot`
     // exercised the packed Delta/Snapshot decode primitive against the
     // foundation's MessageStream/MessageSent/MessageDraft typeId tables.
