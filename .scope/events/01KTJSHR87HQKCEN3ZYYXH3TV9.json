@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJSHR87HQKCEN3ZYYXH3TV9",
+  "ts": "2026-06-08T04:58:40.263Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ38",
+    "field": "branch",
+    "value": "feat/fr15-phase2-android-call-client"
+  }
+}
