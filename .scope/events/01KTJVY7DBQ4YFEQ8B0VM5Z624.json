@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTJVY7DBQ4YFEQ8B0VM5Z624",
+  "ts": "2026-06-08T05:40:26.155Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTJVY7DBQ4YFEQ8B0VM5Z623",
+    "number": 154,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Multi-box SFU placement: bus-coordinated home-node registry",
+    "description": "",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ13",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

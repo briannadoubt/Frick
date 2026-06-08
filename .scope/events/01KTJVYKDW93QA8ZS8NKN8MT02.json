@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJVYKDW93QA8ZS8NKN8MT02",
+  "ts": "2026-06-08T05:40:38.460Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTJVY7DBQ4YFEQ8B0VM5Z623",
+    "field": "description",
+    "value": "Follow-up to FR-83 (single-box mediasoup SFU). FR-83 ships an SfuMediaPlaneAdapter homing each call's mediasoup Router on the local node, behind a MediaPlacement seam whose only impl is LocalMediaPlacement ('always local').\n\nThis ticket adds the multi-box implementation: a FrickClusterBus-coordinated placement registry mapping callId -> homeNodeId + reachable media address. The node that first allocates a call's router becomes its home and publishes placement over the bus; other nodes, when their clients join, resolve the home node and return a MediaJoinGrant whose connection metadata points clients at the home SFU node directly (media is decoupled from sync-WebSocket placement — clients ICE straight to the home node regardless of which node their control WS is on). Signaling already rides the relay -> bus, so produce/consume reaches the home node cross-node for free.\n\nCompose with the existing FrickClusterBus (and later the FR-105 cross-region FrickRegionBus). Explicitly OUT of scope: SFU-to-SFU cascading / PipeTransport (one call stays homed to one node; its ceiling is one node's capacity). Acceptance: a call allocated on node A is joinable from a client whose control WS is on node B, with both media transports converging on node A's router (testable with two in-process buses + fake SFU backend)."
+  }
+}

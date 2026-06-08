@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJVYKHFC8R16VJE6M7DQZS3",
+  "ts": "2026-06-08T05:40:38.575Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTJVY7DBQ4YFEQ8B0VM5Z623",
+    "commentId": "01KTJVYKHFC8R16VJE6M7DQZS2",
+    "author": "claude",
+    "body": "Split out from FR-83 per design decision: FR-83 = single-box mediasoup adapter + LocalMediaPlacement seam; FR-154 = bus-coordinated multi-box home-node registry. Cascading/cross-region explicitly deferred."
+  }
+}
