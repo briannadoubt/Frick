@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJJPB9PKQ0PFH5AY7PRKWWQ",
+  "ts": "2026-06-08T02:58:50.806Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2Y",
+    "commentId": "01KTJJPB9PKQ0PFH5AY7PRKWWP",
+    "author": null,
+    "body": "Swift WS sync telemetry shipped and verified on main (commit 696b305b): FrickSyncSocket emits client span 'WebSocket /_frick/sync' with network.protocol.name/url.path/frick.schema_id/frick.schema_revision/frick.authenticated, finished ok|error + close_code/close_category, per-frame sent/received counters, and frick.client.ws.connection.duration_ms histogram — parity with TS runtime.ts. (Board status was lost in a parallel rebase; implementation + 5 new tests are on main, integrated swift test = 133 passing.)"
+  }
+}
