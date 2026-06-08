@@ -83,3 +83,45 @@ describe("design token contrast contract (WCAG AA)", () => {
     expect(results).toHaveLength(SEMANTIC_CONTRAST_PAIRS.length);
   });
 });
+
+describe("contrast contract integrity (FR-104)", () => {
+  it("declares pairs with unique ids and a meetable threshold", () => {
+    const ids = SEMANTIC_CONTRAST_PAIRS.map((p) => p.id);
+    expect(new Set(ids).size, "duplicate contrast-pair ids").toBe(ids.length);
+    for (const pair of SEMANTIC_CONTRAST_PAIRS) {
+      const min = pair.minRatio ?? 4.5;
+      // Thresholds live in the WCAG-meaningful [1, 21] range.
+      expect(min).toBeGreaterThanOrEqual(1);
+      expect(min).toBeLessThanOrEqual(21);
+    }
+  });
+
+  it("every declared pair resolves to a real hex token in EVERY resolved theme", () => {
+    // checkContrastPairs throws if a foreground/background path is missing or
+    // is not a hex color, so a typo or a gradient slipping into a contrast slot
+    // fails loudly here — across all 12 themes, not just one.
+    for (const mode of MODES) {
+      for (const density of DENSITIES) {
+        for (const brand of BRANDS) {
+          const design = resolveDesign(frickDesignDefinition, {
+            mode,
+            density,
+            brand,
+            iconPack: "native",
+            platform: "web",
+          });
+          const results = checkContrastPairs(design.semantic as Record<string, unknown>);
+          expect(
+            results,
+            `${mode}/${density}/${brand} resolved a different number of pairs`,
+          ).toHaveLength(SEMANTIC_CONTRAST_PAIRS.length);
+          for (const r of results) {
+            expect(isHexColor(r.foregroundValue), `${r.id} fg not hex in ${mode}/${density}/${brand}`).toBe(true);
+            expect(isHexColor(r.backgroundValue), `${r.id} bg not hex in ${mode}/${density}/${brand}`).toBe(true);
+            expect(r.ratio).toBeGreaterThanOrEqual(1);
+          }
+        }
+      }
+    }
+  });
+});
