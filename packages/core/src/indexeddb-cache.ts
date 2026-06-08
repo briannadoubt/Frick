@@ -89,6 +89,12 @@ class IndexedDBFrickCache implements FrickLocalCache {
     this.#put(STORE_OBJECTS, `${type}\x00${id}`, { type, id, value, version });
   }
 
+  deleteObject(schema: FrickSchema, type: string, id: string, scope?: FrickCacheScope): void {
+    this.#mirror.deleteObject(schema, type, id, scope);
+    this.#writeMetadata(schema, scope);
+    this.#delete(STORE_OBJECTS, `${type}\x00${id}`);
+  }
+
   saveStreamEvent(schema: FrickSchema, event: StreamEventInput, scope?: FrickCacheScope): void {
     this.#mirror.saveStreamEvent(schema, event, scope);
     this.#writeMetadata(schema, scope);

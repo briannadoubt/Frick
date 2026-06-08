@@ -689,6 +689,14 @@ export class FrickClient {
           this.#storeObject(unpacked.type, unpacked.id, unpacked.value, frame[1].cursor);
           this.#saveCursor(unpacked.type, frame[1].cursor);
         }
+        // Object deletes (FR-142/FR-144): drop the removed rows. Applied AFTER
+        // the upserts above so a delete wins over its own back-compat tombstone
+        // record (the server emits the removed id both ways). Without this the
+        // cache would keep a stale id-only tombstone instead of dropping it.
+        for (const removal of frame[1].removed ?? []) {
+          this.#removeObject(removal.type, removal.id);
+          this.#saveCursor(removal.type, frame[1].cursor);
+        }
         for (const packed of frame[1].events) {
           const event = unpackStreamEvent(this.schema, packed);
           this.#storeStreamEvent(event);
@@ -805,6 +813,15 @@ export class FrickClient {
     this.#objects.set(objectKey(type, id), { ...value });
     this.#cache.saveObject(this.schema, type, id, value, version, this.#cacheScope());
     this.#objectListSignals.get(type)?.set(this.#selectObjects(type));
+  }
+
+  /** Drop a deleted object from memory + cache and re-emit the type's list signal (FR-144). */
+  #removeObject(type: string, id: string): void {
+    const existed = this.#objects.delete(objectKey(type, id));
+    this.#cache.deleteObject(this.schema, type, id, this.#cacheScope());
+    if (existed) {
+      this.#objectListSignals.get(type)?.set(this.#selectObjects(type));
+    }
   }
 
   #storeStreamEvent(event: StreamEventInput): void {

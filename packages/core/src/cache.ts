@@ -57,6 +57,8 @@ export interface FrickCacheState {
 export interface FrickLocalCache {
   load(schema: FrickSchema, scope?: FrickCacheScope): FrickCacheState;
   saveObject(schema: FrickSchema, type: string, id: string, value: PlainObject, version: number, scope?: FrickCacheScope): void;
+  /** Drop a cached object (FR-144 — applied when the server broadcasts a delete). No-op if absent. */
+  deleteObject(schema: FrickSchema, type: string, id: string, scope?: FrickCacheScope): void;
   saveStreamEvent(schema: FrickSchema, event: StreamEventInput, scope?: FrickCacheScope): void;
   saveCursor(schema: FrickSchema, key: string, cursor: number, scope?: FrickCacheScope): void;
   savePendingAppend(schema: FrickSchema, append: PendingAppend, scope?: FrickCacheScope): void;
@@ -133,6 +135,11 @@ export class MemoryFrickCache implements FrickLocalCache {
       value: { id, ...value },
       version,
     });
+  }
+
+  deleteObject(schema: FrickSchema, type: string, id: string, scope: FrickCacheScope = {}): void {
+    this.#writeMetadata(schema, scope);
+    this.#objects.delete(objectKey(type, id));
   }
 
   saveStreamEvent(schema: FrickSchema, event: StreamEventInput, scope: FrickCacheScope = {}): void {

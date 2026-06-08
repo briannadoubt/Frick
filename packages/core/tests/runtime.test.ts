@@ -6,6 +6,7 @@ import {
   defaultServerCapabilities,
   encodeFrame,
   productTestSchema,
+  packObjectRecord,
   packStreamEvent,
 } from "@fricken/protocol";
 import {
@@ -193,6 +194,57 @@ describe("foundation runtime", () => {
 
     expect(client.stream("MessageStream", "conversation-general").value).toHaveLength(1);
     expect(client.syncStatus.value.cursors["MessageStream:conversation-general"]).toBe(42);
+  });
+
+  it("drops an object when a Delta carries it in `removed` (FR-144)", () => {
+    const socket = TestWebSocket.prepare();
+    const client = new FrickClient({
+      endpoint: "ws://test",
+      schema: productTestSchema,
+      WebSocketImpl: TestWebSocket as never,
+    });
+
+    const conversations = client.objects("Conversation");
+    client.connect();
+    socket.emit("open", {});
+
+    // Live upsert → the row exists.
+    socket.emit("message", {
+      data: encodeFrame([
+        FrameKind.Delta,
+        {
+          objects: [
+            packObjectRecord(productTestSchema, "Conversation", "conversation-doomed", {
+              kind: "group",
+              title: "Doomed room",
+              createdBy: "user-ada",
+            }),
+          ],
+          events: [],
+          cursor: 1,
+        },
+      ]),
+    });
+    expect(conversations.value.map((c) => c.id)).toContain("conversation-doomed");
+
+    // Server delete (FR-142 shape): a back-compat tombstone record in `objects`
+    // PLUS the `removed` list. The runtime must end up with the row DROPPED,
+    // not a stale id-only tombstone.
+    socket.emit("message", {
+      data: encodeFrame([
+        FrameKind.Delta,
+        {
+          objects: [
+            packObjectRecord(productTestSchema, "Conversation", "conversation-doomed", {}),
+          ],
+          events: [],
+          removed: [{ type: "Conversation", id: "conversation-doomed" }],
+          cursor: 2,
+        },
+      ]),
+    });
+
+    expect(conversations.value.map((c) => c.id)).not.toContain("conversation-doomed");
   });
 
   it("merges projection deltas into the projection signal", () => {
