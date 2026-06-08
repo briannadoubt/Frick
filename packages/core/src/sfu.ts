@@ -28,6 +28,7 @@
 import type { CallMediaGrant } from "@fricken/protocol";
 import type { CallCommandOp, CallCommandResultPayload } from "@fricken/protocol";
 
+import type { FrameTransformInserter, SFrameTransform } from "./e2ee.js";
 import type { MediaStreamLike, MediaStreamTrackLike } from "./p2p.js";
 
 /** Media kind a producer/consumer carries. */
@@ -168,6 +169,27 @@ export interface StartSfuCallOptions {
   readonly localStream?: MediaStreamLike;
   /** Override the device factory (tests inject a fake). */
   readonly createDevice?: CreateSfuDevice;
+  /**
+   * FR-156 — opt-in, per-room end-to-end encryption. When provided, the driver
+   * attaches the SFrame `transform` to every local producer (outbound encrypt
+   * before the SFU sees the frame) and every remote consumer (inbound decrypt
+   * after the SFU hands it back) via the injectable `inserter` (the browser
+   * Encoded-Transform seam — a fake in tests). When omitted, the media path is
+   * byte-for-byte as before: no transform is attached and no epoch traffic runs.
+   */
+  readonly e2ee?: SfuE2EEOptions;
+}
+
+/** Per-room E2EE wiring for {@link startSfuCall} (FR-156). */
+export interface SfuE2EEOptions {
+  /** The production SFrame transform (`SFrameCipherTransform`) keyed by the call's epochs. */
+  readonly transform: SFrameTransform;
+  /**
+   * The insertion seam. The browser impl builds an `RTCRtpScriptTransform`
+   * around `transform` per sender/receiver; tests inject a
+   * `MemoryFrameTransformInserter` and pump frames through it.
+   */
+  readonly inserter: FrameTransformInserter;
 }
 
 /**
@@ -232,8 +254,10 @@ export async function startSfuCall(
   client: SfuCallClient,
   options: StartSfuCallOptions,
 ): Promise<SfuCallHandle> {
-  const { callId, grant, localStream } = options;
+  const { callId, grant, localStream, e2ee } = options;
   const createDevice = options.createDevice ?? defaultCreateDevice;
+  /** E2EE transform detach fns (FR-156); empty when E2EE is off. */
+  const e2eeDetachers: Array<() => void> = [];
 
   const routerRtpCapabilities = parseGrantField<SfuRtpCapabilities>(
     grant,
@@ -315,6 +339,17 @@ export async function startSfuCall(
     for (const track of localStream.getTracks()) {
       const producer = await sendTransport.produce({ track });
       producers.set(producer.id, producer);
+      // FR-156: encrypt outbound frames before they reach the SFU. The producer
+      // is the endpoint the Encoded Transform attaches to (a fake in tests).
+      if (e2ee) {
+        e2eeDetachers.push(
+          e2ee.inserter.insert({
+            direction: "encrypt",
+            transform: e2ee.transform,
+            endpoint: producer,
+          }),
+        );
+      }
     }
   }
 
@@ -343,6 +378,16 @@ export async function startSfuCall(
         rtpParameters: params.rtpParameters,
       });
       consumers.set(consumer.id, consumer);
+      // FR-156: decrypt inbound frames after they leave the SFU consumer.
+      if (e2ee) {
+        e2eeDetachers.push(
+          e2ee.inserter.insert({
+            direction: "decrypt",
+            transform: e2ee.transform,
+            endpoint: consumer,
+          }),
+        );
+      }
       const remote: SfuRemoteTrack = {
         producerId: params.producerId,
         consumerId: consumer.id,
@@ -383,6 +428,8 @@ export async function startSfuCall(
     close() {
       if (closed) return;
       closed = true;
+      for (const detach of e2eeDetachers) detach();
+      e2eeDetachers.length = 0;
       for (const consumer of consumers.values()) consumer.close();
       for (const producer of producers.values()) producer.close();
       sendTransport.close();

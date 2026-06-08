@@ -1,13 +1,19 @@
 # End-to-end encrypted calls (E2EE)
 
-> Status: design + key-epoch seam (FR-85, part of the FR-15 calls epic).
-> This ticket delivers the **design** plus a clean, testable **client-side
+> Status: design + key-epoch seam (FR-85) + **production SFrame cipher suite,
+> replay protection, key-epoch distribution wire path, and SFU-path insertion
+> (FR-156)** — both part of the FR-15 calls epic.
+> FR-85 delivered the **design** plus a clean, testable **client-side
 > key-epoch / SFrame-transform seam** ([`packages/core/src/e2ee.ts`](../packages/core/src/e2ee.ts)).
-> Wiring the transform into the real FR-83/FR-155 media path — and shipping a
-> production cipher suite + per-recipient key wrapping — is the explicit
-> follow-up **FR-156** (see [Follow-ups](#follow-ups)). Nothing in this ticket
-> changes existing call behavior: E2EE is opt-in per room and the seam is not
-> yet inserted into the media path.
+> **FR-156 makes it real** (see [What FR-156 delivered](#what-fr-156-delivered)):
+> a production AEAD SFrame cipher suite with a real key schedule + per-frame
+> nonce, sliding-window replay protection, a control-plane-backed key-epoch
+> distributor over the additive `"keyEpoch"` signal kind (symmetric sender-key
+> wrapping), and an injectable insertion seam wired into the FR-155 SFU driver
+> behind a per-room opt-in toggle. The only thing still deferred is
+> per-recipient **asymmetric** key wrapping / **MLS** (see [Follow-ups](#follow-ups)).
+> E2EE remains opt-in per room: with it off, call behavior is byte-for-byte as
+> before — no transform inserted, no epoch traffic.
 
 ## Why calls need a second encryption layer
 
@@ -183,21 +189,55 @@ Because SFrame ciphertext is opaque application payload, **the server SFU
 touch is the additive `"keyEpoch"` signal kind on the relay, which the control
 plane forwards byte-for-byte exactly as it does `sfuToken`.
 
-### What FR-156 (the implementation ticket) must do
+### What FR-156 delivered
 
-1. Replace the reference `AeadSFrameTransform` with a real **SFrame cipher
-   suite** (RFC 9605): proper key derivation (per-sender keys / ratchet), nonce
-   construction with salt, tag handling, and **replay protection** (the
-   reference counter is monotonic but not replay-checked on receive).
-2. Replace `MemoryKeyDistributor` with a control-plane-backed distributor that
-   **wraps the epoch key per recipient** (sender-key over device keys; MLS
-   later) and rides the new `"keyEpoch"` `WebRTCSignal` kind.
-3. Add the `"keyEpoch"` kind to `WebRTCSignalKind` in the protocol and relay it
-   (additive, opaque — like `sfuToken`).
-4. Insert the encrypt/decrypt Encoded Transforms into the FR-155 send/recv path
-   behind a per-room opt-in flag.
-5. Handle codec/SFU constraints: keep frame metadata the SFU still needs (e.g.
-   for SVC/simulcast) outside the encrypted body, per the SFrame spec.
+FR-156 implemented the production path on top of the FR-85 seam (all in
+[`packages/core/src/e2ee.ts`](../packages/core/src/e2ee.ts) unless noted):
+
+1. **Production SFrame cipher suite** — `SFrameCipherTransform` (alongside the
+   retained reference `AeadSFrameTransform`). It runs a real **key schedule**:
+   the epoch's shared secret is HKDF-expanded (`KeyDerivationProvider`, default
+   `WebCryptoKeyDerivation` over HKDF-SHA-256) into a per-epoch AES-GCM **key**
+   and a 12-byte nonce **salt** — the epoch secret is never used directly as an
+   AEAD key. Each frame carries a **v2 header** (`encode/decodeSFrameV2Header`,
+   17 bytes: version + epochId + **senderId** + 64-bit counter) authenticated as
+   AEAD associated data. The per-frame **nonce** is `salt XOR (senderId ||
+   counter)` (RFC 9605 construction), so every `(epoch, sender, counter)` triple
+   is a distinct nonce — no `(key, nonce)` reuse even when all members share one
+   epoch key. Real WebCrypto via the injectable `AeadCryptoProvider`/
+   `KeyDerivationProvider`, so it stays deterministically testable with injected
+   providers.
+2. **Replay protection** — `ReplayWindow`, a sliding-window sequence-number
+   guard tracked **per (epoch, sender)** on receive. A replayed or out-of-window
+   counter is rejected; in-order and reordered-but-fresh counters inside the
+   window are accepted. The counter is committed to the window **only after the
+   AEAD authenticates**, so a forged frame can't poison the window and starve
+   the genuine future frame.
+3. **Key-epoch distribution wire path** — the additive `"keyEpoch"`
+   `WebRTCSignalKind` (in [`packages/protocol/src/calls.ts`](../packages/protocol/src/calls.ts))
+   plus `SignalKeyDistributor`, a `KeyDistributor` that rides the existing
+   `sendSignal`/`signalChannel` relay (no new transport). It **wraps** the epoch
+   key under a key HKDF-derived from a **symmetric per-room secret** (AES-GCM,
+   the key bound to `callId:epochId` as AAD) and announces it as an opaque
+   `"keyEpoch"` signal; `poll()` drains inbound announcements, unwraps them
+   (skipping our own echoes / stale epochs / wrong-secret blobs — fail-closed),
+   and surfaces the reconstructed `KeyEpoch` for the caller to `adopt`.
+4. **SFU insertion** — `startSfuCall` ([`packages/core/src/sfu.ts`](../packages/core/src/sfu.ts))
+   gained an opt-in `e2ee?: { transform, inserter }` option. When set, the
+   driver attaches the transform to every local producer (**encrypt** before
+   produce) and every remote consumer (**decrypt** after consume) via the
+   injectable `FrameTransformInserter` seam — the browser binds an
+   `RTCRtpScriptTransform`; tests inject `MemoryFrameTransformInserter` and pump
+   frames through with no DOM. When `e2ee` is omitted the path is unchanged.
+5. Codec/SFU constraints: the SFrame header stays **outside** the encrypted body
+   (it is AAD, not ciphertext), so metadata the SFU needs remains readable; the
+   encrypted body is the opaque frame payload, per the SFrame spec.
+
+**Still deferred (genuine future work):** per-recipient **asymmetric** key
+wrapping (each member's device public key) and **MLS** group key agreement. The
+`KeyDistributor` seam is pluggable, so swapping `SignalKeyDistributor`'s
+symmetric sender-key wrap for an asymmetric / MLS distributor needs no change to
+`SFrameCipherTransform` or the media-path insertion. See [Follow-ups](#follow-ups).
 
 ## Performance and UX
 
@@ -234,15 +274,27 @@ plane forwards byte-for-byte exactly as it does `sfuToken`.
   **`MemoryKeyDistributorFabric`** — the abstract announce/adopt seam, with an
   in-process fake mirroring FR-105's `MemoryRegionBus`/`MemoryRegionFabric`.
 
-> ⚠️ The reference `AeadSFrameTransform` is for the **seam and its tests** — a
-> deterministic encrypt→decrypt path with no browser. It is **NOT a
-> production-grade SFrame cipher suite.** The real suite, replay protection, and
-> per-recipient key wrapping land in FR-156.
+> ⚠️ The reference `AeadSFrameTransform` is retained for the FR-85 **seam and
+> its tests** — a deterministic encrypt→decrypt path with no browser. It is
+> **NOT a production cipher suite.** The production path shipped by FR-156 is
+> **`SFrameCipherTransform`** (real key schedule, per-frame nonce, v2 header)
+> with `ReplayWindow` replay protection, `SignalKeyDistributor` (symmetric
+> sender-key wrapping over the `"keyEpoch"` signal), and the
+> `FrameTransformInserter` SFU-insertion seam.
 
 ## Follow-ups
 
-- **FR-156 — Wire SFrame E2EE transform into the SFU media path.** The
-  implementation ticket: real SFrame cipher suite, control-plane key
-  distribution with per-recipient wrapping, the `"keyEpoch"` signal kind, and
-  Encoded-Transform insertion into the FR-155 send/recv path behind a per-room
-  toggle. (Optional future hardening: swap the sender-key distributor for MLS.)
+- **FR-156 — DONE.** Production SFrame cipher suite (`SFrameCipherTransform`),
+  sliding-window replay protection (`ReplayWindow`), the additive `"keyEpoch"`
+  signal kind + control-plane `SignalKeyDistributor` (symmetric sender-key
+  wrapping under a per-room secret), and the per-room opt-in
+  `FrameTransformInserter` insertion into the FR-155 SFU driver. See
+  [What FR-156 delivered](#what-fr-156-delivered).
+- **Asymmetric / MLS key agreement (remaining).** The symmetric sender-key
+  distributor assumes a shared per-room secret and trusts the announcer; it does
+  not give per-recipient confidentiality against other members' device-key
+  compromise, nor cryptographic membership authentication. The genuine next step
+  is per-recipient **asymmetric** wrapping (to each device's public key) and,
+  for log-sized re-keying + post-compromise security + ghost-member resistance,
+  **MLS** (RFC 9420). The `KeyDistributor` seam is abstract enough to swap either
+  in without touching `SFrameCipherTransform` or the media-path insertion.

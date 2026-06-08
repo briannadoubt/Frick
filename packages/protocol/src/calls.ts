@@ -37,8 +37,22 @@ export type CallInviteState = "ringing" | "accepted" | "declined" | "cancelled";
 /** Lifecycle states a `CallParticipant` moves through. */
 export type CallParticipantState = "joined" | "left";
 
-/** Kinds of WebRTC signal that ride the `WebRTCSignal` relay (opaque payload). */
-export type WebRTCSignalKind = "offer" | "answer" | "ice" | "renegotiate" | "sfuToken";
+/**
+ * Kinds of WebRTC signal that ride the `WebRTCSignal` relay (opaque payload).
+ *
+ * `"keyEpoch"` (FR-156) carries an E2EE key-epoch announcement for per-room
+ * call encryption: when membership changes, the rotation initiator wraps the
+ * fresh epoch key and announces it over this same relay (the control plane
+ * forwards the opaque `payload` byte-for-byte, exactly as it does `"sfuToken"`).
+ * It is additive — a peer that doesn't understand it simply ignores it.
+ */
+export type WebRTCSignalKind =
+  | "offer"
+  | "answer"
+  | "ice"
+  | "renegotiate"
+  | "sfuToken"
+  | "keyEpoch";
 
 /**
  * Server-authoritative call room record. Mirrors the server's

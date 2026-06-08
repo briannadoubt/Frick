@@ -20,6 +20,18 @@
  *     announced/wrapped to current members over the call control plane / signal
  *     relay. Real per-recipient public-key wrapping (sender-key / MLS) is FR-156.
  *
+ * FR-156 builds ON this seam: it adds a PRODUCTION SFrame cipher suite
+ * ({@link SFrameCipherTransform}) with a real per-epoch key schedule (HKDF →
+ * key + salt), a per-frame nonce derived from `salt XOR (sender || counter)`
+ * (the RFC 9605 construction), sliding-window {@link ReplayWindow} replay
+ * protection per sender, a control-plane-backed {@link SignalKeyDistributor}
+ * that wraps the epoch key under a symmetric room secret and rides the additive
+ * `"keyEpoch"` signal kind, and an injectable {@link FrameTransformInserter}
+ * insertion seam so the SFU driver (FR-155) can encrypt-before-produce /
+ * decrypt-after-consume without a browser. The reference
+ * {@link AeadSFrameTransform} is retained for the FR-85 seam tests; the
+ * production path is {@link SFrameCipherTransform}.
+ *
  * Why a seam matters: in an SFU call (FR-83/FR-155) the media server forwards
  * SRTP it can decrypt at the transport layer, so the SFU sees media. E2EE adds a
  * SECOND, inner encryption layer applied to each frame BEFORE it reaches the SFU,
@@ -126,7 +138,7 @@ interface SubtleCryptoLike {
   importKey(
     format: "raw",
     keyData: Uint8Array,
-    algorithm: { name: string },
+    algorithm: { name: string } | string,
     extractable: boolean,
     keyUsages: readonly string[],
   ): Promise<CryptoKeyLike>;
@@ -140,8 +152,75 @@ interface SubtleCryptoLike {
     key: CryptoKeyLike,
     data: Uint8Array,
   ): Promise<ArrayBuffer>;
+  deriveBits(
+    algorithm: { name: string; hash: string; salt: Uint8Array; info: Uint8Array },
+    key: CryptoKeyLike,
+    length: number,
+  ): Promise<ArrayBuffer>;
 }
 type CryptoKeyLike = unknown;
+
+// -- key-derivation provider seam (FR-156) -----------------------------------
+
+/**
+ * The key-derivation half of the crypto seam the PRODUCTION SFrame suite
+ * depends on. The epoch's shared secret is never used directly as an AEAD key;
+ * instead it is HKDF-expanded into a per-epoch AEAD `key` and a per-epoch `salt`
+ * (the nonce-derivation input). Defining this as an injectable provider — like
+ * {@link AeadCryptoProvider} — keeps the production transform deterministically
+ * testable with no WebCrypto.
+ */
+export interface KeyDerivationProvider {
+  /**
+   * HKDF-expand `secret` into `length` bytes bound to a `label` (the
+   * domain-separation info string, e.g. `"sframe key"` vs `"sframe salt"`).
+   * Deterministic: the same `(secret, label, length)` always yields the same
+   * bytes, so two members holding the same epoch secret derive identical
+   * key+salt material independently.
+   */
+  derive(args: {
+    readonly secret: Uint8Array;
+    readonly label: string;
+    readonly length: number;
+  }): Promise<Uint8Array>;
+}
+
+/**
+ * Default {@link KeyDerivationProvider} backed by `globalThis.crypto.subtle`'s
+ * HKDF-SHA-256. Constructed lazily so importing this module never requires
+ * WebCrypto. Tests inject a deterministic fake.
+ */
+export class WebCryptoKeyDerivation implements KeyDerivationProvider {
+  #subtle(): SubtleCryptoLike {
+    const subtle = (globalThis as { crypto?: { subtle?: SubtleCryptoLike } }).crypto?.subtle;
+    if (!subtle) {
+      throw new Error(
+        "WebCryptoKeyDerivation requires globalThis.crypto.subtle; inject a KeyDerivationProvider in non-browser environments",
+      );
+    }
+    return subtle;
+  }
+
+  async derive(args: {
+    readonly secret: Uint8Array;
+    readonly label: string;
+    readonly length: number;
+  }): Promise<Uint8Array> {
+    const subtle = this.#subtle();
+    const key = await subtle.importKey("raw", args.secret, "HKDF", false, ["deriveBits"]);
+    const bits = await subtle.deriveBits(
+      {
+        name: "HKDF",
+        hash: "SHA-256",
+        salt: new Uint8Array(0),
+        info: new TextEncoder().encode(args.label),
+      },
+      key,
+      args.length * 8,
+    );
+    return new Uint8Array(bits);
+  }
+}
 
 // -- key epochs --------------------------------------------------------------
 
@@ -550,4 +629,616 @@ function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
   out.set(a, 0);
   out.set(b, a.length);
   return out;
+}
+
+// ===========================================================================
+// FR-156 — PRODUCTION SFrame cipher suite
+// ===========================================================================
+//
+// The reference AeadSFrameTransform above validates the FR-85 seam. Everything
+// below is the real, shippable path: a proper key schedule (HKDF), a per-frame
+// nonce built per RFC 9605, an authenticated header carrying the SENDER id (so
+// nonces never collide across senders sharing one epoch key), and sliding-
+// window replay protection on receive. It still runs over the SAME injectable
+// providers so it stays deterministically testable with no browser.
+
+/**
+ * The production SFrame header. Unlike the fixed reference header it carries a
+ * `senderId` so (a) the per-frame nonce is unique per sender even though all
+ * members share one epoch key, and (b) replay state can be tracked per sender.
+ * The whole header is authenticated as AEAD associated data.
+ *
+ * Layout (big-endian):
+ *   byte 0      : version (2)
+ *   bytes 1..4  : epochId  (uint32)
+ *   bytes 5..8  : senderId (uint32) — stable per-call sender ordinal
+ *   bytes 9..16 : counter  (uint64) — per-(epoch,sender) monotonic frame counter
+ */
+export const SFRAME_V2_HEADER_BYTES = 17;
+const SFRAME_V2_VERSION = 2;
+
+/** A stable per-call sender ordinal (e.g. derived from sorted member id). */
+export type SenderId = number;
+
+export interface SFrameV2Header {
+  readonly version: number;
+  readonly epochId: EpochId;
+  readonly senderId: SenderId;
+  readonly counter: bigint;
+}
+
+export function encodeSFrameV2Header(header: SFrameV2Header): Uint8Array {
+  const out = new Uint8Array(SFRAME_V2_HEADER_BYTES);
+  const view = new DataView(out.buffer);
+  view.setUint8(0, header.version);
+  view.setUint32(1, header.epochId, false);
+  view.setUint32(5, header.senderId, false);
+  view.setBigUint64(9, header.counter, false);
+  return out;
+}
+
+export function decodeSFrameV2Header(bytes: Uint8Array): SFrameV2Header {
+  if (bytes.length < SFRAME_V2_HEADER_BYTES) {
+    throw new Error("SFrame v2 header truncated");
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return {
+    version: view.getUint8(0),
+    epochId: view.getUint32(1, false),
+    senderId: view.getUint32(5, false),
+    counter: view.getBigUint64(9, false),
+  };
+}
+
+// -- replay protection -------------------------------------------------------
+
+/** AEAD nonce length in bytes (AES-GCM standard 96-bit IV). */
+const SFRAME_NONCE_BYTES = 12;
+
+/**
+ * Sliding-window replay guard for a single (epoch, sender) stream. Tracks the
+ * highest counter seen and a bitmap of the `windowSize` counters below it, so a
+ * replayed or stale frame is rejected while legitimate reordering inside the
+ * window is still accepted (media frames can arrive slightly out of order).
+ *
+ * `check(counter)` returns true and records the counter if it is fresh; returns
+ * false (without recording) if it is a replay or has fallen off the bottom of
+ * the window. Counter 0 is reserved/never used (counters start at 1), so a
+ * never-seen stream has `#highest === 0n`.
+ */
+export class ReplayWindow {
+  readonly #size: bigint;
+  #highest = 0n;
+  /** Bitmap of seen counters in (#highest - size, #highest]; bit 0 == #highest. */
+  #bitmap = 0n;
+
+  constructor(windowSize = 1024) {
+    if (windowSize < 1) throw new Error("ReplayWindow size must be >= 1");
+    this.#size = BigInt(windowSize);
+  }
+
+  /** Test whether `counter` is fresh without recording it. */
+  seen(counter: bigint): boolean {
+    if (counter <= 0n) return true; // 0 is reserved → treat as replay
+    if (counter > this.#highest) return false;
+    const delta = this.#highest - counter;
+    if (delta >= this.#size) return true; // below the window → treat as replay
+    return (this.#bitmap & (1n << delta)) !== 0n;
+  }
+
+  /**
+   * Validate + record `counter`. Returns false (and records nothing) for a
+   * replay or an out-of-window-old counter; returns true and advances the
+   * window otherwise.
+   */
+  check(counter: bigint): boolean {
+    if (counter <= 0n) return false;
+    if (counter > this.#highest) {
+      const shift = counter - this.#highest;
+      // Slide the window up; bits shifted past `size` drop off the bottom.
+      this.#bitmap = shift >= this.#size ? 0n : (this.#bitmap << shift) & this.#mask();
+      this.#bitmap |= 1n; // mark the new highest (bit 0)
+      this.#highest = counter;
+      return true;
+    }
+    const delta = this.#highest - counter;
+    if (delta >= this.#size) return false; // too old
+    const bit = 1n << delta;
+    if ((this.#bitmap & bit) !== 0n) return false; // replay
+    this.#bitmap |= bit;
+    return true;
+  }
+
+  #mask(): bigint {
+    return (1n << this.#size) - 1n;
+  }
+}
+
+// -- production cipher suite --------------------------------------------------
+
+/**
+ * Per-epoch derived key material: the AEAD `key` and the nonce `salt`, both
+ * HKDF-expanded from the epoch's shared secret. Cached per epoch id so the HKDF
+ * runs once per epoch, not once per frame.
+ */
+interface DerivedEpochKeys {
+  readonly key: Uint8Array;
+  readonly salt: Uint8Array;
+}
+
+const SFRAME_KEY_BYTES = 16; // AES-128-GCM by default
+const SFRAME_KEY_LABEL = "fricken/sframe/v2 key";
+const SFRAME_SALT_LABEL = "fricken/sframe/v2 salt";
+
+export interface SFrameCipherTransformOptions {
+  readonly epochs: CallKeyEpochManager;
+  /**
+   * This client's stable per-call sender ordinal. Stamped into every outbound
+   * header so receivers derive the matching nonce and track replay per sender.
+   */
+  readonly senderId: SenderId;
+  /** AEAD provider; defaults to {@link WebCryptoAeadProvider}. Tests inject a fake. */
+  readonly aead?: AeadCryptoProvider;
+  /** Key-derivation provider; defaults to {@link WebCryptoKeyDerivation}. */
+  readonly kdf?: KeyDerivationProvider;
+  /** Replay window size (frames). Default 1024. */
+  readonly replayWindow?: number;
+}
+
+/**
+ * PRODUCTION {@link SFrameTransform}. Per frame:
+ *
+ *  - Outbound: derive (once per epoch, cached) `key`+`salt` from the epoch
+ *    secret via HKDF; take the next per-(epoch,sender) counter; build the v2
+ *    header (epoch + sender + counter); derive the 96-bit nonce as
+ *    `salt XOR (senderId || counter)`; AES-GCM-seal the frame with the header
+ *    as AAD; emit `header || ciphertext`.
+ *  - Inbound: read the header, resolve the epoch key (via the epoch manager's
+ *    transition window), reject the frame if its (epoch,sender,counter) is a
+ *    replay or too old (sliding {@link ReplayWindow} per sender), then derive
+ *    the same nonce and AES-GCM-open — which also fails closed on any header or
+ *    ciphertext tampering or a wrong-epoch key.
+ *
+ * Nonce uniqueness: the (epoch secret → salt) is unique per epoch; XOR-ing in
+ * `senderId || counter` makes each (epoch, sender, counter) triple a distinct
+ * nonce, so no two frames ever reuse an (key, nonce) pair — the AES-GCM
+ * security requirement.
+ */
+export class SFrameCipherTransform implements SFrameTransform {
+  readonly #epochs: CallKeyEpochManager;
+  readonly #senderId: SenderId;
+  readonly #aead: AeadCryptoProvider;
+  readonly #kdf: KeyDerivationProvider;
+  readonly #replayWindowSize: number;
+  /** Cached derived (key,salt) per epoch id, keyed by the epoch's identity. */
+  readonly #derived = new Map<EpochId, { secret: Uint8Array; keys: Promise<DerivedEpochKeys> }>();
+  /** Outbound per-epoch frame counter for THIS sender. */
+  readonly #counters = new Map<EpochId, bigint>();
+  /** Inbound replay windows, keyed by `${epochId}:${senderId}`. */
+  readonly #replay = new Map<string, ReplayWindow>();
+
+  constructor(options: SFrameCipherTransformOptions) {
+    this.#epochs = options.epochs;
+    this.#senderId = options.senderId >>> 0;
+    this.#aead = options.aead ?? new WebCryptoAeadProvider();
+    this.#kdf = options.kdf ?? new WebCryptoKeyDerivation();
+    this.#replayWindowSize = options.replayWindow ?? 1024;
+  }
+
+  async encrypt(frame: Uint8Array): Promise<Uint8Array> {
+    const epoch = this.#epochs.current;
+    if (!epoch) {
+      throw new Error("SFrameCipherTransform.encrypt: no current epoch (call rotate first)");
+    }
+    const { key, salt } = await this.#deriveFor(epoch.epochId, epoch.key);
+    const counter = this.#nextCounter(epoch.epochId);
+    const header = encodeSFrameV2Header({
+      version: SFRAME_V2_VERSION,
+      epochId: epoch.epochId,
+      senderId: this.#senderId,
+      counter,
+    });
+    const ciphertext = await this.#aead.seal({
+      key,
+      nonce: deriveNonce(salt, this.#senderId, counter),
+      plaintext: frame,
+      associatedData: header,
+    });
+    return concat(header, ciphertext);
+  }
+
+  async decrypt(payload: Uint8Array): Promise<Uint8Array> {
+    const header = decodeSFrameV2Header(payload);
+    if (header.version !== SFRAME_V2_VERSION) {
+      throw new Error(`SFrameCipherTransform.decrypt: unsupported SFrame version ${header.version}`);
+    }
+    const secret = this.#epochs.keyFor(header.epochId);
+    if (!secret) {
+      throw new Error(
+        `SFrameCipherTransform.decrypt: no key for epoch ${header.epochId} (expired or unknown)`,
+      );
+    }
+    // Replay check BEFORE doing crypto so a flood of replays is cheap to reject.
+    // We pre-screen with `seen()` (non-mutating) and only commit the counter to
+    // the window AFTER the AEAD authenticates, so a forged frame that fails
+    // decryption can't poison the window and lock out the real (future) frame.
+    const window = this.#replayWindowFor(header.epochId, header.senderId);
+    if (window.seen(header.counter)) {
+      throw new Error(
+        `SFrameCipherTransform.decrypt: replayed or stale frame (epoch ${header.epochId} sender ${header.senderId} counter ${header.counter})`,
+      );
+    }
+    const { key, salt } = await this.#deriveFor(header.epochId, secret);
+    const ciphertext = payload.subarray(SFRAME_V2_HEADER_BYTES);
+    const headerBytes = payload.subarray(0, SFRAME_V2_HEADER_BYTES);
+    const plaintext = await this.#aead.open({
+      key,
+      nonce: deriveNonce(salt, header.senderId, header.counter),
+      ciphertext,
+      associatedData: headerBytes,
+    });
+    // Commit the counter only now that the frame is authenticated, so a forged
+    // frame can't advance the window and starve the genuine future frame.
+    window.check(header.counter);
+    return plaintext;
+  }
+
+  #replayWindowFor(epochId: EpochId, senderId: SenderId): ReplayWindow {
+    const k = `${epochId}:${senderId}`;
+    let w = this.#replay.get(k);
+    if (!w) {
+      w = new ReplayWindow(this.#replayWindowSize);
+      this.#replay.set(k, w);
+    }
+    return w;
+  }
+
+  #deriveFor(epochId: EpochId, secret: Uint8Array): Promise<DerivedEpochKeys> {
+    const cached = this.#derived.get(epochId);
+    if (cached && bytesEqual(cached.secret, secret)) return cached.keys;
+    const keys = (async (): Promise<DerivedEpochKeys> => {
+      const [key, salt] = await Promise.all([
+        this.#kdf.derive({ secret, label: SFRAME_KEY_LABEL, length: SFRAME_KEY_BYTES }),
+        this.#kdf.derive({ secret, label: SFRAME_SALT_LABEL, length: SFRAME_NONCE_BYTES }),
+      ]);
+      return { key, salt };
+    })();
+    this.#derived.set(epochId, { secret: Uint8Array.from(secret), keys });
+    return keys;
+  }
+
+  #nextCounter(epochId: EpochId): bigint {
+    const next = (this.#counters.get(epochId) ?? 0n) + 1n;
+    this.#counters.set(epochId, next);
+    return next;
+  }
+}
+
+/**
+ * Derive the 96-bit AES-GCM nonce as `salt XOR (0…0 || senderId(4) ||
+ * counter(8))` — the RFC 9605 IV construction. `salt` is the per-epoch
+ * 12-byte secret; the low 12 bytes encode (senderId, counter) so every
+ * (epoch, sender, counter) yields a distinct nonce.
+ */
+function deriveNonce(salt: Uint8Array, senderId: SenderId, counter: bigint): Uint8Array {
+  const nonce = new Uint8Array(SFRAME_NONCE_BYTES);
+  const view = new DataView(nonce.buffer);
+  view.setUint32(0, senderId >>> 0, false);
+  view.setBigUint64(4, counter, false);
+  for (let i = 0; i < SFRAME_NONCE_BYTES; i++) {
+    nonce[i] = (nonce[i] ?? 0) ^ (salt[i] ?? 0);
+  }
+  return nonce;
+}
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+// ===========================================================================
+// FR-156 — control-plane key-epoch distribution (symmetric sender-key)
+// ===========================================================================
+//
+// The PRODUCTION distributor announces a freshly-rotated epoch to current
+// members over the EXISTING WebRTCSignal relay (the additive "keyEpoch" signal
+// kind), NOT a new transport. The epoch key is WRAPPED under a symmetric
+// per-room secret (a pre-shared / transport-derived key every member holds) so
+// the relay and SFU only ever see opaque ciphertext — the sender-key scheme the
+// design recommends as the starting point. Per-recipient ASYMMETRIC wrapping /
+// MLS is the genuine future step and is intentionally left to the pluggable
+// KeyDistributor seam (see docs/e2ee-calls.md "Follow-ups").
+
+/**
+ * The minimal slice of the Frick client the signal-backed distributor needs —
+ * the same `sendSignal` / `signalChannel` pair the P2P driver (FR-81) and SFU
+ * driver (FR-155) use. Defined structurally so tests inject an in-memory bus
+ * with no runtime.
+ */
+export interface SignalRelayClient {
+  sendSignal(name: string, key: string, value: Record<string, unknown>): Promise<void>;
+  signalChannel(name: string, key: string): { get(): readonly Record<string, unknown>[] };
+}
+
+/** The opaque `"keyEpoch"` signal payload: a wrapped epoch announcement. */
+export interface KeyEpochSignal {
+  readonly senderDeviceId: string;
+  readonly kind: "keyEpoch";
+  readonly epochId: EpochId;
+  readonly members: readonly string[];
+  readonly createdAt: number;
+  /** Base64 AES-GCM nonce used to wrap the key. */
+  readonly wrapNonce: string;
+  /** Base64 AES-GCM ciphertext of the raw epoch key (wrapped under the room secret). */
+  readonly wrappedKey: string;
+}
+
+function toBase64(bytes: Uint8Array): string {
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return typeof btoa === "function"
+    ? btoa(bin)
+    : Buffer.from(bytes).toString("base64");
+}
+
+function fromBase64(b64: string): Uint8Array {
+  if (typeof atob === "function") {
+    const bin = atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  return new Uint8Array(Buffer.from(b64, "base64"));
+}
+
+export interface SignalKeyDistributorOptions {
+  readonly client: SignalRelayClient;
+  readonly callId: string;
+  /** This device's id (stamped on announcements; used to drop our own echoes). */
+  readonly senderDeviceId: string;
+  /**
+   * The symmetric per-room secret the epoch key is wrapped under. Every member
+   * holds the same secret (pre-shared out of band, or transport-derived). The
+   * relay/SFU never see it — they carry only the wrapped blob.
+   */
+  readonly roomSecret: Uint8Array;
+  /** AEAD provider used to wrap/unwrap. Defaults to {@link WebCryptoAeadProvider}. */
+  readonly aead?: AeadCryptoProvider;
+  /** KDF used to derive the wrap key from the room secret. Default WebCrypto HKDF. */
+  readonly kdf?: KeyDerivationProvider;
+  /** Nonce source for wrapping (12 random bytes). Tests inject a deterministic one. */
+  readonly randomNonce?: () => Uint8Array;
+  /** Signal type name; defaults to the shared WebRTC signal relay type. */
+  readonly signalType?: string;
+}
+
+const WRAP_KEY_LABEL = "fricken/sframe/v2 keywrap";
+const WRAP_KEY_BYTES = 16;
+
+function defaultRandomNonce(): Uint8Array {
+  const n = new Uint8Array(12);
+  const c = (globalThis as { crypto?: { getRandomValues?: (a: Uint8Array) => Uint8Array } }).crypto;
+  if (c?.getRandomValues) c.getRandomValues(n);
+  else for (let i = 0; i < n.length; i++) n[i] = Math.floor(Math.random() * 256);
+  return n;
+}
+
+/**
+ * PRODUCTION {@link KeyDistributor} riding the call control plane's signal relay.
+ *
+ * `announce(epoch)` wraps the epoch key under a key derived from the room secret
+ * and sends it as an opaque `"keyEpoch"` signal. `onEpoch(listener)` polls the
+ * signal channel, unwraps inbound `"keyEpoch"` signals (skipping our own
+ * echoes and already-seen epochs), and surfaces the reconstructed
+ * {@link KeyEpoch} — the caller wires this to `CallKeyEpochManager.adopt`.
+ *
+ * The wrap is the symmetric sender-key scheme: confidentiality + integrity of
+ * the key blob against the relay/SFU. The signal relay name defaults to the
+ * shared `WEBRTC_SIGNAL_TYPE` (passed by the caller) so it reuses the existing
+ * fan-out exactly like SDP/ICE/sfuToken.
+ */
+export class SignalKeyDistributor implements KeyDistributor {
+  readonly #client: SignalRelayClient;
+  readonly #callId: string;
+  readonly #senderDeviceId: string;
+  readonly #roomSecret: Uint8Array;
+  readonly #aead: AeadCryptoProvider;
+  readonly #kdf: KeyDerivationProvider;
+  readonly #randomNonce: () => Uint8Array;
+  readonly #signalType: string;
+  readonly #listeners = new Set<(epoch: KeyEpoch) => void>();
+  #wrapKey: Promise<Uint8Array> | undefined;
+  #processed = 0;
+  #highestSeen = -1;
+
+  constructor(options: SignalKeyDistributorOptions) {
+    this.#client = options.client;
+    this.#callId = options.callId;
+    this.#senderDeviceId = options.senderDeviceId;
+    this.#roomSecret = options.roomSecret;
+    this.#aead = options.aead ?? new WebCryptoAeadProvider();
+    this.#kdf = options.kdf ?? new WebCryptoKeyDerivation();
+    this.#randomNonce = options.randomNonce ?? defaultRandomNonce;
+    this.#signalType = options.signalType ?? "WebRTCSignal";
+  }
+
+  #wrapKeyMaterial(): Promise<Uint8Array> {
+    if (!this.#wrapKey) {
+      this.#wrapKey = this.#kdf.derive({
+        secret: this.#roomSecret,
+        label: WRAP_KEY_LABEL,
+        length: WRAP_KEY_BYTES,
+      });
+    }
+    return this.#wrapKey;
+  }
+
+  async announce(epoch: KeyEpoch): Promise<void> {
+    const wrapKey = await this.#wrapKeyMaterial();
+    const nonce = this.#randomNonce();
+    const aad = encodeWrapAad(this.#callId, epoch.epochId);
+    const wrapped = await this.#aead.seal({
+      key: wrapKey,
+      nonce,
+      plaintext: epoch.key,
+      associatedData: aad,
+    });
+    const signal: KeyEpochSignal = {
+      senderDeviceId: this.#senderDeviceId,
+      kind: "keyEpoch",
+      epochId: epoch.epochId,
+      members: epoch.members,
+      createdAt: epoch.createdAt,
+      wrapNonce: toBase64(nonce),
+      wrappedKey: toBase64(wrapped),
+    };
+    await this.#client.sendSignal(
+      this.#signalType,
+      this.#callId,
+      signal as unknown as Record<string, unknown>,
+    );
+  }
+
+  onEpoch(listener: (epoch: KeyEpoch) => void): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+
+  /**
+   * Drain new `"keyEpoch"` signals off the relay channel, unwrap them, and
+   * deliver each reconstructed epoch to listeners. Idempotent + monotonic:
+   * skips our own echoes, malformed/foreign signals, and any epoch id not newer
+   * than the highest already surfaced. The caller drives this from the same
+   * place it drains the SDP/ICE channel (e.g. a signal subscription tick).
+   */
+  async poll(): Promise<void> {
+    const entries = this.#client.signalChannel(this.#signalType, this.#callId).get();
+    const wrapKey = await this.#wrapKeyMaterial();
+    for (let i = this.#processed; i < entries.length; i++) {
+      const raw = entries[i] as Partial<KeyEpochSignal>;
+      if (!raw || raw.kind !== "keyEpoch") continue;
+      if (raw.senderDeviceId === this.#senderDeviceId) continue; // our own echo
+      if (typeof raw.epochId !== "number" || raw.epochId <= this.#highestSeen) continue;
+      const epoch = await this.#tryUnwrap(raw, wrapKey);
+      if (!epoch) continue;
+      this.#highestSeen = epoch.epochId;
+      for (const l of this.#listeners) {
+        try {
+          l(epoch);
+        } catch {
+          // Isolate per-listener failures.
+        }
+      }
+    }
+    this.#processed = entries.length;
+  }
+
+  async #tryUnwrap(raw: Partial<KeyEpochSignal>, wrapKey: Uint8Array): Promise<KeyEpoch | undefined> {
+    try {
+      const nonce = fromBase64(raw.wrapNonce as string);
+      const wrapped = fromBase64(raw.wrappedKey as string);
+      const aad = encodeWrapAad(this.#callId, raw.epochId as number);
+      const key = await this.#aead.open({ key: wrapKey, nonce, ciphertext: wrapped, associatedData: aad });
+      return {
+        epochId: raw.epochId as number,
+        key,
+        members: (raw.members as readonly string[]) ?? [],
+        createdAt: (raw.createdAt as number) ?? Date.now(),
+      };
+    } catch {
+      // Wrong room secret or tampered blob → fail closed, drop the announcement.
+      return undefined;
+    }
+  }
+}
+
+/** AAD binding a wrapped key to its call + epoch so it can't be replayed cross-epoch. */
+function encodeWrapAad(callId: string, epochId: EpochId): Uint8Array {
+  return new TextEncoder().encode(`keyEpoch:${callId}:${epochId}`);
+}
+
+// ===========================================================================
+// FR-156 — SFU media-path insertion seam
+// ===========================================================================
+//
+// The real browser hook is an Encoded Transform (RTCRtpScriptTransform /
+// insertable streams) attached per-sender/-receiver. That is browser-only, so —
+// exactly as FR-155 abstracted the mediasoup Device behind SfuDeviceLike — we
+// abstract the insertion point behind FrameTransformInserter. A browser impl
+// wires the Encoded Transform; tests inject a fake that simply pumps frames
+// through, proving encrypt-before-produce / decrypt-after-consume with no DOM.
+
+/**
+ * Direction of an encoded-frame transform: outbound frames are encrypted before
+ * they reach the producer; inbound frames are decrypted after the consumer.
+ */
+export type FrameTransformDirection = "encrypt" | "decrypt";
+
+/**
+ * Attaches an {@link SFrameTransform} to a media sender or receiver. The browser
+ * implementation builds an Encoded Transform around the supplied transform; the
+ * test fake records the attachment and lets a test pump frames through. Returns
+ * a detach function.
+ */
+export interface FrameTransformInserter {
+  insert(args: {
+    readonly direction: FrameTransformDirection;
+    readonly transform: SFrameTransform;
+    /** Opaque sink handle (an RTCRtpSender/Receiver in the browser). */
+    readonly endpoint: unknown;
+  }): () => void;
+}
+
+/**
+ * In-memory {@link FrameTransformInserter} for tests: records each attachment and
+ * exposes `pump(direction, endpoint, frame)` to run a frame through the attached
+ * transform — the deterministic stand-in for the browser Encoded Transform, so
+ * the SFU-insertion path is unit-testable with no DOM.
+ */
+export class MemoryFrameTransformInserter implements FrameTransformInserter {
+  readonly #attached = new Map<
+    unknown,
+    { direction: FrameTransformDirection; transform: SFrameTransform }
+  >();
+
+  insert(args: {
+    direction: FrameTransformDirection;
+    transform: SFrameTransform;
+    endpoint: unknown;
+  }): () => void {
+    this.#attached.set(args.endpoint, { direction: args.direction, transform: args.transform });
+    return () => this.#attached.delete(args.endpoint);
+  }
+
+  /** Run `frame` through the transform attached to `endpoint` in `direction`. */
+  async pump(
+    direction: FrameTransformDirection,
+    endpoint: unknown,
+    frame: Uint8Array,
+  ): Promise<Uint8Array> {
+    const entry = this.#attached.get(endpoint);
+    if (!entry) throw new Error("MemoryFrameTransformInserter.pump: no transform attached");
+    if (entry.direction !== direction) {
+      throw new Error(
+        `MemoryFrameTransformInserter.pump: endpoint attached for ${entry.direction}, not ${direction}`,
+      );
+    }
+    return direction === "encrypt"
+      ? entry.transform.encrypt(frame)
+      : entry.transform.decrypt(frame);
+  }
+
+  get attachmentCount(): number {
+    return this.#attached.size;
+  }
+
+  /** Endpoints currently attached for `direction` (test introspection). */
+  endpointsFor(direction: FrameTransformDirection): unknown[] {
+    const out: unknown[] = [];
+    for (const [endpoint, entry] of this.#attached) {
+      if (entry.direction === direction) out.push(endpoint);
+    }
+    return out;
+  }
 }
