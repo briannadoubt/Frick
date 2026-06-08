@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJP297R64XK8JZDGSQKBA7W",
+  "ts": "2026-06-08T03:57:47.640Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTJMZYP02AG2164DFPE54REW",
+    "commentId": "01KTJP297R64XK8JZDGSQKBA7V",
+    "author": "claude",
+    "body": "Partial GREEN landed (988 server tests pass, 0 fail; typecheck 0). WIRED end-to-end: appId resolved at request boundary (WS Hello schemaId -> SyncClient.appId; HTTP appRegistry.resolveByPath -> activeAppId), defaulting _default for single-app (byte-for-byte unchanged). Threaded through FrickStore object/stream facades -> FR-37 ObjectStore/StreamStore (read filter + write stamp + FrickCrossAppAccessError clobber guard). Live fan-out (object upsert/delete, stream events, projection deltas) app-scoped per subscriber. Store-level per-app projection routing via optional StoreOptions.perAppRegistries. New app-end-to-end-isolation.test.ts proves object+stream isolation + cross-app clobber rejection over real HTTP for two apps on one server+tenant+db. DEFERRED (additive follow-up, kept in_progress): blobs/presence/signals/jobs/search/auth store facades not yet appId-threaded (columns exist via 0021); per-app JOB dispatch still uses the single shared job registry (not wired into server.ts); no WS-surface e2e test (HTTP proof + shared store path covers it)."
+  }
+}
