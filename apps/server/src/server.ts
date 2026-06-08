@@ -172,6 +172,16 @@ import {
 import {
   BLOB_PROCESS_JOB_TYPE,
   createBlobProcessorJobHandler,
+} from "./blobs/processor-job.js";
+import {
+  BLOB_GC_JOB_TYPE,
+  createBlobGcJobHandler,
+  createBlobGcRecurringJob,
+  DEFAULT_BLOB_GC_GRACE_MS,
+  DEFAULT_BLOB_GC_INTERVAL_MS,
+  type BlobIsReferencedHook,
+} from "./blobs/gc-job.js";
+import {
   encodeBlobProcessPayload,
 } from "./blobs/processor-job.js";
 import { emitDevToolsEvent } from "./devtools/emit.js";
@@ -315,6 +325,29 @@ export interface ServerOptions {
    * job handler is registered automatically.
    */
   blobProcessors?: FrickBlobProcessor[];
+  /**
+   * Orphaned-blob garbage collection (FR-57). OFF BY DEFAULT — omit this entire
+   * option and no blob is ever GC'd. When `enabled: true`, the framework
+   * registers the `blob.gc` job handler and a recurring sweep that, per tenant,
+   * deletes `blob_metadata` rows (plus their bytes + derivatives) that are
+   * unreferenced by every *declared* blob-ref field (`kind:'ref'` whose
+   * `ref ∈ schema.blobs`) AND outside the grace window AND not protected by the
+   * optional `isReferenced` hook.
+   *
+   * CAVEAT — read before enabling: the declared-ref scan CANNOT see blob ids
+   * stored in untyped `string`/`json` fields. If your app does that, you MUST
+   * supply `isReferenced` to protect those blobs (and/or keep a generous
+   * `graceMs`). See `blobRefFields` and CHANGELOG.md for the full rationale.
+   */
+  blobGc?: {
+    enabled: boolean;
+    /** Grace window (ms). Defaults to {@link DEFAULT_BLOB_GC_GRACE_MS} (7d). */
+    graceMs?: number;
+    /** Sweep cadence (ms). Defaults to {@link DEFAULT_BLOB_GC_INTERVAL_MS} (1h); MUST be >= 60_000. */
+    intervalMs?: number;
+    /** Optional hook to protect blobs referenced via untyped fields. */
+    isReferenced?: BlobIsReferencedHook;
+  };
   /**
    * Search subsystem configuration. Apps register indexes via `searchIndexes`.
    * Supplying an `adapter` overrides the default SQLite FTS5 implementation —
@@ -776,6 +809,25 @@ export function createFrickServer(options: ServerOptions = {}) {
       }),
     );
   }
+  // Orphaned-blob GC (FR-57). OFF BY DEFAULT: only when `blobGc.enabled` is set
+  // do we register the `blob.gc` handler and add the recurring sweep below.
+  // Both wiring steps gate on the same flag so a default server never GCs.
+  const blobGcEnabled = options.blobGc?.enabled === true;
+  if (blobGcEnabled && !jobRegistry.resolve(BLOB_GC_JOB_TYPE)) {
+    jobRegistry.register(
+      BLOB_GC_JOB_TYPE,
+      createBlobGcJobHandler({
+        logger,
+        config: {
+          graceMs: options.blobGc?.graceMs ?? DEFAULT_BLOB_GC_GRACE_MS,
+          ...(options.blobGc?.isReferenced
+            ? { isReferenced: options.blobGc.isReferenced }
+            : {}),
+        },
+      }),
+    );
+  }
+
   // Default: worker runs in non-test envs. Tests would otherwise have a
   // polling loop ticking during every spec, complicating shutdown ordering
   // and timer-based fixtures. Apps can flip `workerEnabled: true` per-suite
@@ -814,7 +866,18 @@ export function createFrickServer(options: ServerOptions = {}) {
     analyticsConsumer.start();
   }
 
-  const recurringJobs = options.recurring?.jobs ?? [];
+  // The opt-in blob GC sweep (FR-57) is appended to the app's recurring jobs
+  // only when enabled, so a default server schedules nothing extra.
+  const recurringJobs: readonly FrickRecurringJob[] = [
+    ...(options.recurring?.jobs ?? []),
+    ...(blobGcEnabled
+      ? [
+          createBlobGcRecurringJob({
+            intervalMs: options.blobGc?.intervalMs ?? DEFAULT_BLOB_GC_INTERVAL_MS,
+          }),
+        ]
+      : []),
+  ];
   const recurringRegistry: FrickRecurringRegistry = createFrickRecurringRegistry(recurringJobs);
   const recurringScheduler = createRecurringScheduler({
     store,

@@ -127,6 +127,20 @@ export class BlobDerivativeStore {
     return rows.map(mapRow);
   }
 
+  /**
+   * Delete every derivative row for a parent blob within a tenant. Returns the
+   * number of rows removed. Used by the orphaned-blob GC (FR-57) when reclaiming
+   * an orphaned parent — the caller deletes the derivative *bytes* separately
+   * (this table stores bytes inline, but the byte driver may be filesystem/S3).
+   */
+  async deleteForParent(parentBlobId: string, tenantId: string): Promise<number> {
+    const result = await this.sql.run(
+      "DELETE FROM blob_derivatives WHERE tenant_id = ? AND parent_blob_id = ?",
+      [tenantId, parentBlobId],
+    );
+    return result.changes;
+  }
+
   async read(
     parentBlobId: string,
     derivativeId: string,

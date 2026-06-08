@@ -313,6 +313,43 @@ export function blobByName(schema: FrickSchema, name: string): BlobDef {
   return findByName(schema.blobs, "blob", name);
 }
 
+/** A declared object field that holds a blob id: `kind:'ref'` whose `ref` names a schema blob. */
+export interface BlobRefField {
+  /** The object type that declares this field. */
+  objectName: string;
+  /** The field on that object whose value is a blob id. */
+  field: FieldDef;
+  /** The blob type the field references (`field.ref`, guaranteed ∈ schema.blobs). */
+  blobName: string;
+}
+
+/**
+ * Enumerate every *declared* blob-ref field across all object types: fields of
+ * `kind:'ref'` whose `ref` names one of `schema.blobs`. This is the
+ * framework-known set of places a blob id can be stored in typed object state,
+ * and is the authoritative reference set for orphaned-blob GC (FR-57).
+ *
+ * IMPORTANT CAVEAT: this enumerates only *declared* blob-ref fields. Apps that
+ * stash blob ids in untyped `string`/`json` fields (e.g. an `attachmentBlobIds`
+ * JSON array) are NOT captured here — the framework has no way to know those
+ * strings are blob ids. Any GC built on this set MUST therefore stay
+ * conservative (opt-in, grace window, app `isReferenced` hook) so it never
+ * deletes a blob referenced only via an untyped field. A `ref` may also target
+ * an *object* type rather than a blob; those are excluded here by construction.
+ */
+export function blobRefFields(schema: FrickSchema): BlobRefField[] {
+  const blobNames = new Set(schema.blobs.map((blob) => blob.name));
+  const result: BlobRefField[] = [];
+  for (const object of schema.objects) {
+    for (const field of object.fields) {
+      if (field.kind === "ref" && field.ref !== undefined && blobNames.has(field.ref)) {
+        result.push({ objectName: object.name, field, blobName: field.ref });
+      }
+    }
+  }
+  return result;
+}
+
 export function jobByName(schema: FrickSchema, name: string): JobDef {
   return findByName(schema.jobs, "job", name);
 }

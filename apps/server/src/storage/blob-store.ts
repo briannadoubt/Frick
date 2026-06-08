@@ -112,6 +112,36 @@ export class BlobStore {
     return row ? Number(row.total) : 0;
   }
 
+  /**
+   * Remove a blob's metadata row. Returns true when a row was deleted, false
+   * when `(tenantId, blobId)` was already absent — idempotent. Used by the
+   * orphaned-blob GC (FR-57); callers MUST also delete the bytes (and any
+   * derivatives) via {@link deleteContent}. On the `blob_content` byte backend
+   * the metadata→content FK is `ON DELETE CASCADE`, but the filesystem/S3 byte
+   * drivers are not cascade-backed, so byte deletion is the caller's job.
+   */
+  async deleteMetadata(tenantId: string, blobId: string): Promise<boolean> {
+    const result = await this.sql.run(
+      "DELETE FROM blob_metadata WHERE tenant_id = ? AND blob_id = ?",
+      [tenantId, blobId],
+    );
+    return result.changes > 0;
+  }
+
+  /**
+   * List every `blob_metadata` row for a tenant, oldest first. Unlike
+   * {@link list} (newest-first, owner-filtered, for app reads) this is ordered
+   * by `created_at ASC` so the orphaned-blob GC (FR-57) examines the oldest —
+   * most likely orphaned — blobs first.
+   */
+  async listAllOldestFirst(tenantId: string): Promise<BlobMetadata[]> {
+    const rows = await this.sql.all<BlobRow>(
+      "SELECT * FROM blob_metadata WHERE tenant_id = ? ORDER BY created_at ASC, blob_id ASC",
+      [tenantId],
+    );
+    return rows.map(mapBlobRow);
+  }
+
   async writeContent(tenantId: string, blobId: string, content: Uint8Array): Promise<void> {
     await this.#bytes.write(tenantId, blobId, content);
   }

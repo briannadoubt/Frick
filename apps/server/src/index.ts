@@ -87,6 +87,19 @@ export {
   type ImageFormat,
 } from "./blobs/image-processor.js";
 export {
+  BLOB_GC_JOB_TYPE,
+  createBlobGcJobHandler,
+  createBlobGcRecurringJob,
+  runOrphanedBlobGc,
+  DEFAULT_BLOB_GC_GRACE_MS,
+  DEFAULT_BLOB_GC_INTERVAL_MS,
+  type BlobGcConfig,
+  type BlobGcResult,
+  type BlobGcRecurringConfig,
+  type BlobIsReferencedHook,
+  type RunBlobGcArgs,
+} from "./blobs/gc-job.js";
+export {
   mimeSizeValidator,
   moderationProcessor,
   type BlobModerationContext,
