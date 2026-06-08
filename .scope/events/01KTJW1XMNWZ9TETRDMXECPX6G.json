@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJW1XMNWZ9TETRDMXECPX6G",
+  "ts": "2026-06-08T05:42:27.221Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ37",
+    "field": "branch",
+    "value": "feat/fr83-sfu-mediasoup-singlebox"
+  }
+}

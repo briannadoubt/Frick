@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJWC58NGYMF5HFX58GJ4XH6",
+  "ts": "2026-06-08T05:48:02.709Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ37",
+    "commentId": "01KTJWC58NGYMF5HFX58GJ4XH5",
+    "author": "claude",
+    "body": "Shipped self-hosted single-box mediasoup SFU behind MediaPlaneAdapter: SfuBackend abstraction (local shapes, no mediasoup on typecheck path), MediasoupSfuBackend (lazy import), deterministic FakeSfuBackend, SfuMediaPlaneAdapter (allocate=1 router/call idempotent + bootstrap caps; issueJoinToken=send+recv transports + ICE/DTLS + HMAC nonce; release closes router), MediaPlacement seam w/ LocalMediaPlacement (FR-154 multi-node deferred). mediasoup is optionalDependency (gate untouched; pnpm ignores native build). Opt-in, default unchanged. Gate green: typecheck 0, server vitest 1038 passed/0 failed. Client-driver became follow-up FR-155."
+  }
+}

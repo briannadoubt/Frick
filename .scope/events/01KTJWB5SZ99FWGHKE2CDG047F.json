@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTJWB5SZ99FWGHKE2CDG047F",
+  "ts": "2026-06-08T05:47:30.495Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTJWB5SZ99FWGHKE2CDG047E",
+    "number": 155,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Web client SFU produce/consume driver",
+    "description": "",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ13",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}
