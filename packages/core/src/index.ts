@@ -6,6 +6,7 @@ export * from "./calls.js";
 export * from "./http.js";
 export * from "./indexeddb-cache.js";
 export * from "./optimistic.js";
+export * from "./p2p.js";
 export * from "./runtime.js";
 export * from "./subscriptions.js";
 export * from "./telemetry.js";

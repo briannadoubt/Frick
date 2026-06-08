@@ -11,6 +11,12 @@ export {
   type MediaSession,
 } from "./media-plane.js";
 export { FakeMediaPlaneAdapter, type FakeMediaPlaneOptions } from "./fake-media-plane.js";
+export {
+  P2PWebRTCAdapter,
+  type P2PIceServer,
+  type P2PMediaPlaneOptions,
+  type P2PTurnConfig,
+} from "./p2p-media-plane.js";
 
 // FR-79 — call control-plane state machine + canonical schema fragment.
 export {
