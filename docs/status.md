@@ -68,8 +68,9 @@ Frick is pre-1.0. The framework has a working schema-driven sync server, TypeScr
   the npm publish workflow does not yet include `apps/cli`, so publishing the
   CLI remains release work.
 - The default deploy image builds the canonical monorepo server runtime.
-  Published-package and scaffolded-app image recipes are still follow-up
-  release work.
+  Reference Dockerfile recipes for non-monorepo consumers — a
+  published-`@fricken/server`-package server and a `frick init` scaffolded app —
+  now live under `docker/` with a build/run guide in `docs/docker-recipes.md`.
 - `@fricken/server` has an import-safe package entrypoint and documented export
   map for the baseline server, telemetry, project, migration/reset, cluster
   bus, and production push-adapter surfaces. Deep route/storage imports remain

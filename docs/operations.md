@@ -259,6 +259,17 @@ Without `--dry-run`, the CLI runs `docker compose -f <profile> up -d --wait`
 and emits the same plan with `started` and `exitCode`. Docker output stays off
 stdout so automation can always parse the JSON record.
 
+### Standalone image recipes (outside the monorepo)
+
+The profiles above build the canonical monorepo server image
+(`ops/deploy/server.Dockerfile`). If you instead depend on the published
+`@fricken/server` package or scaffold an app with `frick init`, use the
+reference Dockerfile recipes under [`docker/`](../docker): one for a
+published-package server and one for a scaffolded app. Both run as a non-root
+user, declare a `/var/lib/frick` data volume, and `HEALTHCHECK` against
+`/ready`. See [`docker-recipes.md`](docker-recipes.md) for the build/run
+walkthrough and the SQLite-volume vs `FRICK_DATABASE_URL` storage guidance.
+
 ## Runtime limits
 
 `createFrickServer({ limits })` accepts partial `FrickLimits` overrides. Any

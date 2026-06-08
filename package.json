@@ -27,6 +27,7 @@
     "server": "pnpm build:packages && pnpm --filter @fricken/server dev",
     "web": "pnpm build:packages && pnpm --filter @fricken/web dev",
     "dashboard": "pnpm cli dashboard",
+    "docker:check": "pnpm build:packages && pnpm --filter @fricken/server exec vitest run tests/docker-recipes.test.ts",
     "tilt": "tilt up",
     "ios:generate": "pnpm schema:generate && pnpm design:generate && cd apps/ios && xcodegen generate",
     "ios:build": "pnpm schema:generate && pnpm design:generate && cd apps/ios && xcodebuild -project FrickDemo.xcodeproj -scheme FrickDemo -destination 'platform=iOS Simulator,name=iPhone 17' build",

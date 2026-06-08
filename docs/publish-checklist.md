@@ -116,6 +116,9 @@ Companion docs:
   ```
   Use the exact versions the workflow published; omit packages that were
   already published and skipped for this release.
+- [ ] If `@fricken/server` was published, bump the pinned version in the
+  Docker recipes (`docker/published-server/package.json`) so the
+  standalone-consumer image tracks the release. See `docs/docker-recipes.md`.
 - [ ] Announce in the team channel with a link to the GitHub Release
 
 ## Rollback
