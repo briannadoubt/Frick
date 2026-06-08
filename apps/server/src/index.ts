@@ -277,6 +277,13 @@ export {
   type FrickAppResolution,
 } from "./apps/registry.js";
 export {
+  createFrickPerAppRegistries,
+  type FrickPerAppRegistries,
+  type FrickAppRegistrySet,
+  type CreateFrickPerAppRegistriesOptions,
+} from "./apps/per-app-registries.js";
+export { DEFAULT_APP_ID, normalizeAppId } from "./app-id.js";
+export {
   MemoryClusterBus,
   MemoryClusterChannel,
   randomNodeId,
