@@ -86,6 +86,49 @@ public class FrickDesignTest {
     }
 
     @Test
+    public fun chartSeriesNormalizesIntoUnitRange() {
+        val normalized = normalizeSeries(listOf(10f, 20f, 30f))
+
+        assertEquals(0f, normalized.first())
+        assertEquals(1f, normalized.last())
+        assertEquals(0.5f, normalized[1])
+    }
+
+    @Test
+    public fun chartSeriesHandlesFlatAndEmptyInputWithoutDividingByZero() {
+        assertEquals(emptyList<Float>(), normalizeSeries(emptyList()))
+
+        val flat = normalizeSeries(listOf(5f, 5f, 5f))
+        assertEquals(3, flat.size)
+        assertEquals(true, flat.all { it == 0f })
+    }
+
+    @Test
+    public fun dataGridColumnCarriesSemanticContract() {
+        val column = FrickColumn(key = "name", title = "Name", weight = 2f, sortable = true)
+
+        assertEquals("name", column.key)
+        assertEquals("Name", column.title)
+        assertEquals(2f, column.weight)
+        assertEquals(true, column.sortable)
+    }
+
+    @Test
+    public fun reactionRowItemsCarryEmojiAndCount() {
+        val item = FrickReactionItem(emoji = "👍", count = 3)
+
+        assertEquals("👍", item.emoji)
+        assertEquals(3, item.count)
+    }
+
+    @Test
+    public fun receiptStatesMapToSemanticStatuses() {
+        assertEquals(FrickStatus.Success, FrickReceiptState.Delivered.status)
+        assertEquals(FrickStatus.Danger, FrickReceiptState.Failed.status)
+        assertEquals("Sent", FrickReceiptState.Sent.label)
+    }
+
+    @Test
     public fun workspaceTopBarActionStoresNativeChromeContract() {
         val action = FrickTopBarAction(
             icon = FrickIconName.ActionReload,

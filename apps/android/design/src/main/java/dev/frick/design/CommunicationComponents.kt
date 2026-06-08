@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -230,6 +231,24 @@ public fun FrickReaction(
     FrickBadge(text = "$emoji $count", modifier = modifier, status = FrickStatus.Neutral)
 }
 
+public data class FrickReactionItem(
+    public val emoji: String,
+    public val count: Int,
+)
+
+/** A row of reactions; the spec-named container around [FrickReaction]. */
+@Composable
+public fun FrickReactionRow(
+    reactions: List<FrickReactionItem>,
+    modifier: Modifier = Modifier,
+) {
+    FrickInline(modifier = modifier, spacing = FrickDesign.spacing.xs) {
+        reactions.forEach { reaction ->
+            FrickReaction(emoji = reaction.emoji, count = reaction.count)
+        }
+    }
+}
+
 @Composable
 public fun FrickSignal(
     strength: Int,
@@ -270,6 +289,56 @@ public fun FrickCallStatus(
                 }
             }
         }
+    }
+}
+
+/**
+ * Spec-named signal panel: a labeled surface presenting connection strength and
+ * an optional status line. Wraps [FrickSignal] in a token surface.
+ */
+@Composable
+public fun FrickSignalPanel(
+    strength: Int,
+    modifier: Modifier = Modifier,
+    title: String = "Signal",
+    detail: String? = null,
+) {
+    FrickSurface(modifier = modifier.fillMaxWidth()) {
+        FrickInline(modifier = Modifier.padding(FrickDesign.spacing.md), spacing = FrickDesign.spacing.md) {
+            FrickSignal(strength = strength)
+            FrickStack(modifier = Modifier.weight(1f), spacing = FrickDesign.spacing.xs) {
+                FrickText(text = title, maxLines = 1)
+                if (detail != null) {
+                    FrickLabel(text = detail)
+                }
+            }
+        }
+    }
+}
+
+/** Spec-named call affordance: a circular call/end button styled by [active]. */
+@Composable
+public fun FrickCallButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    active: Boolean = false,
+    enabled: Boolean = true,
+    contentDescription: String = if (active) "End call" else "Start call",
+) {
+    val background = if (active) FrickDesign.colors.danger else FrickDesign.colors.success
+    IconButton(
+        onClick = onClick,
+        modifier = modifier
+            .size(FrickDesign.spacing.xl + FrickDesign.spacing.md)
+            .clip(CircleShape)
+            .background(background),
+        enabled = enabled,
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Call,
+            contentDescription = contentDescription,
+            tint = FrickDesign.colors.onPrimary,
+        )
     }
 }
 
