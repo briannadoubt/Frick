@@ -68,8 +68,54 @@ export interface Principal {
    * tenants — `decide()` skips the `tenantMismatch` check, though every
    * per-action policy still applies. Admin principals are constructed only
    * by the framework when a request bears the configured `FRICK_ADMIN_TOKEN`.
+   *
+   * `"service"` is a non-human (machine) identity authenticated by a
+   * long-lived API key (FR-46). A service principal is bound to its tenant
+   * exactly like a `"tenant"` principal — `decide()` enforces the
+   * `tenantMismatch` check — but additionally carries a fixed set of
+   * {@link Principal.serviceScopes} that gate which actions it may perform.
+   * The framework resolves an API-key bearer into a service principal and
+   * attributes its access in the admin audit log.
    */
-  scope?: "tenant" | "admin";
+  scope?: "tenant" | "admin" | "service";
+  /**
+   * Scopes granted to a `"service"` principal (FR-46). Each entry bounds an
+   * action the machine identity may perform (e.g. `"object.read"`,
+   * `"stream.append"`). Only meaningful when `scope === "service"`; ignored
+   * for user/admin principals. Use {@link servicePrincipalHasScope} /
+   * {@link assertServicePrincipalScope} to test membership.
+   */
+  serviceScopes?: readonly string[];
+}
+
+/**
+ * True iff `principal` is a service principal (FR-46) holding `scope`. A
+ * principal that is not `scope === "service"` is treated as unscoped and
+ * always passes (user/admin principals are gated by the normal authz flow,
+ * not by service scopes). The wildcard `"*"` grants every scope.
+ */
+export function servicePrincipalHasScope(principal: Principal, scope: string): boolean {
+  if (principal.scope !== "service") {
+    return true;
+  }
+  const scopes = principal.serviceScopes ?? [];
+  return scopes.includes("*") || scopes.includes(scope);
+}
+
+/**
+ * Assert that a service principal holds `scope`, throwing an
+ * {@link AuthorizationError} (`notAuthorizedForResource`) otherwise. A no-op
+ * for non-service principals. Call this at the entry of an action the machine
+ * identity is attempting so a key issued without that scope is denied.
+ */
+export function assertServicePrincipalScope(principal: Principal, scope: string): void {
+  if (!servicePrincipalHasScope(principal, scope)) {
+    throw new AuthorizationError({
+      allow: false,
+      reason: "notAuthorizedForResource",
+      publicMessage: `Service principal is not authorized for scope ${scope}`,
+    });
+  }
 }
 
 export interface MembershipReader {

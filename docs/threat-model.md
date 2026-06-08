@@ -63,6 +63,50 @@ server.
 
 ---
 
+## Service principals (machine identities)
+
+**Threat.** A non-human caller (CI pipeline, backend integration, cron worker)
+needs to authenticate without a human session. Minting user sessions for robots
+conflates the two and makes revocation and least-privilege hard; an over-broad
+or leaked machine credential then has unbounded reach.
+
+**Today (FR-46).**
+
+- A **service principal** is a distinct principal type authenticated by a
+  long-lived API key, not a user session. The key is minted as
+  `sk_<keyId>.<secret>` and only its SHA-256 hash is persisted in the
+  `service_principals` table (migration `0019_service_principals`); the raw key
+  is returned exactly once at issue time. The non-secret `key_id` prefix is the
+  only part stored in cleartext, so a leaked DB snapshot cannot be replayed and
+  logs/audit rows can identify a key without revealing the secret.
+- Each principal is **bound to a single tenant** and resolves to a
+  `Principal` with `scope: "service"`. Unlike `"admin"`, a service principal is
+  subject to the normal `decide()` `tenantMismatch` check — it can never act
+  cross-tenant. It additionally carries `serviceScopes`, a fixed set of scope
+  strings; `assertServicePrincipalScope` denies (`notAuthorizedForResource`) any
+  action whose scope the key was not issued with. The `"*"` wildcard grants all
+  scopes for callers that deliberately want a broad key.
+- **Revocation is immediate.** `revoke(tenantId, id)` is a tenant-scoped soft
+  delete; `authenticate()` ignores revoked rows, so the very next request with a
+  revoked key fails. Key verification is a constant-time hash comparison.
+- **Every access is audited.** Resolving a service-key bearer emits a row on the
+  shared hash-chained `admin_audit_log` (`action: "servicePrincipal.authenticate"`):
+  `allow` with the tenant + scopes in `detail` on success, `deny` on an
+  unknown/revoked key. The actor is fingerprinted from the non-secret key id, so
+  the raw key never enters the chain.
+
+**Known gaps.**
+
+- API keys do not expire on their own — lifetime is bounded only by explicit
+  revocation. A rotation cadence is an operator responsibility.
+- Scope strings are opaque to the framework; call sites must invoke
+  `assertServicePrincipalScope` for the actions they gate. The framework wires
+  authentication + audit but does not yet auto-map every `FrickAction` to a
+  required scope.
+- No per-principal request-rate quota (shared with the session-token gap above).
+
+---
+
 ## Spoofed user, device, or replica ids in request bodies
 
 **Threat.** A client (or attacker controlling a session) submits a request

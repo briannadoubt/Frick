@@ -15,6 +15,7 @@ import {
 } from "./storage/password-hasher.js";
 import { PasswordResetTokenStore } from "./storage/password-reset-store.js";
 import { RefreshTokenStore } from "./storage/refresh-token-store.js";
+import { ServicePrincipalStore } from "./storage/service-principal-store.js";
 import { AdminAuditStore } from "./storage/admin-audit-store.js";
 import { BlobStore, type BlobMetadata, type BlobMetadataInput } from "./storage/blob-store.js";
 import {
@@ -349,6 +350,7 @@ export class FrickStore {
   readonly accounts: AccountStore;
   readonly passwordResetTokens: PasswordResetTokenStore;
   readonly refreshTokens: RefreshTokenStore;
+  readonly servicePrincipals: ServicePrincipalStore;
   readonly tenants: TenantStore;
   readonly invitations: InvitationStore;
   readonly grants: GrantStore;
@@ -468,6 +470,7 @@ export class FrickStore {
     this.accounts = new AccountStore(sql, resolvePasswordHasher(options.passwordHasher));
     this.passwordResetTokens = new PasswordResetTokenStore(sql);
     this.refreshTokens = new RefreshTokenStore(sql);
+    this.servicePrincipals = new ServicePrincipalStore(sql);
     this.tenants = new TenantStore(sql);
     this.invitations = new InvitationStore(sql);
     this.grants = new GrantStore(sql);

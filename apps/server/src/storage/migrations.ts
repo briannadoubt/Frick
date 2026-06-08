@@ -844,6 +844,32 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
         ON auth_refresh_tokens (tenant_id, user_id, expires_at DESC);
     `,
   },
+  {
+    // FR-46: service principals (machine identities). A service principal is a
+    // non-human identity authenticated by a long-lived API key, distinct from a
+    // user session. Only the SHA-256 hash of the key is stored (`key_hash`); the
+    // non-secret `key_id` prefix identifies the key in audit logs and the
+    // issue/list UI. `scopes` is a JSON array bounding what the identity may do.
+    // `revoked_at` is the soft-delete marker — authenticate() ignores revoked
+    // rows. Tenant-scoped: each principal belongs to exactly one tenant.
+    id: "0019_service_principals",
+    schemaRevision: 1,
+    description: "Create service_principals table for machine identities (FR-46).",
+    sql: `
+      CREATE TABLE IF NOT EXISTS service_principals (
+        id TEXT PRIMARY KEY NOT NULL,
+        key_id TEXT NOT NULL UNIQUE,
+        key_hash TEXT NOT NULL,
+        tenant_id TEXT NOT NULL DEFAULT '_default',
+        name TEXT NOT NULL,
+        scopes TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        revoked_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_service_principals_tenant
+        ON service_principals (tenant_id, created_at DESC);
+    `,
+  },
 ];
 
 /** Names of all framework tables (and indexes) the runner manages. Used by the
@@ -878,6 +904,7 @@ export const FRAMEWORK_TABLES: readonly string[] = [
   "invitations",
   "grants",
   "auth_refresh_tokens",
+  "service_principals",
 ];
 
 export interface MigrationRunResult {

@@ -636,6 +636,27 @@ export const FRAMEWORK_MIGRATIONS_PG: readonly FrameworkMigration[] = [
         ON auth_refresh_tokens (tenant_id, user_id, expires_at DESC);
     `,
   },
+  {
+    // FR-46: service principals (machine identities). See the SQLite migration
+    // for the full rationale. Only the SHA-256 hash of the API key is stored.
+    id: "0019_service_principals",
+    schemaRevision: 1,
+    description: "Create service_principals table for machine identities (FR-46).",
+    sql: `
+      CREATE TABLE IF NOT EXISTS service_principals (
+        id TEXT PRIMARY KEY NOT NULL,
+        key_id TEXT NOT NULL UNIQUE,
+        key_hash TEXT NOT NULL,
+        tenant_id TEXT NOT NULL DEFAULT '_default',
+        name TEXT NOT NULL,
+        scopes TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        revoked_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_service_principals_tenant
+        ON service_principals (tenant_id, created_at DESC);
+    `,
+  },
 ];
 
 /** Names of all framework tables the Postgres runner manages. Used by dev-reset. */
@@ -667,4 +688,5 @@ export const FRAMEWORK_TABLES_PG: readonly string[] = [
   "invitations",
   "grants",
   "auth_refresh_tokens",
+  "service_principals",
 ];

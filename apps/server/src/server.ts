@@ -3449,8 +3449,79 @@ async function protectedHttpPrincipal(request: http.IncomingMessage, url: URL, s
     };
   }
 
+  // Service-principal API keys (FR-46) carry the non-secret `sk_…` key-id
+  // prefix, so we can route them to the service-principal store without a
+  // wasted session lookup. A user session token never has this shape.
+  if (isServicePrincipalKey(token)) {
+    return servicePrincipalFromKey(store, token);
+  }
+
   const session = await store.readActiveSession(token);
   return principalFromActiveSessionToken(store, token, session);
+}
+
+/**
+ * Whether `token` looks like a service-principal API key (FR-46). Keys are
+ * minted as `sk_<keyId>.<secret>` — the `sk_` prefix and embedded `.` separator
+ * distinguish them from opaque base64url session tokens.
+ */
+function isServicePrincipalKey(token: string): boolean {
+  return token.startsWith("sk_") && token.includes(".");
+}
+
+/**
+ * Resolve a service-principal API key into a scoped `"service"` principal and
+ * emit an admin-audit event recording the access (FR-46). The audit row reuses
+ * the existing hash chain; the subject fingerprint is the non-secret key id so
+ * the raw key never reaches the log. Authentication failures are audited as a
+ * `deny` so a leaked/revoked key's use is visible.
+ */
+async function servicePrincipalFromKey(
+  store: FrickStore,
+  apiKey: string,
+): Promise<Principal | AuthenticationError> {
+  const record = await store.servicePrincipals.authenticate(apiKey);
+  const fingerprint = serviceKeyFingerprint(apiKey);
+  if (!record) {
+    void store.adminAudit
+      .record({
+        adminTokenFingerprint: fingerprint,
+        action: "servicePrincipal.authenticate",
+        outcome: "deny",
+        detail: JSON.stringify({ reason: "unknownOrRevoked" }),
+      })
+      .catch(() => {});
+    return new AuthenticationError("Invalid or revoked service principal key");
+  }
+
+  if (await isTenantArchived(store, record.tenantId)) {
+    return new AuthenticationError("Tenant is archived");
+  }
+
+  void store.adminAudit
+    .record({
+      adminTokenFingerprint: fingerprint,
+      action: "servicePrincipal.authenticate",
+      target: record.id,
+      outcome: "allow",
+      detail: JSON.stringify({ tenantId: record.tenantId, scopes: record.scopes }),
+    })
+    .catch(() => {});
+
+  return {
+    userId: record.id,
+    deviceId: "service",
+    replicaId: "service",
+    tenantId: record.tenantId,
+    scope: "service",
+    serviceScopes: record.scopes,
+  };
+}
+
+/** Truncated SHA-256 of the service key's non-secret id prefix, for audit. */
+function serviceKeyFingerprint(apiKey: string): string {
+  const keyId = apiKey.slice(0, apiKey.indexOf("."));
+  return createHash("sha256").update(keyId).digest("hex").slice(0, 12);
 }
 
 async function principalFromActiveSessionToken(
