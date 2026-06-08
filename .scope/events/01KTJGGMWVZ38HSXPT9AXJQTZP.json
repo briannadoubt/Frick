@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJGGMWVZ38HSXPT9AXJQTZP",
+  "ts": "2026-06-08T02:20:46.875Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTJBF1CDF5WZ68G1QSB39CGH",
+    "field": "branch",
+    "value": "feat/fr152-android-sharing-service"
+  }
+}

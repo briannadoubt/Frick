@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJGV5D0QTRR1SAS6MF6KPSF",
+  "ts": "2026-06-08T02:26:31.456Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTJBF1CDF5WZ68G1QSB39CGH",
+    "commentId": "01KTJGV5D0QTRR1SAS6MF6KPSE",
+    "author": null,
+    "body": "Shipped Android stateful sharing service (FR-152, Kotlin parity w/ Swift FR-140). Added raw verbs+types to FrickClient (createInvitation/acceptInvitation/listGrants/revokeGrant; FrickInvitation/FrickGrant/FrickSharingPermission), FrickTransport.delete, and observable FrickSharingService: StateFlow<SharingState> (outgoing/shared-with-me/isLoading/hasLoaded/lastError/pendingAcceptToken) + suspend verbs (refresh/invite/revoke/accept/handleDeepLink/consumePendingAccept) + deep-link parsing with injected scheme (FrickSharingLinkConfig). Additive. Gate green: pnpm typecheck exit 0, :frick:testDebugUnitTest BUILD SUCCESSFUL."
+  }
+}
