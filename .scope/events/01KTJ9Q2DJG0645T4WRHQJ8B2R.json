@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJ9Q2DJG0645T4WRHQJ8B2R",
+  "ts": "2026-06-08T00:21:57.298Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ27",
+    "commentId": "01KTJ9Q2DH8BJ9GX4NF7Y4NBWX",
+    "author": "claude",
+    "body": "Shipped docker/ recipes for non-monorepo consumers: published-@fricken/server-package server (entrypoint.mjs + Dockerfile + compose w/ SQLite & Postgres profiles) and frick-init scaffolded-app Dockerfile. Both multi-stage node:24-slim, non-root, /var/lib/frick volume, SIGTERM/SIGINT close, HEALTHCHECK /ready. Added docs/docker-recipes.md, pnpm docker:check, and apps/server/tests/docker-recipes.test.ts (11 tests). Gate green: typecheck exit 0, 896 server tests pass."
+  }
+}
