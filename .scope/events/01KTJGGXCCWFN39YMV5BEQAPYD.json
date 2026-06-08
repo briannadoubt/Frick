@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJGGXCCWFN39YMV5BEQAPYD",
+  "ts": "2026-06-08T02:20:55.564Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ44",
+    "commentId": "01KTJGGXCCWFN39YMV5BEQAPYC",
+    "author": "claude",
+    "body": "Gap: both native clients surfaced subscribeProjection + raw ProjectionDelta events but had no store folding deltas into an observable keyed map (TS client.projection(name) -> Signal<Map>). Closed minimally + symmetrically: added FrickProjectionStore on Swift (@Observable rows: [String: FrickMsgPackValue]) and Android (rows: StateFlow<Map>), non-nil value upserts / nil deletes / re-subscribe on reconnect. No wire/protocol/generated changes. Tests: Swift 104 total 0 failures (6 new), Android FrickProjectionStoreTest 4 tests green. Contract doc updated."
+  }
+}
