@@ -13,6 +13,7 @@
     "load:harness": "pnpm build:packages && tsx bench/src/cli.ts",
     "bench:latency": "pnpm build:packages && tsx bench/src/cli.ts latency",
     "bench:throughput": "pnpm build:packages && tsx bench/src/cli.ts throughput",
+    "bench:budget": "pnpm build:packages && tsx bench/src/cli.ts budget",
     "schema:generate": "tsx packages/protocol/scripts/generate-native-artifacts.ts",
     "fixtures:generate": "tsx packages/protocol/scripts/generate-fixtures.ts",
     "verify:generated": "tsx scripts/check-generated-artifacts.ts",

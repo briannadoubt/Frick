@@ -1,17 +1,18 @@
-# `@fricken/bench` — Benchmarks (FR-96 / FR-97 / FR-98)
+# `@fricken/bench` — Benchmarks (FR-96 / FR-97 / FR-98 / FR-100)
 
 A reusable synthetic benchmark package for Frick. It drives configurable load
 against a Frick server and emits a single machine-readable JSON result to stdout
-so CI and trend tooling can consume it. This is the foundation for the
-performance-budget story (FR-100) — it is reusable, not a one-off.
+so CI and trend tooling can consume it. It is reusable, not a one-off — the
+performance-budget checker (FR-100) sits on top of the measurement suites.
 
-Three suites share one CLI and one server-spin-up path:
+The CLI hosts the measurement suites plus a budget checker:
 
 | Subcommand | Story | What it measures | Script |
 | --- | --- | --- | --- |
 | `load` (default) | FR-96 | Synthetic per-user load: object upserts + stream appends | `pnpm load:harness` |
 | `latency` | FR-97 | p50/p90/p99 latency across the core paths | `pnpm bench:latency` |
 | `throughput` | FR-98 | Sustained ops/sec + resource growth (memory/db/cache) | `pnpm bench:throughput` |
+| `budget` | FR-100 | PASS/FAIL the suites against declared thresholds + record a trend | `pnpm bench:budget` |
 
 Every suite is kept deliberately separate from the correctness tests: the
 harnesses only **measure** and never assert product behavior. By default each
@@ -202,4 +203,93 @@ pnpm bench:throughput --connections 16 --ops-per-connection 500 --no-await-acks 
 ```ts
 import { runThroughput } from "@fricken/bench";
 const result = await runThroughput({ connections: 4, opsPerConnection: 200 });
+```
+
+## Performance budgets + trend tracking (FR-100)
+
+The `budget` subcommand turns the measurement suites into a pass/fail gate. A
+**budget** is a declarative set of thresholds over named metrics extracted from
+the latency/throughput JSON results — a p99 latency ceiling per path, a minimum
+sustained throughput, a memory-growth ceiling. The checker runs only the suites
+a budget references (once each), pulls each metric out of the suite result by a
+dot-path, judges it against its threshold, and emits a single machine-readable
+PASS/FAIL verdict (`tool: "frick-budget-check"`). A missing metric fails closed.
+
+It also records each verdict for **trend tracking**: every run appends one
+NDJSON line to a history file, and the run reports per-metric deltas (signed +
+percent change) against the most-recent prior entry. The first run just
+establishes a baseline (null deltas).
+
+```bash
+# Check the built-in default budget; append to bench/.perf-history.ndjson and
+# print the verdict (+ baseline deltas once history exists). Exits non-zero on FAIL.
+pnpm bench:budget
+
+# Non-blocking / opt-in CI mode: always exit 0, attach CI metadata, custom history file.
+pnpm bench:budget --no-fail --history ci-history.ndjson --meta commit=$GITHUB_SHA --pretty
+
+# Just judge, don't record:
+pnpm bench:budget --no-history
+```
+
+### Flags
+
+| Flag | Meaning |
+| --- | --- |
+| `--history PATH` | NDJSON trend-history file (default `bench/.perf-history.ndjson`, git-ignored) |
+| `--no-history` | judge only; do not append to the history file |
+| `--no-fail` | always exit 0 even on a FAILED budget (for non-blocking CI) |
+| `--meta key=value` | attach metadata to the history entry (repeatable, e.g. commit sha) |
+| `--pretty` | indent the JSON output |
+
+### Verdict shape
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "tool": "frick-budget-check",
+  "budget": "frick-default",
+  "startedAt": "2026-06-07T00:00:00.000Z",
+  "env": { "node": "v24.x", "platform": "darwin" },
+  "totalDurationMs": 1234.5,
+  "pass": true,
+  "metrics": [
+    { "id": "latency.wsAppend.p99", "suite": "latency", "path": "paths.wsAppend.latencyMs.p99",
+      "comparison": "max", "threshold": 250, "unit": "ms", "value": 4.3, "pass": true }
+    // …
+  ],
+  "summary": { "total": 6, "passed": 6, "failed": 0 },
+  // present unless --no-history: per-metric deltas vs. the latest prior history entry
+  "baselineComparison": {
+    "budget": "frick-default", "baselineAt": "2026-06-06T…",
+    "deltas": [ { "id": "latency.wsAppend.p99", "baseline": 4.0, "current": 4.3, "delta": 0.3, "pctChange": 0.075 } ]
+  }
+}
+```
+
+The built-in `DEFAULT_BUDGET` ships **loose, sane initial thresholds** —
+generous enough not to flake on shared CI runners while still catching gross
+regressions. The point is the mechanism; tune the numbers over time against the
+recorded trend history.
+
+### CI
+
+The `ts` job in `.github/workflows/ci.yml` has an **opt-in, non-blocking**
+budget step. It runs only on a manual `workflow_dispatch` with
+`run_perf_budget=true`, uses `--no-fail` + `continue-on-error`, and uploads the
+verdict JSON + NDJSON history as an artifact. It is intentionally kept off the
+PR/push path (shared runners are too noisy for a meaningful latency gate);
+promote it to a blocking gate once thresholds are tuned against history.
+
+### Programmatic use
+
+```ts
+import {
+  runBudgetCheck, DEFAULT_BUDGET, appendHistory, readHistory, compareToBaseline,
+} from "@fricken/bench";
+
+const verdict = await runBudgetCheck(DEFAULT_BUDGET);
+const baseline = (await readHistory("history.ndjson")).at(-1) ?? null;
+const trend = compareToBaseline(verdict, baseline);
+await appendHistory("history.ndjson", verdict, { commit: "abc123" });
 ```

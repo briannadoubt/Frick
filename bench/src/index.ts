@@ -28,3 +28,21 @@ export {
   parseLatencyConfig,
   parseThroughputConfig,
 } from "./config.js";
+export {
+  runBudgetCheck,
+  appendHistory,
+  readHistory,
+  toHistoryEntry,
+  compareToBaseline,
+  extractMetric,
+  DEFAULT_BUDGET,
+  type BudgetComparison,
+  type BudgetMetric,
+  type BudgetConfig,
+  type MetricVerdict,
+  type BudgetVerdict,
+  type RunBudgetCheckOptions,
+  type HistoryEntry,
+  type MetricDelta,
+  type BaselineComparison,
+} from "./budget.js";

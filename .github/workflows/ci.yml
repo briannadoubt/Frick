@@ -4,6 +4,15 @@ on:
   pull_request:
   push:
     branches: [main]
+  # FR-100 — manual dispatch can opt into the non-blocking perf-budget step.
+  # Left off the PR/push triggers on purpose: shared CI runners are too noisy
+  # for a meaningful latency/throughput gate, so the budget run is opt-in.
+  workflow_dispatch:
+    inputs:
+      run_perf_budget:
+        description: "Run the FR-100 performance-budget check (non-blocking, trend only)"
+        type: boolean
+        default: false
 
 # Cancel superseded runs on the same ref. Lets PRs reuse runner capacity
 # instead of queueing every push.
@@ -50,6 +59,28 @@ jobs:
 
       - name: End-to-end smoke
         run: pnpm e2e:smoke
+
+      # FR-100 — performance budgets + trend tracking. Opt-in and non-blocking:
+      # only runs on a manual dispatch with `run_perf_budget=true`, and never
+      # fails the job (`continue-on-error` + `--no-fail`). Shared CI runners are
+      # noisy, so treat this as a trend signal, not a gate. The verdict JSON +
+      # NDJSON history are uploaded as an artifact; promote it to a blocking gate
+      # once the thresholds are tuned against accumulated history.
+      - name: Performance budget (opt-in, non-blocking)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_perf_budget }}
+        continue-on-error: true
+        run: pnpm bench:budget --no-fail --history bench/.perf-history.ndjson --pretty | tee perf-budget-verdict.json
+
+      - name: Upload perf-budget verdict
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_perf_budget }}
+        continue-on-error: true
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # actions/upload-artifact@v4
+        with:
+          name: perf-budget-verdict
+          path: |
+            perf-budget-verdict.json
+            bench/.perf-history.ndjson
+          if-no-files-found: ignore
 
   ts-postgres:
     name: TypeScript (Postgres migration runner)

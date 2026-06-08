@@ -16,7 +16,8 @@
     "build": "tsc -b",
     "load:harness": "tsx src/cli.ts",
     "bench:latency": "tsx src/cli.ts latency",
-    "bench:throughput": "tsx src/cli.ts throughput"
+    "bench:throughput": "tsx src/cli.ts throughput",
+    "bench:budget": "tsx src/cli.ts budget"
   },
   "dependencies": {
     "@fricken/protocol": "workspace:*",

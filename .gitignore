@@ -9,6 +9,10 @@ dist-types/
 *.sqlite-shm
 *.sqlite-wal
 apps/server/data/
+
+# FR-100 perf-budget trend history (NDJSON, written by `pnpm bench:budget`).
+# Local runs accumulate here; CI publishes/persists its own copy as an artifact.
+bench/.perf-history.ndjson
 apps/ios/FrickDemo.xcodeproj/
 apps/ios/build/
 apps/android/.gradle/
