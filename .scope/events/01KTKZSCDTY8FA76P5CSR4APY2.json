@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTKZSCDTY8FA76P5CSR4APY2",
+  "ts": "2026-06-08T16:06:56.186Z",
+  "actor": "unknown",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTKZSCDTY8FA76P5CSR4APY1",
+    "number": 157,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Production WAN cross-region transport: Redis-backed FrickRegionBus (FR-157)",
+    "description": "",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ18",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

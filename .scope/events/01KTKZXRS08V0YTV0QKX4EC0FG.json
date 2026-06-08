@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTKZXRS08V0YTV0QKX4EC0FG",
+  "ts": "2026-06-08T16:09:19.904Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTKZSCDTY8FA76P5CSR4APY1",
+    "commentId": "01KTKZXRS08V0YTV0QKX4EC0FF",
+    "author": "claude",
+    "body": "Shipped RedisRegionBus (apps/server/src/cluster/region-redis-bus.ts): production Redis pub/sub cross-region transport mirroring RedisClusterBus one level up. msgpack codec, dedicated subscriber connection, originRegionId loop guard, ready promise, best-effort logging, createRedisRegionBus ioredis helper reusing the same RedisBusClient interface. Plugs into FederatingClusterBus where MemoryRegionBus does; strictly additive. Tests: fake-client suite (federation, loop guard, encode/decode round-trip, close unsubscribes) + Redis-gated integration that skips without FRICK_REDIS_URL. Gate green: 1079 server tests pass, 0 failures."
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTKZSEZ3YVK602VEH3TV58MY",
+  "ts": "2026-06-08T16:06:58.787Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTKZSCDTY8FA76P5CSR4APY1",
+    "field": "branch",
+    "value": "feat/fr157-redis-region-transport"
+  }
+}
