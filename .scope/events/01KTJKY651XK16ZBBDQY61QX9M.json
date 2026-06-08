@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJKY651XK16ZBBDQY61QX9M",
+  "ts": "2026-06-08T03:20:36.257Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1R",
+    "field": "branch",
+    "value": "feat/fr36-app-id-column"
+  }
+}

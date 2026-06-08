@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJM3HC2S7Q8RQD584K22C98",
+  "ts": "2026-06-08T03:23:31.586Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1R",
+    "commentId": "01KTJM3HC2S7Q8RQD584K22C97",
+    "author": "claude",
+    "body": "Landed 0021_app_boundary migration (SQLite + Postgres): additive app_id TEXT NOT NULL DEFAULT '_default' on all 10 tenant-scoped framework tables + compound (app_id, tenant_id, …) indexes. ALTER TABLE ADD COLUMN, no PK changes, strictly additive. Gate: typecheck exit 0; server vitest 962 passed / 0 failed / 45 skipped (958 baseline + 4 new app-migration.test.ts). SQLite/PG parity via pg-migrations static checks."
+  }
+}
