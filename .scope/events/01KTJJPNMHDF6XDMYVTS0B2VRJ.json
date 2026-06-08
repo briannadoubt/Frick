@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJJPNMHDF6XDMYVTS0B2VRJ",
+  "ts": "2026-06-08T02:59:01.393Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ12",
+    "commentId": "01KTJJPNMG84E39S0PCGM5N7D8",
+    "author": null,
+    "body": "All children done (FR-74 Swift + FR-75 Android native sync telemetry, FR-76/77). Native clients now emit OTel-style spans + metrics for the WS sync loop at parity with the TS client."
+  }
+}
