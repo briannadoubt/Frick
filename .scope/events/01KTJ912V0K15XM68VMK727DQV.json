@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJ912V0K15XM68VMK727DQV",
+  "ts": "2026-06-08T00:09:56.832Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2A",
+    "commentId": "01KTJ912V0K15XM68VMK727DQT",
+    "author": "claude",
+    "body": "Shipped S3BlobBytesDriver behind the BlobBytesDriver seam (3rd driver after sqlite/filesystem). Tenant-isolated content-addressed keys; optional @aws-sdk/client-s3 lazily imported by createS3BlobBytesDriver via a small injected S3LikeClient (mirrors RedisClusterBus). Config FRICK_BLOB_DRIVER=s3 + FRICK_BLOB_S3_BUCKET/_REGION/_ENDPOINT/_PREFIX. Built by caller + injected via createFrickServer({ blobBytesDriver }) since the SDK import is async. SQLite stays default; fully additive. Gate green: typecheck exit 0, server vitest 867 passed/45 skipped/0 failed."
+  }
+}
