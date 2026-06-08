@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJZBMGX2R9AB2GMXC42QXVY",
+  "ts": "2026-06-08T06:40:11.293Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ18",
+    "commentId": "01KTJZBMGX2R9AB2GMXC42QXVX",
+    "author": "claude",
+    "body": "Epic complete. FR-105 (cross-region bus federation: docs/multi-region.md design + FrickRegionBus/FederatingClusterBus seam + MemoryRegionFabric), FR-106 (per-region-primary write routing: RegionWriteRouter + static/claim ownership, home-region-authoritative convergence), FR-107 (region-aware failover: deterministic lowest-regionId promotion + docs/multi-region-operations.md LB/DNS runbook). All merged green; production WAN transport adapter is the documented next step."
+  }
+}
