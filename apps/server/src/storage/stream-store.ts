@@ -8,10 +8,16 @@ import {
   type PlainObject,
   type StreamEventInput,
 } from "@fricken/protocol";
+import { DEFAULT_APP_ID } from "../app-id.js";
 import type { IdempotencyCache } from "./idempotency-cache.js";
 import type { SqlDriver } from "./sql-driver.js";
 
 export interface AppendInput {
+  /**
+   * App partition (FR-37). Defaults to {@link DEFAULT_APP_ID} when omitted so
+   * existing single-app callers are unaffected.
+   */
+  appId?: string;
   tenantId: string;
   requestId: string;
   replicaId: string;
@@ -23,6 +29,9 @@ export interface AppendInput {
 
 export interface StoredEvent extends StreamEventInput {
   tenantId: string;
+  /** App partition the event belongs to (FR-37). {@link DEFAULT_APP_ID} for
+   * single-app deployments. */
+  appId: string;
 }
 
 export interface AppendResult {
@@ -129,12 +138,14 @@ export class StreamStore {
   }
 
   async append(input: AppendInput): Promise<AppendResult> {
-    const cacheKey = `${input.tenantId}|${input.replicaId}|${input.requestId}`;
+    const appId = input.appId ?? DEFAULT_APP_ID;
+    const cacheKey = `${appId}|${input.tenantId}|${input.replicaId}|${input.requestId}`;
     const cached = this.idempotencyCache?.get(cacheKey);
     if (cached && this.#withinReplayWindow(cached.createdAtMs)) {
       return { event: cached.event, created: false };
     }
     const existing = await this.readIdempotentEvent(
+      appId,
       input.tenantId,
       input.replicaId,
       input.requestId,
@@ -159,9 +170,10 @@ export class StreamStore {
 
     await this.sql.run(
       `INSERT INTO stream_events
-          (tenant_id, stream_type, stream_id, sequence, event_id, event_type, packed, replica_id, request_id, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (app_id, tenant_id, stream_type, stream_id, sequence, event_id, event_type, packed, replica_id, request_id, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
+        appId,
         input.tenantId,
         input.stream,
         input.streamId,
@@ -182,16 +194,21 @@ export class StreamStore {
     // event with a fresh created_at so we don't trip the (tenant, replica,
     // request) primary key and so subsequent in-window replays dedupe to the
     // fresh event.
+    // idempotency_keys PRIMARY KEY is (tenant_id, replica_id, request_id);
+    // app_id is an additive column (FR-36) stamped here and filtered on lookup,
+    // so two apps sharing a (tenant, replica, request) tuple do not collide in
+    // practice because lookups (readIdempotentEvent) are app-scoped. The
+    // ON CONFLICT target stays the PK and refreshes app_id alongside the result.
     await this.sql.run(
       `INSERT INTO idempotency_keys
-          (tenant_id, replica_id, request_id, result_event_id, created_at)
-          VALUES (?, ?, ?, ?, ?)
+          (app_id, tenant_id, replica_id, request_id, result_event_id, created_at)
+          VALUES (?, ?, ?, ?, ?, ?)
           ON CONFLICT(tenant_id, replica_id, request_id)
-          DO UPDATE SET result_event_id = excluded.result_event_id, created_at = excluded.created_at`,
-      [input.tenantId, input.replicaId, input.requestId, eventId, createdAt],
+          DO UPDATE SET app_id = excluded.app_id, result_event_id = excluded.result_event_id, created_at = excluded.created_at`,
+      [appId, input.tenantId, input.replicaId, input.requestId, eventId, createdAt],
     );
 
-    const event: StoredEvent = { ...wireEvent, tenantId: input.tenantId };
+    const event: StoredEvent = { ...wireEvent, tenantId: input.tenantId, appId };
     this.idempotencyCache?.set(cacheKey, { event, createdAtMs: Date.parse(createdAt) });
     return { event, created: true };
   }
@@ -203,29 +220,35 @@ export class StreamStore {
    * stream ids up front. Returned events are tenant-scoped and ordered by
    * `(stream_id, sequence)`.
    */
-  async listAllByStreamType(tenantId: string, stream: string): Promise<StoredEvent[]> {
+  async listAllByStreamType(
+    tenantId: string,
+    stream: string,
+    appId: string = DEFAULT_APP_ID,
+  ): Promise<StoredEvent[]> {
     const rows = await this.sql.all<EventRow>(
       `SELECT packed FROM stream_events
-          WHERE tenant_id = ? AND stream_type = ?
+          WHERE app_id = ? AND tenant_id = ? AND stream_type = ?
           ORDER BY stream_id ASC, sequence ASC`,
-      [tenantId, stream],
+      [appId, tenantId, stream],
     );
     return rows.map((row) => ({
       ...unpackStreamEvent(this.schema, decode(row.packed) as PackedStreamEvent),
       tenantId,
+      appId,
     }));
   }
 
-  async listAll(tenantId: string): Promise<StoredEvent[]> {
+  async listAll(tenantId: string, appId: string = DEFAULT_APP_ID): Promise<StoredEvent[]> {
     const rows = await this.sql.all<EventRow>(
       `SELECT packed FROM stream_events
-          WHERE tenant_id = ?
+          WHERE app_id = ? AND tenant_id = ?
           ORDER BY stream_type ASC, stream_id ASC, sequence ASC`,
-      [tenantId],
+      [appId, tenantId],
     );
     return rows.map((row) => ({
       ...unpackStreamEvent(this.schema, decode(row.packed) as PackedStreamEvent),
       tenantId,
+      appId,
     }));
   }
 
@@ -235,6 +258,7 @@ export class StreamStore {
     streamId: string,
     after: number,
     limit?: number,
+    appId: string = DEFAULT_APP_ID,
   ): Promise<StoredEvent[]> {
     const clamped =
       limit === undefined ? undefined : Math.max(1, Math.floor(Number.isFinite(limit) ? limit : 1));
@@ -242,20 +266,21 @@ export class StreamStore {
       clamped === undefined
         ? await this.sql.all<EventRow>(
             `SELECT packed FROM stream_events
-                WHERE tenant_id = ? AND stream_type = ? AND stream_id = ? AND sequence > ?
+                WHERE app_id = ? AND tenant_id = ? AND stream_type = ? AND stream_id = ? AND sequence > ?
                 ORDER BY sequence ASC`,
-            [tenantId, stream, streamId, after],
+            [appId, tenantId, stream, streamId, after],
           )
         : await this.sql.all<EventRow>(
             `SELECT packed FROM stream_events
-                WHERE tenant_id = ? AND stream_type = ? AND stream_id = ? AND sequence > ?
+                WHERE app_id = ? AND tenant_id = ? AND stream_type = ? AND stream_id = ? AND sequence > ?
                 ORDER BY sequence ASC
                 LIMIT ?`,
-            [tenantId, stream, streamId, after, clamped],
+            [appId, tenantId, stream, streamId, after, clamped],
           );
     return rows.map((row) => ({
       ...unpackStreamEvent(this.schema, decode(row.packed) as PackedStreamEvent),
       tenantId,
+      appId,
     }));
   }
 
@@ -269,11 +294,12 @@ export class StreamStore {
     tenantId: string,
     stream: string,
     streamId: string,
+    appId: string = DEFAULT_APP_ID,
   ): Promise<{ headSequence: number; count: number }> {
     const row = await this.sql.get<{ head: number; count: number }>(
       `SELECT COALESCE(MAX(sequence), 0) AS head, COUNT(*) AS count
-          FROM stream_events WHERE tenant_id = ? AND stream_type = ? AND stream_id = ?`,
-      [tenantId, stream, streamId],
+          FROM stream_events WHERE app_id = ? AND tenant_id = ? AND stream_type = ? AND stream_id = ?`,
+      [appId, tenantId, stream, streamId],
     );
     return { headSequence: Number(row!.head), count: Number(row!.count) };
   }
@@ -290,32 +316,35 @@ export class StreamStore {
     streamId: string,
     before: number,
     limit: number,
+    appId: string = DEFAULT_APP_ID,
   ): Promise<StoredEvent[]> {
     const clamped = Math.max(1, Math.min(500, Math.floor(limit)));
     const cutoff = Number.isFinite(before) && before > 0 ? before : Number.MAX_SAFE_INTEGER;
     const rows = await this.sql.all<EventRow>(
       `SELECT packed FROM stream_events
-          WHERE tenant_id = ? AND stream_type = ? AND stream_id = ? AND sequence < ?
+          WHERE app_id = ? AND tenant_id = ? AND stream_type = ? AND stream_id = ? AND sequence < ?
           ORDER BY sequence DESC
           LIMIT ?`,
-      [tenantId, stream, streamId, cutoff, clamped],
+      [appId, tenantId, stream, streamId, cutoff, clamped],
     );
     return rows
       .map((row) => ({
         ...unpackStreamEvent(this.schema, decode(row.packed) as PackedStreamEvent),
         tenantId,
+        appId,
       }))
       .reverse();
   }
 
   private async readIdempotentEvent(
+    appId: string,
     tenantId: string,
     replicaId: string,
     requestId: string,
   ): Promise<CachedIdempotentEvent | undefined> {
     const row = await this.sql.get<IdempotencyRow>(
-      "SELECT result_event_id, created_at FROM idempotency_keys WHERE tenant_id = ? AND replica_id = ? AND request_id = ?",
-      [tenantId, replicaId, requestId],
+      "SELECT result_event_id, created_at FROM idempotency_keys WHERE app_id = ? AND tenant_id = ? AND replica_id = ? AND request_id = ?",
+      [appId, tenantId, replicaId, requestId],
     );
     if (!row) return undefined;
     const createdAtMs = Date.parse(row.created_at);
@@ -325,26 +354,38 @@ export class StreamStore {
     if (!this.#withinReplayWindow(createdAtMs)) {
       return undefined;
     }
-    const event = await this.readByEventId(tenantId, row.result_event_id);
+    const event = await this.readByEventId(appId, tenantId, row.result_event_id);
     return event ? { event, createdAtMs } : undefined;
   }
 
   private async readByEventId(
+    appId: string,
     tenantId: string,
     eventId: string,
   ): Promise<StoredEvent | undefined> {
     const row = await this.sql.get<EventRow>(
-      "SELECT packed FROM stream_events WHERE tenant_id = ? AND event_id = ?",
-      [tenantId, eventId],
+      "SELECT packed FROM stream_events WHERE app_id = ? AND tenant_id = ? AND event_id = ?",
+      [appId, tenantId, eventId],
     );
     if (!row) return undefined;
     return {
       ...unpackStreamEvent(this.schema, decode(row.packed) as PackedStreamEvent),
       tenantId,
+      appId,
     };
   }
 
   private async nextSequence(tenantId: string, stream: string, streamId: string): Promise<number> {
+    // Sequence is scoped to the stream_events PRIMARY KEY
+    // (tenant_id, stream_type, stream_id, sequence) — app_id is an additive
+    // column (FR-36), NOT part of the key — so the next sequence must be the
+    // global max across the key, independent of app_id. Were it computed
+    // per-app, two apps writing the same (tenant, stream, streamId) would mint
+    // the same sequence and collide on the PK. App isolation is enforced on the
+    // read side: every query filters by app_id, so an app never observes
+    // another app's events even though they share the sequence space. In
+    // practice apps use distinct stream ids / schemas, so contention is rare;
+    // the '_default' single-app case is entirely unaffected.
     const row = await this.sql.get<{ next_sequence: number }>(
       `SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence
           FROM stream_events WHERE tenant_id = ? AND stream_type = ? AND stream_id = ?`,

@@ -8,7 +8,8 @@ import {
   type PlainObject,
 } from "@fricken/protocol";
 import { DEFAULT_TENANT_ID } from "../tenant.js";
-import { FrickObjectVersionConflictError } from "./object-errors.js";
+import { DEFAULT_APP_ID } from "../app-id.js";
+import { FrickCrossAppAccessError, FrickObjectVersionConflictError } from "./object-errors.js";
 import type { SqlDriver } from "./sql-driver.js";
 
 interface ObjectRow {
@@ -29,6 +30,12 @@ export interface ObjectUpsertResult {
 }
 
 export interface ObjectUpsertArgs {
+  /**
+   * App partition (FR-37). Defaults to {@link DEFAULT_APP_ID} when omitted so
+   * existing single-app callers are unaffected. Two apps writing the same
+   * (tenant, type, id) are isolated by this column.
+   */
+  appId?: string;
   tenantId: string;
   objectType: string;
   objectId: string;
@@ -61,8 +68,9 @@ export class ObjectStore {
     id: string,
     value: PlainObject,
     version: number,
+    appId: string = DEFAULT_APP_ID,
   ): Promise<void> {
-    await this.#writeRow(tenantId, type, id, value, version);
+    await this.#writeRow(appId, tenantId, type, id, value, version);
   }
 
   /**
@@ -73,10 +81,11 @@ export class ObjectStore {
    */
   async upsertWithPolicy(args: ObjectUpsertArgs): Promise<ObjectUpsertResult> {
     const mergePolicy = args.mergePolicy ?? "lastWriteWins";
+    const appId = args.appId ?? DEFAULT_APP_ID;
     return this.sql.transaction(async (tx) => {
       const current = await tx.get<ObjectVersionRow>(
-        "SELECT version FROM objects WHERE tenant_id = ? AND object_type = ? AND object_id = ?",
-        [args.tenantId, args.objectType, args.objectId],
+        "SELECT version FROM objects WHERE app_id = ? AND tenant_id = ? AND object_type = ? AND object_id = ?",
+        [appId, args.tenantId, args.objectType, args.objectId],
       );
       const previousVersion = current ? Number(current.version) : 0;
       const exists = current !== undefined;
@@ -112,6 +121,7 @@ export class ObjectStore {
 
       await this.#writeRowTx(
         tx,
+        appId,
         args.tenantId,
         args.objectType,
         args.objectId,
@@ -122,10 +132,15 @@ export class ObjectStore {
     });
   }
 
-  async read(tenantId: string, type: string, id: string): Promise<PlainObject | undefined> {
+  async read(
+    tenantId: string,
+    type: string,
+    id: string,
+    appId: string = DEFAULT_APP_ID,
+  ): Promise<PlainObject | undefined> {
     const row = await this.sql.get<ObjectRow>(
-      "SELECT packed FROM objects WHERE tenant_id = ? AND object_type = ? AND object_id = ?",
-      [tenantId, type, id],
+      "SELECT packed FROM objects WHERE app_id = ? AND tenant_id = ? AND object_type = ? AND object_id = ?",
+      [appId, tenantId, type, id],
     );
     if (!row) {
       return undefined;
@@ -138,10 +153,15 @@ export class ObjectStore {
    * Exposed so the HTTP layer can populate ETag headers without a second
    * unpack.
    */
-  async readVersion(tenantId: string, type: string, id: string): Promise<number> {
+  async readVersion(
+    tenantId: string,
+    type: string,
+    id: string,
+    appId: string = DEFAULT_APP_ID,
+  ): Promise<number> {
     const row = await this.sql.get<ObjectVersionRow>(
-      "SELECT version FROM objects WHERE tenant_id = ? AND object_type = ? AND object_id = ?",
-      [tenantId, type, id],
+      "SELECT version FROM objects WHERE app_id = ? AND tenant_id = ? AND object_type = ? AND object_id = ?",
+      [appId, tenantId, type, id],
     );
     return row ? Number(row.version) : 0;
   }
@@ -152,18 +172,27 @@ export class ObjectStore {
    * does not soft-delete — once removed, the row is gone, and a follow-up
    * upsert with the same id starts at version 1 again.
    */
-  async delete(tenantId: string, type: string, id: string): Promise<boolean> {
+  async delete(
+    tenantId: string,
+    type: string,
+    id: string,
+    appId: string = DEFAULT_APP_ID,
+  ): Promise<boolean> {
     const result = await this.sql.run(
-      "DELETE FROM objects WHERE tenant_id = ? AND object_type = ? AND object_id = ?",
-      [tenantId, type, id],
+      "DELETE FROM objects WHERE app_id = ? AND tenant_id = ? AND object_type = ? AND object_id = ?",
+      [appId, tenantId, type, id],
     );
     return result.changes > 0;
   }
 
-  async list(tenantId: string, type: string): Promise<PlainObject[]> {
+  async list(
+    tenantId: string,
+    type: string,
+    appId: string = DEFAULT_APP_ID,
+  ): Promise<PlainObject[]> {
     const rows = await this.sql.all<ObjectRow>(
-      "SELECT packed FROM objects WHERE tenant_id = ? AND object_type = ? ORDER BY object_id ASC",
-      [tenantId, type],
+      "SELECT packed FROM objects WHERE app_id = ? AND tenant_id = ? AND object_type = ? ORDER BY object_id ASC",
+      [appId, tenantId, type],
     );
     return rows.map((row) =>
       unpackObjectRecord(this.schema, decode(row.packed) as PackedRecord).value,
@@ -171,17 +200,19 @@ export class ObjectStore {
   }
 
   async #writeRow(
+    appId: string,
     tenantId: string,
     type: string,
     id: string,
     value: PlainObject,
     version: number,
   ): Promise<void> {
-    await this.#writeRowTx(this.sql, tenantId, type, id, value, version);
+    await this.#writeRowTx(this.sql, appId, tenantId, type, id, value, version);
   }
 
   async #writeRowTx(
     tx: SqlDriver,
+    appId: string,
     tenantId: string,
     type: string,
     id: string,
@@ -189,15 +220,39 @@ export class ObjectStore {
     version: number,
   ): Promise<void> {
     const packed = packObjectRecord(this.schema, type, id, withoutRecordId(value));
+    // Cross-app write guard (FR-37): the objects PRIMARY KEY is
+    // (tenant_id, object_type, object_id) — app_id is an additive column
+    // (FR-36), not part of the key. So a write from a *different* app to the
+    // same (tenant, type, id) would otherwise clobber the owning app's row via
+    // ON CONFLICT. Reject it: an app may only write rows it owns (or a
+    // brand-new row). Reads already filter by app_id, so this closes the write
+    // side of the boundary. Same-app writes (the overwhelming common case, and
+    // the entire single-app '_default' default) pass through untouched.
+    const owner = await tx.get<{ app_id: string }>(
+      "SELECT app_id FROM objects WHERE tenant_id = ? AND object_type = ? AND object_id = ?",
+      [tenantId, type, id],
+    );
+    if (owner !== undefined && owner.app_id !== appId) {
+      throw new FrickCrossAppAccessError({
+        requestedAppId: appId,
+        ownerAppId: owner.app_id,
+        tenantId,
+        objectType: type,
+        objectId: id,
+      });
+    }
+    // The ON CONFLICT target stays the PK; app_id is set on both the insert and
+    // the update branch so an existing row's app stamp is preserved.
     await tx.run(
       `INSERT INTO objects
-          (tenant_id, object_type, object_id, version, packed, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?)
+          (app_id, tenant_id, object_type, object_id, version, packed, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(tenant_id, object_type, object_id) DO UPDATE SET
+            app_id = excluded.app_id,
             version = excluded.version,
             packed = excluded.packed,
             updated_at = excluded.updated_at`,
-      [tenantId, type, id, version, Buffer.from(encode(packed)), new Date().toISOString()],
+      [appId, tenantId, type, id, version, Buffer.from(encode(packed)), new Date().toISOString()],
     );
   }
 }
@@ -205,6 +260,7 @@ export class ObjectStore {
 // Re-exported for the FrickStore facade and tests that want to fall back to
 // the single-tenant default explicitly.
 export { DEFAULT_TENANT_ID };
+export { DEFAULT_APP_ID };
 export { FrickObjectVersionConflictError };
 
 function withoutRecordId(value: PlainObject): PlainObject {
