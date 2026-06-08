@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJ8T4A9VCA4RQJZRFQ1SYNY",
+  "ts": "2026-06-08T00:06:08.969Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3W",
+    "commentId": "01KTJ8T4A9VCA4RQJZRFQ1SYNX",
+    "author": "claude",
+    "body": "Shipped automated a11y + l10n suite locking in FR-101/FR-103 contracts. New: design-web/src/a11y-suite.test.tsx (icon-name contract completeness + both-pack resolution + decorative glyphs; interactive controls keyboard-operable with names/roles/state; focus-visible + reduced-motion CSS contract), protocol/tests/localization-suite.test.ts (no-gaps/no-stale default table, full fallback-chain ordering, interpolation + function messages), strengthened design/tests/a11y.test.ts (contrast-pair integrity across all 12 themes). typecheck exit 0; design 50, design-web 73, protocol l10n 26 green. No new deps."
+  }
+}
