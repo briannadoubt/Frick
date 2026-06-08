@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJFZWXWWT2MX9PX4MAGTWCZ",
+  "ts": "2026-06-08T02:11:38.044Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTJBF1CCNYZA7KEFWCTS8QHW",
+    "commentId": "01KTJFZWXWWT2MX9PX4MAGTWCY",
+    "author": "claude",
+    "body": "Shipped FrickSessionManager (StateFlow<SessionState>: session/isAuthenticating/lastError/isAuthenticated; verbs signIn/signUp/signOut/requestPasswordReset/resetPassword) riding FrickClient encrypted SQLite persistence. Added FrickClient.currentSession getter + password-reset verbs + public replicaId. Demo ViewModel auth path now rides the manager. Gate: pnpm typecheck exit 0, :frick:testDebugUnitTest green. Note: :app module does not compile from baseline (missing generated ConversationDto/UserDto/RoomMemberDto) — pre-existing, unrelated to this change."
+  }
+}
