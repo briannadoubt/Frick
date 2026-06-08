@@ -893,6 +893,84 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
         ON auth_saml_seen_assertions (expires_at);
     `,
   },
+  {
+    // App boundary (FR-36): the second axis of multi-tenancy. Where `tenant_id`
+    // (migration 0003) partitions data within a single app, `app_id` partitions
+    // data across the distinct apps a multi-app server hosts (today routed only
+    // by URL prefix / WebSocket Hello schema id, with storage server-SHARED).
+    // This migration is the schema foundation for true per-app isolation; the
+    // read/write threading (FR-37) and per-app registries (FR-38) build on it.
+    //
+    // It is STRICTLY ADDITIVE and mirrors `tenant_id` exactly:
+    //   * every framework table that carries `tenant_id` gains a non-null
+    //     `app_id TEXT NOT NULL DEFAULT '_default'`, so all legacy rows map to
+    //     the implicit default app and existing single-app servers behave
+    //     byte-for-byte identically;
+    //   * each `(tenant_id, …)` index gets an `(app_id, tenant_id, …)` sibling
+    //     so per-app + per-tenant filtered reads stay index-covered.
+    //
+    // Unlike 0003 this migration adds the column with `ALTER TABLE ADD COLUMN`
+    // rather than copy-and-rename: app isolation needs the partition column and
+    // covering indexes, not a change to any existing PRIMARY KEY. Two apps
+    // sharing the same (tenant_id, object_type, object_id) is a pre-existing
+    // single-app-server invariant the default `'_default'` preserves; FR-37
+    // enforces the cross-app boundary at the query layer (every read filters
+    // app_id, every write stamps it), which is where tenant isolation is also
+    // ultimately enforced.
+    //
+    // Schema revision stays at 1: the wire protocol is unchanged.
+    id: "0021_app_boundary",
+    schemaRevision: 1,
+    description:
+      "Add app_id columns to framework tables with compound (app_id, tenant_id, …) indexes mirroring the tenant boundary (FR-36).",
+    sql: `
+      ALTER TABLE objects ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';
+      CREATE INDEX IF NOT EXISTS idx_objects_app_tenant
+        ON objects (app_id, tenant_id, object_type, object_id);
+
+      ALTER TABLE stream_events ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';
+      CREATE INDEX IF NOT EXISTS idx_stream_events_app_tenant
+        ON stream_events (app_id, tenant_id, stream_type, stream_id, sequence);
+      CREATE INDEX IF NOT EXISTS idx_stream_events_app_tenant_event_id
+        ON stream_events (app_id, tenant_id, event_id);
+
+      ALTER TABLE presence_leases ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';
+      CREATE INDEX IF NOT EXISTS idx_presence_leases_app_tenant
+        ON presence_leases (app_id, tenant_id, presence_type, presence_key);
+
+      ALTER TABLE signal_outbox ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';
+      CREATE INDEX IF NOT EXISTS idx_signal_outbox_app_tenant
+        ON signal_outbox (app_id, tenant_id, signal_type, signal_key, expires_at);
+
+      ALTER TABLE blob_metadata ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';
+      CREATE INDEX IF NOT EXISTS idx_blob_metadata_app_tenant
+        ON blob_metadata (app_id, tenant_id, blob_id);
+      CREATE INDEX IF NOT EXISTS idx_blob_metadata_app_tenant_owner
+        ON blob_metadata (app_id, tenant_id, owner_id, created_at DESC);
+
+      ALTER TABLE blob_content ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';
+      CREATE INDEX IF NOT EXISTS idx_blob_content_app_tenant
+        ON blob_content (app_id, tenant_id, blob_id);
+
+      ALTER TABLE jobs ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';
+      CREATE INDEX IF NOT EXISTS idx_jobs_app_tenant
+        ON jobs (app_id, tenant_id, job_type, status, id);
+      CREATE INDEX IF NOT EXISTS idx_jobs_app_tenant_status_available_at
+        ON jobs (app_id, tenant_id, status, available_at);
+
+      ALTER TABLE auth_sessions ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';
+      CREATE INDEX IF NOT EXISTS idx_auth_sessions_app_tenant_user
+        ON auth_sessions (app_id, tenant_id, user_id, expires_at DESC);
+
+      ALTER TABLE auth_accounts ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';
+      CREATE INDEX IF NOT EXISTS idx_auth_accounts_app_tenant_handle
+        ON auth_accounts (app_id, tenant_id, handle COLLATE NOCASE);
+
+      ALTER TABLE idempotency_keys ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';
+      CREATE INDEX IF NOT EXISTS idx_idempotency_keys_app_tenant
+        ON idempotency_keys (app_id, tenant_id, replica_id, request_id);
+    `,
+  },
 ];
 
 /** Names of all framework tables (and indexes) the runner manages. Used by the
