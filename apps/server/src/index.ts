@@ -313,6 +313,36 @@ export {
   type RegionId,
 } from "./cluster/region-bus.js";
 export {
+  ClaimRegionOwnership,
+  MemoryOwnershipControl,
+  MemoryOwnershipControlFabric,
+  MemoryRegionProxy,
+  MemoryRegionRouterFabric,
+  RegionWriteRouter,
+  StaticRegionOwnership,
+  writeKeyForTenant,
+  type ClaimRegionOwnershipOptions,
+  type MemoryOwnershipControlOptions,
+  type MemoryRegionProxyOptions,
+  type OwnershipControlChannel,
+  type OwnershipControlHandler,
+  type OwnershipControlMessage,
+  type ProxiedWrite,
+  type ProxiedWriteHandler,
+  type RegionOwnershipResolver,
+  type RegionProxyTransport,
+  type RegionWriteRouterOptions,
+  type StaticRegionOwnershipOptions,
+  type WriteKey,
+  type WriteRoute,
+} from "./cluster/region-router.js";
+export {
+  RegionFailoverCoordinator,
+  type HomePromotionHandler,
+  type RegionFailoverCoordinatorOptions,
+  type RegionHealth,
+} from "./cluster/region-failover.js";
+export {
   createFrickProjectModule,
   projectModuleToAppDefinition,
   type FrickProjectManifest,

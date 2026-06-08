@@ -1,8 +1,13 @@
 # Multi-region bus federation
 
-> Status: design + adapter seam (FR-105, first deliverable of the FR-20 multi-region epic).
-> Write-region routing/conflict handling (FR-106) and region-aware failover + LB
-> integration (FR-107) are explicit follow-ups — see [Follow-ups](#follow-ups).
+> Status: FR-105 (federation seam) **+** FR-106 (write-region routing + conflict
+> handling) **+** FR-107 (region-aware failover + LB integration) **delivered** —
+> the FR-20 multi-region epic's routing/failover layer is in place.
+> FR-105 shipped the cross-region fan-out transport; FR-106 layered the
+> per-region-primary ownership/routing model on top; FR-107 added health-aware
+> failover + the [operations runbook](multi-region-operations.md). See
+> [Write-region routing (FR-106)](#write-region-routing--conflict-handling-fr-106)
+> and [Failover (FR-107)](#region-aware-failover-fr-107).
 
 ## The problem: the bus is single-region today
 
@@ -186,14 +191,109 @@ MirrorMaker) implements the same `FrickRegionBus` interface, the same way
 `RedisClusterBus` implements `FrickClusterBus`. That adapter is intentionally **not**
 part of FR-105 (no real cross-region infra in this deliverable).
 
-## Follow-ups
+## Write-region routing + conflict handling (FR-106)
 
-- **FR-106 — write-region routing + conflict handling.** Defines which region owns a
-  write, how cross-region writes are routed/proxied, and how conflicting concurrent
-  writes converge. This is the "per-region primary" topology layered *on top of* the
-  FR-105 transport. FR-105 deliberately stays a best-effort fan-out transport and
-  takes no position on ownership.
-- **FR-107 — region-aware failover + LB integration.** Health-checking regions,
-  draining/promoting on regional outage, and the load-balancer/DNS glue that routes
-  clients to a healthy region. The FR-105 seam is failover-friendly (regions attach
-  and detach from the fabric/transport cleanly), but the orchestration is FR-107.
+FR-105 carries realtime fan-out across regions but takes **no position on
+ownership**: two regions can accept writes to the same key "simultaneously" and the
+federated streams can interleave differently per region. That is fine for realtime
+*hints* (consumers reconcile via per-stream cursors) but it is not a conflict story.
+
+FR-106 supplies the conflict story by adopting **topology option C — per-region
+primary (write-region routing)** from [Topology options](#c-per-region-primary-write-region-routing):
+every write key has exactly one **home region** that owns its writes.
+
+### Ownership model: per-region primary, tenant-home
+
+- **Granularity.** Home is assigned **per tenant** (`tenantId → homeRegionId`).
+  Tenant-home is the simplest correct default and matches how the rest of the stack
+  is already tenant-partitioned (object/stream/presence/signal stores are all
+  tenant-scoped). `writeKeyForTenant(tenantId)` centralizes how a routing key is
+  derived, so a future tenant+object granularity is a one-line change — but the
+  conflict guarantee only needs *a* single home per key, not finer keys.
+- **Assignment.** Two strategies behind one `RegionOwnershipResolver` interface
+  ([`region-router.ts`](../apps/server/src/cluster/region-router.ts)):
+  - **`StaticRegionOwnership`** (recommended default) — a config map
+    `tenantId → homeRegionId` plus a `defaultHomeRegionId` fallback. Ownership is a
+    deployment decision (place a tenant's home near its users); zero coordination,
+    trivially correct.
+  - **`ClaimRegionOwnership`** (opt-in, dynamic) — claim-based assignment over a
+    region control channel, **mirroring FR-154's `ClusterMediaPlacement`** one level
+    up (region instead of node): the first region to route a write for an unowned
+    tenant **claims** home and announces it; concurrent claims converge by a
+    deterministic **lowest-`regionId`-wins** tie-break (total + symmetric, exactly
+    like FR-154's lowest-`nodeId` rule); a **TTL** backstops a missed release so a
+    crashed home self-heals.
+
+### Routing
+
+`RegionWriteRouter.routeWrite(tenantId)` resolves the home and returns either:
+
+- **`{ kind: "local" }`** — this region *is* the home → apply the write here (the
+  authoritative serialization point) and federate it outward via FR-105 as today; or
+- **`{ kind: "proxy", homeRegionId }`** — this region is *not* the home → forward the
+  write to the home region, which applies it; the authoritative stream then flows
+  back to every region via FR-105 federation.
+
+The in-memory proxy transport (`RegionProxyTransport` / `MemoryRegionProxy` over a
+shared `MemoryRegionRouterFabric`) is the routing analogue of `MemoryRegionBus`:
+**addressed** (point-to-point to the home) rather than broadcast. Production supplies
+a WAN request/response adapter (HTTP to the home's ingress, or a cross-region queue)
+implementing the same interface.
+
+### Convergence guarantee: home-region-authoritative
+
+Because all writes to a key funnel through a single home region, the home
+**serializes** concurrent cross-region writes to that key — that is the
+coherent-ordering win [option C](#c-per-region-primary-write-region-routing) calls
+out. The convergence guarantee is therefore **home-region-authoritative**: the
+home's applied order is the order every region eventually observes. Conflicts are
+resolved by *serialization at the home*, not by a merge rule. (The alternative —
+accept-anywhere-then-converge with a region-stamped deterministic rule such as
+"home-region wins, else lowest-`regionId`" — was considered and rejected;
+home-authoritative routing is preferred and simpler.)
+
+### Additive & backward-compatible
+
+A single-region deployment sets its one region as the `defaultHomeRegionId`, so every
+key is home-local → `routeWrite` **always** returns `local` → zero proxying → behaves
+exactly as today. The router is opt-in; an unwired server publishes through its
+`FrickClusterBus` (possibly a `FederatingClusterBus`) unchanged.
+
+## Region-aware failover (FR-107)
+
+The per-region-primary model makes a key's home a per-key availability dependency: if
+a key's home region goes down, writes have nowhere authoritative to land. FR-107
+closes that gap with minimal, testable orchestration
+([`region-failover.ts`](../apps/server/src/cluster/region-failover.ts)).
+
+- **Health states.** `RegionFailoverCoordinator` tracks each region as `healthy`
+  (serving; eligible to own writes and be promoted to), `draining` (graceful
+  pre-removal — finishing in-flight work, accepting no new home assignments, owned
+  keys promoted away), or `down` (failed health checks — unavailable, owned keys
+  promoted away). The FR-105 seam is failover-friendly: regions attach/detach from
+  the fabric cleanly.
+- **Deterministic promotion.** When a key's home becomes unavailable, the new home is
+  the **lowest-`regionId` healthy region** among the survivors — mirroring the
+  FR-106/FR-154 lowest-id tie-break, so it is total + symmetric: from the same
+  `{ownership snapshot} × {health map}` every region computes the identical promotion
+  with **no coordination messages**. Writes then re-route to the promoted home via
+  the unchanged `routeWrite` path (routing reads ownership live, so promotion is just
+  an ownership reassignment).
+- **Rejoin without flapping.** A recovered region (`down`/`draining` → `healthy`)
+  does **not** auto-revert a promotion — the promoted home stays home until an
+  operator (or a static-config reconcile) moves it back, avoiding write-ownership
+  flapping on a flaky region. The recovered region simply becomes an eligible
+  promotion target again.
+- **Honest degraded state.** With zero healthy survivors there is nowhere to promote
+  to, so ownership is left as-is and re-evaluated when a region comes back up.
+
+**Operational runbook + load-balancer/DNS glue:** see
+[`docs/multi-region-operations.md`](multi-region-operations.md) — health-checking,
+drain/promote on regional outage, and how client-facing LB/DNS region affinity
+interacts with home-region write routing.
+
+### Additive & opt-in
+
+A single-region server wires none of this: one region, always healthy, home for
+everything, no promotion ever fires. Multi-region deployments opt in by constructing
+a `RegionFailoverCoordinator` over their ownership model.
