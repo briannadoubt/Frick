@@ -18,6 +18,44 @@ export {
   type P2PTurnConfig,
 } from "./p2p-media-plane.js";
 
+// FR-83 — self-hosted single-box mediasoup SFU media plane.
+export {
+  LocalMediaPlacement,
+  type LocalMediaPlacementOptions,
+  type MediaHome,
+  type MediaPlacement,
+} from "./media-placement.js";
+export {
+  SfuBackendError,
+  type ConnectTransportInput,
+  type ConsumeInput,
+  type ConsumerHandle,
+  type CreateWebRtcTransportInput,
+  type DtlsParameters,
+  type IceCandidate,
+  type IceParameters,
+  type MediaKind,
+  type ProduceInput,
+  type ProducerHandle,
+  type RouterHandle,
+  type RtpCapabilities,
+  type RtpParameters,
+  type SfuBackend,
+  type SfuCodec,
+  type TransportHandle,
+} from "./sfu-backend.js";
+export { FakeSfuBackend, type FakeSfuBackendOptions } from "./fake-sfu-backend.js";
+export {
+  MediasoupSfuBackend,
+  type MediasoupSfuBackendOptions,
+} from "./mediasoup-sfu-backend.js";
+export {
+  SfuMediaPlaneAdapter,
+  DEFAULT_SFU_MEDIA_CODECS,
+  type SfuMediaPlaneOptions,
+  type SfuTransportParams,
+} from "./sfu-media-plane.js";
+
 // FR-79 — call control-plane state machine + canonical schema fragment.
 export {
   CallControlPlane,

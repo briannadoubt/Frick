@@ -67,6 +67,9 @@
     "ws": "^8.18.3",
     "xml-crypto": "^6.1.2"
   },
+  "optionalDependencies": {
+    "mediasoup": "^3.14.0"
+  },
   "devDependencies": {
     "@types/ws": "^8.18.1",
     "tsx": "^4.20.6",
