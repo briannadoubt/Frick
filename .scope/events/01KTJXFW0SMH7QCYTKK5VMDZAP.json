@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJXFW0SMH7QCYTKK5VMDZAP",
+  "ts": "2026-06-08T06:07:32.889Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTJWB5SZ99FWGHKE2CDG047E",
+    "commentId": "01KTJXFW0SMH7QCYTKK5VMDZAN",
+    "author": "claude",
+    "body": "Web client SFU produce/consume driver landed. Wire: extended CallCommand with sfuConnectTransport/sfuProduce/sfuConsume ops + producer/consumer result payloads (additive, no codegen). Server: CallControlPlane.sfu* methods forward to the media plane's produce/consume companion behind supportsSfuMedia() guard; gateway dispatches + Nacks sfuUnsupported on non-SFU planes. Core: startSfuCall mirrors startP2PCall, mediasoup-client lazy-imported behind injectable SfuDeviceLike/SfuTransportLike (optionalDependency). Gate green: typecheck 0, protocol 110, core 63, server 1044, 0 failures."
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJWYHMDE28H36RBF64DRB49",
+  "ts": "2026-06-08T05:58:05.197Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTJWB5SZ99FWGHKE2CDG047E",
+    "field": "branch",
+    "value": "feat/fr155-web-sfu-client-driver"
+  }
+}
