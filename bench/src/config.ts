@@ -1,3 +1,4 @@
+import { type CodecConfig } from "./codec.js";
 import { type LoadHarnessConfig } from "./harness.js";
 import { type LatencyConfig } from "./latency.js";
 import { type ThroughputConfig } from "./throughput.js";
@@ -137,6 +138,33 @@ export function parseThroughputConfig(
 
   const target = pickTarget(flags, env);
   if (target) config.target = target;
+
+  return config;
+}
+
+/**
+ * Resolve a codec-suite config from CLI flags layered over environment
+ * variables. Precedence: flag > env > default. The codec suite is pure CPU
+ * work (no server), so it has no `--http-url`/`--ws-url` target.
+ *
+ * Flags: `--ops`, `--samples`, `--page-events`.
+ * Env: `FRICK_CODEC_OPS`, `FRICK_CODEC_SAMPLES`, `FRICK_CODEC_PAGE_EVENTS`.
+ */
+export function parseCodecConfig(
+  argv: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): Partial<CodecConfig> {
+  const flags = parseFlags(argv);
+  const config: { ops?: number; samples?: number; pageEvents?: number } = {};
+
+  const ops = pickNumber(flags.ops, env.FRICK_CODEC_OPS);
+  if (ops !== undefined) config.ops = ops;
+
+  const samples = pickNumber(flags.samples, env.FRICK_CODEC_SAMPLES);
+  if (samples !== undefined) config.samples = samples;
+
+  const pageEvents = pickNumber(flags["page-events"], env.FRICK_CODEC_PAGE_EVENTS);
+  if (pageEvents !== undefined) config.pageEvents = pageEvents;
 
   return config;
 }

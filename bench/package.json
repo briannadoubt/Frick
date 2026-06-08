@@ -17,6 +17,7 @@
     "load:harness": "tsx src/cli.ts",
     "bench:latency": "tsx src/cli.ts latency",
     "bench:throughput": "tsx src/cli.ts throughput",
+    "bench:codec": "tsx src/cli.ts codec",
     "bench:budget": "tsx src/cli.ts budget"
   },
   "dependencies": {

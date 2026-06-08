@@ -9,19 +9,23 @@
  *   load        synthetic load harness          (FR-96, default)
  *   latency     per-path latency suite          (FR-97)
  *   throughput  sustained throughput + growth   (FR-98)
+ *   codec       codec encode/decode speed       (FR-99)
  *   budget      perf-budget check + trend       (FR-100)
  *
  * Usage:
  *   pnpm load:harness [flags]            # load harness (default)
  *   pnpm bench:latency [flags]           # latency suite
  *   pnpm bench:throughput [flags]        # throughput + resource-growth suite
+ *   pnpm bench:codec [flags]             # codec encode/decode speed suite
  *   pnpm bench:budget [flags]            # perf-budget check + trend tracking
  */
 import {
+  parseCodecConfig,
   parseLatencyConfig,
   parseLoadConfig,
   parseThroughputConfig,
 } from "./config.js";
+import { runCodec } from "./codec.js";
 import {
   DEFAULT_BUDGET,
   appendHistory,
@@ -82,6 +86,24 @@ growth (process memory, SQLite db size + row counts, idempotency cache rows).
 
 Prints a single JSON result to stdout. Diagnostics go to stderr.`;
 
+const CODEC_HELP = `frick codec encode/decode speed benchmark (FR-99)
+
+Usage: pnpm bench:codec [flags]
+
+Benchmarks the @fricken/protocol wire codec (encodeFrame/decodeFrame) in pure
+isolation — no server — over representative frame shapes (append message,
+object upsert, multi-event stream page, multi-object delta). Reports per-op
+latency (microseconds) plus ops/sec and bytes/sec for each shape and direction.
+Mirrors the Swift/Kotlin codec micro-benchmarks for cross-platform comparison.
+
+  --ops N                       encode/decode calls per timed sample
+  --samples N                   timed samples per direction per payload
+  --page-events N               packed events in the stream-page/delta shapes
+  --pretty                      indent the JSON output
+  --help                        print this help
+
+Prints a single JSON result to stdout. Diagnostics go to stderr.`;
+
 const BUDGET_HELP = `frick performance-budget check + trend tracking (FR-100)
 
 Usage: pnpm bench:budget [flags]
@@ -111,13 +133,14 @@ Subcommands:
   load        synthetic load harness (FR-96, default)
   latency     per-path latency suite (FR-97)
   throughput  sustained throughput + resource-growth (FR-98)
+  codec       codec encode/decode speed (FR-99)
   budget      perf-budget check + trend tracking (FR-100)
 
 Run "<subcommand> --help" for subcommand flags.`;
 
 const DEFAULT_HISTORY_PATH = "bench/.perf-history.ndjson";
 
-type Subcommand = "load" | "latency" | "throughput" | "budget";
+type Subcommand = "load" | "latency" | "throughput" | "codec" | "budget";
 
 function resolveSubcommand(argv: readonly string[]): { command: Subcommand; rest: string[] } {
   const first = argv[0];
@@ -125,6 +148,7 @@ function resolveSubcommand(argv: readonly string[]): { command: Subcommand; rest
     first === "load" ||
     first === "latency" ||
     first === "throughput" ||
+    first === "codec" ||
     first === "budget"
   ) {
     return { command: first, rest: argv.slice(1) };
@@ -193,6 +217,17 @@ async function main(): Promise<number> {
       const result = await runThroughput(config);
       process.stdout.write(JSON.stringify(result, null, pretty ? 2 : undefined) + "\n");
       return result.ops.errors > 0 ? 1 : 0;
+    }
+
+    if (command === "codec") {
+      if (wantsHelp) {
+        process.stderr.write(CODEC_HELP + "\n");
+        return 0;
+      }
+      const config = parseCodecConfig(rest);
+      const result = runCodec(config);
+      process.stdout.write(JSON.stringify(result, null, pretty ? 2 : undefined) + "\n");
+      return 0;
     }
 
     if (command === "budget") {

@@ -24,9 +24,21 @@ export {
   type MemorySample,
 } from "./throughput.js";
 export {
+  runCodec,
+  buildCodecFrames,
+  DEFAULT_CODEC_CONFIG,
+  CODEC_PAYLOAD_NAMES,
+  type CodecConfig,
+  type CodecResult,
+  type CodecPayloadResult,
+  type CodecDirectionResult,
+  type CodecPayloadName,
+} from "./codec.js";
+export {
   parseLoadConfig,
   parseLatencyConfig,
   parseThroughputConfig,
+  parseCodecConfig,
 } from "./config.js";
 export {
   runBudgetCheck,

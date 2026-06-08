@@ -1,4 +1,4 @@
-# `@fricken/bench` — Benchmarks (FR-96 / FR-97 / FR-98 / FR-100)
+# `@fricken/bench` — Benchmarks (FR-96 / FR-97 / FR-98 / FR-99 / FR-100)
 
 A reusable synthetic benchmark package for Frick. It drives configurable load
 against a Frick server and emits a single machine-readable JSON result to stdout
@@ -12,6 +12,7 @@ The CLI hosts the measurement suites plus a budget checker:
 | `load` (default) | FR-96 | Synthetic per-user load: object upserts + stream appends | `pnpm load:harness` |
 | `latency` | FR-97 | p50/p90/p99 latency across the core paths | `pnpm bench:latency` |
 | `throughput` | FR-98 | Sustained ops/sec + resource growth (memory/db/cache) | `pnpm bench:throughput` |
+| `codec` | FR-99 | Codec encode/decode speed over representative frames (no server) | `pnpm bench:codec` |
 | `budget` | FR-100 | PASS/FAIL the suites against declared thresholds + record a trend | `pnpm bench:budget` |
 
 Every suite is kept deliberately separate from the correctness tests: the
@@ -204,6 +205,89 @@ pnpm bench:throughput --connections 16 --ops-per-connection 500 --no-await-acks 
 import { runThroughput } from "@fricken/bench";
 const result = await runThroughput({ connections: 4, opsPerConnection: 200 });
 ```
+
+## Codec speed suite (FR-99)
+
+Benchmarks the `@fricken/protocol` wire codec (`encodeFrame` / `decodeFrame`)
+in **pure isolation** — no server, no sockets, no I/O, just CPU — over four
+representative frame shapes, and emits JSON (`tool: "frick-codec-bench"`) with
+per-op latency (microseconds), ops/sec, and bytes/sec for each shape and
+direction (encode + decode):
+
+- **`appendMessage`** — a single `Append` frame carrying one `MessageSent`.
+- **`objectUpsert`**  — an `ObjectUpsert` of a `Conversation`.
+- **`streamPage`**    — a `StreamPage` with `--page-events` packed stream events.
+- **`delta`**         — a `Delta` with one object + `--page-events` events.
+
+Each direction is timed as a tight loop of `--ops` calls per sample, repeated
+`--samples` times (after a JIT warm-up), so the per-op cost is amortized over a
+measurable batch and you get a percentile distribution of batch timings.
+
+```bash
+# Defaults (2000 ops/sample, 30 samples, 32 events per page/delta):
+pnpm bench:codec
+
+# Custom, pretty JSON:
+pnpm bench:codec --ops 5000 --samples 50 --page-events 64 --pretty
+```
+
+### Flags (env fallbacks in parentheses)
+
+| Flag | Meaning | Env |
+| --- | --- | --- |
+| `--ops N` | encode/decode calls per timed sample | `FRICK_CODEC_OPS` |
+| `--samples N` | timed samples per direction per payload | `FRICK_CODEC_SAMPLES` |
+| `--page-events N` | packed events in the `streamPage`/`delta` shapes | `FRICK_CODEC_PAGE_EVENTS` |
+| `--pretty` | indent the JSON output | — |
+
+### Output shape
+
+```jsonc
+{
+  "schemaVersion": 1,
+  "tool": "frick-codec-bench",
+  "startedAt": "2026-06-07T00:00:00.000Z",
+  "config": { "ops": 2000, "samples": 30, "pageEvents": 32 },
+  "env": { "node": "v24.x", "platform": "darwin" },
+  "totalDurationMs": 123.45,
+  "payloads": {
+    "appendMessage": {
+      "bytes": 235,
+      "encode": { "operations": 60000, "bytes": 235, "perOpMicros": { /* … */ }, "opsPerSec": 0, "bytesPerSec": 0 },
+      "decode": { /* … */ }
+    },
+    "objectUpsert": { /* … */ },
+    "streamPage":   { /* … */ },
+    "delta":        { /* … */ }
+  }
+}
+```
+
+```ts
+import { runCodec } from "@fricken/bench";
+const result = runCodec({ ops: 1000, samples: 10 });
+```
+
+### Cross-platform parity (Swift + Kotlin)
+
+The same four payload shapes are benchmarked natively so results are
+comparable across platforms. These run inside the existing native test gates
+(no JMH or other heavy tooling) and **report** timing to stdout rather than
+asserting an absolute speed (machine-dependent); they assert only that the
+work completes and round-trips:
+
+```bash
+# Swift — Tests/FrickSwiftTests/FrickCodecBenchmarkTests.swift
+cd packages/swift && swift test --filter FrickCodecBenchmarkTests
+
+# Kotlin — apps/android/frick/.../FrickCodecBenchmarkTest.kt
+cd apps/android && ./gradlew :frick:testDebugUnitTest --tests "dev.frick.client.FrickCodecBenchmarkTest"
+```
+
+Each prints lines like `[FR-99 codec] swift encode appendMessage: 235 bytes,
+2.8 us/op, 354668 ops/sec`. The encoded byte sizes line up with the TS suite
+(e.g. `appendMessage` 235 bytes, `objectUpsert` 178 bytes), confirming the
+shapes are equivalent on the wire across TS / Swift / Kotlin.
 
 ## Performance budgets + trend tracking (FR-100)
 
