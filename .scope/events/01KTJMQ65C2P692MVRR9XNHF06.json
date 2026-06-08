@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJMQ65C2P692MVRR9XNHF06",
+  "ts": "2026-06-08T03:34:15.468Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1T",
+    "commentId": "01KTJMQ65BN74MXHDGWT9QMZC6",
+    "author": "claude",
+    "body": "De-shared projection + job registries into per-app sets via new createFrickPerAppRegistries() (apps/per-app-registries.ts): FrickPerAppRegistries.for(appId) returns one {appId, projections, jobs} set per app, lazy+cached, '_default' eager. Composes existing registry factories; projectionDeltaListenerFor(appId) hook for per-app gateway delta routing. Strictly additive — single-app server unchanged. Exported from root + DEFAULT_APP_ID/normalizeAppId. New per-app-registries.test.ts (5 tests) proves projection + job-handler isolation across apps. Gate: typecheck exit 0; server vitest 976 passed / 0 failed / 45 skipped (971+5). SCOPE NOTE: wiring into server.ts/gateway by request-time appId depends on FR-37-deferred request-boundary appId resolution; this lands the primitive green."
+  }
+}
