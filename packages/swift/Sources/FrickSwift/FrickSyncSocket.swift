@@ -26,6 +26,67 @@ public enum FrickFrameKind: Int, Sendable {
     case helloAck = 18
     case projectionDelta = 19
     case objectUpsert = 20
+
+    /// Telemetry frame-kind label. Mirrors the TS `frameKindLabel` helper in
+    /// `packages/core/src/runtime.ts`, which returns the PascalCase
+    /// `FrameKind[kind]` enum-member name. Used as the `kind` attribute on
+    /// the `frick.client.ws.frames.{sent,received}.total` counters.
+    public var telemetryLabel: String {
+        switch self {
+        case .hello: return "Hello"
+        case .schema: return "Schema"
+        case .subscribe: return "Subscribe"
+        case .snapshot: return "Snapshot"
+        case .streamPage: return "StreamPage"
+        case .append: return "Append"
+        case .ack: return "Ack"
+        case .nack: return "Nack"
+        case .delta: return "Delta"
+        case .presenceSet: return "PresenceSet"
+        case .presenceClear: return "PresenceClear"
+        case .presenceDelta: return "PresenceDelta"
+        case .signalSend: return "SignalSend"
+        case .signalDeliver: return "SignalDeliver"
+        case .cursorCommit: return "CursorCommit"
+        case .ping: return "Ping"
+        case .pong: return "Pong"
+        case .syncStatus: return "SyncStatus"
+        case .helloAck: return "HelloAck"
+        case .projectionDelta: return "ProjectionDelta"
+        case .objectUpsert: return "ObjectUpsert"
+        }
+    }
+}
+
+// MARK: - WebSocket close categorization
+
+/// Maps a WebSocket close code to a stable category label. Mirrors the TS
+/// `webSocketCloseCategory` helper in `packages/core/src/runtime.ts` so the
+/// Swift and TS clients emit identical `frick.ws.close_category` /
+/// histogram `closeCategory` values.
+public func frickWebSocketCloseCategory(_ code: Int?) -> String {
+    switch code {
+    case 1000: return "normal"
+    case 1001: return "going_away"
+    case 1002: return "protocol_error"
+    case 1003: return "unsupported_data"
+    case 1005: return "no_status"
+    case 1006: return "abnormal"
+    case 1007: return "invalid_payload"
+    case 1008: return "policy_violation"
+    case 1009: return "too_large"
+    case 1010: return "mandatory_extension"
+    case 1011: return "internal_error"
+    case 1012: return "service_restart"
+    case 1013: return "try_again_later"
+    case 1014: return "bad_gateway"
+    case 1015: return "tls_handshake"
+    default:
+        if let code, code >= 4000, code <= 4999 {
+            return "private"
+        }
+        return "unknown"
+    }
 }
 
 // MARK: - Frame model
@@ -803,6 +864,18 @@ public actor FrickSyncSocket {
     private let sleepFor: @Sendable (UInt64) async throws -> Void
     private let descriptor: FrickSchemaDescriptorValues
 
+    /// Telemetry runtime. Defaults to the no-op runtime so behavior is
+    /// unchanged unless a runtime is supplied (mirrors `FrickClient`). The
+    /// WS sync loop emits an OTEL-style span on connect/close plus frame
+    /// counters and a connection-duration histogram, matching the TS client
+    /// (`packages/core/src/runtime.ts`).
+    private let telemetry: any FrickClientTelemetryRuntime
+
+    /// Span + start time for the currently-open connection, if any. Mirrors
+    /// the TS `#socketTelemetry` WeakMap keyed by the live socket.
+    private var connectionSpan: (any FrickClientTelemetrySpan)?
+    private var connectionStartedAt: Date?
+
     private var task: FrickWebSocketTaskProtocol?
     private var receiveLoop: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
@@ -835,7 +908,8 @@ public actor FrickSyncSocket {
             try await Task.sleep(nanoseconds: ns)
         },
         schemaHash: String = FrickSchema.schemaHash,
-        descriptor: FrickSchemaDescriptorValues = .foundation
+        descriptor: FrickSchemaDescriptorValues = .foundation,
+        telemetry: any FrickClientTelemetryRuntime = FrickNoopClientTelemetryRuntime()
     ) {
         self.baseURL = baseURL
         self.sessionToken = sessionToken
@@ -846,6 +920,7 @@ public actor FrickSyncSocket {
         self.sleepFor = sleepFor
         self.schemaHash = schemaHash
         self.descriptor = descriptor
+        self.telemetry = telemetry
 
         // Defer construction of the AsyncThrowingStream until after self init so
         // we can capture the continuation.
@@ -894,6 +969,9 @@ public actor FrickSyncSocket {
             cont.resume(throwing: CancellationError())
         }
         pendingResponders.removeAll()
+        // Explicit close is a clean shutdown — finish the span with the
+        // normal-closure code (1000), matching the TS normal-close path.
+        finishConnectionTelemetry(closeCode: 1000)
         updateStatus { $0.state = .closed }
         eventContinuation?.finish()
     }
@@ -1043,6 +1121,7 @@ public actor FrickSyncSocket {
         if statusValue.state == .connected, let task {
             do {
                 try await task.send(.data(encoded))
+                recordFrameTelemetry(direction: "sent", kind: frame.kind)
             } catch {
                 pending.append(PendingSocketAppend(requestId: requestId, frame: encoded))
                 updateStatus { $0.pendingAppendCount = pending.count }
@@ -1068,6 +1147,7 @@ public actor FrickSyncSocket {
         }
         do {
             try await task.send(.data(encoded))
+            recordFrameTelemetry(direction: "sent", kind: frame.kind)
         } catch {
             pending.append(PendingSocketAppend(requestId: "", frame: encoded))
             updateStatus { $0.pendingAppendCount = pending.count }
@@ -1083,6 +1163,9 @@ public actor FrickSyncSocket {
         for entry in drained {
             do {
                 try await task.send(.data(entry.frame))
+                if let kind = try? FrickMsgPackCodec.decodeFrame(entry.frame).kind {
+                    recordFrameTelemetry(direction: "sent", kind: kind)
+                }
             } catch {
                 // Re-queue at front; we'll retry on the next connection.
                 pending.insert(entry, at: 0)
@@ -1097,6 +1180,11 @@ public actor FrickSyncSocket {
     private func openSocket() async {
         guard !explicitlyClosed else { return }
         updateStatus { $0.state = .connecting; $0.lastError = nil }
+
+        // Open the connection span before the upgrade so the span covers the
+        // full connection lifetime (mirrors TS, which starts the span when the
+        // socket is constructed in `connect()`).
+        startConnectionTelemetry()
 
         let request = makeRequest()
         let newTask = factory.makeTask(request: request)
@@ -1114,6 +1202,7 @@ public actor FrickSyncSocket {
         ]))
         do {
             try await newTask.send(.data(FrickMsgPackCodec.encodeFrame(hello)))
+            recordFrameTelemetry(direction: "sent", kind: hello.kind)
         } catch {
             await handleDisconnect(error: error)
             return
@@ -1129,6 +1218,7 @@ public actor FrickSyncSocket {
         for frame in activeSubscriptions.values {
             do {
                 try await newTask.send(.data(FrickMsgPackCodec.encodeFrame(frame)))
+                recordFrameTelemetry(direction: "sent", kind: frame.kind)
             } catch {
                 await handleDisconnect(error: error)
                 return
@@ -1165,6 +1255,7 @@ public actor FrickSyncSocket {
         guard let frame = try? FrickMsgPackCodec.decodeFrame(data) else {
             return
         }
+        recordFrameTelemetry(direction: "received", kind: frame.kind)
         switch frame.kind {
         case .helloAck:
             handleHelloAck(payload: frame.payload)
@@ -1482,6 +1573,12 @@ public actor FrickSyncSocket {
         receiveLoop?.cancel()
         receiveLoop = nil
 
+        // The connection dropped on an error/receive failure with no clean
+        // close handshake — categorize as abnormal (1006), matching the TS
+        // error-close path. Finish the span before reconnecting so each
+        // connection attempt gets its own span + duration sample.
+        finishConnectionTelemetry(closeCode: 1006)
+
         if explicitlyClosed {
             updateStatus { $0.state = .closed }
             return
@@ -1530,6 +1627,72 @@ public actor FrickSyncSocket {
             cont.yield(statusValue)
         }
         eventContinuation?.yield(.status(statusValue))
+    }
+
+    // MARK: Telemetry
+
+    /// Path component of the WS endpoint, e.g. `/_frick/sync`. Mirrors the
+    /// TS `urlPath` helper used for the span's `url.path` attribute.
+    private func telemetryURLPath() -> String {
+        let path = makeURL().path
+        return path.isEmpty ? "/" : path
+    }
+
+    /// Open the connection span. Mirrors TS `#startWebSocketTelemetrySpan` +
+    /// the `#socketTelemetry.set(...)` in `connect()`.
+    private func startConnectionTelemetry() {
+        let span = startFrickClientTelemetrySpan(telemetry, FrickClientTelemetrySpanStart(
+            name: "WebSocket /_frick/sync",
+            kind: .client,
+            attributes: [
+                "network.protocol.name": .string("websocket"),
+                "url.path": .string(telemetryURLPath()),
+                "frick.schema_id": .string(clientCapabilities.schemaId),
+                "frick.schema_revision": .int(clientCapabilities.schemaRevision),
+                "frick.authenticated": .bool(!sessionToken.isEmpty),
+            ]
+        ))
+        connectionSpan = span
+        connectionStartedAt = Date()
+    }
+
+    /// Finish the connection span and record the duration histogram. Mirrors
+    /// TS `#finishWebSocketTelemetrySpan`. Idempotent: a no-op if no span is
+    /// open (so a close following a disconnect doesn't double-emit).
+    private func finishConnectionTelemetry(closeCode: Int?) {
+        guard let span = connectionSpan else { return }
+        let startedAt = connectionStartedAt
+        connectionSpan = nil
+        connectionStartedAt = nil
+
+        let category = frickWebSocketCloseCategory(closeCode)
+        var attributes: FrickClientTelemetryAttributes = [
+            "frick.ws.close_category": .string(category),
+        ]
+        if let closeCode {
+            attributes["frick.ws.close_code"] = .int(closeCode)
+        }
+        finishFrickClientTelemetrySpan(span, FrickClientTelemetrySpanResult(
+            status: category == "normal" ? .ok : .error,
+            attributes: attributes
+        ))
+        let durationMs = max(0, (startedAt.map { Date().timeIntervalSince($0) } ?? 0) * 1000)
+        recordFrickClientTelemetryHistogram(
+            telemetry,
+            name: "frick.client.ws.connection.duration_ms",
+            value: durationMs,
+            attributes: ["closeCategory": .string(category)]
+        )
+    }
+
+    /// Record a per-frame counter. Mirrors TS `#recordWebSocketFrameTelemetry`.
+    private func recordFrameTelemetry(direction: String, kind: FrickFrameKind) {
+        recordFrickClientTelemetryCounter(
+            telemetry,
+            name: "frick.client.ws.frames.\(direction).total",
+            value: 1,
+            attributes: ["kind": .string(kind.telemetryLabel)]
+        )
     }
 }
 

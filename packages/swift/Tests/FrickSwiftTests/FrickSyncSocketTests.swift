@@ -170,7 +170,11 @@ final class FrickSyncSocketTests: XCTestCase {
 
     // Helpers
 
-    private func makeSocket(factory: MockWebSocketFactory, sleepFor: @escaping @Sendable (UInt64) async throws -> Void = { _ in }) -> FrickSyncSocket {
+    private func makeSocket(
+        factory: MockWebSocketFactory,
+        sleepFor: @escaping @Sendable (UInt64) async throws -> Void = { _ in },
+        telemetry: any FrickClientTelemetryRuntime = FrickNoopClientTelemetryRuntime()
+    ) -> FrickSyncSocket {
         FrickSyncSocket(
             baseURL: URL(string: "http://127.0.0.1:4099")!,
             sessionToken: "token-1",
@@ -178,7 +182,8 @@ final class FrickSyncSocketTests: XCTestCase {
             replicaId: "test-replica",
             deviceId: "test-device",
             factory: factory,
-            sleepFor: sleepFor
+            sleepFor: sleepFor,
+            telemetry: telemetry
         )
     }
 
@@ -899,4 +904,191 @@ final class FrickSyncSocketTests: XCTestCase {
         await socket.close()
     }
 
+    // MARK: Telemetry (FR-74)
+
+    func testTelemetryStartsConnectionSpanWithMirroredAttributes() async throws {
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+        let telemetry = SyncRecordingTelemetry()
+        let socket = makeSocket(factory: factory, telemetry: telemetry)
+
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+        _ = await waitForCondition { await telemetry.startedSpanCount() >= 1 }
+
+        let startedSpans = await telemetry.startedSpans()
+        let started = try XCTUnwrap(startedSpans.first)
+        XCTAssertEqual(started.name, "WebSocket /_frick/sync")
+        XCTAssertEqual(started.kind, .client)
+        XCTAssertEqual(started.attributes["network.protocol.name"], .string("websocket"))
+        XCTAssertEqual(started.attributes["url.path"], .string("/_frick/sync"))
+        XCTAssertEqual(started.attributes["frick.schema_id"], .string(FrickSchema.schemaId))
+        XCTAssertEqual(started.attributes["frick.schema_revision"], .int(FrickSchema.schemaRevision))
+        XCTAssertEqual(started.attributes["frick.authenticated"], .bool(true))
+
+        await socket.close()
+    }
+
+    func testTelemetryRecordsSentAndReceivedFrameCounters() async throws {
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+        let telemetry = SyncRecordingTelemetry()
+        let socket = makeSocket(factory: factory, telemetry: telemetry)
+
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+        // Hello sent → counter for the Hello frame.
+        _ = await waitForCondition {
+            await telemetry.counters().contains {
+                $0.name == "frick.client.ws.frames.sent.total"
+                    && $0.attributes["kind"] == .string("Hello")
+            }
+        }
+        let sentCounters = await telemetry.counters()
+        let sentHello = try XCTUnwrap(sentCounters.first {
+            $0.name == "frick.client.ws.frames.sent.total"
+        })
+        XCTAssertEqual(sentHello.value, 1)
+        XCTAssertEqual(sentHello.attributes["kind"], .string("Hello"))
+
+        // Deliver a HelloAck → received counter labeled HelloAck.
+        task.deliver(.data(helloAckFrame()))
+        let gotReceived = await waitForCondition {
+            await telemetry.counters().contains {
+                $0.name == "frick.client.ws.frames.received.total"
+                    && $0.attributes["kind"] == .string("HelloAck")
+            }
+        }
+        XCTAssertTrue(gotReceived, "received counter should label the HelloAck frame kind")
+
+        await socket.close()
+    }
+
+    func testTelemetryFinishesSpanOkAndRecordsDurationOnNormalClose() async throws {
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+        let telemetry = SyncRecordingTelemetry()
+        let socket = makeSocket(factory: factory, telemetry: telemetry)
+
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+        await socket.close()
+
+        _ = await waitForCondition { await telemetry.finishedSpanCount() >= 1 }
+        let finishedSpans = await telemetry.finishedSpans()
+        let finished = try XCTUnwrap(finishedSpans.first)
+        XCTAssertEqual(finished.status, .ok)
+        XCTAssertEqual(finished.attributes["frick.ws.close_category"], .string("normal"))
+        XCTAssertEqual(finished.attributes["frick.ws.close_code"], .int(1000))
+
+        let histograms = await telemetry.histograms()
+        let histogram = try XCTUnwrap(histograms.first {
+            $0.name == "frick.client.ws.connection.duration_ms"
+        })
+        XCTAssertEqual(histogram.attributes["closeCategory"], .string("normal"))
+        XCTAssertGreaterThanOrEqual(histogram.value, 0)
+    }
+
+    func testTelemetryFinishesSpanErrorWithAbnormalCategoryOnDisconnect() async throws {
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+        let telemetry = SyncRecordingTelemetry()
+        // sleepFor no-op keeps reconnect from delaying; we only assert on the
+        // first connection's span being finished with the abnormal category.
+        let socket = makeSocket(factory: factory, telemetry: telemetry)
+
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+        // Force the receive loop to fail → handleDisconnect path.
+        task.deliverError(URLError(.networkConnectionLost))
+
+        _ = await waitForCondition { await telemetry.finishedSpanCount() >= 1 }
+        let finishedSpans = await telemetry.finishedSpans()
+        let finished = try XCTUnwrap(finishedSpans.first)
+        XCTAssertEqual(finished.status, .error)
+        XCTAssertEqual(finished.attributes["frick.ws.close_category"], .string("abnormal"))
+        XCTAssertEqual(finished.attributes["frick.ws.close_code"], .int(1006))
+
+        await socket.close()
+    }
+
+    func testWebSocketCloseCategoryMirrorsTS() {
+        XCTAssertEqual(frickWebSocketCloseCategory(1000), "normal")
+        XCTAssertEqual(frickWebSocketCloseCategory(1001), "going_away")
+        XCTAssertEqual(frickWebSocketCloseCategory(1006), "abnormal")
+        XCTAssertEqual(frickWebSocketCloseCategory(1011), "internal_error")
+        XCTAssertEqual(frickWebSocketCloseCategory(4123), "private")
+        XCTAssertEqual(frickWebSocketCloseCategory(9999), "unknown")
+        XCTAssertEqual(frickWebSocketCloseCategory(nil), "unknown")
+    }
+
+}
+
+// MARK: - Telemetry spy
+
+/// Recording telemetry runtime local to the sync-socket tests. Captures
+/// started/finished spans and counter/histogram measurements so assertions
+/// can verify the WS sync telemetry contract (FR-74).
+private actor SyncRecordingTelemetryStore {
+    struct Measurement {
+        let name: String
+        let value: Double
+        let attributes: FrickClientTelemetryAttributes
+    }
+
+    private(set) var startedSpans: [FrickClientTelemetrySpanStart] = []
+    private(set) var finishedSpans: [FrickClientTelemetrySpanResult] = []
+    private(set) var counters: [Measurement] = []
+    private(set) var histograms: [Measurement] = []
+
+    func appendStarted(_ input: FrickClientTelemetrySpanStart) { startedSpans.append(input) }
+    func appendFinished(_ result: FrickClientTelemetrySpanResult) { finishedSpans.append(result) }
+    func appendCounter(_ m: Measurement) { counters.append(m) }
+    func appendHistogram(_ m: Measurement) { histograms.append(m) }
+}
+
+private final class SyncRecordingTelemetry: FrickClientTelemetryRuntime, @unchecked Sendable {
+    typealias Measurement = SyncRecordingTelemetryStore.Measurement
+    private let store = SyncRecordingTelemetryStore()
+
+    func startSpan(_ input: FrickClientTelemetrySpanStart) throws -> any FrickClientTelemetrySpan {
+        let store = self.store
+        Task { await store.appendStarted(input) }
+        return SyncRecordingSpan { result in
+            Task { await store.appendFinished(result ?? FrickClientTelemetrySpanResult()) }
+        }
+    }
+
+    func recordCounter(name: String, value: Double, attributes: FrickClientTelemetryAttributes) throws {
+        let store = self.store
+        Task { await store.appendCounter(Measurement(name: name, value: value, attributes: attributes)) }
+    }
+
+    func recordHistogram(name: String, value: Double, attributes: FrickClientTelemetryAttributes) throws {
+        let store = self.store
+        Task { await store.appendHistogram(Measurement(name: name, value: value, attributes: attributes)) }
+    }
+
+    func startedSpans() async -> [FrickClientTelemetrySpanStart] { await store.startedSpans }
+    func finishedSpans() async -> [FrickClientTelemetrySpanResult] { await store.finishedSpans }
+    func counters() async -> [Measurement] { await store.counters }
+    func histograms() async -> [Measurement] { await store.histograms }
+    func startedSpanCount() async -> Int { await store.startedSpans.count }
+    func finishedSpanCount() async -> Int { await store.finishedSpans.count }
+}
+
+private final class SyncRecordingSpan: FrickClientTelemetrySpan, @unchecked Sendable {
+    private let onEnd: @Sendable (FrickClientTelemetrySpanResult?) -> Void
+
+    init(onEnd: @escaping @Sendable (FrickClientTelemetrySpanResult?) -> Void) {
+        self.onEnd = onEnd
+    }
+
+    func end(_ result: FrickClientTelemetrySpanResult?) throws {
+        onEnd(result)
+    }
 }

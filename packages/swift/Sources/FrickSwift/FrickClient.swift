@@ -1127,7 +1127,8 @@ public final class FrickClient: Sendable {
             replicaId: replicaId,
             deviceId: session.deviceId,
             schemaHash: schemaHash,
-            descriptor: syncDescriptor
+            descriptor: syncDescriptor,
+            telemetry: telemetry
         )
         Task { await socket.connect() }
         return socket
