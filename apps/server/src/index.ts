@@ -313,6 +313,12 @@ export {
   type RegionId,
 } from "./cluster/region-bus.js";
 export {
+  RedisRegionBus,
+  createRedisRegionBus,
+  type CreateRedisRegionBusOptions,
+  type RedisRegionBusOptions,
+} from "./cluster/region-redis-bus.js";
+export {
   ClaimRegionOwnership,
   MemoryOwnershipControl,
   MemoryOwnershipControlFabric,
