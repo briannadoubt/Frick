@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJFWVDE32MJS2B1D3HCY5X6",
+  "ts": "2026-06-08T02:09:58.190Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTJBF1CCNYZA7KEFWCTS8QHR",
+    "commentId": "01KTJFWVDE32MJS2B1D3HCY5X5",
+    "author": "claude",
+    "body": "Shipped FrickStoreRegistry in :frick — type-keyed (KClass) registry owning/lazily resolving one shared FrickObservableStore<Model> per type; register/store with reified conveniences, idempotent shared resolution, re-registration rebuild, close() closes owned stores. 8 unit tests green."
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJFNV8AQS22ED4ZZMQ06PMC",
+  "ts": "2026-06-08T02:06:08.650Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTJBF1CCNYZA7KEFWCTS8QHT",
+    "field": "branch",
+    "value": "feat/fr149-150-android-store-registry-query"
+  }
+}

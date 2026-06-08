@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJFWVH7MW5BNHQTF3J5ESHV",
+  "ts": "2026-06-08T02:09:58.311Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTJBF1CCNYZA7KEFWCTS8QHT",
+    "commentId": "01KTJFWVH7MW5BNHQTF3J5ESHT",
+    "author": "claude",
+    "body": "Shipped rememberFrickQuery in :frick-compose — @Composable resolving the store via FrickStoreRegistry, collectAsState over items StateFlow, optional filter + sort comparator in derivedStateOf (mirrors @FrickQuery). Store-only overload + pure applyQuery for tests. 5 unit tests green."
+  }
+}
