@@ -176,6 +176,7 @@ Pending appends are preserved across compatible reloads. When an incompatible-ca
 | Authenticated product analytics tracking | `FrickClient.track(...)` | `FrickClient.track(...)` | `FrickClient.track(...)` |
 | Capability negotiation in handshake | ✓ (WebSocket) | ✓ (WebSocket) | ✓ (WebSocket) |
 | Object delete deltas carry `removed` ids | ✓ (wire type) | Back-compat tombstone/refetch path | Back-compat tombstone/refetch path |
+| Projection subscribe + `ProjectionDelta` apply into observable keyed store | `client.projection(name)` → `Signal<Map>` | `FrickProjectionStore` (`rows: [String: FrickMsgPackValue]`) | `FrickProjectionStore` (`rows: StateFlow<Map>`) |
 
 ## Product Analytics
 
@@ -244,6 +245,33 @@ the local `(type, id)` row without a full refetch; they must keep the tombstone
 path for servers that predate `removed`.
 
 Schema field definitions may also carry an optional `sensitivity` classification — `public | private | pii | secret | content` — that informs how the server treats field values in logs, diagnostics, and admin inspection (and, in future, export/deletion workflows). Like `mergePolicy`, `sensitivity` is **server-only** metadata: it is validated by `validateSchema`, defaults to `private` when omitted, and is intentionally *not* emitted into the generated Swift / Kotlin / TS client artifacts, so adding or changing it is wire-backwards-compatible and requires no artifact regeneration. The server's `redactRecord` helper masks `pii`/`secret`/`content` values by default; see [`docs/operations.md`](operations.md) for where this is applied.
+
+## Projections Over Sync
+
+A projection is a server-maintained, keyed view (row key → row value) that the
+client subscribes to by name and keeps live via `ProjectionDelta` frames. Every
+client SDK exposes the same two layers:
+
+1. **Subscribe + raw delta surface.** The client issues a `Subscribe` frame
+   with `kind: "projection"` and receives `ProjectionDelta` frames carrying a
+   list of `{ key, value }` changes, where a `null` value deletes the row at
+   `key`. TypeScript handles this inside the runtime; Swift exposes
+   `FrickSyncSocket.subscribeProjection(name:)` and a
+   `FrickInboundEvent.projectionDelta` event; Android exposes
+   `FrickSyncSocket.subscribeProjection(name)` and a
+   `FrickInboundEvent.ProjectionDelta` event.
+
+2. **Observable keyed store.** A higher-level store folds those deltas into an
+   observable map keyed by row key (non-null value upserts, `null` deletes) and
+   re-subscribes on reconnect so a dropped connection self-heals. TypeScript
+   exposes `client.projection(name)` returning a `Signal<Map<key, row>>`; Swift
+   exposes `FrickProjectionStore` (`@Observable`, `rows: [String: FrickMsgPackValue]`);
+   Android exposes `FrickProjectionStore` (`rows: StateFlow<Map<String, Map<String, Any?>>>`).
+
+Semantics are identical across SDKs: the row map is keyed by the projection's
+row key, `null` deletes, and the subscription is replayed after reconnect (the
+server replays the snapshot, which reconciles the map). The wire surface is the
+same `ProjectionDelta` frame for all clients — no per-platform frame variants.
 
 ## Object Sharing
 
