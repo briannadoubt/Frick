@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJV1MFJVR5AWQMD6NX5HGY8",
+  "ts": "2026-06-08T05:24:49.266Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ36",
+    "commentId": "01KTJV1MFJVR5AWQMD6NX5HGY7",
+    "author": "claude",
+    "body": "Call presence (mic/camera/screenshare/speaking/networkQuality) on participant model across TS/Swift/Android call state."
+  }
+}

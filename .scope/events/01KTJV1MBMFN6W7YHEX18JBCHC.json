@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJV1MBMFN6W7YHEX18JBCHC",
+  "ts": "2026-06-08T05:24:49.140Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ34",
+    "commentId": "01KTJV1MBKR4NM37WE65DQ4M78",
+    "author": "claude",
+    "body": "Call helpers (createCall/joinCall/acceptCall/leaveCall/endCall/setCallMediaState) + observable call state shipped on all 3 platforms: TS/core+react (Phase 1), Swift FrickCallSession, Android FrickCallManager. Wire: CallCommand(21)/CallCommandResult(22) frames, Nack by requestId."
+  }
+}

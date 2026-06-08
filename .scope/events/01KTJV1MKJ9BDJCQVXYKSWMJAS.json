@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJV1MKJ9BDJCQVXYKSWMJAS",
+  "ts": "2026-06-08T05:24:49.394Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ38",
+    "commentId": "01KTJV1MKH2ZYPMZT90KXJYT9B",
+    "author": "claude",
+    "body": "Call UI: web CallButton/CallControlBar (design-web), Swift FrickCallControlBar (design-swift), Compose FrickCallControlBar (:design), all tokenized over existing FrickCallButton."
+  }
+}
