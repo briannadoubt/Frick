@@ -462,10 +462,17 @@ per-tenant, not globally — `dorothy` in `tenant-a` and `dorothy` in
 `_default` as the implicit tenant for all rows, and migration `0003` backfills
 existing rows accordingly without changing the wire protocol.
 
-**Known gap**: tenant assignment is per-session and per-account; there is no
-admin route for moving an account between tenants. The framework does have a
-tenants ledger and admin bearer principals for cross-tenant operations, but
-account re-homing still needs an explicit migration workflow.
+**Closed (FR-39)**: the authenticated admin route
+`POST /_frick/admin/accounts/move` reassigns an account between tenants. It
+verifies the target tenant exists (via `ensureTenantAllowed`, so a non-default
+target must be in the ledger unless implicit creation is enabled), updates the
+account row's `tenant_id` in place, and revokes every session bound to the old
+tenant (live-disconnecting open sockets) so the user re-authenticates into the
+new tenant. The action is recorded on the admin-audit hash chain as
+`accounts.move`. **Data boundary:** only the account *identity* moves. The
+account's per-tenant DATA in the object/stream stores is tenant-scoped and is
+NOT migrated by this route — that remains a separate, explicit data-migration
+concern. See `docs/operations.md` → "Moving an account between tenants".
 
 ---
 

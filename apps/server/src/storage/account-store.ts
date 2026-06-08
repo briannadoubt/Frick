@@ -143,6 +143,56 @@ export class AccountStore {
   }
 
   /**
+   * Reassign an account row from one tenant to another (FR-39). Only the
+   * account's `tenant_id` changes; `user_id` (the stable principal id), handle,
+   * display name, and password hash are preserved. The caller is responsible
+   * for ensuring the target tenant exists and for revoking the account's
+   * old-tenant sessions. Returns:
+   *   - "moved"     when the row was reassigned,
+   *   - "notFound"  when no `(fromTenantId, userId)` row exists,
+   *   - "conflict"  when the target tenant already has an account with the
+   *                 same handle (case-insensitive) or user_id.
+   * The move is a no-op (still "moved") when from and to tenants are equal.
+   */
+  async move(
+    fromTenantId: string,
+    userId: string,
+    toTenantId: string,
+  ): Promise<"moved" | "notFound" | "conflict"> {
+    const row = await this.sql.get<AccountRow>(
+      "SELECT * FROM auth_accounts WHERE tenant_id = ? AND user_id = ? LIMIT 1",
+      [fromTenantId, userId],
+    );
+    if (!row) {
+      return "notFound";
+    }
+    if (fromTenantId === toTenantId) {
+      return "moved";
+    }
+    const clash = await this.sql.get<AccountRow>(
+      `SELECT * FROM auth_accounts
+          WHERE tenant_id = ? AND (LOWER(handle) = LOWER(?) OR user_id = ?)
+          LIMIT 1`,
+      [toTenantId, row.handle, userId],
+    );
+    if (clash) {
+      return "conflict";
+    }
+    try {
+      await this.sql.run(
+        "UPDATE auth_accounts SET tenant_id = ? WHERE tenant_id = ? AND user_id = ?",
+        [toTenantId, fromTenantId, userId],
+      );
+    } catch (error) {
+      if (error instanceof Error && /constraint|UNIQUE/i.test(error.message)) {
+        return "conflict";
+      }
+      throw error;
+    }
+    return "moved";
+  }
+
+  /**
    * Remove an account row, scoped to a single tenant. Used by the self-service
    * account-deletion flow. Returns true when a row was actually deleted, false
    * when no `(tenant_id, user_id)` match existed — idempotent. `user_id` is the

@@ -577,6 +577,64 @@ operator a tamper-evident record of data-subject deletions. Retention policies
 (soft-delete windows, legal-hold) are out of scope here — a deletion is
 immediate and hard.
 
+## Moving an account between tenants
+
+The authenticated admin route `POST /_frick/admin/accounts/move` reassigns an
+account from one tenant to another (FR-39). It is admin-only (standard
+`/_frick/admin/*` bearer auth — a request without the admin token returns `401`),
+tenant-scoped, and audited.
+
+Request body:
+
+```jsonc
+{
+  "userId": "user-ada",        // required — the stable principal id to move
+  "fromTenantId": "tenant-old", // the account's current tenant (defaults to _default)
+  "toTenantId": "tenant-new"    // required — the destination tenant
+}
+```
+
+On success the route returns `200`:
+
+```jsonc
+{
+  "userId": "user-ada",
+  "fromTenantId": "tenant-old",
+  "toTenantId": "tenant-new",
+  "moved": true,
+  "revoked": 1,        // old-tenant session rows deleted
+  "disconnected": 0    // live sockets dropped
+}
+```
+
+What the route does, in order:
+
+1. **Verifies the target tenant exists** via `ensureTenantAllowed`. A non-default
+   `toTenantId` must already be in the tenants ledger; if implicit tenant
+   creation is disabled and the tenant is unknown (or archived) the request is
+   rejected with `403` (`auth.forbidden`, `reason: "unknownTenant"`).
+2. **Moves the account identity row** — updates `auth_accounts.tenant_id` in
+   place. `user_id`, handle, display name, and password hash are preserved.
+   - `404` (`reason: "accountNotFound"`) when no account exists for
+     `(fromTenantId, userId)`.
+   - `409` (`storage.conflict`, `reason: "handleExists"`) when the target tenant
+     already has an account with the same handle (case-insensitive) or `userId`.
+3. **Revokes the account's old-tenant sessions** — deletes every session row
+   bound to `fromTenantId` and live-disconnects any open WebSocket, so the user
+   must re-authenticate to obtain a session in the new tenant.
+4. **Appends an `accounts.move` row** to the admin-audit hash chain
+   (target = `fromTenantId/userId`, detail = from/to tenant, userId, and the
+   revoked/disconnected counts).
+
+**Data boundary — important.** This route moves the account *identity* only. The
+account's per-tenant DATA in the object and stream stores is tenant-scoped and is
+**NOT** migrated by this route. Objects, stream history, blobs, projections, and
+any app-owned records keyed by tenant stay where they are. Re-homing that data is
+a separate, deliberate migration concern: the framework cannot safely assume an
+account's old-tenant rows should follow it (the destination tenant may already
+have conflicting data, and cross-tenant copies can violate isolation invariants).
+Plan and execute any data move explicitly, out of band, after the identity move.
+
 ## Outbound email
 
 Frick ships a pluggable outbound email surface that mirrors the push-adapter

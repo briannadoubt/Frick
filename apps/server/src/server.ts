@@ -4106,6 +4106,121 @@ async function handleAdminRoute(
     return;
   }
 
+  if (request.method === "POST" && sub === "accounts/move") {
+    // Reassign an account's tenant (FR-39). Moves the account *identity* row
+    // (its `tenant_id`); the user re-authenticates into the new tenant because
+    // we revoke every session bound to the old tenant. NOTE ON DATA BOUNDARY:
+    // only the account identity moves here. The account's per-tenant DATA in
+    // the object/stream stores is tenant-scoped and is NOT migrated — that is
+    // a separate concern (see docs/operations.md "Moving an account between
+    // tenants"). Don't assume objects/streams follow the account.
+    let fromTenantId: string | undefined;
+    let toTenantId: string | undefined;
+    let userId: string | undefined;
+    const sendMoveError = (
+      statusCode: number,
+      requestId: string,
+      message: string,
+      details: Record<string, unknown>,
+    ): void => {
+      const envelope = createFrickErrorEnvelope({
+        code: statusCode === 409 ? "storage.conflict" : "sync.protocolError",
+        message,
+        requestId,
+        retryable: false,
+        details,
+        schemaHash: foundationSchema.hash,
+        schemaRevision: foundationSchema.schemaRevision,
+      });
+      sendJson(response, statusCode, {
+        error: envelope,
+        code: envelope.code,
+        message: envelope.message,
+        requestId: envelope.requestId,
+        retryable: envelope.retryable,
+      });
+    };
+    try {
+      const body = await readJsonBody(request, maxBodyBytes);
+      userId = requireString(body.userId, "userId");
+      const rawFrom = body.fromTenantId ?? body.tenantId;
+      fromTenantId = resolveAuthTenantId(rawFrom);
+      toTenantId = resolveAuthTenantId(requireString(body.toTenantId, "toTenantId"));
+      const target = `${fromTenantId}/${userId}`;
+
+      // Target tenant must exist (and not be archived) — never move an account
+      // into a tenant the ledger doesn't know about.
+      await ensureTenantAllowed(store, config, toTenantId);
+
+      const result = await store.accounts.move(fromTenantId, userId, toTenantId);
+      if (result === "notFound") {
+        strictAudit({
+          action: "accounts.move",
+          target,
+          outcome: "deny",
+          detail: { reason: "accountNotFound", fromTenantId, toTenantId, userId },
+        });
+        sendMoveError(404, "admin_account_move_not_found", "Account not found", {
+          reason: "accountNotFound",
+          fromTenantId,
+          toTenantId,
+          userId,
+        });
+        return;
+      }
+      if (result === "conflict") {
+        strictAudit({
+          action: "accounts.move",
+          target,
+          outcome: "deny",
+          detail: { reason: "handleExists", fromTenantId, toTenantId, userId },
+        });
+        sendMoveError(
+          409,
+          "admin_account_move_conflict",
+          "Target tenant already has an account with that handle or userId",
+          { reason: "handleExists", fromTenantId, toTenantId, userId },
+        );
+        return;
+      }
+
+      // Revoke the account's old-tenant sessions so the user re-authenticates
+      // into the new tenant; live-disconnect any open sockets.
+      const revoked = await store.deleteSessionsForUser(userId, fromTenantId);
+      const disconnected = gateway.closeSessionsForUser(userId, fromTenantId);
+
+      strictAudit({
+        action: "accounts.move",
+        target,
+        outcome: "allow",
+        detail: { fromTenantId, toTenantId, userId, revoked, disconnected },
+      });
+      sendJson(response, 200, {
+        userId,
+        fromTenantId,
+        toTenantId,
+        moved: true,
+        revoked,
+        disconnected,
+      });
+    } catch (error) {
+      if (!(error instanceof AdminAuditWriteError)) {
+        const target =
+          fromTenantId !== undefined && userId !== undefined
+            ? `${fromTenantId}/${userId}`
+            : undefined;
+        strictAudit({
+          action: "accounts.move",
+          ...(target !== undefined ? { target } : {}),
+          outcome: "error",
+          detail: { error: error instanceof Error ? error.message : String(error) },
+        });
+      }
+      throw error;
+    }
+    return;
+  }
+
   const jobsTriggerMatch = /^jobs\/([^/]+)$/.exec(sub);
   if (request.method === "POST" && jobsTriggerMatch) {
     const jobType = decodeURIComponent(jobsTriggerMatch[1]!);
