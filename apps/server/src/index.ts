@@ -76,12 +76,25 @@ export {
   type FrickBlobValidationResult,
 } from "./blobs/processor.js";
 export {
+  copyDerivativeGenerator,
   DEFAULT_MAX_IMAGE_BYTES,
   imageBlobProcessor,
   sniffImageFormat,
   type ImageBlobProcessorOptions,
+  type ImageDerivativeGenerator,
+  type ImageDerivativeGeneratorInput,
+  type ImageDerivativeVariant,
   type ImageFormat,
 } from "./blobs/image-processor.js";
+export {
+  mimeSizeValidator,
+  moderationProcessor,
+  type BlobModerationContext,
+  type BlobModerationHook,
+  type BlobModerationVerdict,
+  type MimeSizeValidatorOptions,
+  type ModerationProcessorOptions,
+} from "./blobs/validation-processor.js";
 export {
   type FrickJobContext,
   type FrickJobHandler,

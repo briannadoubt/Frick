@@ -128,6 +128,65 @@ injecting a driver throws at construction; selecting it without
 `FRICK_BLOB_S3_BUCKET` fails fast at config load. SQLite remains the default, so
 this is fully opt-in.
 
+## Blob processing pipeline
+
+Blob processors (registered via `createFrickServer({ blobProcessors: [...] })`)
+hook the upload pipeline in two phases: a synchronous `validate(...)` that runs
+before any row is written (rejected uploads short-circuit with
+`blob.unsupportedContentType`), and an asynchronous `process(...)` that runs as a
+`blob.process` job after the upload commits and persists any returned
+derivatives. Frick ships three stock processor factories (FR-55, FR-130) — all
+additive and behind the same registry surface:
+
+```ts
+import {
+  createFrickServer,
+  imageBlobProcessor,
+  mimeSizeValidator,
+  moderationProcessor,
+} from "@fricken/server";
+
+const server = createFrickServer({
+  blobProcessors: [
+    // MIME/size gate: reject anything not on the allow-list or over the cap.
+    // Allow-list entries match exactly, or by prefix when they end in `/`.
+    mimeSizeValidator({
+      allowedMimeTypes: ["image/", "application/pdf"],
+      maxBytes: 10 * 1024 * 1024,
+      matches: { mimePrefixes: ["application/"] },
+    }),
+
+    // Image validation + derivative extraction. The derivative generator is
+    // pluggable; the default `copyDerivativeGenerator` re-tags the source bytes
+    // (no native image library required). Supply your own (e.g. a `sharp`
+    // wrapper) for real resizing.
+    imageBlobProcessor({
+      matches: { mimePrefixes: ["image/"] },
+      derivatives: [
+        { derivativeId: "thumb-256", maxEdge: 256, mimeType: "image/webp" },
+        { derivativeId: "thumb-64", maxEdge: 64 },
+      ],
+      // derivativeGenerator: myResizer,
+    }),
+
+    // Moderation extension point — Frick ships the hook *mechanism*, not a
+    // moderation impl. The hook runs in the async `process` phase (never blocks
+    // the upload) and its verdict is persisted as a JSON sidecar derivative.
+    moderationProcessor({
+      hook: async ({ blobId, content }) => {
+        const verdict = await myModerationVendor.scan(content);
+        return { decision: verdict.flagged ? "flag" : "allow", details: verdict };
+      },
+    }),
+  ],
+});
+```
+
+Derivatives are retrievable through the existing derivative routes
+(`GET /blobs/:blobId/derivatives` and
+`GET /blobs/:blobId/derivatives/:derivativeId/content`). Re-running a processor
+overwrites the prior derivative on the `(tenant, parent, derivative)` key.
+
 ## Local runtime profiles
 
 `frick dev` prints the standard local runtime plan as JSON. The default

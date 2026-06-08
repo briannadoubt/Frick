@@ -15,7 +15,13 @@
  *
  * Only the size cap and rejection copy are app config; the sniffing is generic.
  */
-import type { FrickBlobProcessor, FrickBlobValidationResult } from "./processor.js";
+import type {
+  FrickBlobDerivative,
+  FrickBlobProcessContext,
+  FrickBlobProcessor,
+  FrickBlobProcessResult,
+  FrickBlobValidationResult,
+} from "./processor.js";
 
 /** Default ceiling for an uploaded image: 10 MiB. */
 export const DEFAULT_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -73,7 +79,58 @@ export interface ImageBlobProcessorOptions {
    * `{ mimePrefixes: ["image/"] }`) to let other processors own non-images.
    */
   matches?: FrickBlobProcessor["matches"];
+  /**
+   * Derivative variants to generate asynchronously after upload (FR-55).
+   * When supplied (non-empty), the processor gains a `process(...)` hook that
+   * reads the stored blob bytes and emits one derivative per variant via the
+   * {@link ImageDerivativeGenerator}. Omit (the default) for a validate-only
+   * processor that ships no derivatives.
+   */
+  derivatives?: ImageDerivativeVariant[];
+  /**
+   * Pluggable byte transformer used to produce each derivative's content.
+   * Defaults to {@link copyDerivativeGenerator}, which simply re-tags the
+   * original bytes — no native image library required. Apps that want real
+   * resizing supply their own (e.g. a `sharp` wrapper) without changing the
+   * pipeline. Tests can pass a deterministic fake.
+   */
+  derivativeGenerator?: ImageDerivativeGenerator;
 }
+
+/** A single derivative variant to emit for a processable image. */
+export interface ImageDerivativeVariant {
+  /** Local id within the parent blob, e.g. "thumb-256". */
+  derivativeId: string;
+  /** Longest-edge target in pixels. Advisory — passed to the generator. */
+  maxEdge?: number;
+  /** MIME type of the produced derivative. Defaults to the source MIME. */
+  mimeType?: string;
+}
+
+/** Input handed to an {@link ImageDerivativeGenerator}. */
+export interface ImageDerivativeGeneratorInput {
+  source: Buffer;
+  sourceMimeType: string;
+  variant: ImageDerivativeVariant;
+}
+
+/**
+ * Produces derivative bytes from source image bytes. Pure function of its
+ * input so it stays trivially testable and backend-agnostic. Returning
+ * `null`/`undefined` skips the variant (e.g. unsupported source format).
+ */
+export type ImageDerivativeGenerator = (
+  input: ImageDerivativeGeneratorInput,
+) => Promise<Buffer | null | undefined> | Buffer | null | undefined;
+
+/**
+ * Default, dependency-free derivative generator: returns the source bytes
+ * unchanged. This keeps the framework usable out of the box (the derivative is
+ * a content-addressed copy) and lets apps swap in real resizing later without
+ * touching the pipeline.
+ */
+export const copyDerivativeGenerator: ImageDerivativeGenerator = ({ source }) =>
+  Buffer.from(source);
 
 const DEFAULT_REJECTION_MESSAGE =
   "Upload is not a recognised PNG, JPEG, GIF, or WebP image.";
@@ -89,8 +146,10 @@ export function imageBlobProcessor(options: ImageBlobProcessorOptions = {}): Fri
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_IMAGE_BYTES;
   const message = options.message ?? DEFAULT_REJECTION_MESSAGE;
   const matches = options.matches ?? {};
+  const variants = options.derivatives ?? [];
+  const generate = options.derivativeGenerator ?? copyDerivativeGenerator;
 
-  return {
+  const processor: FrickBlobProcessor = {
     id,
     matches,
     async validate(ctx): Promise<FrickBlobValidationResult> {
@@ -113,4 +172,44 @@ export function imageBlobProcessor(options: ImageBlobProcessorOptions = {}): Fri
       return { ok: true, extractedMetadata: { format } };
     },
   };
+
+  // Only attach a `process` hook when there are variants to emit — a
+  // validate-only processor must not enqueue empty jobs.
+  if (variants.length > 0) {
+    processor.process = async (
+      ctx: FrickBlobProcessContext,
+    ): Promise<FrickBlobProcessResult> => {
+      const source = await ctx.store.blobs.readContent(ctx.tenantId, ctx.blobId);
+      if (!source) {
+        ctx.logger.warn("frick.blob.image.missingContent", {
+          event: "frick.blob.image.missingContent",
+          blobId: ctx.blobId,
+          processorId: id,
+        });
+        return { derivatives: [] };
+      }
+      const sourceBuffer = Buffer.from(source);
+      const derivatives: FrickBlobDerivative[] = [];
+      for (const variant of variants) {
+        const bytes = await generate({
+          source: sourceBuffer,
+          sourceMimeType: ctx.mimeType,
+          variant,
+        });
+        if (!bytes) continue;
+        derivatives.push({
+          derivativeId: variant.derivativeId,
+          mimeType: variant.mimeType ?? ctx.mimeType,
+          bytes,
+          metadata: {
+            ...(variant.maxEdge !== undefined ? { maxEdge: variant.maxEdge } : {}),
+            source: "image-derivative",
+          },
+        });
+      }
+      return { derivatives };
+    };
+  }
+
+  return processor;
 }
