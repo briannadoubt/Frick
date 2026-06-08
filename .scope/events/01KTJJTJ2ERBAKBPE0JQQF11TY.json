@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJJTJ2ERBAKBPE0JQQF11TY",
+  "ts": "2026-06-08T03:01:08.814Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1K",
+    "field": "branch",
+    "value": "feat/fr31-saml-provider-routing"
+  }
+}

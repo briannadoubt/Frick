@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJKHTCJZZT2RRPX7EHEM47E",
+  "ts": "2026-06-08T03:13:50.994Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1K",
+    "commentId": "01KTJKHTCJZZT2RRPX7EHEM47D",
+    "author": "claude",
+    "body": "Shipped SAML 2.0 SP routing. Routes: GET /auth/saml/:id/metadata + POST /auth/saml/:id/acs, reusing the OIDC identity-linking/session path. Enforced validations (all reject->401): XML signature against the CONFIGURED IdP cert (embedded KeyInfo never trusted) + signature-wrapping guard (assertion read for claims must be covered by a verified signature); unsigned rejected; issuer=IdP entityID; AudienceRestriction contains SP entityID; Conditions + SubjectConfirmationData NotBefore/NotOnOrAfter within configurable skew (default 60s); Recipient=ACS URL; InResponseTo=expected AuthnRequest id (SP-initiated); assertion-ID replay protection via new auth_saml_seen_assertions table (SQLite+PG parity). Lib choice: xml-crypto + @xmldom/xmldom (the vetted libs node-saml/passport-saml build on) behind a pluggable SamlSignatureVerifier seam (per-provider override for offline tests). Subject = NameID scoped as providerId:nameId on User.samlSubject; attribute mapping mirrors OIDC claim mapping. Additive/opt-in. Gate green: typecheck 0, server vitest 950 passed/0 failed."
+  }
+}
