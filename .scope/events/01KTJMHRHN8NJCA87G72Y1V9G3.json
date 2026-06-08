@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJMHRHN8NJCA87G72Y1V9G3",
+  "ts": "2026-06-08T03:31:17.685Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1S",
+    "commentId": "01KTJMHRHN8NJCA87G72Y1V9G2",
+    "author": "claude",
+    "body": "Threaded appId through ObjectStore + StreamStore read/write paths (trailing optional param, defaults '_default'). Reads filter by app_id; writes stamp it; cross-app object write rejected via new FrickCrossAppAccessError (objects PK doesn't include app_id, so guard the ON CONFLICT clobber). New app-id.ts mirrors tenant.ts. New app-scoping.test.ts proves read/list/delete isolation + write rejection + idempotency stamp. Gate: typecheck exit 0; server vitest 971 passed / 0 failed / 45 skipped (962+9). SCOPE NOTE: request-boundary appId resolution (gateway/server.ts) + non-core stores (blobs/presence/jobs/search/auth) left as follow-up; FR-38 + wider threading continue the epic."
+  }
+}
