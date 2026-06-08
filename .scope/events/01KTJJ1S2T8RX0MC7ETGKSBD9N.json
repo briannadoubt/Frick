@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJJ1S2T8RX0MC7ETGKSBD9N",
+  "ts": "2026-06-08T02:47:36.794Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3C",
+    "commentId": "01KTJJ1S2T8RX0MC7ETGKSBD9M",
+    "author": "claude",
+    "body": "Verified existing FrickWorkspaceShell (NavigationComponents.kt) matches the workspace-shell spec: NavigationSuiteScaffold adaptive nav, NavigableListDetailPaneScaffold adaptive list/detail panes, ModalBottomSheet inspector on compact, semantic collection/content/inspector slots with app-owned state. Tests already cover destination contract + adaptive breakpoints. No behavior change needed."
+  }
+}

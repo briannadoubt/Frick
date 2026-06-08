@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJHWH4A2187BR07XEQA2P5J",
+  "ts": "2026-06-08T02:44:44.810Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3G",
+    "field": "branch",
+    "value": "feat/fr88-92-android-shell-parity"
+  }
+}

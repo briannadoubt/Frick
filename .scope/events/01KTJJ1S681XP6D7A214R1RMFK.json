@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJJ1S681XP6D7A214R1RMFK",
+  "ts": "2026-06-08T02:47:36.904Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3G",
+    "commentId": "01KTJJ1S67QE921C9KKVGH7S70",
+    "author": "claude",
+    "body": "Added spec-named, token-only, additive Compose composables to :design (ParityComponents.kt + 3 in CommunicationComponents.kt): FrickDesignProvider; FrickCluster/AppShell/Toolbar/ScrollArea; FrickTextField+TextArea; FrickStatusChip/PresenceDot/ProgressRing/Toast; FrickMetricCard/Column/Cell; FrickDatePicker/TimePicker/DateTimePicker/DateRangePicker; FrickChartSurface/Line/Area/Bar/PieChart; FrickReactionRow/SignalPanel/CallButton. Consumes only generated FrickTokens + icon aliases, no raw literals. Gate green: pnpm typecheck exit 0, :design:testDebugUnitTest BUILD SUCCESSFUL."
+  }
+}
