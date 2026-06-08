@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJK5BB0CMWKKAATJ5YSGTCQ",
+  "ts": "2026-06-08T03:07:02.368Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2D",
+    "commentId": "01KTJK5BB0CMWKKAATJ5YSGTCP",
+    "author": "claude",
+    "body": "Shipped opt-in orphaned-blob GC. Safety: (a) off by default — blob.gc handler + recurring sweep only register when blobGc.enabled; (b) grace window (default 7d, configurable) — newer blobs never touched; (c) optional app isReferenced(blobId) hook protects blobs in untyped fields; (d) framework reference set = declared blob-ref fields only (kind:'ref' → schema.blobs) via new blobRefFields() helper. A blob is deleted only if unreferenced by BOTH scan and hook AND past grace. Untyped-field caveat documented in gc-job header, blobRefFields jsdoc, ServerOptions.blobGc, CHANGELOG. Delete order derivatives→bytes→metadata-last. No schema change. Gate: typecheck exit 0; server suite 941 passed / 45 skipped / 0 failures."
+  }
+}
