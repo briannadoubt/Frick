@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJKP1XSEJPCC358ZN5QCBJX",
+  "ts": "2026-06-08T03:16:09.785Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0X",
+    "commentId": "01KTJKP1XSEJPCC358ZN5QCBJW",
+    "author": null,
+    "body": "All children done. Blob storage complete — incl. FR-57 opt-in, grace-windowed orphaned-blob GC job that only treats declared blob-ref fields as the known reference set (untyped-field caveat documented)."
+  }
+}

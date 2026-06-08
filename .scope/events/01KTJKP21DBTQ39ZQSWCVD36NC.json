@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJKP21DBTQ39ZQSWCVD36NC",
+  "ts": "2026-06-08T03:16:09.901Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ16",
+    "commentId": "01KTJKP21CX7AKJKG9DZ38XFH1",
+    "author": null,
+    "body": "All children done. Perf benchmarking complete — incl. FR-99 cross-platform codec encode/decode benchmarks (TS bench CLI + Swift/Kotlin micro-benchmarks over identical frame shapes)."
+  }
+}

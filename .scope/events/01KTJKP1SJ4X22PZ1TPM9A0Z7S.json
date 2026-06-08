@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJKP1SJ4X22PZ1TPM9A0Z7S",
+  "ts": "2026-06-08T03:16:09.650Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ0S",
+    "commentId": "01KTJKP1SJ4X22PZ1TPM9A0Z7R",
+    "author": null,
+    "body": "All children done. Auth & identity hardening complete — incl. FR-31 SAML 2.0 SP routing (assertion signature validation, audience/validity/replay protection, attribute mapping) reusing the OIDC federation path."
+  }
+}
