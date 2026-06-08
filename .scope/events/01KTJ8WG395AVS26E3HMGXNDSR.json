@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJ8WG395AVS26E3HMGXNDSR",
+  "ts": "2026-06-08T00:07:26.569Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ22",
+    "commentId": "01KTJ8WG395AVS26E3HMGXNDSQ",
+    "author": "claude",
+    "body": "Shipped service principals (FR-46): ServicePrincipalStore (issue/authenticate/list/get/revoke) with hashed API keys (sk_<keyId>.<secret>, SHA-256, constant-time verify), migration 0019 (SQLite+PG parity), scope:\"service\" Principal + serviceScopes + assertServicePrincipalScope, HTTP key resolution emitting admin-audit events (allow/deny). Gate green: typecheck exit 0, server vitest 863 passed/45 skipped."
+  }
+}
