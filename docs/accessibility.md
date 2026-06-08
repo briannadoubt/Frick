@@ -142,4 +142,31 @@ Animations and transitions are *neutralized*, not removed — final layout and
 state are unchanged, only the motion is gone (WCAG 2.3.3). The typing indicator's
 bounce animation is disabled and falls back to a static muted state.
 
+## 6. Dynamic Type / text scaling (native)
+
+Native text honors the OS text-size preference (iOS Dynamic Type, Android
+font-scale), satisfying WCAG 1.4.4 (Resize Text). The shared typography token
+*values* (point sizes in the generated tokens) are unchanged; each platform
+applies them through its scaling mechanism (FR-102).
+
+**iOS (`design-swift`).** The generated `FrickTokens.Typography` fonts are built
+with `Font.system(size:)`, which produces a **fixed** point size that does not
+respond to Dynamic Type. `FrickTypography` therefore applies each role via a
+relative text style (`Font.system(_:design:weight:)`) anchored to the OS Dynamic
+Type ramp — heading → `.title` (rounded, bold), body → `.callout`, label →
+`.footnote` (semibold), mono → `.footnote` (monospaced) — preserving each role's
+design intent while scaling. `FrickButton` titles likewise map their control size
+to a relative style (`.footnote`/`.callout`/`.body`). The raw fixed-size tokens
+remain available as `FrickTypography.Fixed.*` for non-scaling needs.
+
+**Android (`design`).** All typography tokens (`FrickTokens.typography.body`,
+`.heading`, `.label`) are declared in scalable `sp` units, which Compose scales
+by the OS `fontScale` automatically. No component or theme forces
+`fontScale = 1f` or overrides `LocalDensity`, so text tracks the system setting.
+
+Enforced by `packages/design-swift/Tests/FrickDesignTests/FrickDesignTests.swift`
+(roles use scaling styles and differ from the fixed tokens) and
+`apps/android/design/src/test/java/dev/frick/design/FrickDesignTest.kt`
+(typography tokens are `sp`).
+
 Enforced by `packages/design-web/src/a11y.test.tsx`.

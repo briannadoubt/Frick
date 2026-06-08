@@ -85,11 +85,41 @@ public enum FrickPalette {
     public static let info = FrickTokens.Colors.info
 }
 
+/// Typography roles that honor the platform's Dynamic Type setting (FR-102).
+///
+/// The generated `FrickTokens.Typography` fonts are built with `Font.system(size:)`,
+/// which produces a *fixed* point size that does **not** respond to the user's
+/// Dynamic Type / text-size preference. To honor accessibility text scaling
+/// without hand-editing the generated tokens, each role here is applied via a
+/// SwiftUI relative text style (`Font.system(_:design:weight:)`). Relative text
+/// styles anchor to the OS Dynamic Type ramp, so they scale up and down with the
+/// user's setting while preserving the design intent (rounded heading, mono,
+/// per-role weight) carried by the generated tokens.
+///
+/// The token *values* (point sizes / weights / designs in `Generated/FrickTokens.swift`)
+/// are unchanged and remain the cross-platform source of truth; only the way iOS
+/// *applies* them now scales. The reference point sizes are mapped to the closest
+/// standard text style: heading 28pt → `.title`, body 15pt → `.callout`,
+/// label/mono 13pt → `.footnote`.
 public enum FrickTypography {
-    public static let heading = FrickTokens.Typography.heading
-    public static let body = FrickTokens.Typography.body
-    public static let label = FrickTokens.Typography.label
-    public static let mono = FrickTokens.Typography.mono
+    /// 28pt rounded bold heading, scaled relative to `.title`.
+    public static let heading = Font.system(.title, design: .rounded, weight: .bold)
+    /// 15pt body, scaled relative to `.callout`.
+    public static let body = Font.system(.callout, design: .default, weight: .regular)
+    /// 13pt semibold label, scaled relative to `.footnote`.
+    public static let label = Font.system(.footnote, design: .default, weight: .semibold)
+    /// 13pt monospaced, scaled relative to `.footnote`.
+    public static let mono = Font.system(.footnote, design: .monospaced, weight: .regular)
+
+    /// The generated, fixed-point-size token fonts. Retained for callers (and
+    /// tests) that need the raw reference values; prefer the scaling roles above
+    /// for any user-facing text so it honors Dynamic Type.
+    public enum Fixed {
+        public static let heading = FrickTokens.Typography.heading
+        public static let body = FrickTokens.Typography.body
+        public static let label = FrickTokens.Typography.label
+        public static let mono = FrickTokens.Typography.mono
+    }
 }
 
 public extension FrickTokens.Spacing {

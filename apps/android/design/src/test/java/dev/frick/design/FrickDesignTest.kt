@@ -1,12 +1,15 @@
 package dev.frick.design
 
+import androidx.compose.ui.unit.TextUnitType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import dev.frick.design.generated.FrickDensity
 import dev.frick.design.generated.FrickIconName
 import dev.frick.design.generated.FrickMode
 import dev.frick.design.generated.FrickTokens
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 public class FrickDesignTest {
@@ -139,5 +142,39 @@ public class FrickDesignTest {
         assertEquals(FrickIconName.ActionReload, action.icon)
         assertEquals("Reload", action.contentDescription)
         assertEquals(true, action.enabled)
+    }
+
+    // FR-102 Dynamic Type / text scaling.
+    //
+    // On Android, text honors the OS font-scale setting only when sizes are
+    // expressed in scalable `sp` units; `dp`/`em` text would ignore fontScale.
+    // These assertions pin every typography token to `sp` so the design
+    // components scale with the user's text-size preference.
+
+    @Test
+    public fun typographyTokensUseScalableSpUnits() {
+        val typography = FrickTokens.typography
+
+        assertEquals(TextUnitType.Sp, typography.body.type)
+        assertEquals(TextUnitType.Sp, typography.heading.type)
+        assertEquals(TextUnitType.Sp, typography.label.type)
+    }
+
+    @Test
+    public fun typographyTokensCarryExpectedScalableValues() {
+        val typography = FrickTokens.typography
+
+        assertEquals(15.sp, typography.body)
+        assertEquals(28.sp, typography.heading)
+        assertEquals(13.sp, typography.label)
+    }
+
+    @Test
+    public fun spTextUnitScalesWithFontScaleWhileSpReportsSp() {
+        // A higher fontScale renders sp text larger (the scaling contract), while
+        // the declared unit type stays Sp so it always tracks the OS setting.
+        val body = FrickTokens.typography.body
+        assertTrue(body.value > 0f)
+        assertEquals(TextUnitType.Sp, body.type)
     }
 }

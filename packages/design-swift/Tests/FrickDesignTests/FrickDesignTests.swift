@@ -234,4 +234,34 @@ final class FrickDesignTests: XCTestCase {
         ])
         XCTAssertEqual(chart.points.map(\.label), ["Mon", "Tue"])
     }
+
+    // MARK: - FR-102 Dynamic Type / text scaling
+
+    /// The typography roles must be built from *relative* text styles so they
+    /// scale with the user's Dynamic Type setting, not from fixed point sizes.
+    /// A fixed-size system font compares unequal to its text-style counterpart,
+    /// so these assertions pin the roles to the scaling fonts.
+    func testTypographyRolesUseDynamicTypeScalingStyles() {
+        XCTAssertEqual(FrickTypography.heading, Font.system(.title, design: .rounded, weight: .bold))
+        XCTAssertEqual(FrickTypography.body, Font.system(.callout, design: .default, weight: .regular))
+        XCTAssertEqual(FrickTypography.label, Font.system(.footnote, design: .default, weight: .semibold))
+        XCTAssertEqual(FrickTypography.mono, Font.system(.footnote, design: .monospaced, weight: .regular))
+    }
+
+    /// The scaling roles must differ from the fixed-point-size generated tokens;
+    /// if they were identical the text would not respond to Dynamic Type.
+    func testTypographyScalingRolesDifferFromFixedTokens() {
+        XCTAssertNotEqual(FrickTypography.heading, FrickTypography.Fixed.heading)
+        XCTAssertNotEqual(FrickTypography.body, FrickTypography.Fixed.body)
+        XCTAssertNotEqual(FrickTypography.label, FrickTypography.Fixed.label)
+        XCTAssertNotEqual(FrickTypography.mono, FrickTypography.Fixed.mono)
+    }
+
+    /// The fixed reference fonts still expose the unchanged generated token values.
+    func testTypographyFixedRolesMirrorGeneratedTokens() {
+        XCTAssertEqual(FrickTypography.Fixed.heading, FrickTokens.Typography.heading)
+        XCTAssertEqual(FrickTypography.Fixed.body, FrickTokens.Typography.body)
+        XCTAssertEqual(FrickTypography.Fixed.label, FrickTokens.Typography.label)
+        XCTAssertEqual(FrickTypography.Fixed.mono, FrickTokens.Typography.mono)
+    }
 }

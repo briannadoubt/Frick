@@ -402,7 +402,7 @@ public struct FrickButton: View, Sendable {
                     FrickIcon(icon, size: 16)
                 }
             }
-            .font(.system(size: fontSize, weight: .semibold))
+            .font(font)
             .padding(.horizontal, horizontalPadding)
             .padding(.vertical, verticalPadding)
             .frame(minHeight: minHeight)
@@ -421,11 +421,14 @@ public struct FrickButton: View, Sendable {
         }
     }
 
-    private var fontSize: CGFloat {
+    // Scales the button title with Dynamic Type (FR-102) by mapping each control
+    // size to a relative text style instead of a fixed point size: sm 13pt →
+    // `.footnote`, md 15pt → `.callout`, lg 17pt → `.body`.
+    private var font: Font {
         switch size {
-        case .sm: 13
-        case .md: 15
-        case .lg: 17
+        case .sm: Font.system(.footnote, weight: .semibold)
+        case .md: Font.system(.callout, weight: .semibold)
+        case .lg: Font.system(.body, weight: .semibold)
         }
     }
 
