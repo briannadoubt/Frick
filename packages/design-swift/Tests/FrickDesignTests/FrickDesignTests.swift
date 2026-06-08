@@ -111,4 +111,127 @@ final class FrickDesignTests: XCTestCase {
 
         XCTAssertEqual(sparkline.normalizedValues, [0.5, 0.5, 0.5])
     }
+
+    // MARK: - FR-87 workspace shell composition
+
+    func testAppShellIsWorkspaceShellParityAlias() {
+        // FrickAppShell is the cross-platform parity name for the Apple
+        // TabView + .sidebarAdaptable + .inspector workspace shell.
+        let shell = FrickAppShell(
+            destinations: [
+                FrickWorkspaceDestination(id: "chat", title: "Chat", icon: .chatMessage)
+            ],
+            selection: .constant("chat"),
+            inspectorPresented: .constant(false)
+        ) { destination in
+            Text(destination.title)
+        } inspector: {
+            Text("Inspector")
+        }
+
+        XCTAssertEqual(shell.destinations.map(\.id), ["chat"])
+        XCTAssertFalse(shell.inspectorPresented.wrappedValue)
+    }
+
+    func testWorkspaceShellPreservesDisabledDestinationContract() {
+        let destinations = [
+            FrickWorkspaceDestination(id: "chat", title: "Chat", icon: .chatMessage),
+            FrickWorkspaceDestination(id: "calls", title: "Calls", icon: .callVideo, isEnabled: false),
+        ]
+        let shell = FrickWorkspaceShell(
+            destinations: destinations,
+            selection: .constant("chat")
+        ) { destination in
+            Text(destination.title)
+        } inspector: {
+            EmptyView()
+        }
+
+        XCTAssertEqual(shell.destinations.filter { !$0.isEnabled }.map(\.id), ["calls"])
+    }
+
+    // MARK: - FR-91 parity components
+
+    func testStatusChipStoresToneAndText() {
+        let chip = FrickStatusChip("Live", tone: .success)
+        XCTAssertEqual(chip.text, "Live")
+        XCTAssertEqual(chip.tone, .success)
+    }
+
+    func testProgressRingClampsAndExposesValue() {
+        let ring = FrickProgressRing(value: 0.42)
+        XCTAssertEqual(ring.value, 0.42)
+        let indeterminate = FrickProgressRing()
+        XCTAssertNil(indeterminate.value)
+    }
+
+    func testReactionRowKeepsReactionsInOrder() {
+        let row = FrickReactionRow(reactions: [
+            .init(value: "👍", count: 3),
+            .init(value: "🎉", count: 1),
+        ])
+        XCTAssertEqual(row.reactions.map(\.value), ["👍", "🎉"])
+        XCTAssertEqual(row.reactions.first?.count, 3)
+    }
+
+    func testSignalPanelStoresStrengthAndDetail() {
+        let panel = FrickSignalPanel(title: "Relay", strength: 0.8, detail: "Stable")
+        XCTAssertEqual(panel.strength, 0.8)
+        XCTAssertEqual(panel.detail, "Stable")
+    }
+
+    func testCallButtonStoresIconAndTone() {
+        let button = FrickCallButton(icon: .call, label: "Answer", tone: .success) {}
+        XCTAssertEqual(button.icon, .call)
+        XCTAssertEqual(button.tone, .success)
+        XCTAssertEqual(button.label, "Answer")
+    }
+
+    func testDateTimePickerStoresTitle() {
+        let picker = FrickDateTimePicker("When", selection: .constant(Date(timeIntervalSince1970: 0)))
+        XCTAssertEqual(picker.title, "When")
+    }
+
+    func testColumnAndDataTableExposeSemanticColumns() {
+        struct Person: Identifiable { let id: String; let name: String }
+        let people = [Person(id: "1", name: "Ada"), Person(id: "2", name: "Grace")]
+        let columns: [FrickColumn<Person>] = [
+            FrickColumn("Name") { Text($0.name) },
+            FrickColumn("ID", width: 60, alignment: .trailing) { Text($0.id) },
+        ]
+        let table = FrickDataTable(people, columns: columns)
+
+        XCTAssertEqual(table.columns.map(\.title), ["Name", "ID"])
+        XCTAssertEqual(table.columns.last?.width, 60)
+        XCTAssertEqual(table.data.count, 2)
+    }
+
+    // MARK: - FR-91 charts
+
+    func testChartPaletteRotatesAcrossSeries() {
+        XCTAssertEqual(FrickChartPalette.color(at: 0), FrickPalette.accent)
+        XCTAssertEqual(FrickChartPalette.color(at: FrickChartPalette.series.count), FrickPalette.accent)
+    }
+
+    func testPieChartComputesTotalFromPoints() {
+        let chart = FrickPieChart(points: [
+            FrickChartPoint(label: "A", value: 3),
+            FrickChartPoint(label: "B", value: 1),
+        ])
+        XCTAssertEqual(chart.total, 4)
+    }
+
+    func testChartSurfaceStoresEmptyAndErrorState() {
+        let surface = FrickChartSurface(title: "Usage", isEmpty: true) { EmptyView() }
+        XCTAssertTrue(surface.isEmpty)
+        XCTAssertEqual(surface.title, "Usage")
+    }
+
+    func testLineChartKeepsPointsInOrder() {
+        let chart = FrickLineChart(points: [
+            FrickChartPoint(label: "Mon", value: 1),
+            FrickChartPoint(label: "Tue", value: 5),
+        ])
+        XCTAssertEqual(chart.points.map(\.label), ["Mon", "Tue"])
+    }
 }
