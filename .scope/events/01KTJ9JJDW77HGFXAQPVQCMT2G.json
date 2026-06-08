@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJ9JJDW77HGFXAQPVQCMT2G",
+  "ts": "2026-06-08T00:19:29.852Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1V",
+    "commentId": "01KTJ9JJDW77HGFXAQPVQCMT2F",
+    "author": "claude",
+    "body": "Shipped POST /_frick/admin/accounts/move: admin-only, audited tenant reassignment. Verifies target tenant exists, moves account identity row, revokes old-tenant sessions + live-disconnects. AccountStore.move added. Data boundary (per-tenant object/stream data not migrated) documented. 891 server tests green."
+  }
+}
