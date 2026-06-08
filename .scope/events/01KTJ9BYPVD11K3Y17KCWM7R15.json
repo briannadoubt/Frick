@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJ9BYPVD11K3Y17KCWM7R15",
+  "ts": "2026-06-08T00:15:53.051Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ1V",
+    "field": "branch",
+    "value": "feat/fr39-tenant-move-admin"
+  }
+}

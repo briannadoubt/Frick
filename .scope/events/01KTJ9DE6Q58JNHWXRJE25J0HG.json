@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJ9DE6Q58JNHWXRJE25J0HG",
+  "ts": "2026-06-08T00:16:41.687Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ32",
+    "field": "branch",
+    "value": "feat/fr78-79-calls-control-plane"
+  }
+}

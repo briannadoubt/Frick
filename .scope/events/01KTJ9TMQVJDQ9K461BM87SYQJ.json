@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJ9TMQVJDQ9K461BM87SYQJ",
+  "ts": "2026-06-08T00:23:54.363Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ32",
+    "commentId": "01KTJ9TMQVJDQ9K461BM87SYQH",
+    "author": "claude",
+    "body": "Shipped MediaPlaneAdapter (apps/server/src/calls/media-plane.ts): describe()/allocateSession/issueJoinToken/releaseSession — a small boundary that fits both P2P (FR-81) and SFU (FR-83) futures. Plus FakeMediaPlaneAdapter (deterministic, no networking) for tests. Re-exported from package root. Covered by apps/server/tests/calls-control-plane.test.ts. typecheck green; server suite 906 passed/45 skipped."
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJ9TMVHXF0JJR080X5P1HZR",
+  "ts": "2026-06-08T00:23:54.481Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ33",
+    "commentId": "01KTJ9TMVHXF0JJR080X5P1HZQ",
+    "author": "claude",
+    "body": "Shipped CallControlPlane (apps/server/src/calls/call-control-plane.ts): server-authoritative invite→ringing→join→leave→end state machine over FrickStore. Persists CallRoom/CallInvite/CallParticipant as object records (no migration) + durable CallEventStream events; brokers media via the FR-78 adapter. Tenant-scoped + authz-aware: only creator invites/ends, only invitees join, no actions on ended calls, participants change only own media state, auto-end on last leave. Typed CallStateError/CallAuthzError. Schema fragment exported via call-schema.ts (buildCallSchema/callObjectDefs/...). Covered by apps/server/tests/calls-control-plane.test.ts (21 tests incl. invalid-transition + authz + tenant isolation). typecheck green; server suite 906 passed/45 skipped."
+  }
+}
