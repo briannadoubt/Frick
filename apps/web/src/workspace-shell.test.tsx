@@ -40,6 +40,40 @@ describe("web workspace shell integration", () => {
     expect(html).toContain("Soon");
   });
 
+  test("renders the chat demo destination set: Chat active + Files/Calls/Admin placeholders", () => {
+    // Mirrors the `workspaceDestinations` the chat demo (apps/web/src/App.tsx)
+    // hands the shell after the FR-89 cutover: Chat is enabled + selected, the
+    // other three are visible-but-disabled "Soon" placeholders.
+    const demoDestinations = [
+      { id: "chat", label: "Chat", icon: "message" as const },
+      { id: "files", label: "Files", icon: "paperclip" as const, disabled: true, badge: "Soon" },
+      { id: "calls", label: "Calls", icon: "video" as const, disabled: true, badge: "Soon" },
+      { id: "admin", label: "Admin", icon: "settings" as const, disabled: true, badge: "Soon" },
+    ];
+
+    const html = renderToStaticMarkup(
+      <WorkspaceShell
+        destinations={demoDestinations}
+        selectedDestination="chat"
+        onDestinationChange={() => undefined}
+        collection={<div>Threads</div>}
+      >
+        <div>Messages</div>
+      </WorkspaceShell>,
+    );
+
+    // All four destinations are visible in the navigation.
+    for (const label of ["Chat", "Files", "Calls", "Admin"]) {
+      expect(html).toContain(label);
+    }
+    // Chat is the selected/active destination.
+    expect(html).toContain('aria-current="page"');
+    // The three placeholder destinations are rendered but not interactive.
+    expect(html.match(/disabled/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+    // ...and badged "Soon" so the placeholder status is honest.
+    expect(html).toContain("Soon");
+  });
+
   test("keeps the accessible DOM order: destinations, collection, content, inspector", () => {
     const html = renderToStaticMarkup(
       <WorkspaceShell
