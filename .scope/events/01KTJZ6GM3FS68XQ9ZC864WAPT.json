@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJZ6GM3FS68XQ9ZC864WAPT",
+  "ts": "2026-06-08T06:37:23.459Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTJXR0WZ1NNTYCFWXAMRVBF1",
+    "commentId": "01KTJZ6GM3FS68XQ9ZC864WAPS",
+    "author": "claude",
+    "body": "Production SFrame E2EE shipped on the FR-85 seam. PRODUCTION: SFrameCipherTransform (AES-GCM, HKDF key schedule -> per-epoch key+salt, v2 header w/ senderId+counter as AAD, RFC9605 nonce salt XOR senderId||counter); ReplayWindow sliding-window replay guard per (epoch,sender) committed post-auth; additive 'keyEpoch' WebRTCSignalKind + SignalKeyDistributor over the existing sendSignal/signalChannel relay wrapping the epoch key under a symmetric per-room secret (fail-closed unwrap); FrameTransformInserter seam + startSfuCall e2ee?:{transform,inserter} per-room opt-in (encrypt-before-produce/decrypt-after-consume, browser RTCRtpScriptTransform behind injectable seam, tested w/ MemoryFrameTransformInserter, no DOM). E2EE off = path unchanged. REMAINS for future: per-recipient ASYMMETRIC key wrapping + MLS group key agreement (KeyDistributor seam left pluggable). Gates: typecheck clean, core 96 pass (75 baseline + 21 new), protocol 110 pass, 0 failures."
+  }
+}

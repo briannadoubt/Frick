@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJYNEXBSJYTSFV5NPP2AH43",
+  "ts": "2026-06-08T06:28:04.651Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTJXR0WZ1NNTYCFWXAMRVBF1",
+    "field": "branch",
+    "value": "feat/fr156-production-sframe-e2ee"
+  }
+}
