@@ -1378,6 +1378,7 @@ class FrickClient(
             sessionTokenProvider = { storage.loadSession()?.sessionToken },
             config = config,
             httpClient = httpClient,
+            telemetry = telemetry,
         )
     }
 }

@@ -134,6 +134,72 @@ internal object FrameKindCodes {
     const val OBJECT_UPSERT = 20
 }
 
+/**
+ * Map a wire frame-kind code to the label used in telemetry frame counters.
+ * Mirrors the TypeScript `frameKindLabel` (which resolves `FrameKind[kind]`)
+ * and the Swift parity: the PascalCase enum name, or `"unknown"` for codes
+ * outside the enum. Keys identical across TS/Swift/Android so dashboards group.
+ */
+internal fun frickFrameKindLabel(kind: Int): String =
+    when (kind) {
+        FrameKindCodes.HELLO -> "Hello"
+        FrameKindCodes.SCHEMA -> "Schema"
+        FrameKindCodes.SUBSCRIBE -> "Subscribe"
+        FrameKindCodes.SNAPSHOT -> "Snapshot"
+        FrameKindCodes.STREAM_PAGE -> "StreamPage"
+        FrameKindCodes.APPEND -> "Append"
+        FrameKindCodes.ACK -> "Ack"
+        FrameKindCodes.NACK -> "Nack"
+        FrameKindCodes.DELTA -> "Delta"
+        FrameKindCodes.PRESENCE_SET -> "PresenceSet"
+        FrameKindCodes.PRESENCE_CLEAR -> "PresenceClear"
+        FrameKindCodes.PRESENCE_DELTA -> "PresenceDelta"
+        FrameKindCodes.SIGNAL_SEND -> "SignalSend"
+        FrameKindCodes.SIGNAL_DELIVER -> "SignalDeliver"
+        FrameKindCodes.CURSOR_COMMIT -> "CursorCommit"
+        FrameKindCodes.PING -> "Ping"
+        FrameKindCodes.PONG -> "Pong"
+        FrameKindCodes.SYNC_STATUS -> "SyncStatus"
+        FrameKindCodes.HELLO_ACK -> "HelloAck"
+        FrameKindCodes.PROJECTION_DELTA -> "ProjectionDelta"
+        FrameKindCodes.OBJECT_UPSERT -> "ObjectUpsert"
+        else -> "unknown"
+    }
+
+/**
+ * Categorize a WebSocket close code for the `frick.ws.close_category` span
+ * attribute and the connection-duration histogram label. Mirrors the
+ * TypeScript `webSocketCloseCategory` and the Swift parity exactly.
+ */
+internal fun frickWebSocketCloseCategory(code: Int?): String =
+    when (code) {
+        1000 -> "normal"
+        1001 -> "going_away"
+        1002 -> "protocol_error"
+        1003 -> "unsupported_data"
+        1005 -> "no_status"
+        1006 -> "abnormal"
+        1007 -> "invalid_payload"
+        1008 -> "policy_violation"
+        1009 -> "too_large"
+        1010 -> "mandatory_extension"
+        1011 -> "internal_error"
+        1012 -> "service_restart"
+        1013 -> "try_again_later"
+        1014 -> "bad_gateway"
+        1015 -> "tls_handshake"
+        else -> if (code != null && code in 4000..4999) "private" else "unknown"
+    }
+
+/**
+ * Extract the URL path for the `url.path` span attribute, mirroring the
+ * TypeScript `urlPath` helper: the parsed pathname, or `"/"` on failure.
+ */
+internal fun frickWebSocketUrlPath(url: String): String =
+    runCatching {
+        URI(url).path?.takeIf { it.isNotEmpty() } ?: "/"
+    }.getOrDefault("/")
+
 /** Build the default capability bundle the Android SDK advertises in Hello. */
 fun defaultAndroidCapabilities(sdkVersion: String = "0.1.0"): Map<String, Any?> =
     mapOf(
@@ -334,6 +400,7 @@ class FrickSyncSocket internal constructor(
     private val config: FrickSyncSocketConfig,
     private val httpClient: OkHttpClient,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    private val telemetry: FrickClientTelemetryRuntime = NoopFrickClientTelemetryRuntime,
 ) : AutoCloseable {
     private val _status = MutableStateFlow<FrickSyncStatus>(FrickSyncStatus.Disconnected)
     val status: StateFlow<FrickSyncStatus> = _status.asStateFlow()
@@ -351,7 +418,9 @@ class FrickSyncSocket internal constructor(
     @Volatile private var connectJob: Job? = null
 
     // Pending appends/upserts queued before connect or replayed after reconnect.
-    private val pendingFrames: MutableList<ByteArray> = java.util.Collections.synchronizedList(mutableListOf())
+    // Each entry pairs the encoded frame with its FrameKind so the sent-frame
+    // telemetry counter can be labelled by kind when the frame actually flushes.
+    private val pendingFrames: MutableList<Pair<Int, ByteArray>> = java.util.Collections.synchronizedList(mutableListOf())
 
     // requestId -> awaitable result (Ack or Nack). Used by upsertObject().
     private val pendingObjectWrites = ConcurrentHashMap<String, CompletableDeferred<ObjectWriteResult>>()
@@ -359,6 +428,13 @@ class FrickSyncSocket internal constructor(
     init {
         URI(buildSyncUrl(baseUrl))
     }
+
+    // Per-connection telemetry span + start time, mirroring the TS client's
+    // `#socketTelemetry` map (one entry per live WebSocket) and Swift FR-74.
+    // The span opens at connect (openSocketOnce) and finishes exactly once on
+    // close/failure, recording the connection-duration histogram alongside.
+    private val telemetrySpan = AtomicReference<FrickClientTelemetrySpan?>(null)
+    private val telemetryStartedAtMs = AtomicReference<Long?>(null)
 
     @Volatile private var reconnectEnabled: Boolean = true
     private val backoffState = AtomicReference(config.initialBackoffMs)
@@ -393,6 +469,7 @@ class FrickSyncSocket internal constructor(
         val sessionToken = sessionTokenProvider()?.takeIf { token -> token.isNotBlank() }
         activeSessionToken = sessionToken
         val url = buildSyncUrl(baseUrl)
+        startConnectionTelemetrySpan(url, authenticated = sessionToken != null)
         val requestBuilder = Request.Builder()
             .url(url.replace("ws://", "http://").replace("wss://", "https://"))
         if (sessionToken != null) {
@@ -407,6 +484,86 @@ class FrickSyncSocket internal constructor(
         if (!disconnectedSignal.isCompleted) disconnectedSignal.complete(Unit)
     }
 
+    /**
+     * Open the per-connection telemetry span. Mirrors the TS
+     * `#startWebSocketTelemetrySpan`: span name `"WebSocket /_frick/sync"`,
+     * client kind, with the shared `network.protocol.name` / `url.path` /
+     * `frick.schema_id` / `frick.schema_revision` / `frick.authenticated`
+     * attributes. Records the start time for the duration histogram on close.
+     */
+    private fun startConnectionTelemetrySpan(url: String, authenticated: Boolean) {
+        val span = startFrickClientTelemetrySpan(
+            telemetry,
+            FrickClientTelemetrySpanStart(
+                name = "WebSocket /_frick/sync",
+                kind = FrickClientTelemetrySpanKind.CLIENT,
+                attributes = mapOf(
+                    "network.protocol.name" to JsonPrimitive("websocket"),
+                    "url.path" to JsonPrimitive(frickWebSocketUrlPath(url)),
+                    "frick.schema_id" to JsonPrimitive(FRICK_SCHEMA_ID),
+                    "frick.schema_revision" to JsonPrimitive(FRICK_SCHEMA_REVISION),
+                    "frick.authenticated" to JsonPrimitive(authenticated),
+                ),
+            ),
+        )
+        telemetrySpan.set(span)
+        telemetryStartedAtMs.set(System.currentTimeMillis())
+    }
+
+    /**
+     * Finish the active connection span (if any) and record the
+     * `frick.client.ws.connection.duration_ms` histogram. Mirrors the TS
+     * `#finishWebSocketTelemetrySpan`: status ok when the close category is
+     * `"normal"`, else error, with `frick.ws.close_code` (when known) and
+     * `frick.ws.close_category` span attributes plus the histogram labelled by
+     * `closeCategory`. Idempotent — the first caller per connection wins so a
+     * close that follows a failure (or vice versa) does not double-record.
+     */
+    private fun finishConnectionTelemetrySpan(closeCode: Int?) {
+        val span = telemetrySpan.getAndSet(null) ?: return
+        val startedAt = telemetryStartedAtMs.getAndSet(null)
+        val closeCategory = frickWebSocketCloseCategory(closeCode)
+        val attributes = buildMap<String, JsonPrimitive> {
+            if (closeCode != null) put("frick.ws.close_code", JsonPrimitive(closeCode))
+            put("frick.ws.close_category", JsonPrimitive(closeCategory))
+        }
+        finishFrickClientTelemetrySpan(
+            span,
+            FrickClientTelemetrySpanResult(
+                status = if (closeCategory == "normal") {
+                    FrickClientTelemetrySpanStatus.OK
+                } else {
+                    FrickClientTelemetrySpanStatus.ERROR
+                },
+                attributes = attributes,
+            ),
+        )
+        if (startedAt != null) {
+            val durationMs = (System.currentTimeMillis() - startedAt).coerceAtLeast(0L)
+            recordFrickClientTelemetryHistogram(
+                telemetry,
+                name = "frick.client.ws.connection.duration_ms",
+                value = durationMs.toDouble(),
+                attributes = mapOf("closeCategory" to JsonPrimitive(closeCategory)),
+            )
+        }
+    }
+
+    /**
+     * Record a per-frame counter. Mirrors the TS
+     * `#recordWebSocketFrameTelemetry`: increments
+     * `frick.client.ws.frames.{sent,received}.total` with a `kind` label
+     * resolved via [frickFrameKindLabel].
+     */
+    private fun recordFrameTelemetry(direction: String, kind: Int) {
+        recordFrickClientTelemetryCounter(
+            telemetry,
+            name = "frick.client.ws.frames.$direction.total",
+            value = 1.0,
+            attributes = mapOf("kind" to JsonPrimitive(frickFrameKindLabel(kind))),
+        )
+    }
+
     private fun sendHello() {
         val payload = buildMap<String, Any?> {
             put("replicaId", config.replicaId)
@@ -418,6 +575,7 @@ class FrickSyncSocket internal constructor(
         }
         val bytes = FrickMsgPack.encodeFrame(FrameKindCodes.HELLO, payload)
         if (webSocket?.send(bytes.toByteString()) == true) {
+            recordFrameTelemetry("sent", FrameKindCodes.HELLO)
             _status.value = FrickSyncStatus.HelloSent
         }
     }
@@ -447,7 +605,7 @@ class FrickSyncSocket internal constructor(
                 "payload" to payload,
             ),
         )
-        sendOrQueue(frame)
+        sendOrQueue(FrameKindCodes.APPEND, frame)
     }
 
     /** Subscribe to a stream by key. */
@@ -461,7 +619,7 @@ class FrickSyncSocket internal constructor(
                 "key" to key,
             ),
         )
-        sendOrQueue(frame)
+        sendOrQueue(FrameKindCodes.SUBSCRIBE, frame)
     }
 
     /**
@@ -479,7 +637,7 @@ class FrickSyncSocket internal constructor(
                 "key" to key,
             ),
         )
-        sendOrQueue(frame)
+        sendOrQueue(FrameKindCodes.SUBSCRIBE, frame)
     }
 
     /**
@@ -497,7 +655,7 @@ class FrickSyncSocket internal constructor(
                 "value" to value,
             ),
         )
-        sendOrQueue(frame)
+        sendOrQueue(FrameKindCodes.PRESENCE_SET, frame)
     }
 
     /** Revoke the active user's presence lease on this key. */
@@ -510,7 +668,7 @@ class FrickSyncSocket internal constructor(
                 "key" to key,
             ),
         )
-        sendOrQueue(frame)
+        sendOrQueue(FrameKindCodes.PRESENCE_CLEAR, frame)
     }
 
     /**
@@ -530,7 +688,7 @@ class FrickSyncSocket internal constructor(
                 "name" to type,
             ),
         )
-        sendOrQueue(frame)
+        sendOrQueue(FrameKindCodes.SUBSCRIBE, frame)
     }
 
     /** Subscribe to a projection by name. */
@@ -543,7 +701,7 @@ class FrickSyncSocket internal constructor(
                 "name" to name,
             ),
         )
-        sendOrQueue(frame)
+        sendOrQueue(FrameKindCodes.SUBSCRIBE, frame)
     }
 
     /**
@@ -568,7 +726,7 @@ class FrickSyncSocket internal constructor(
         val frame = FrickMsgPack.encodeFrame(FrameKindCodes.OBJECT_UPSERT, payload)
         val deferred = CompletableDeferred<ObjectWriteResult>()
         pendingObjectWrites[requestId] = deferred
-        sendOrQueue(frame)
+        sendOrQueue(FrameKindCodes.OBJECT_UPSERT, frame)
         val result = deferred.await()
         return when (result) {
             is ObjectWriteResult.Ok -> result.version
@@ -581,13 +739,15 @@ class FrickSyncSocket internal constructor(
         }
     }
 
-    private fun sendOrQueue(frame: ByteArray) {
+    private fun sendOrQueue(kind: Int, frame: ByteArray) {
         val ws = webSocket
         val ready = _status.value is FrickSyncStatus.Ready
         if (ws != null && ready) {
-            ws.send(frame.toByteString())
+            if (ws.send(frame.toByteString())) {
+                recordFrameTelemetry("sent", kind)
+            }
         } else {
-            pendingFrames.add(frame)
+            pendingFrames.add(kind to frame)
         }
     }
 
@@ -596,9 +756,10 @@ class FrickSyncSocket internal constructor(
         synchronized(pendingFrames) {
             val iter = pendingFrames.iterator()
             while (iter.hasNext()) {
-                val frame = iter.next()
+                val (kind, frame) = iter.next()
                 if (ws.send(frame.toByteString())) {
                     iter.remove()
+                    recordFrameTelemetry("sent", kind)
                 } else {
                     break
                 }
@@ -611,6 +772,11 @@ class FrickSyncSocket internal constructor(
         closed = true
         reconnectEnabled = false
         webSocket?.close(NORMAL_CLOSURE, "client.close")
+        // OkHttp delivers onClosed asynchronously after a client-initiated
+        // close, and the scope is cancelled below — finish the span here so the
+        // client-close path is recorded deterministically (normal/ok). Idempotent
+        // with onClosed: whichever runs first claims the span.
+        finishConnectionTelemetrySpan(NORMAL_CLOSURE)
         webSocket = null
         _status.value = FrickSyncStatus.Disconnected
         signalDisconnected()
@@ -715,7 +881,9 @@ class FrickSyncSocket internal constructor(
                     FrameKindCodes.PONG,
                     mapOf("sentAt" to sentAt, "receivedAt" to System.currentTimeMillis()),
                 )
-                webSocket?.send(pong.toByteString())
+                if (webSocket?.send(pong.toByteString()) == true) {
+                    recordFrameTelemetry("sent", FrameKindCodes.PONG)
+                }
             }
             // Other kinds handled in follow-up commits.
         }
@@ -832,6 +1000,7 @@ class FrickSyncSocket internal constructor(
                 _status.value = FrickSyncStatus.Failed("decode: ${e.message}")
                 return
             } ?: return
+            recordFrameTelemetry("received", decoded.first)
             handleFrame(decoded.first, decoded.second)
         }
 
@@ -844,12 +1013,17 @@ class FrickSyncSocket internal constructor(
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+            finishConnectionTelemetrySpan(code)
             _events.tryEmit(FrickInboundEvent.Disconnected)
             _status.value = FrickSyncStatus.Disconnected
             signalDisconnected()
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            // No close code is available on a transport failure; pass the
+            // abnormal-closure code so the span/histogram are labelled
+            // "abnormal" with error status, matching the TS/Swift parity.
+            finishConnectionTelemetrySpan(ABNORMAL_CLOSURE)
             _events.tryEmit(FrickInboundEvent.Disconnected)
             _status.value = FrickSyncStatus.Failed(t.message ?: "socket failure")
             signalDisconnected()
@@ -858,6 +1032,7 @@ class FrickSyncSocket internal constructor(
 
     companion object {
         internal const val NORMAL_CLOSURE = 1000
+        internal const val ABNORMAL_CLOSURE = 1006
 
         fun defaultOkHttpClient(): OkHttpClient =
             OkHttpClient.Builder()
