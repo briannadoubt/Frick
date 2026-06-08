@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJGE0QCWVEGJYJ8JJ0ZMPAA",
+  "ts": "2026-06-08T02:19:20.684Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTG9BWY3WPEVR56EHJ1E9XG6",
+    "commentId": "01KTJGE0QCWVEGJYJ8JJ0ZMPA9",
+    "author": null,
+    "body": "Shipped @FrickModel(DTO.self) attached macro (member+extension) generating objectId/dto/init(dto:)/apply(_:)/id/==/hash + Identifiable+Hashable conformance, in a new FrickMacros swift-syntax compiler-plugin target, exposed from FrickSwift. Additive; existing FrickModel conformances unchanged. swift test 104/0, pnpm typecheck exit 0."
+  }
+}

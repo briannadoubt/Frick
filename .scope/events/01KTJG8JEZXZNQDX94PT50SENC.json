@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJG8JEZXZNQDX94PT50SENC",
+  "ts": "2026-06-08T02:16:22.239Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTG9BWY3WPEVR56EHJ1E9XG6",
+    "field": "branch",
+    "value": "feat/fr141-frickmodel-macro"
+  }
+}
