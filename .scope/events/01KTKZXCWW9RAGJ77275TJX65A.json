@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTKZXCWW9RAGJ77275TJX65A",
+  "ts": "2026-06-08T16:09:07.740Z",
+  "actor": "unknown",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTKZXCWVMPZ7DJBCNXF0E3EF",
+    "number": 157,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Asymmetric per-recipient E2EE key wrapping (ECDH)",
+    "description": "",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

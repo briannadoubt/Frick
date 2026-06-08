@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTM08TATWCRN0ZPQRERRDZCT",
+  "ts": "2026-06-08T16:15:21.946Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTKZXTPAQM4VA15GS19YKBZG",
+    "commentId": "01KTM08TATWCRN0ZPQRERRDZCS",
+    "author": "claude",
+    "body": "Per-recipient asymmetric (ECDH P-256) E2EE key wrapping: AsymmetricKeyDistributor wraps the epoch key individually to each current member's public key via ephemeral-ECDH->HKDF->AES-GCM (AAD callId:epochId:recipientId), over the same opaque keyEpoch relay (no protocol change). Boundary: SYMMETRIC sender-key (FR-156) shares one room secret so a removed member can still unwrap future keys; ASYMMETRIC (FR-158) wraps per recipient with no shared secret so a dropped member gets no blob and cannot derive future epoch keys (membership-change forward secrecy, proven by tests: removed C adopts nothing + transform rejects post-removal frames while A,B succeed). MLS (RFC 9420) remains the further evolution -- log-sized re-keying + post-compromise ratchet -- and slots behind the same KeyDistributor seam without touching SFrameCipherTransform or the media path. Gates: typecheck 0, protocol 110, core 102 (96 baseline + 6 new)."
+  }
+}
