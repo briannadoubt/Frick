@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJK94RB8CBMPBQ4CB3AN9NB",
+  "ts": "2026-06-08T03:09:06.699Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3Q",
+    "commentId": "01KTJK94RB8CBMPBQ4CB3AN9NA",
+    "author": "claude",
+    "body": "Added codec encode/decode speed benchmarks across all three platforms over the same four representative frame shapes (appendMessage/objectUpsert/streamPage/delta). TS: bench/src/codec.ts + 'codec' CLI subcommand (pnpm bench:codec). Swift: FrickCodecBenchmarkTests (XCTest measure + timed loops). Kotlin: FrickCodecBenchmarkTest (nanoTime loops). Codec untouched, timings reported not asserted. Gate green: typecheck exit 0, bench build exit 0, swift test 137/0 failures, :frick:testDebugUnitTest BUILD SUCCESSFUL."
+  }
+}
