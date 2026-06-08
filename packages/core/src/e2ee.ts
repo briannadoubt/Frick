@@ -1159,6 +1159,386 @@ function encodeWrapAad(callId: string, epochId: EpochId): Uint8Array {
 }
 
 // ===========================================================================
+// FR-158 — per-recipient ASYMMETRIC key wrapping (ECDH)
+// ===========================================================================
+//
+// FR-156's SignalKeyDistributor wraps the epoch key under a SYMMETRIC per-room
+// secret every member shares. Security gap: a removed member who learned that
+// room secret can still unwrap FUTURE epoch keys — there is no per-recipient
+// confidentiality and no membership-change forward secrecy without rotating the
+// (shared) secret out of band.
+//
+// FR-158 closes that gap with per-recipient ASYMMETRIC wrapping. Each member has
+// an ECDH key pair (default WebCrypto P-256, via an injectable provider). To
+// announce an epoch, the sender wraps the epoch key INDIVIDUALLY to each current
+// member's public key: it generates an ephemeral ECDH key pair, does
+// ECDH(ephemeralPriv, recipientPub) → HKDF → AES-GCM key-encryption-key (KEK),
+// and AES-GCM-seals the epoch key under that KEK with AAD bound to
+// `callId:epochId:recipientId`. The signal carries the ephemeral public key plus
+// one wrapped blob per recipient. A removed member is simply NOT in the recipient
+// set, so NO blob is wrapped to its public key → it cannot derive any KEK →
+// it cannot obtain the new epoch's key. True forward-secrecy-on-membership-change
+// without a shared secret.
+//
+// This is an OPT-IN alternative KeyDistributor; the symmetric SignalKeyDistributor
+// is unchanged. It is NOT MLS: there is no group ratchet / log-sized re-keying /
+// tree — re-keying is O(members) per epoch and the member key directory's
+// authenticity is an app-side input. MLS (RFC 9420) remains the further evolution
+// and can replace this distributor behind the same seam. See docs/e2ee-calls.md.
+
+/**
+ * The asymmetric (ECDH) half of the crypto seam FR-158's distributor depends on.
+ * Defined as an injectable provider — like {@link AeadCryptoProvider} /
+ * {@link KeyDerivationProvider} — so tests inject a deterministic fake with no
+ * WebCrypto and no real curve math, and so the runtime's available curve is a
+ * provider choice rather than a hardcoded constant.
+ *
+ * Keys are opaque `Uint8Array`s at this boundary (raw/SPKI public, PKCS8/raw
+ * private — the provider decides the encoding; the distributor never inspects
+ * them). `deriveSharedSecret(priv, pub)` is the ECDH primitive: ECDH(privA, pubB)
+ * == ECDH(privB, pubA), the shared-secret symmetry the wrap/unwrap relies on.
+ */
+export interface AsymmetricCryptoProvider {
+  /** Generate a fresh ECDH key pair (e.g. the sender's per-announce ephemeral). */
+  generateKeyPair(): Promise<AsymmetricKeyPair>;
+  /**
+   * ECDH: derive the raw shared secret from one party's private key and the
+   * other party's public key. MUST be symmetric across the two parties.
+   */
+  deriveSharedSecret(args: {
+    readonly privateKey: Uint8Array;
+    readonly publicKey: Uint8Array;
+  }): Promise<Uint8Array>;
+}
+
+/** An ECDH key pair as opaque bytes (encoding is the provider's concern). */
+export interface AsymmetricKeyPair {
+  readonly publicKey: Uint8Array;
+  readonly privateKey: Uint8Array;
+}
+
+/**
+ * Default {@link AsymmetricCryptoProvider} backed by `globalThis.crypto.subtle`
+ * ECDH over **P-256** (portable across Node 16+/modern browsers). Constructed
+ * lazily so importing this module never requires WebCrypto. Public keys are
+ * exported as **raw** (uncompressed point) bytes and private keys as **PKCS8**,
+ * so they round-trip through the opaque-bytes boundary. Tests inject a fake.
+ */
+export class WebCryptoAsymmetric implements AsymmetricCryptoProvider {
+  #subtle(): EcdhSubtleLike {
+    const subtle = (globalThis as { crypto?: { subtle?: EcdhSubtleLike } }).crypto?.subtle;
+    if (!subtle) {
+      throw new Error(
+        "WebCryptoAsymmetric requires globalThis.crypto.subtle; inject an AsymmetricCryptoProvider in non-browser environments",
+      );
+    }
+    return subtle;
+  }
+
+  async generateKeyPair(): Promise<AsymmetricKeyPair> {
+    const subtle = this.#subtle();
+    const pair = await subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, [
+      "deriveBits",
+    ]);
+    const [publicKey, privateKey] = await Promise.all([
+      subtle.exportKey("raw", pair.publicKey),
+      subtle.exportKey("pkcs8", pair.privateKey),
+    ]);
+    return { publicKey: new Uint8Array(publicKey), privateKey: new Uint8Array(privateKey) };
+  }
+
+  async deriveSharedSecret(args: {
+    readonly privateKey: Uint8Array;
+    readonly publicKey: Uint8Array;
+  }): Promise<Uint8Array> {
+    const subtle = this.#subtle();
+    const [priv, pub] = await Promise.all([
+      subtle.importKey("pkcs8", args.privateKey, { name: "ECDH", namedCurve: "P-256" }, false, [
+        "deriveBits",
+      ]),
+      subtle.importKey("raw", args.publicKey, { name: "ECDH", namedCurve: "P-256" }, false, []),
+    ]);
+    // P-256 shared secret is the 32-byte X coordinate (256 bits).
+    const bits = await subtle.deriveBits({ name: "ECDH", public: pub }, priv, 256);
+    return new Uint8Array(bits);
+  }
+}
+
+/** The slice of `SubtleCrypto` {@link WebCryptoAsymmetric} uses. */
+interface EcdhSubtleLike {
+  generateKey(
+    algorithm: { name: "ECDH"; namedCurve: string },
+    extractable: boolean,
+    keyUsages: readonly string[],
+  ): Promise<{ publicKey: CryptoKeyLike; privateKey: CryptoKeyLike }>;
+  exportKey(format: "raw" | "pkcs8", key: CryptoKeyLike): Promise<ArrayBuffer>;
+  importKey(
+    format: "raw" | "pkcs8",
+    keyData: Uint8Array,
+    algorithm: { name: "ECDH"; namedCurve: string },
+    extractable: boolean,
+    keyUsages: readonly string[],
+  ): Promise<CryptoKeyLike>;
+  deriveBits(
+    algorithm: { name: "ECDH"; public: CryptoKeyLike },
+    key: CryptoKeyLike,
+    length: number,
+  ): Promise<ArrayBuffer>;
+}
+
+/**
+ * Resolves the published ECDH **public key** for a call member id (the
+ * `memberKey(member)` form, `"userId:deviceId"`). Injected into the asymmetric
+ * distributor as a seam: HOW public keys are published and AUTHENTICATED app-side
+ * (a key transparency log, the directory service, a safety-number check, …) is
+ * OUT OF SCOPE for FR-158 — the directory is an input. Returning `undefined`
+ * means "no key for this member" → that member simply gets no wrapped blob.
+ */
+export interface MemberKeyDirectory {
+  publicKeyFor(memberId: string): Promise<Uint8Array | undefined> | (Uint8Array | undefined);
+}
+
+/**
+ * In-memory {@link MemberKeyDirectory} for tests and simple deployments: a plain
+ * `memberId → publicKey` map. The real directory authenticates keys app-side
+ * (out of FR-158 scope).
+ */
+export class MapMemberKeyDirectory implements MemberKeyDirectory {
+  readonly #keys = new Map<string, Uint8Array>();
+  constructor(entries?: Iterable<readonly [string, Uint8Array]>) {
+    if (entries) for (const [id, key] of entries) this.#keys.set(id, key);
+  }
+  set(memberId: string, publicKey: Uint8Array): void {
+    this.#keys.set(memberId, publicKey);
+  }
+  publicKeyFor(memberId: string): Uint8Array | undefined {
+    return this.#keys.get(memberId);
+  }
+}
+
+/** One recipient's wrapped epoch key inside an asymmetric `"keyEpoch"` signal. */
+export interface AsymmetricWrappedBlob {
+  /** `memberKey(member)` the blob is wrapped to. */
+  readonly recipientId: string;
+  /** Base64 AES-GCM nonce used to seal the epoch key under the per-recipient KEK. */
+  readonly wrapNonce: string;
+  /** Base64 AES-GCM ciphertext of the raw epoch key. */
+  readonly wrappedKey: string;
+}
+
+/**
+ * The opaque `"keyEpoch"` signal payload for asymmetric wrapping. Distinguished
+ * from {@link KeyEpochSignal} by `wrap: "ecdh"` so a receiver routes it to the
+ * right distributor and never confuses it with the symmetric blob. Carries the
+ * sender's per-announce **ephemeral public key** plus one {@link AsymmetricWrappedBlob}
+ * per current recipient.
+ */
+export interface AsymmetricKeyEpochSignal {
+  readonly senderDeviceId: string;
+  readonly kind: "keyEpoch";
+  readonly wrap: "ecdh";
+  readonly epochId: EpochId;
+  readonly members: readonly string[];
+  readonly createdAt: number;
+  /** Base64 sender ephemeral ECDH public key (the static-ephemeral ECDH peer). */
+  readonly ephemeralPublicKey: string;
+  /** Per-recipient wrapped epoch-key blobs. */
+  readonly blobs: readonly AsymmetricWrappedBlob[];
+}
+
+const ASYM_KEK_LABEL = "fricken/sframe/v2 ecdh-kek";
+const ASYM_KEK_BYTES = 16;
+
+export interface AsymmetricKeyDistributorOptions {
+  readonly client: SignalRelayClient;
+  readonly callId: string;
+  /** This device's id (stamped on announcements; used to drop our own echoes). */
+  readonly senderDeviceId: string;
+  /**
+   * This member's id in `memberKey(member)` form (`"userId:deviceId"`). Used to
+   * find OUR wrapped blob on receive — the blob whose `recipientId` is ours.
+   */
+  readonly selfMemberId: string;
+  /** This member's long-term ECDH private key (matches the directory's public key). */
+  readonly privateKey: Uint8Array;
+  /** Resolves each recipient's published ECDH public key. */
+  readonly directory: MemberKeyDirectory;
+  /** Asymmetric/ECDH provider; defaults to {@link WebCryptoAsymmetric} (P-256). */
+  readonly asymmetric?: AsymmetricCryptoProvider;
+  /** AEAD provider used to wrap/unwrap under the derived KEK. Default WebCrypto. */
+  readonly aead?: AeadCryptoProvider;
+  /** KDF used to derive the KEK from the ECDH shared secret. Default WebCrypto HKDF. */
+  readonly kdf?: KeyDerivationProvider;
+  /** Nonce source for each per-recipient wrap (12 bytes). Tests inject a deterministic one. */
+  readonly randomNonce?: () => Uint8Array;
+  /** Signal type name; defaults to the shared WebRTC signal relay type. */
+  readonly signalType?: string;
+}
+
+/**
+ * PRODUCTION {@link KeyDistributor} that wraps the epoch key **per recipient**
+ * using ECDH (asymmetric), riding the same `"keyEpoch"` signal relay as
+ * {@link SignalKeyDistributor} but with NO shared room secret.
+ *
+ * `announce(epoch)`: generate an ephemeral ECDH key pair; for EACH member in
+ * `epoch.members` resolve its public key from the {@link MemberKeyDirectory},
+ * derive `KEK = HKDF(ECDH(ephemeralPriv, recipientPub))`, and AES-GCM-seal the
+ * epoch key under that KEK with AAD bound to `callId:epochId:recipientId`. Emit
+ * one signal carrying the ephemeral public key + all per-recipient blobs.
+ *
+ * `poll()`/receive: find OUR blob by `recipientId === selfMemberId`; derive the
+ * same KEK via `ECDH(ourPriv, ephemeralPub)`; AES-GCM-open. Fail-closed: no blob
+ * for us / wrong key / tamper / stale or own-echo epoch → drop, never throw out.
+ *
+ * Membership-removal forward secrecy: an epoch announced to {A,B} (not C)
+ * produces blobs ONLY for A and B. C is not in the recipient set, so there is no
+ * blob C can find and no KEK C can derive → C cannot obtain that epoch's key.
+ */
+export class AsymmetricKeyDistributor implements KeyDistributor {
+  readonly #client: SignalRelayClient;
+  readonly #callId: string;
+  readonly #senderDeviceId: string;
+  readonly #selfMemberId: string;
+  readonly #privateKey: Uint8Array;
+  readonly #directory: MemberKeyDirectory;
+  readonly #asym: AsymmetricCryptoProvider;
+  readonly #aead: AeadCryptoProvider;
+  readonly #kdf: KeyDerivationProvider;
+  readonly #randomNonce: () => Uint8Array;
+  readonly #signalType: string;
+  readonly #listeners = new Set<(epoch: KeyEpoch) => void>();
+  #processed = 0;
+  #highestSeen = -1;
+
+  constructor(options: AsymmetricKeyDistributorOptions) {
+    this.#client = options.client;
+    this.#callId = options.callId;
+    this.#senderDeviceId = options.senderDeviceId;
+    this.#selfMemberId = options.selfMemberId;
+    this.#privateKey = options.privateKey;
+    this.#directory = options.directory;
+    this.#asym = options.asymmetric ?? new WebCryptoAsymmetric();
+    this.#aead = options.aead ?? new WebCryptoAeadProvider();
+    this.#kdf = options.kdf ?? new WebCryptoKeyDerivation();
+    this.#randomNonce = options.randomNonce ?? defaultRandomNonce;
+    this.#signalType = options.signalType ?? "WebRTCSignal";
+  }
+
+  /** Derive the per-recipient KEK from an ECDH shared secret. */
+  #deriveKek(sharedSecret: Uint8Array): Promise<Uint8Array> {
+    return this.#kdf.derive({ secret: sharedSecret, label: ASYM_KEK_LABEL, length: ASYM_KEK_BYTES });
+  }
+
+  async announce(epoch: KeyEpoch): Promise<void> {
+    const ephemeral = await this.#asym.generateKeyPair();
+    const blobs: AsymmetricWrappedBlob[] = [];
+    for (const recipientId of epoch.members) {
+      const recipientPub = await this.#directory.publicKeyFor(recipientId);
+      if (!recipientPub) continue; // no published key → no blob (fail-closed for that member)
+      const shared = await this.#asym.deriveSharedSecret({
+        privateKey: ephemeral.privateKey,
+        publicKey: recipientPub,
+      });
+      const kek = await this.#deriveKek(shared);
+      const nonce = this.#randomNonce();
+      const aad = encodeAsymWrapAad(this.#callId, epoch.epochId, recipientId);
+      const wrapped = await this.#aead.seal({
+        key: kek,
+        nonce,
+        plaintext: epoch.key,
+        associatedData: aad,
+      });
+      blobs.push({
+        recipientId,
+        wrapNonce: toBase64(nonce),
+        wrappedKey: toBase64(wrapped),
+      });
+    }
+    const signal: AsymmetricKeyEpochSignal = {
+      senderDeviceId: this.#senderDeviceId,
+      kind: "keyEpoch",
+      wrap: "ecdh",
+      epochId: epoch.epochId,
+      members: epoch.members,
+      createdAt: epoch.createdAt,
+      ephemeralPublicKey: toBase64(ephemeral.publicKey),
+      blobs,
+    };
+    await this.#client.sendSignal(
+      this.#signalType,
+      this.#callId,
+      signal as unknown as Record<string, unknown>,
+    );
+  }
+
+  onEpoch(listener: (epoch: KeyEpoch) => void): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+
+  /**
+   * Drain new asymmetric `"keyEpoch"` signals off the relay, unwrap OUR blob, and
+   * deliver each reconstructed epoch to listeners. Idempotent + monotonic: skips
+   * our own echoes, foreign/symmetric/malformed signals, stale epoch ids, and any
+   * announcement with no blob addressed to us (fail-closed — e.g. we were
+   * removed). The caller drives this from the same place it drains SDP/ICE.
+   */
+  async poll(): Promise<void> {
+    const entries = this.#client.signalChannel(this.#signalType, this.#callId).get();
+    for (let i = this.#processed; i < entries.length; i++) {
+      const raw = entries[i] as Partial<AsymmetricKeyEpochSignal>;
+      if (!raw || raw.kind !== "keyEpoch" || raw.wrap !== "ecdh") continue;
+      if (raw.senderDeviceId === this.#senderDeviceId) continue; // our own echo
+      if (typeof raw.epochId !== "number" || raw.epochId <= this.#highestSeen) continue;
+      const epoch = await this.#tryUnwrap(raw);
+      if (!epoch) continue;
+      this.#highestSeen = epoch.epochId;
+      for (const l of this.#listeners) {
+        try {
+          l(epoch);
+        } catch {
+          // Isolate per-listener failures.
+        }
+      }
+    }
+    this.#processed = entries.length;
+  }
+
+  async #tryUnwrap(raw: Partial<AsymmetricKeyEpochSignal>): Promise<KeyEpoch | undefined> {
+    try {
+      const blobs = raw.blobs;
+      if (!Array.isArray(blobs)) return undefined;
+      const mine = blobs.find((b) => b?.recipientId === this.#selfMemberId);
+      if (!mine) return undefined; // no blob for us → fail closed (e.g. removed member)
+      const ephemeralPub = fromBase64(raw.ephemeralPublicKey as string);
+      const shared = await this.#asym.deriveSharedSecret({
+        privateKey: this.#privateKey,
+        publicKey: ephemeralPub,
+      });
+      const kek = await this.#deriveKek(shared);
+      const nonce = fromBase64(mine.wrapNonce);
+      const wrapped = fromBase64(mine.wrappedKey);
+      const aad = encodeAsymWrapAad(this.#callId, raw.epochId as number, this.#selfMemberId);
+      const key = await this.#aead.open({ key: kek, nonce, ciphertext: wrapped, associatedData: aad });
+      return {
+        epochId: raw.epochId as number,
+        key,
+        members: (raw.members as readonly string[]) ?? [],
+        createdAt: (raw.createdAt as number) ?? Date.now(),
+      };
+    } catch {
+      // Wrong key / tampered blob / malformed → fail closed, drop the announcement.
+      return undefined;
+    }
+  }
+}
+
+/** AAD binding a wrapped blob to its call + epoch + RECIPIENT (no cross-recipient/epoch replay). */
+function encodeAsymWrapAad(callId: string, epochId: EpochId, recipientId: string): Uint8Array {
+  return new TextEncoder().encode(`keyEpoch:ecdh:${callId}:${epochId}:${recipientId}`);
+}
+
+// ===========================================================================
 // FR-156 — SFU media-path insertion seam
 // ===========================================================================
 //

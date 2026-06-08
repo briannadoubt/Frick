@@ -2,7 +2,8 @@
 
 > Status: design + key-epoch seam (FR-85) + **production SFrame cipher suite,
 > replay protection, key-epoch distribution wire path, and SFU-path insertion
-> (FR-156)** — both part of the FR-15 calls epic.
+> (FR-156)** + **per-recipient asymmetric (ECDH) key wrapping (FR-158)** — all
+> part of the FR-15 calls epic.
 > FR-85 delivered the **design** plus a clean, testable **client-side
 > key-epoch / SFrame-transform seam** ([`packages/core/src/e2ee.ts`](../packages/core/src/e2ee.ts)).
 > **FR-156 makes it real** (see [What FR-156 delivered](#what-fr-156-delivered)):
@@ -10,8 +11,11 @@
 > nonce, sliding-window replay protection, a control-plane-backed key-epoch
 > distributor over the additive `"keyEpoch"` signal kind (symmetric sender-key
 > wrapping), and an injectable insertion seam wired into the FR-155 SFU driver
-> behind a per-room opt-in toggle. The only thing still deferred is
-> per-recipient **asymmetric** key wrapping / **MLS** (see [Follow-ups](#follow-ups)).
+> behind a per-room opt-in toggle. **FR-158** adds an opt-in alternative
+> distributor that wraps the epoch key **per recipient** with ECDH (no shared
+> room secret), closing the removed-member forward-secrecy gap (see
+> [What FR-158 delivered](#what-fr-158-delivered)). The only thing still deferred
+> is **MLS** (RFC 9420) group key agreement (see [Follow-ups](#follow-ups)).
 > E2EE remains opt-in per room: with it off, call behavior is byte-for-byte as
 > before — no transform inserted, no epoch traffic.
 
@@ -233,11 +237,66 @@ FR-156 implemented the production path on top of the FR-85 seam (all in
    (it is AAD, not ciphertext), so metadata the SFU needs remains readable; the
    encrypted body is the opaque frame payload, per the SFrame spec.
 
-**Still deferred (genuine future work):** per-recipient **asymmetric** key
-wrapping (each member's device public key) and **MLS** group key agreement. The
-`KeyDistributor` seam is pluggable, so swapping `SignalKeyDistributor`'s
-symmetric sender-key wrap for an asymmetric / MLS distributor needs no change to
+**Delivered next by FR-158:** per-recipient **asymmetric** key wrapping — see
+[What FR-158 delivered](#what-fr-158-delivered). **Still deferred (genuine future
+work):** **MLS** group key agreement. The `KeyDistributor` seam is pluggable, so
+swapping the distributor for an MLS one needs no change to
 `SFrameCipherTransform` or the media-path insertion. See [Follow-ups](#follow-ups).
+
+### What FR-158 delivered
+
+FR-156's `SignalKeyDistributor` wraps the epoch key under a **symmetric per-room
+secret** every member holds. The security gap: a member who is removed but still
+knows that room secret can keep unwrapping **future** epoch keys — there is no
+per-recipient confidentiality and no forward-secrecy on membership change unless
+the shared secret itself is re-established out of band.
+
+FR-158 closes that gap with **per-recipient asymmetric (ECDH) wrapping**, an
+**opt-in alternative** `KeyDistributor` (`AsymmetricKeyDistributor`) — the
+symmetric `SignalKeyDistributor` is unchanged. All in
+[`packages/core/src/e2ee.ts`](../packages/core/src/e2ee.ts):
+
+1. **Asymmetric crypto seam** — `AsymmetricCryptoProvider` (`generateKeyPair` +
+   `deriveSharedSecret`), default `WebCryptoAsymmetric` over **ECDH P-256**
+   (portable across Node/browser; public keys exported `raw`, private `pkcs8`).
+   Like the AEAD/KDF providers it is injectable, so tests use a deterministic
+   fake with no WebCrypto and no real curve math. The curve is a provider choice,
+   never hardcoded into the distributor.
+2. **Member key directory seam** — `MemberKeyDirectory` (`publicKeyFor(memberId)`),
+   default in-memory `MapMemberKeyDirectory`. It resolves the published ECDH
+   public key for each recipient member id. **How public keys are published and
+   authenticated app-side (key transparency, safety-number verification, …) is
+   out of scope** — the directory is an *input*.
+3. **The wrap construction.** `announce(epoch)` generates a per-announce
+   **ephemeral** ECDH key pair and, for **each** current member: derives
+   `shared = ECDH(ephemeralPriv, recipientPub)`, expands `KEK = HKDF(shared)`
+   (label `fricken/sframe/v2 ecdh-kek`, 16-byte AES key), and AES-GCM-seals the
+   epoch key under that KEK with **AAD bound to `keyEpoch:ecdh:callId:epochId:recipientId`**
+   (so a blob cannot be replayed cross-recipient or cross-epoch). The `"keyEpoch"`
+   signal (distinguished by `wrap: "ecdh"`) carries the ephemeral public key plus
+   **one wrapped blob per recipient** — opaque to the relay/SFU.
+4. **Receive + fail-closed.** `poll()` finds **our** blob by
+   `recipientId === selfMemberId`, derives the same KEK via
+   `ECDH(ourPriv, ephemeralPub)`, AES-GCM-opens it, and surfaces the `KeyEpoch`
+   for the caller to `adopt`. Every failure mode is dropped silently (never
+   thrown out of the poll loop): no blob for us, wrong private key, tampered
+   blob, our own echo, or a stale/duplicate epoch id.
+5. **Membership-removal forward secrecy (the crucial property).** An epoch
+   announced to members `{A,B}` (not `C`) produces blobs **only** for A and B.
+   C is not in the recipient set, so there is no blob C can find and no KEK C can
+   derive → C cannot obtain that epoch's key, and therefore cannot decrypt any
+   media sent under it — even though C may still hold an *old* epoch's key. This
+   is enforced *cryptographically by the recipient set*, not by trusting C to
+   forget a shared secret. The FR-158 tests prove this end-to-end: after C is
+   dropped, C's `poll()` adopts nothing and `keyFor(newEpoch)` is `undefined`, so
+   the FR-156 transform rejects post-removal frames with "no key for epoch N",
+   while A and B decrypt them.
+
+This is **not MLS**: re-keying is O(members) per epoch (no log-sized tree
+ratchet), there is no post-compromise self-healing group ratchet, and the
+directory's key authenticity is an app-side input. MLS (RFC 9420) remains the
+further evolution and slots in behind the same `KeyDistributor` seam without
+touching `SFrameCipherTransform` or the media path. See [Follow-ups](#follow-ups).
 
 ## Performance and UX
 
@@ -280,7 +339,10 @@ symmetric sender-key wrap for an asymmetric / MLS distributor needs no change to
 > **`SFrameCipherTransform`** (real key schedule, per-frame nonce, v2 header)
 > with `ReplayWindow` replay protection, `SignalKeyDistributor` (symmetric
 > sender-key wrapping over the `"keyEpoch"` signal), and the
-> `FrameTransformInserter` SFU-insertion seam.
+> `FrameTransformInserter` SFU-insertion seam. FR-158 adds
+> `AsymmetricKeyDistributor` (per-recipient ECDH wrapping) over the
+> `AsymmetricCryptoProvider` + `MemberKeyDirectory` seams as an opt-in
+> alternative distributor.
 
 ## Follow-ups
 
@@ -290,11 +352,19 @@ symmetric sender-key wrap for an asymmetric / MLS distributor needs no change to
   wrapping under a per-room secret), and the per-room opt-in
   `FrameTransformInserter` insertion into the FR-155 SFU driver. See
   [What FR-156 delivered](#what-fr-156-delivered).
-- **Asymmetric / MLS key agreement (remaining).** The symmetric sender-key
-  distributor assumes a shared per-room secret and trusts the announcer; it does
-  not give per-recipient confidentiality against other members' device-key
-  compromise, nor cryptographic membership authentication. The genuine next step
-  is per-recipient **asymmetric** wrapping (to each device's public key) and,
-  for log-sized re-keying + post-compromise security + ghost-member resistance,
-  **MLS** (RFC 9420). The `KeyDistributor` seam is abstract enough to swap either
-  in without touching `SFrameCipherTransform` or the media-path insertion.
+- **FR-158 — DONE.** Per-recipient **asymmetric (ECDH P-256)** key wrapping:
+  `AsymmetricKeyDistributor` (opt-in alternative `KeyDistributor`) wraps the
+  epoch key individually to each current member's public key (resolved via the
+  injected `MemberKeyDirectory`) over the same `"keyEpoch"` relay, with **no
+  shared room secret**. A removed member is not in the recipient set, so no blob
+  is wrapped to its key → it cannot obtain future epoch keys (membership-change
+  forward secrecy enforced cryptographically). See
+  [What FR-158 delivered](#what-fr-158-delivered).
+- **MLS group key agreement (remaining).** FR-158 gives per-recipient
+  confidentiality and membership-removal forward secrecy, but re-keying is
+  O(members) per epoch and there is no post-compromise self-healing group
+  ratchet or built-in ghost-member resistance, and member-key authenticity is an
+  app-side input (the directory). The genuine next step for log-sized re-keying +
+  post-compromise security + ghost-member resistance is **MLS** (RFC 9420). The
+  `KeyDistributor` seam is abstract enough to swap an MLS distributor in without
+  touching `SFrameCipherTransform` or the media-path insertion.
