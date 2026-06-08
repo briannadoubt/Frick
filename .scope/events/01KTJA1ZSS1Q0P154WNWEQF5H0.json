@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJA1ZSS1Q0P154WNWEQF5H0",
+  "ts": "2026-06-08T00:27:55.065Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2V",
+    "commentId": "01KTJA1ZSR0GXN5VK66N9NG1FQ",
+    "author": "claude",
+    "body": "Shipped + merged (commit b6303ef3): cascade grant scoping to search results + blob access via the existing grant-lookup/decide pipeline. Marking done — the agent's scope event was lost during its worktree run though the code landed on main."
+  }
+}

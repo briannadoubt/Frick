@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJA202403CKFZ1YZ9TKYN95",
+  "ts": "2026-06-08T00:27:55.332Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2X",
+    "commentId": "01KTJA202403CKFZ1YZ9TKYN94",
+    "author": "claude",
+    "body": "Shipped + merged (commit b6303ef3): tests/cascade-search-blob-authz.test.ts covering cascade visibility for object/stream search hits + blobs, revoke, and leave-share. Marking done — scope event was lost during the agent's worktree run."
+  }
+}
