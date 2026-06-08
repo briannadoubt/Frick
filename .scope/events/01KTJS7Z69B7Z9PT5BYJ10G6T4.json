@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJS7Z69B7Z9PT5BYJ10G6T4",
+  "ts": "2026-06-08T04:53:19.689Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ36",
+    "commentId": "01KTJS7Z69B7Z9PT5BYJ10G6T3",
+    "author": "claude",
+    "body": "Phase 1 TS portion LANDED: CallParticipantRecord carries micEnabled/cameraEnabled/screenSharing + optional speaking/networkQuality; surfaced as CallParticipantPresence in the observable CallState (useCallState). setCallMediaState command updates own media state server-authoritatively. Native pending — Phase 2."
+  }
+}

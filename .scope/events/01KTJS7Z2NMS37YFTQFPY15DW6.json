@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJS7Z2NMS37YFTQFPY15DW6",
+  "ts": "2026-06-08T04:53:19.573Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ34",
+    "commentId": "01KTJS7Z2NMS37YFTQFPY15DW5",
+    "author": "claude",
+    "body": "Phase 1 TS portion LANDED on feat/fr15-phase1-call-wire-ts: protocol CallCommand/CallCommandResult frames; FrickClient.callCommand + createCall/joinCall/acceptCall/leaveCall/endCall/setCallMediaState helpers; observable callState(); React useCallState + useCallActions. Gate green (server 1009, core 56, protocol 110, design-web 78, typecheck 0). Native Swift/Android pending — Phase 2. Staying in_progress."
+  }
+}

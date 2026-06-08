@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJRFCJ1TMNTR0DNJHGARJ6E",
+  "ts": "2026-06-08T04:39:54.177Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ34",
+    "commentId": "01KTJRFCJ1TMNTR0DNJHGARJ6D",
+    "author": "claude",
+    "body": "Phase 1: TS/web portion in progress (createCall/joinCall/leaveCall + useCallState on the new CallCommand wire frame). Native (Swift/Android) pending — Phase 2."
+  }
+}

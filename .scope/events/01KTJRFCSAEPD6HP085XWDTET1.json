@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJRFCSAEPD6HP085XWDTET1",
+  "ts": "2026-06-08T04:39:54.410Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ38",
+    "commentId": "01KTJRFCSAEPD6HP085XWDTET0",
+    "author": "claude",
+    "body": "Phase 1: web portion in progress (FrickCallButton web surface + call control bar in @fricken/design-web, tokenized). Native FrickCallButton already exists; Swift/Android UI pending — Phase 2."
+  }
+}

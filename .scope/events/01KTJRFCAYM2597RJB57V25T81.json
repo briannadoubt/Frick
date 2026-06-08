@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJRFCAYM2597RJB57V25T81",
+  "ts": "2026-06-08T04:39:53.950Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ36",
+    "field": "branch",
+    "value": "feat/fr15-phase1-call-wire-ts"
+  }
+}

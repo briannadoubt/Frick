@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJS7Z9XV00AH86KR8V5A2DQ",
+  "ts": "2026-06-08T04:53:19.805Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ38",
+    "commentId": "01KTJS7Z9WQADJHVKJ2REJE8JS",
+    "author": "claude",
+    "body": "Phase 1 web portion LANDED: @fricken/design-web CallButton (FrickCallButton web surface, start/end modes) + tokenized CallControlBar (mic/camera/screen toggles + leave), no raw literals, focus-ring + a11y names. Native FrickCallButton already existed; Swift/Android UI pending — Phase 2."
+  }
+}

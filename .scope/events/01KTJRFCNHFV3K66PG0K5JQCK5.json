@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJRFCNHFV3K66PG0K5JQCK5",
+  "ts": "2026-06-08T04:39:54.289Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ36",
+    "commentId": "01KTJRFCNHFV3K66PG0K5JQCK4",
+    "author": "claude",
+    "body": "Phase 1: TS/web portion in progress (mic/camera/screenshare/speaking/network-quality on call participant model surfaced via useCallState). Native pending — Phase 2."
+  }
+}
