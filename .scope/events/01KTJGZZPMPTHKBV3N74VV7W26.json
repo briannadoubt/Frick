@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJGZZPMPTHKBV3N74VV7W26",
+  "ts": "2026-06-08T02:29:09.460Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTJBF1C90WP52SG6SEQF780V",
+    "commentId": "01KTJGZZPMPTHKBV3N74VV7W25",
+    "author": null,
+    "body": "All children done (FR-148/149/150/151/152). Android observation tier — FrickObservableStore, store registry, rememberFrickQuery, FrickSessionManager, FrickSharingService — fully landed and integrated (:frick + :frick-compose green)."
+  }
+}

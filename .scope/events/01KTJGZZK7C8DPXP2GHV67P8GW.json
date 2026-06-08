@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJGZZK7C8DPXP2GHV67P8GW",
+  "ts": "2026-06-08T02:29:09.351Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTG9BWY2A7MWJBWFNEMR90N9",
+    "commentId": "01KTJGZZK7C8DPXP2GHV67P8GV",
+    "author": null,
+    "body": "All children done (FR-136/137/138/139/140/141/143). Swift observation tier — FrickStore, store registry, @FrickQuery, FrickSessionManager, FrickSharingService, @FrickModel macro, Keychain persistence — fully landed and integrated (swift test 128 passing)."
+  }
+}
