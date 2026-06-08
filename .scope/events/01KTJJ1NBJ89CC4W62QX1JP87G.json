@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJJ1NBJ89CC4W62QX1JP87G",
+  "ts": "2026-06-08T02:47:32.978Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3B",
+    "commentId": "01KTJJ1NBJ89CC4W62QX1JP87F",
+    "author": "claude",
+    "body": "Verified: FrickWorkspaceShell already implements the spec Apple mapping (TabView + .tabViewStyle(.sidebarAdaptable) + .inspector(isPresented:), semantic FrickWorkspaceDestination slots, app-owned selection binding; explicitly not a root NavigationSplitView). Added shell composition tests (FrickAppShell parity alias + disabled-destination contract) on top of the existing coverage."
+  }
+}

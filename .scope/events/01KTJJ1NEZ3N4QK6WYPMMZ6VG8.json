@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTJJ1NEZ3N4QK6WYPMMZ6VG8",
+  "ts": "2026-06-08T02:47:33.087Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3F",
+    "commentId": "01KTJJ1NEZ3N4QK6WYPMMZ6VG7",
+    "author": "claude",
+    "body": "Filled remaining Phase-1 gaps as SwiftUI-native views consuming only generated FrickTokens/Palette/Typography + semantic icons: FrickStatusChip, FrickProgressRing, FrickReactionRow, FrickSignalPanel, FrickCallButton, FrickColumn/Cell/DataTable, FrickDateTimePicker, and the chart family (ChartSurface/Line/Bar/Area/Pie + tokenized palette). Parity aliases: FrickAppShell, FrickSegmentedControl, FrickPresenceDot, FrickMetricCard. Additive; no generated files edited. design-swift swift test 9 -> 22, 0 failures; pnpm typecheck exit 0."
+  }
+}

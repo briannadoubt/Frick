@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTJHWH6R4DSE1ZGB8GX2WYWH",
+  "ts": "2026-06-08T02:44:44.888Z",
+  "actor": "claude",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ3B",
+    "field": "branch",
+    "value": "feat/fr87-91-swift-shell-parity"
+  }
+}
