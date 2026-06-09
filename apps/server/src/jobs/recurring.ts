@@ -27,13 +27,23 @@ export interface FrickRecurringJob {
   /** Interval between completions, in ms. Minimum 60_000. */
   intervalMs: number;
   /**
-   * Resolve the set of (tenantId, payload) tuples to enqueue on each tick.
-   * Called by the scheduler on each tick; lets apps fan out across all
-   * linked tenants without keeping their own list.
+   * Resolve the set of (tenantId, appId?, payload?) tuples to enqueue on each
+   * tick. Called by the scheduler on each tick; lets apps fan out across all
+   * linked tenants without keeping their own list. An optional `appId` (FR-153)
+   * lands the job in that app's partition AND scopes the idempotency key, so a
+   * per-(tenant, app) fan-out enqueues one independent job per app per window;
+   * omit it for the single-app default.
    */
   resolveTargets(ctx: { store: FrickStore; logger: FrickLogger }):
-    | Iterable<{ tenantId: string; payload?: PlainObject }>
-    | Promise<Iterable<{ tenantId: string; payload?: PlainObject }>>;
+    | Iterable<RecurringTarget>
+    | Promise<Iterable<RecurringTarget>>;
+}
+
+export interface RecurringTarget {
+  tenantId: string;
+  /** App partition to enqueue under (FR-153). Defaults to the default app. */
+  appId?: string;
+  payload?: PlainObject;
 }
 
 export interface FrickRecurringRegistry {
@@ -116,7 +126,7 @@ export function createRecurringScheduler(opts: RecurringSchedulerOptions): Recur
     for (const job of jobs) {
       const windowStart = Math.floor(now / job.intervalMs) * job.intervalMs;
       const idempotencyKeyPrefix = `recurring:${job.name}:`;
-      let targets: Iterable<{ tenantId: string; payload?: PlainObject }>;
+      let targets: Iterable<RecurringTarget>;
       try {
         targets = await job.resolveTargets({ store, logger });
       } catch (err) {
@@ -127,11 +137,16 @@ export function createRecurringScheduler(opts: RecurringSchedulerOptions): Recur
         });
         continue;
       }
-      for (const { tenantId, payload } of targets) {
-        const idempotencyKey = `${idempotencyKeyPrefix}${tenantId}:${windowStart}`;
+      for (const { tenantId, appId, payload } of targets) {
+        // Scope the idempotency key by app too (FR-153) so a per-(tenant, app)
+        // fan-out enqueues one independent job per app per window instead of
+        // collapsing them into one default-app job.
+        const appSegment = appId !== undefined ? `${appId}:` : "";
+        const idempotencyKey = `${idempotencyKeyPrefix}${appSegment}${tenantId}:${windowStart}`;
         try {
           store.jobs.enqueue({
             tenantId,
+            ...(appId !== undefined ? { appId } : {}),
             jobType: job.jobType,
             payload: payload ?? {},
             idempotencyKey,

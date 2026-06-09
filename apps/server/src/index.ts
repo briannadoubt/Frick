@@ -78,12 +78,15 @@ export {
 export {
   copyDerivativeGenerator,
   DEFAULT_MAX_IMAGE_BYTES,
+  DEFAULT_MAX_IMAGE_PIXELS,
   imageBlobProcessor,
+  parseImageDimensions,
   sniffImageFormat,
   type ImageBlobProcessorOptions,
   type ImageDerivativeGenerator,
   type ImageDerivativeGeneratorInput,
   type ImageDerivativeVariant,
+  type ImageDimensions,
   type ImageFormat,
 } from "./blobs/image-processor.js";
 export {
@@ -93,6 +96,7 @@ export {
   runOrphanedBlobGc,
   DEFAULT_BLOB_GC_GRACE_MS,
   DEFAULT_BLOB_GC_INTERVAL_MS,
+  DEFAULT_BLOB_GC_PAGE_SIZE,
   type BlobGcConfig,
   type BlobGcResult,
   type BlobGcRecurringConfig,

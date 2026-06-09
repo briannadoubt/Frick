@@ -43,11 +43,12 @@ import type {
   PlainObject,
 } from "@fricken/protocol";
 import { blobRefFields } from "@fricken/protocol";
+import { DEFAULT_APP_ID } from "../app-id.js";
 import type { FrickLogger } from "../logger.js";
 import type { FrickStore } from "../store.js";
-import type { FrickJobHandler, FrickJobResult } from "../jobs/registry.js";
+import type { BlobMetadata } from "../storage/blob-store.js";
+import type { FrickJobContext, FrickJobHandler, FrickJobResult } from "../jobs/registry.js";
 import type { FrickRecurringJob } from "../jobs/recurring.js";
-import { eachTenant } from "../jobs/recurring.js";
 
 export const BLOB_GC_JOB_TYPE = "blob.gc";
 
@@ -58,14 +59,29 @@ export const DEFAULT_BLOB_GC_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 export const DEFAULT_BLOB_GC_INTERVAL_MS = 60 * 60 * 1000;
 
 /**
+ * Default number of `blob_metadata` rows scanned per page. The GC streams the
+ * tenant's blobs in pages of this size instead of loading every row into a
+ * single array, so a tenant with millions of blobs cannot OOM the worker
+ * (finding blob-gc-4). Tunable via {@link RunBlobGcArgs.pageSize}.
+ */
+export const DEFAULT_BLOB_GC_PAGE_SIZE = 500;
+
+/**
  * App-supplied predicate that reports whether `blobId` is still referenced by
  * something the framework cannot see (typically a blob id stored in an untyped
  * `string`/`json` field). Return `true` to PROTECT the blob from GC. May be
  * async. Called only for blobs already past the grace window and already found
  * to be unreferenced by the declared-ref scan, so it runs on a small set.
+ *
+ * FAIL-SAFE CONTRACT: the GC only deletes when this hook returns the EXPLICIT
+ * boolean `false`. Any other outcome — `true`, `undefined`/`null`, a non-bool,
+ * or a thrown error — is treated as "referenced/unknown → keep the blob". A
+ * subtle app bug (a forgotten `return`) must never cause data loss.
  */
 export type BlobIsReferencedHook = (args: {
   tenantId: string;
+  /** App partition the blob lives in (FR-153). {@link DEFAULT_APP_ID} for single-app servers. */
+  appId: string;
   blobId: string;
 }) => boolean | Promise<boolean>;
 
@@ -86,11 +102,22 @@ export interface BlobGcConfig {
 export interface RunBlobGcArgs {
   store: FrickStore;
   tenantId: string;
+  /**
+   * App partition to sweep (FR-153). Defaults to {@link DEFAULT_APP_ID}. The GC
+   * is always scoped to a single (tenant, app); the recurring sweep fans out one
+   * pass per app that actually holds blobs (see {@link createBlobGcRecurringJob}).
+   */
+  appId?: string;
   /** Wall-clock reference for the grace check. Defaults to `Date.now()`. */
   now?: number;
   graceMs?: number;
   isReferenced?: BlobIsReferencedHook;
   logger?: FrickLogger;
+  /**
+   * Rows scanned per page. Defaults to {@link DEFAULT_BLOB_GC_PAGE_SIZE}. The
+   * scan is keyset-paginated so heap stays bounded regardless of tenant size.
+   */
+  pageSize?: number;
   /** When true, compute deletions but do not delete anything. */
   dryRun?: boolean;
 }
@@ -118,21 +145,12 @@ async function collectDeclaredReferencedBlobIds(
   store: FrickStore,
   schema: FrickSchema,
   tenantId: string,
+  appId: string,
 ): Promise<Set<string>> {
   const referenced = new Set<string>();
-  const fields = blobRefFields(schema);
-  if (fields.length === 0) {
-    return referenced;
-  }
-  // Group ref-fields by object type so we list each type at most once.
-  const fieldsByObject = new Map<string, string[]>();
-  for (const { objectName, field } of fields) {
-    const names = fieldsByObject.get(objectName) ?? [];
-    names.push(field.name);
-    fieldsByObject.set(objectName, names);
-  }
-  for (const [objectName, fieldNames] of fieldsByObject) {
-    const rows: PlainObject[] = await store.objects.list(tenantId, objectName);
+  const grouped = groupBlobRefFieldsByObject(schema);
+  for (const [objectName, fieldNames] of grouped) {
+    const rows: PlainObject[] = await store.objects.list(tenantId, objectName, appId);
     for (const row of rows) {
       for (const fieldName of fieldNames) {
         const value = row[fieldName];
@@ -145,6 +163,93 @@ async function collectDeclaredReferencedBlobIds(
   return referenced;
 }
 
+/** Group declared blob-ref fields by object type so each type is listed once. */
+function groupBlobRefFieldsByObject(schema: FrickSchema): Map<string, string[]> {
+  const fieldsByObject = new Map<string, string[]>();
+  for (const { objectName, field } of blobRefFields(schema)) {
+    const names = fieldsByObject.get(objectName) ?? [];
+    names.push(field.name);
+    fieldsByObject.set(objectName, names);
+  }
+  return fieldsByObject;
+}
+
+/**
+ * Targeted re-scan: is THIS one `blobId` referenced by any declared blob-ref
+ * field right now? Used as the TOCTOU re-check immediately before deletion
+ * (finding blob-gc-3): the pass-level reference set is a snapshot, so a blob
+ * that was unreferenced when the page was scanned may have been re-attached to
+ * a freshly written object before the loop reached it. Re-querying the live
+ * object state at delete time closes that window.
+ */
+async function isDeclaredReferencedNow(
+  store: FrickStore,
+  schema: FrickSchema,
+  tenantId: string,
+  appId: string,
+  blobId: string,
+): Promise<boolean> {
+  const grouped = groupBlobRefFieldsByObject(schema);
+  for (const [objectName, fieldNames] of grouped) {
+    const rows: PlainObject[] = await store.objects.list(tenantId, objectName, appId);
+    for (const row of rows) {
+      for (const fieldName of fieldNames) {
+        if (row[fieldName] === blobId) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Resolve the {@link BlobIsReferencedHook} into a FAIL-SAFE keep decision
+ * (finding blob-gc-6). The blob is eligible for deletion ONLY when the hook
+ * returns the explicit boolean `false`. Every other outcome — `true`, a
+ * non-boolean (`undefined`/`null`/`0`/`''`), or a thrown error — is treated as
+ * "protected / unknown → keep". Never the reverse: a buggy hook must not cause
+ * data loss.
+ *
+ * @returns `true` when the blob is protected (keep), `false` only when the hook
+ *   explicitly returned `false` (safe to delete as far as the hook is concerned).
+ */
+async function hookProtects(
+  hook: BlobIsReferencedHook,
+  args: { tenantId: string; appId: string; blobId: string },
+  logger: FrickLogger | undefined,
+): Promise<boolean> {
+  let outcome: unknown;
+  try {
+    outcome = await hook(args);
+  } catch (error) {
+    // A throwing hook is "unknown" — fail safe toward keeping the blob.
+    logger?.warn("frick.blob.gc.hook_threw", {
+      event: "frick.blob.gc.hook_threw",
+      tenantId: args.tenantId,
+      appId: args.appId,
+      blobId: args.blobId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return true;
+  }
+  if (outcome === false) {
+    return false; // explicit, strict false → not protected by the hook.
+  }
+  if (outcome !== true) {
+    // Non-boolean return (undefined/null/0/''/object) — an app bug. Keep, and
+    // surface it so the bug is visible rather than silently deleting data.
+    logger?.warn("frick.blob.gc.hook_non_boolean", {
+      event: "frick.blob.gc.hook_non_boolean",
+      tenantId: args.tenantId,
+      appId: args.appId,
+      blobId: args.blobId,
+      returnedType: outcome === null ? "null" : typeof outcome,
+    });
+  }
+  return true;
+}
+
 /**
  * Run one orphaned-blob GC pass for a single tenant. Conservative by design:
  * see the module header. Safe to call directly (unit tests) or from the job
@@ -154,11 +259,16 @@ async function collectDeclaredReferencedBlobIds(
  */
 export async function runOrphanedBlobGc(args: RunBlobGcArgs): Promise<BlobGcResult> {
   const { store, tenantId } = args;
+  const appId = args.appId ?? DEFAULT_APP_ID;
   const now = args.now ?? Date.now();
   const graceMs = args.graceMs ?? DEFAULT_BLOB_GC_GRACE_MS;
   if (!(graceMs >= 0)) {
     throw new Error(`blob GC graceMs must be >= 0 (got ${graceMs})`);
   }
+  const pageSize =
+    args.pageSize !== undefined && Number.isFinite(args.pageSize) && args.pageSize > 0
+      ? Math.floor(args.pageSize)
+      : DEFAULT_BLOB_GC_PAGE_SIZE;
   const result: BlobGcResult = {
     scanned: 0,
     keptWithinGrace: 0,
@@ -167,53 +277,104 @@ export async function runOrphanedBlobGc(args: RunBlobGcArgs): Promise<BlobGcResu
     deleted: [],
   };
 
-  const blobs = await store.blobs.listAllOldestFirst(tenantId);
-  result.scanned = blobs.length;
-  if (blobs.length === 0) {
-    return result;
-  }
-
   // Declared blob-ref set is computed once per pass (one listing per object
-  // type that declares a blob-ref field).
-  const referenced = await collectDeclaredReferencedBlobIds(store, store.schema, tenantId);
+  // type that declares a blob-ref field), scoped to THIS app. It is a snapshot:
+  // the per-blob TOCTOU re-check below re-validates against live state right
+  // before any delete (finding blob-gc-3).
+  const referenced = await collectDeclaredReferencedBlobIds(store, store.schema, tenantId, appId);
 
   const graceCutoff = now - graceMs;
-  for (const blob of blobs) {
-    // (b) Grace window: never touch a blob newer than the cutoff. A blob with
-    // an unparseable timestamp is treated as "too new" and kept.
-    const createdAtMs = Date.parse(blob.createdAt);
-    const withinGrace = !Number.isFinite(createdAtMs) || createdAtMs > graceCutoff;
-    if (withinGrace) {
-      result.keptWithinGrace += 1;
-      continue;
+  // Keyset-paginated scan (finding blob-gc-4): stream blobs oldest-first in
+  // bounded pages instead of materializing the whole tenant in heap.
+  let cursor: { createdAt: string; blobId: string } | undefined;
+  for (;;) {
+    const page: BlobMetadata[] = await store.blobs.listOldestFirstPage(
+      tenantId,
+      pageSize,
+      cursor,
+      appId,
+    );
+    if (page.length === 0) {
+      break;
     }
-    // (d) Declared-ref scan.
-    if (referenced.has(blob.blobId)) {
-      result.keptDeclaredRef += 1;
-      continue;
-    }
-    // (c) App hook for untyped-field references.
-    if (args.isReferenced) {
-      const protectedByHook = await args.isReferenced({ tenantId, blobId: blob.blobId });
-      if (protectedByHook) {
+    for (const blob of page) {
+      result.scanned += 1;
+      // (b) Grace window: never touch a blob newer than the cutoff. A blob with
+      // an unparseable timestamp is treated as "too new" and kept.
+      const createdAtMs = Date.parse(blob.createdAt);
+      const withinGrace = !Number.isFinite(createdAtMs) || createdAtMs > graceCutoff;
+      if (withinGrace) {
+        result.keptWithinGrace += 1;
+        continue;
+      }
+      // (d) Declared-ref scan (snapshot).
+      if (referenced.has(blob.blobId)) {
+        result.keptDeclaredRef += 1;
+        continue;
+      }
+      // (c) App hook for untyped-field references — fail-safe (finding blob-gc-6):
+      // only an explicit `false` clears the hook guard; anything else keeps.
+      if (args.isReferenced) {
+        const protectedByHook = await hookProtects(
+          args.isReferenced,
+          { tenantId, appId, blobId: blob.blobId },
+          args.logger,
+        );
+        if (protectedByHook) {
+          result.keptHookProtected += 1;
+          continue;
+        }
+      }
+      // Candidate orphan. Under dryRun, report without the destructive
+      // re-validation (no delete to guard).
+      if (args.dryRun) {
+        result.deleted.push(blob.blobId);
+        continue;
+      }
+      // TOCTOU re-check (finding blob-gc-3): the snapshot above can be stale —
+      // an aged orphan may have been re-attached to a freshly written object
+      // since the page was scanned. Immediately before deleting, re-verify the
+      // blob is STILL (1) present, (2) past the grace window, (3) unreferenced
+      // by the live declared-ref scan, and (4) not hook-protected. If any guard
+      // now holds, skip the delete (fail safe toward keeping data).
+      const decision = await recheckOrphanBeforeDelete({
+        store,
+        tenantId,
+        appId,
+        blob,
+        graceCutoff,
+        ...(args.isReferenced ? { isReferenced: args.isReferenced } : {}),
+        logger: args.logger,
+      });
+      if (decision === "keptDeclaredRef") {
+        result.keptDeclaredRef += 1;
+        continue;
+      }
+      if (decision === "keptHookProtected") {
         result.keptHookProtected += 1;
         continue;
       }
-    }
-    // Orphan: unreferenced by BOTH the declared-ref scan and the hook, and
-    // outside the grace window.
-    if (args.dryRun) {
+      if (decision === "keptWithinGrace" || decision === "gone") {
+        // Re-attached-then-aged is impossible (grace only grows), and "gone"
+        // means another actor already removed it. Either way: skip.
+        if (decision === "keptWithinGrace") result.keptWithinGrace += 1;
+        continue;
+      }
+      await deleteBlobConsistently(store, tenantId, blob.blobId, appId);
       result.deleted.push(blob.blobId);
-      continue;
     }
-    await deleteBlobConsistently(store, tenantId, blob.blobId);
-    result.deleted.push(blob.blobId);
+    const last = page[page.length - 1];
+    if (last === undefined || page.length < pageSize) {
+      break;
+    }
+    cursor = { createdAt: last.createdAt, blobId: last.blobId };
   }
 
   if (result.deleted.length > 0) {
     args.logger?.info("frick.blob.gc.swept", {
       event: "frick.blob.gc.swept",
       tenantId,
+      appId,
       scanned: result.scanned,
       deleted: result.deleted.length,
       keptWithinGrace: result.keptWithinGrace,
@@ -222,6 +383,53 @@ export async function runOrphanedBlobGc(args: RunBlobGcArgs): Promise<BlobGcResu
     });
   }
   return result;
+}
+
+/**
+ * The destructive-step re-validation for one candidate orphan (finding
+ * blob-gc-3). Run as close to the delete as possible, it re-reads LIVE state so
+ * a blob re-referenced after the pass snapshot is never deleted. Returns the
+ * reason to KEEP the blob, or `"delete"` when every guard still says orphan.
+ */
+async function recheckOrphanBeforeDelete(args: {
+  store: FrickStore;
+  tenantId: string;
+  appId: string;
+  blob: BlobMetadata;
+  graceCutoff: number;
+  isReferenced?: BlobIsReferencedHook;
+  logger: FrickLogger | undefined;
+}): Promise<
+  "delete" | "gone" | "keptWithinGrace" | "keptDeclaredRef" | "keptHookProtected"
+> {
+  const { store, tenantId, appId, blob, graceCutoff } = args;
+  // (1) Still present? A concurrent delete may have removed it.
+  const current = await store.blobs.read(tenantId, blob.blobId, appId);
+  if (!current) {
+    return "gone";
+  }
+  // (2) Still past grace? createdAt is immutable, but re-check defensively so an
+  // unparseable/now-fresher row is never deleted.
+  const createdAtMs = Date.parse(current.createdAt);
+  if (!Number.isFinite(createdAtMs) || createdAtMs > graceCutoff) {
+    return "keptWithinGrace";
+  }
+  // (3) Re-scan declared refs for THIS blob against live object state.
+  if (await isDeclaredReferencedNow(store, store.schema, tenantId, appId, blob.blobId)) {
+    return "keptDeclaredRef";
+  }
+  // (4) Re-consult the hook (fail-safe) as the final guard for untyped refs.
+  if (args.isReferenced) {
+    const protectedByHook = await hookProtects(
+      args.isReferenced,
+      { tenantId, appId, blobId: blob.blobId },
+      args.logger,
+    );
+    if (protectedByHook) {
+      return "keptHookProtected";
+    }
+  }
+  return "delete";
 }
 
 /**
@@ -243,16 +451,18 @@ async function deleteBlobConsistently(
   store: FrickStore,
   tenantId: string,
   blobId: string,
+  appId: string = DEFAULT_APP_ID,
 ): Promise<void> {
   // Derivatives first: their bytes are stored inline on the row, so a single
   // delete reclaims both. blob_derivatives is NOT FK-cascaded from
   // blob_metadata, so it must be cleaned up explicitly to avoid leaks.
   await store.blobDerivatives.deleteForParent(blobId, tenantId);
-  // Parent bytes (explicit so filesystem/S3 byte drivers are covered too).
-  await store.blobs.deleteContent(tenantId, blobId);
+  // Parent bytes (explicit so filesystem/S3 byte drivers are covered too),
+  // scoped to the owning app (FR-153) so a multi-app sweep stays in-app.
+  await store.blobs.deleteContent(tenantId, blobId, appId);
   // Metadata last — a crash mid-delete leaves a re-GC-able orphan, never a
   // dangling content row with no metadata.
-  await store.blobs.deleteMetadata(tenantId, blobId);
+  await store.blobs.deleteMetadata(tenantId, blobId, appId);
 }
 
 export interface BlobGcJobHandlerDeps {
@@ -268,11 +478,15 @@ export interface BlobGcJobHandlerDeps {
  */
 export function createBlobGcJobHandler(deps: BlobGcJobHandlerDeps): FrickJobHandler {
   const { logger, config } = deps;
-  const handler: FrickJobHandler = async (ctx) => {
+  const handler: FrickJobHandler = async (ctx: FrickJobContext) => {
     try {
       const result = await runOrphanedBlobGc({
         store: ctx.store,
         tenantId: ctx.tenantId,
+        // App scoping (FR-153): the worker stamps `ctx.appId` from the job row,
+        // so a per-app blob.gc job sweeps its OWN app, not just `_default`
+        // (findings blob-gc-2 / tenant-app-isolation-6).
+        appId: ctx.appId ?? DEFAULT_APP_ID,
         logger: ctx.logger,
         ...(config?.graceMs !== undefined ? { graceMs: config.graceMs } : {}),
         ...(config?.isReferenced ? { isReferenced: config.isReferenced } : {}),
@@ -314,11 +528,17 @@ export interface BlobGcRecurringConfig extends BlobGcConfig {
 
 /**
  * Build the opt-in recurring spec that drives orphaned-blob GC across every
- * live tenant. Apps that want GC pass the returned job in
+ * live tenant AND every app that holds blobs (FR-153, findings blob-gc-2 /
+ * tenant-app-isolation-6). Apps that want GC pass the returned job in
  * `createFrickServer({ recurring: { jobs: [createBlobGcRecurringJob(...)] } })`
  * AND register the `blob.gc` handler. Both wiring steps are deliberate so GC
  * stays off unless an operator explicitly turns it on. See module header for
  * the full safety rationale.
+ *
+ * Fan-out: one job per (tenant, app) per window. For each live tenant the
+ * resolver enumerates the distinct `app_id`s that actually own a blob (via
+ * {@link BlobStore.listAppIdsWithBlobs}); a tenant with no blobs yet still gets
+ * one default-app job so the behavior is unchanged for single-app servers.
  */
 export function createBlobGcRecurringJob(
   config: BlobGcRecurringConfig = {},
@@ -327,6 +547,19 @@ export function createBlobGcRecurringJob(
     name: "frick.blob.gc",
     jobType: BLOB_GC_JOB_TYPE,
     intervalMs: config.intervalMs ?? DEFAULT_BLOB_GC_INTERVAL_MS,
-    resolveTargets: eachTenant(),
+    resolveTargets: async ({ store }) => {
+      const tenants = await store.tenants.list(false);
+      const targets: Array<{ tenantId: string; appId: string }> = [];
+      for (const tenant of tenants) {
+        const appIds = await store.blobs.listAppIdsWithBlobs(tenant.tenantId);
+        // No blobs yet → still emit a default-app pass (cheap no-op) so a fresh
+        // tenant's behavior matches the historical per-tenant sweep.
+        const apps = appIds.length > 0 ? appIds : [DEFAULT_APP_ID];
+        for (const appId of apps) {
+          targets.push({ tenantId: tenant.tenantId, appId });
+        }
+      }
+      return targets;
+    },
   };
 }

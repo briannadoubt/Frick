@@ -195,6 +195,58 @@ export class BlobStore {
     return rows.map(mapBlobRow);
   }
 
+  /**
+   * Stream `blob_metadata` rows oldest-first in a bounded keyset page, for the
+   * orphaned-blob GC (FR-57). Unlike {@link listAllOldestFirst} (which loads the
+   * whole tenant into memory and can OOM a large tenant), this returns at most
+   * `limit` rows and lets the caller resume from the last `(createdAt, blobId)`
+   * cursor — so a GC pass over millions of blobs runs in bounded heap.
+   *
+   * Pass `cursor` = the `{ createdAt, blobId }` of the last row from the prior
+   * page to fetch the next page; omit it for the first page. Ordering matches
+   * {@link listAllOldestFirst}: `created_at ASC, blob_id ASC`.
+   */
+  async listOldestFirstPage(
+    tenantId: string,
+    limit: number,
+    cursor?: { createdAt: string; blobId: string },
+    appId: string = DEFAULT_APP_ID,
+  ): Promise<BlobMetadata[]> {
+    const safeLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 1;
+    const rows = cursor
+      ? await this.sql.all<BlobRow>(
+          `SELECT * FROM blob_metadata
+              WHERE app_id = ? AND tenant_id = ?
+                AND (created_at > ? OR (created_at = ? AND blob_id > ?))
+              ORDER BY created_at ASC, blob_id ASC
+              LIMIT ?`,
+          [appId, tenantId, cursor.createdAt, cursor.createdAt, cursor.blobId, safeLimit],
+        )
+      : await this.sql.all<BlobRow>(
+          `SELECT * FROM blob_metadata
+              WHERE app_id = ? AND tenant_id = ?
+              ORDER BY created_at ASC, blob_id ASC
+              LIMIT ?`,
+          [appId, tenantId, safeLimit],
+        );
+    return rows.map(mapBlobRow);
+  }
+
+  /**
+   * Return the distinct `app_id`s that own at least one `blob_metadata` row for
+   * a tenant. The orphaned-blob GC (FR-57) uses this to fan a sweep out across
+   * EVERY app that actually holds blobs — not just {@link DEFAULT_APP_ID} — so a
+   * multi-app server reclaims storage for non-default apps too. Returned in
+   * ascending app-id order for deterministic iteration.
+   */
+  async listAppIdsWithBlobs(tenantId: string): Promise<string[]> {
+    const rows = await this.sql.all<{ app_id: string }>(
+      "SELECT DISTINCT app_id FROM blob_metadata WHERE tenant_id = ? ORDER BY app_id ASC",
+      [tenantId],
+    );
+    return rows.map((row) => row.app_id);
+  }
+
   async writeContent(
     tenantId: string,
     blobId: string,

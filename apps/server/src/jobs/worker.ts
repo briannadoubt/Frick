@@ -137,6 +137,9 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
     const handler = handlerRegistry.resolve(job.jobType);
     const ctx = {
       tenantId: job.tenantId,
+      // App scoping (FR-153): expose the job's app to the handler so per-app
+      // work (e.g. blob GC) stays scoped to the originating app, not _default.
+      appId: job.appId,
       jobId: job.id,
       jobType: job.jobType,
       payload: job.payload,

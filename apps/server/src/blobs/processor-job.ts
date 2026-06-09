@@ -71,15 +71,22 @@ function sha256ContentHash(content: Uint8Array): string {
   return `sha256-${createHash("sha256").update(content).digest("hex")}`;
 }
 
-function persistDerivative(
+async function persistDerivative(
   derivatives: BlobDerivativeStore,
   tenantId: string,
   parentBlobId: string,
   processorId: string,
   derivative: FrickBlobDerivative,
-): void {
+): Promise<void> {
   const storageKey = derivativeStorageKey(parentBlobId, derivative.derivativeId);
-  derivatives.record({
+  // `record` is async (it writes to the blob_content/blob_derivatives store).
+  // It MUST be awaited: a floating promise here would (1) let the job report
+  // "completed" before the derivative bytes are durably written — and completed
+  // jobs never retry, so a write still pending at restart is permanently lost —
+  // and (2) on rejection become an unhandled promise rejection that can crash
+  // the worker. Awaiting surfaces any failure to the handler's try/catch so the
+  // job correctly reports failed+retryable instead.
+  await derivatives.record({
     parentBlobId,
     derivativeId: derivative.derivativeId,
     tenantId,
@@ -151,7 +158,7 @@ export function createBlobProcessorJobHandler(
       });
       const derivatives = outcome.derivatives ?? [];
       for (const derivative of derivatives) {
-        persistDerivative(
+        await persistDerivative(
           store.blobDerivatives,
           ctx.tenantId,
           blobId,

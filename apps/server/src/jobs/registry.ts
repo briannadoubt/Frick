@@ -16,6 +16,13 @@ import type { FrickStore } from "../store.js";
  */
 export interface FrickJobContext {
   tenantId: string;
+  /**
+   * App partition the job belongs to (FR-153). The worker stamps this from the
+   * job row so a handler can scope its work to the originating app (e.g. the
+   * blob GC sweeps that app's blobs, not just the default app). Optional for
+   * backward compatibility; absent/`undefined` means the default app.
+   */
+  appId?: string;
   jobId: number;
   jobType: string;
   payload: unknown;

@@ -26,7 +26,132 @@ import type {
 /** Default ceiling for an uploaded image: 10 MiB. */
 export const DEFAULT_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
+/**
+ * Default ceiling on DECODED pixel count (width × height): 40 megapixels.
+ * Independent of encoded byte length — a small (<10 MiB) but maliciously
+ * crafted PNG/WebP can declare enormous dimensions (a classic decompression
+ * bomb) that blow up memory/CPU when an app's `derivativeGenerator` decodes it.
+ * This bound is enforced from the parsed header BEFORE any decode/generate.
+ */
+export const DEFAULT_MAX_IMAGE_PIXELS = 40 * 1024 * 1024;
+
 export type ImageFormat = "png" | "jpeg" | "gif" | "webp";
+
+/** Decoded image dimensions parsed from the encoded header bytes. */
+export interface ImageDimensions {
+  width: number;
+  height: number;
+}
+
+/**
+ * Parse pixel dimensions from the leading header bytes of a recognised image,
+ * WITHOUT decoding the pixel data. Returns `null` when the dimensions cannot be
+ * determined from the available bytes (truncated header / unsupported variant).
+ *
+ * This is intentionally header-only and cheap: it exists so the framework can
+ * enforce a decoded-size ceiling (decompression-bomb guard) before handing the
+ * bytes to an app's image decoder — see {@link imageBlobProcessor}.
+ */
+export function parseImageDimensions(buffer: Buffer): ImageDimensions | null {
+  const format = sniffImageFormat(buffer);
+  if (format === "png") {
+    // PNG: 8-byte signature, then an IHDR chunk: 4-byte length, "IHDR",
+    // 4-byte width, 4-byte height (big-endian). Width/height start at byte 16.
+    if (buffer.length < 24) return null;
+    if (buffer.toString("ascii", 12, 16) !== "IHDR") return null;
+    const width = buffer.readUInt32BE(16);
+    const height = buffer.readUInt32BE(20);
+    return finiteDimensions(width, height);
+  }
+  if (format === "gif") {
+    // GIF: 6-byte header, then logical screen width/height as little-endian
+    // uint16 at bytes 6 and 8.
+    if (buffer.length < 10) return null;
+    return finiteDimensions(buffer.readUInt16LE(6), buffer.readUInt16LE(8));
+  }
+  if (format === "jpeg") {
+    return parseJpegDimensions(buffer);
+  }
+  if (format === "webp") {
+    return parseWebpDimensions(buffer);
+  }
+  return null;
+}
+
+function finiteDimensions(width: number, height: number): ImageDimensions | null {
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+  if (width <= 0 || height <= 0) return null;
+  return { width, height };
+}
+
+/** Parse dimensions from a JPEG SOF (start-of-frame) marker. */
+function parseJpegDimensions(buffer: Buffer): ImageDimensions | null {
+  // Walk the marker segments after the SOI (FF D8) until a SOFn frame header.
+  let offset = 2;
+  while (offset + 9 < buffer.length) {
+    if (buffer[offset] !== 0xff) {
+      offset += 1;
+      continue;
+    }
+    const marker = buffer[offset + 1];
+    if (marker === undefined) return null;
+    // Standalone markers (RSTn, SOI, EOI, TEM) carry no length field.
+    if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) {
+      offset += 2;
+      continue;
+    }
+    const segLength = buffer.readUInt16BE(offset + 2);
+    if (segLength < 2) return null;
+    // SOF0..SOF15 except the non-frame DHT(C4)/DAC(CC)/RSTn markers.
+    const isSof =
+      marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+    if (isSof) {
+      // SOF payload: precision(1) height(2) width(2) — height first.
+      if (offset + 9 >= buffer.length) return null;
+      const height = buffer.readUInt16BE(offset + 5);
+      const width = buffer.readUInt16BE(offset + 7);
+      return finiteDimensions(width, height);
+    }
+    offset += 2 + segLength;
+  }
+  return null;
+}
+
+/** Parse dimensions from a WebP (VP8 / VP8L / VP8X) container. */
+function parseWebpDimensions(buffer: Buffer): ImageDimensions | null {
+  if (buffer.length < 30) return null;
+  const fourCc = buffer.toString("ascii", 12, 16);
+  if (fourCc === "VP8 ") {
+    // Lossy: dimensions are 14-bit LE at byte 26/28 (after the 3-byte start code).
+    if (buffer.length < 30) return null;
+    const width = buffer.readUInt16LE(26) & 0x3fff;
+    const height = buffer.readUInt16LE(28) & 0x3fff;
+    return finiteDimensions(width, height);
+  }
+  if (fourCc === "VP8L") {
+    // Lossless: 1 signature byte then 14-bit width-1, 14-bit height-1 packed LE.
+    if (buffer.length < 25) return null;
+    const b0 = buffer[21];
+    const b1 = buffer[22];
+    const b2 = buffer[23];
+    const b3 = buffer[24];
+    if (b0 === undefined || b1 === undefined || b2 === undefined || b3 === undefined) {
+      return null;
+    }
+    const bits = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
+    const width = (bits & 0x3fff) + 1;
+    const height = ((bits >> 14) & 0x3fff) + 1;
+    return finiteDimensions(width, height);
+  }
+  if (fourCc === "VP8X") {
+    // Extended: 24-bit canvas width-1/height-1 LE at byte 24/27.
+    if (buffer.length < 30) return null;
+    const width = 1 + (buffer.readUIntLE(24, 3) & 0xffffff);
+    const height = 1 + (buffer.readUIntLE(27, 3) & 0xffffff);
+    return finiteDimensions(width, height);
+  }
+  return null;
+}
 
 /**
  * Sniff common image magic bytes from the leading bytes of an upload.
@@ -67,6 +192,15 @@ export interface ImageBlobProcessorOptions {
   id?: string;
   /** Hard upper bound on upload size. Defaults to {@link DEFAULT_MAX_IMAGE_BYTES}. */
   maxBytes?: number;
+  /**
+   * Hard upper bound on DECODED pixel count (width × height). Defaults to
+   * {@link DEFAULT_MAX_IMAGE_PIXELS}. This is the decompression-bomb guard: an
+   * upload whose parsed header declares more than this many pixels is rejected
+   * at `validate` time and never handed to the (potentially app-supplied)
+   * `derivativeGenerator`, so a small-but-huge-dimension image can't exhaust
+   * memory/CPU during decode. Set to `0`/`Infinity` to disable (not advised).
+   */
+  maxPixels?: number;
   /**
    * Rejection message surfaced when an upload isn't a recognised image (wrong
    * MIME or unknown magic bytes). Defaults to a generic message naming the
@@ -144,6 +278,7 @@ const DEFAULT_REJECTION_MESSAGE =
 export function imageBlobProcessor(options: ImageBlobProcessorOptions = {}): FrickBlobProcessor {
   const id = options.id ?? "frick-image";
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_IMAGE_BYTES;
+  const maxPixels = options.maxPixels ?? DEFAULT_MAX_IMAGE_PIXELS;
   const message = options.message ?? DEFAULT_REJECTION_MESSAGE;
   const matches = options.matches ?? {};
   const variants = options.derivatives ?? [];
@@ -169,7 +304,31 @@ export function imageBlobProcessor(options: ImageBlobProcessorOptions = {}): Fri
       if (!format) {
         return { ok: false, reason: message };
       }
-      return { ok: true, extractedMetadata: { format } };
+      // Decompression-bomb guard (FR-130): bound DECODED dimensions, not just
+      // encoded bytes. A small file can declare enormous width/height; reject
+      // it from the parsed header before any decoder ever sees it. When the
+      // dimensions can't be parsed from the available preview bytes we keep the
+      // historical behavior (accept) — the byte cap still applies — rather than
+      // rejecting on an unparseable-but-valid header.
+      const dimensions = parseImageDimensions(ctx.preview);
+      if (dimensions && maxPixels > 0 && Number.isFinite(maxPixels)) {
+        const pixels = dimensions.width * dimensions.height;
+        if (pixels > maxPixels) {
+          return {
+            ok: false,
+            reason: `Image is ${dimensions.width}x${dimensions.height} (${pixels} pixels); the limit is ${maxPixels} pixels.`,
+          };
+        }
+      }
+      return {
+        ok: true,
+        extractedMetadata: {
+          format,
+          ...(dimensions
+            ? { width: dimensions.width, height: dimensions.height }
+            : {}),
+        },
+      };
     },
   };
 
@@ -189,6 +348,28 @@ export function imageBlobProcessor(options: ImageBlobProcessorOptions = {}): Fri
         return { derivatives: [] };
       }
       const sourceBuffer = Buffer.from(source);
+      // Decompression-bomb guard before decode (FR-130): re-check the decoded
+      // dimensions against `maxPixels` on the FULL source bytes — `validate`
+      // only saw a preview and the byte cap doesn't bound decoded size. An
+      // oversized image never reaches the (possibly app-supplied) generator.
+      if (maxPixels > 0 && Number.isFinite(maxPixels)) {
+        const dimensions = parseImageDimensions(sourceBuffer);
+        if (dimensions && dimensions.width * dimensions.height > maxPixels) {
+          ctx.logger.warn("frick.blob.image.oversizeDimensions", {
+            event: "frick.blob.image.oversizeDimensions",
+            blobId: ctx.blobId,
+            processorId: id,
+            width: dimensions.width,
+            height: dimensions.height,
+            maxPixels,
+          });
+          throw new Error(
+            `Image ${ctx.blobId} is ${dimensions.width}x${dimensions.height} ` +
+              `(${dimensions.width * dimensions.height} pixels); exceeds the ` +
+              `${maxPixels}-pixel decode limit.`,
+          );
+        }
+      }
       const derivatives: FrickBlobDerivative[] = [];
       for (const variant of variants) {
         const bytes = await generate({
