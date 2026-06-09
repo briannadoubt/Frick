@@ -184,6 +184,120 @@ describe("SfuMediaPlaneAdapter", () => {
     expect(backend.hasRouter("call-1")).toBe(false);
     expect(backend.transportCount("call-1")).toBe(0);
   });
+
+  // -- audit regressions ---------------------------------------------------
+
+  it("rejects an empty/weak token secret at construction (sfu-media-7)", () => {
+    const opts = {
+      backend: new FakeSfuBackend(),
+      announcedIp: ANNOUNCED_IP,
+      mediaCodecs: [],
+    };
+    expect(() => new SfuMediaPlaneAdapter({ ...opts, tokenSecret: "" })).toThrow(MediaPlaneError);
+    expect(() => new SfuMediaPlaneAdapter({ ...opts, tokenSecret: "short" })).toThrow(
+      MediaPlaneError,
+    );
+    // A sufficiently long secret is accepted.
+    expect(() => new SfuMediaPlaneAdapter({ ...opts, tokenSecret: SECRET })).not.toThrow();
+  });
+
+  it("verifyJoinToken accepts a fresh token and rejects forged/expired/foreign ones (sfu-media-1)", async () => {
+    const now = 1_700_000_000_000;
+    const { adapter } = makeAdapter({ now: () => now, ttl: 60_000 });
+    await adapter.allocateSession("call-1");
+    const grant = await adapter.issueJoinToken("call-1", A);
+
+    // Valid: the token the adapter just minted for A on call-1.
+    expect(() => adapter.verifyJoinToken("call-1", A, grant.token)).not.toThrow();
+
+    // Forged signature.
+    const [exp] = grant.token.split(".");
+    expect(() => adapter.verifyJoinToken("call-1", A, `${exp}.deadbeef`)).toThrow(MediaPlaneError);
+
+    // Wrong identity (B presenting A's token).
+    expect(() => adapter.verifyJoinToken("call-1", B, grant.token)).toThrow(MediaPlaneError);
+
+    // Wrong call.
+    expect(() => adapter.verifyJoinToken("call-2", A, grant.token)).toThrow(MediaPlaneError);
+
+    // Expired: mint a short-lived token, then verify with the same secret under
+    // a clock past its expiry. (Same SECRET → signature still matches, so the
+    // failure is the expiry check, not the MAC.)
+    const minter = makeAdapter({ now: () => now, ttl: 1_000 }).adapter;
+    await minter.allocateSession("call-1");
+    const staleGrant = await minter.issueJoinToken("call-1", A);
+    const late = makeAdapter({ now: () => now + 10_000 }).adapter;
+    expect(() => late.verifyJoinToken("call-1", A, staleGrant.token)).toThrow(/expired/);
+  });
+
+  it("binds transports to their owner — B cannot act on A's transport (sfu-media-2)", async () => {
+    const now = 1_700_000_000_000;
+    const { adapter } = makeAdapter({ now: () => now, ttl: 60_000 });
+    await adapter.allocateSession("call-1");
+    const grantA = await adapter.issueJoinToken("call-1", A);
+    const grantB = await adapter.issueJoinToken("call-1", B);
+    const aSend = JSON.parse(grantA.connection!.sendTransport) as SfuTransportParams;
+    const aRecv = JSON.parse(grantA.connection!.recvTransport) as SfuTransportParams;
+    const bSend = JSON.parse(grantB.connection!.sendTransport) as SfuTransportParams;
+
+    // B (valid token) cannot connect/produce/consume on A's transport.
+    await expect(
+      adapter.connectTransport("call-1", B, grantB.token, aSend.id, aSend.dtlsParameters),
+    ).rejects.toBeInstanceOf(MediaPlaneError);
+    await expect(
+      adapter.produce("call-1", B, grantB.token, aSend.id, "audio", {}),
+    ).rejects.toBeInstanceOf(MediaPlaneError);
+    await expect(
+      adapter.consume("call-1", B, grantB.token, aRecv.id, "producer-x", {}),
+    ).rejects.toBeInstanceOf(MediaPlaneError);
+
+    // Producing onto a *recv* transport (even your own) is rejected.
+    await expect(
+      adapter.produce("call-1", B, grantB.token, JSON.parse(grantB.connection!.recvTransport).id, "audio", {}),
+    ).rejects.toBeInstanceOf(MediaPlaneError);
+
+    // B acting on B's own send transport with a valid token is fine.
+    await expect(
+      adapter.connectTransport("call-1", B, grantB.token, bSend.id, bSend.dtlsParameters),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects ops presenting an invalid token even on an owned transport (sfu-media-1)", async () => {
+    const { adapter } = makeAdapter({ now: () => 1_700_000_000_000 });
+    await adapter.allocateSession("call-1");
+    const grantA = await adapter.issueJoinToken("call-1", A);
+    const aSend = JSON.parse(grantA.connection!.sendTransport) as SfuTransportParams;
+    await expect(
+      adapter.connectTransport("call-1", A, "not-a-real-token", aSend.id, aSend.dtlsParameters),
+    ).rejects.toBeInstanceOf(MediaPlaneError);
+  });
+
+  it("closes a participant's transports on leave and reuses (no leak) on rejoin (sfu-media-3)", async () => {
+    const { backend, adapter } = makeAdapter({ now: () => 1_700_000_000_000 });
+    await adapter.allocateSession("call-1");
+
+    await adapter.issueJoinToken("call-1", A);
+    expect(backend.transportCount("call-1")).toBe(2);
+
+    // Rejoin: the prior pair is replaced, not leaked → still 2.
+    await adapter.issueJoinToken("call-1", A);
+    expect(backend.transportCount("call-1")).toBe(2);
+
+    // A second participant adds their own pair.
+    await adapter.issueJoinToken("call-1", B);
+    expect(backend.transportCount("call-1")).toBe(4);
+
+    // A leaves → only A's two transports are reclaimed.
+    await adapter.leaveParticipant("call-1", A);
+    expect(backend.transportCount("call-1")).toBe(2);
+
+    // Repeated join/leave churn never grows the transport count past 2.
+    for (let i = 0; i < 5; i++) {
+      await adapter.issueJoinToken("call-1", A);
+      await adapter.leaveParticipant("call-1", A);
+    }
+    expect(backend.transportCount("call-1")).toBe(2); // only B remains
+  });
 });
 
 describe("LocalMediaPlacement", () => {

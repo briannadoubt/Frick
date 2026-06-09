@@ -29,6 +29,30 @@ describe("P2PWebRTCAdapter", () => {
     });
   });
 
+  it("rejects an empty/weak TURN shared secret at construction (sfu-media-7)", () => {
+    expect(
+      () =>
+        new P2PWebRTCAdapter({
+          turn: { urls: "turn:turn.example.org:3478", sharedSecret: "" },
+        }),
+    ).toThrow(MediaPlaneError);
+    expect(
+      () =>
+        new P2PWebRTCAdapter({
+          turn: { urls: "turn:turn.example.org:3478", sharedSecret: "short" },
+        }),
+    ).toThrow(MediaPlaneError);
+    // STUN-only (no TURN) is still valid.
+    expect(() => new P2PWebRTCAdapter()).not.toThrow();
+    // A strong secret is accepted.
+    expect(
+      () =>
+        new P2PWebRTCAdapter({
+          turn: { urls: "turn:turn.example.org:3478", sharedSecret: "a-strong-turn-secret-1234" },
+        }),
+    ).not.toThrow();
+  });
+
   it("allocateSession is idempotent per call id and does no networking", async () => {
     const adapter = new P2PWebRTCAdapter();
     const first = await adapter.allocateSession("call-1");

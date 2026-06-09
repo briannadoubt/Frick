@@ -8,6 +8,7 @@ import {
   DEFAULT_SFU_MEDIA_CODECS,
   FakeMediaPlaneAdapter,
   FakeSfuBackend,
+  MediaPlaneError,
   SfuMediaPlaneAdapter,
   buildCallSchema,
   callActor,
@@ -547,6 +548,35 @@ describe("FR-79 — CallControlPlane", () => {
       await expect(
         sfuPlane.sfuConnectTransport(bob, callId, token, send, { fingerprints: [] }),
       ).rejects.toBeInstanceOf(CallStateError);
+    });
+
+    it("rejects an invalid join token even from a real participant (calls-token-1)", async () => {
+      const { callId, send } = await joinedCall();
+      await expect(
+        sfuPlane.sfuConnectTransport(bob, callId, "forged.token", send, { fingerprints: [] }),
+      ).rejects.toThrow(MediaPlaneError);
+      await expect(
+        sfuPlane.sfuProduce(bob, callId, "forged.token", send, "audio", {}),
+      ).rejects.toThrow(MediaPlaneError);
+    });
+
+    it("a participant cannot operate on another participant's transport (calls-media-1)", async () => {
+      // Alice creates, both alice (creator) and bob join → two participants,
+      // each with their own send/recv transports.
+      await sfuPlane.createCall(alice, { conversationId: "conv-1", inviteeUserIds: ["bob"] });
+      const aliceJoin = await sfuPlane.joinCall(alice, "call-1");
+      const bobJoin = await sfuPlane.joinCall(bob, "call-1");
+      const aliceSend = grantTransports(aliceJoin.mediaGrant.connection!).send;
+      const bobToken = bobJoin.mediaGrant.token;
+
+      // Bob (valid token) tries to produce on Alice's send transport → rejected.
+      await expect(
+        sfuPlane.sfuProduce(bob, "call-1", bobToken, aliceSend, "audio", {}),
+      ).rejects.toThrow(MediaPlaneError);
+      // And cannot complete Alice's DTLS handshake.
+      await expect(
+        sfuPlane.sfuConnectTransport(bob, "call-1", bobToken, aliceSend, { fingerprints: [] }),
+      ).rejects.toThrow(MediaPlaneError);
     });
 
     it("Nacks SFU ops on a non-SFU (P2P/fake) media plane", async () => {
