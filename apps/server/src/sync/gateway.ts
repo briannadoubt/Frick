@@ -592,6 +592,7 @@ export class SyncGateway {
         kind: "projectionDelta",
         originNodeId: this.#clusterBus.nodeId,
         tenantId: notice.tenantId,
+        appId: notice.appId ?? DEFAULT_APP_ID,
         projection: notice.projection,
         // Notice changes carry `value: PlainObject | null`; the
         // envelope's typing is intentionally loose so adapters can
@@ -680,6 +681,10 @@ export class SyncGateway {
         kind: "streamEvent",
         originNodeId: this.#clusterBus.nodeId,
         tenantId: event.tenantId,
+        // App partition (tenant-app-isolation-1): peers fan this out only to
+        // the originating app's subscribers. Defaults to _default for events
+        // with no app id (single-app servers).
+        appId: event.appId ?? DEFAULT_APP_ID,
         stream: event.stream,
         streamId: event.streamId,
         sequence: event.sequence,
@@ -695,6 +700,7 @@ export class SyncGateway {
         kind: "objects",
         originNodeId: this.#clusterBus.nodeId,
         tenantId,
+        appId: appId ?? DEFAULT_APP_ID,
         type,
         objects: [...objects],
       });
@@ -713,6 +719,7 @@ export class SyncGateway {
         kind: "objectDeletes",
         originNodeId: this.#clusterBus.nodeId,
         tenantId,
+        appId: appId ?? DEFAULT_APP_ID,
         type,
         ids: [...ids],
       });
@@ -870,11 +877,17 @@ export class SyncGateway {
    * the bus implementation, so this only sees genuine peer traffic.
    */
   #handleClusterEnvelope(envelope: ClusterEnvelope): void {
+    // App partition (tenant-app-isolation-1): thread the envelope's originating
+    // app into every fan-out so a peer's delta reaches ONLY that app's local
+    // subscribers, mirroring the local publish path's app filter. Envelopes
+    // from older peers that predate the field decode with `appId === undefined`,
+    // which defaults to _default — the single-app behaviour, unchanged.
     switch (envelope.kind) {
       case "streamEvent":
         this.#fanOutStreamEvent(
           {
             tenantId: envelope.tenantId,
+            appId: envelope.appId ?? DEFAULT_APP_ID,
             stream: envelope.stream,
             streamId: envelope.streamId,
             sequence: envelope.sequence,
@@ -883,10 +896,20 @@ export class SyncGateway {
         );
         return;
       case "objects":
-        void this.#fanOutObjects(envelope.type, envelope.objects as PlainObject[], envelope.tenantId);
+        void this.#fanOutObjects(
+          envelope.type,
+          envelope.objects as PlainObject[],
+          envelope.tenantId,
+          envelope.appId ?? DEFAULT_APP_ID,
+        );
         return;
       case "objectDeletes":
-        this.#fanOutObjectDeletes(envelope.type, envelope.ids as string[], envelope.tenantId);
+        this.#fanOutObjectDeletes(
+          envelope.type,
+          envelope.ids as string[],
+          envelope.tenantId,
+          envelope.appId ?? DEFAULT_APP_ID,
+        );
         return;
       case "signal":
         // Don't re-broadcast to the bus — the originating node already
@@ -897,11 +920,13 @@ export class SyncGateway {
           { requestId: envelope.requestId, name: envelope.name, key: envelope.key, value: envelope.value },
           envelope.tenantId,
           { maxBufferedAmount: this.#limits.maxWebSocketOutboundBufferedBytes },
+          envelope.appId ?? DEFAULT_APP_ID,
         );
         return;
       case "projectionDelta":
         this.#fanOutProjectionDelta({
           tenantId: envelope.tenantId,
+          appId: envelope.appId ?? DEFAULT_APP_ID,
           projection: envelope.projection,
           changes: envelope.changes as ProjectionDeltaNotice["changes"],
         });
@@ -919,6 +944,7 @@ export class SyncGateway {
           key,
           envelope.records,
           envelope.cleared,
+          envelope.appId ?? DEFAULT_APP_ID,
         );
         return;
     }
@@ -945,6 +971,7 @@ export class SyncGateway {
         kind: "signal",
         originNodeId: this.#clusterBus.nodeId,
         tenantId,
+        appId,
         name,
         key,
         value,
@@ -1570,6 +1597,7 @@ export class SyncGateway {
         kind: "presenceDelta",
         originNodeId: this.#clusterBus.nodeId,
         tenantId: principal.tenantId,
+        appId: presenceAppId,
         name: payload.name,
         records: [{ key: payload.key, value: payload.value }],
         cleared: [],
@@ -1605,6 +1633,7 @@ export class SyncGateway {
         kind: "presenceDelta",
         originNodeId: this.#clusterBus.nodeId,
         tenantId: principal.tenantId,
+        appId: clearAppId,
         name: payload.name,
         records: [],
         cleared: [payload.key],

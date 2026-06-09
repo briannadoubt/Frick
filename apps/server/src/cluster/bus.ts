@@ -31,11 +31,22 @@ export type NodeId = string;
  * publish methods one-to-one so the subscriber on a peer node can
  * dispatch back into the right local publish path.
  */
+/**
+ * App partition (FR-153 / tenant-app-isolation-1) the envelope's payload
+ * originated in. Every sync-carrying variant carries it so a receiving node
+ * fans the envelope out ONLY to subscribers in the matching app partition, not
+ * just the matching tenant — otherwise a multi-app, multi-node deployment leaks
+ * app B's deltas to `_default` subscribers and drops them from app B's own
+ * subscribers. Optional on the wire for back-compat: an envelope from an older
+ * peer that predates this field decodes with `appId === undefined`, which the
+ * gateway treats as {@link DEFAULT_APP_ID}.
+ */
 export type ClusterEnvelope =
   | {
       kind: "streamEvent";
       originNodeId: NodeId;
       tenantId: string;
+      appId?: string;
       stream: string;
       streamId: string;
       sequence: number;
@@ -45,6 +56,7 @@ export type ClusterEnvelope =
       kind: "objects";
       originNodeId: NodeId;
       tenantId: string;
+      appId?: string;
       type: string;
       objects: PlainObject[];
     }
@@ -52,6 +64,7 @@ export type ClusterEnvelope =
       kind: "objectDeletes";
       originNodeId: NodeId;
       tenantId: string;
+      appId?: string;
       type: string;
       ids: string[];
     }
@@ -59,6 +72,7 @@ export type ClusterEnvelope =
       kind: "signal";
       originNodeId: NodeId;
       tenantId: string;
+      appId?: string;
       name: string;
       key: string;
       value: PlainObject;
@@ -68,6 +82,7 @@ export type ClusterEnvelope =
       kind: "projectionDelta";
       originNodeId: NodeId;
       tenantId: string;
+      appId?: string;
       projection: string;
       changes: ReadonlyArray<{ key: string; value: PlainObject | null }>;
     }
@@ -75,6 +90,7 @@ export type ClusterEnvelope =
       kind: "presenceDelta";
       originNodeId: NodeId;
       tenantId: string;
+      appId?: string;
       name: string;
       records: ReadonlyArray<{ key: string; value: PlainObject | null }>;
       cleared: readonly string[];

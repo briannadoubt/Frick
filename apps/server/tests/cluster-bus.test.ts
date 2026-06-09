@@ -195,4 +195,34 @@ describe("MemoryClusterBus", () => {
       "presenceDelta",
     ]);
   });
+
+  it("carries the originating appId across nodes (tenant-app-isolation-1)", async () => {
+    const channel = new MemoryClusterChannel();
+    const a = new MemoryClusterBus({ channel, nodeId: "node-a" });
+    const b = new MemoryClusterBus({ channel, nodeId: "node-b" });
+    const seen: ClusterEnvelope[] = [];
+    b.subscribe((envelope) => seen.push(envelope));
+
+    a.publish({
+      kind: "objects",
+      originNodeId: "node-a",
+      tenantId: "acme",
+      appId: "chat",
+      type: "Conversation",
+      objects: [{ id: "c1" }],
+    });
+    a.publish({
+      kind: "presenceDelta",
+      originNodeId: "node-a",
+      tenantId: "acme",
+      appId: "docs",
+      name: "TypingState",
+      records: [{ key: "k", value: { isTyping: true } }],
+      cleared: [],
+    });
+
+    // The receiving node must see the originating app id so it can scope fan-out
+    // to the right app's subscribers, not default everything to _default.
+    expect(seen.map((e) => e.appId)).toEqual(["chat", "docs"]);
+  });
 });
