@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTNF4QD4SAAS0S2SAJJYND1X",
+  "ts": "2026-06-09T05:54:30.948Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTN46588BFSS4XH9CW11F9EW",
+    "commentId": "01KTNF4QD4SAAS0S2SAJJYND1W",
+    "author": "claude",
+    "body": "Wave 2b merged green (11 findings): CRITICAL ClusterEnvelope appId cross-app isolation + CRITICAL cross-region federation HMAC auth (replay-protected); per-app job/projection/WS-partition scoping; failover determinism + ownership fencing-epoch; malformed-frame + loop-guard hardening. ALL 70 audit findings remediated. Final gate: server 1185, core 118, protocol 110, design-web 78, swift 174, android green, typecheck 0."
+  }
+}
