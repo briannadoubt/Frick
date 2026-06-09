@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTKZPJ035T8W30CH0PCCXXZZ",
+  "ts": "2026-06-08T16:05:23.587Z",
+  "actor": "unknown",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTKZPJ035T8W30CH0PCCXXZY",
+    "number": 159,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Documentation refresh for current runtime surfaces",
+    "description": "",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

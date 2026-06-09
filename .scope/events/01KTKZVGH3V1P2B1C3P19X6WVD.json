@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTKZVGH3V1P2B1C3P19X6WVD",
+  "ts": "2026-06-08T16:08:05.923Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTKZPJ035T8W30CH0PCCXXZY",
+    "commentId": "01KTKZVGH3V1P2B1C3P19X6WVC",
+    "author": "codex",
+    "body": "Refreshed public docs, package READMEs, Agent Kit skills, and stale source guidance for Postgres, multi-app isolation, native Delta.removed handling, observation layers, and SFU/E2EE calls."
+  }
+}
