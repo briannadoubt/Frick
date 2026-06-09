@@ -291,6 +291,23 @@ internal fun buildSyncUrl(baseUrl: String): String {
 // ----- msgpack encode/decode helpers -----
 
 internal object FrickMsgPack {
+    // Bounds on the decode path so a malicious/compromised server can't OOM or
+    // stack-overflow the client with a single small frame (FR audit
+    // native-android-4). A msgpack array/map/binary header declares its length
+    // BEFORE the element bytes, so a tiny frame can claim e.g. ~2.1e9 entries and
+    // trigger a huge backing-array allocation before any payload is read. We cap
+    // the *pre-sized* allocation (collections then grow incrementally only if the
+    // bytes really are there) and bound recursion depth.
+    //
+    // The caps are far above any legitimate frame: real Delta/Snapshot frames
+    // carry on the order of hundreds of rows and shallow nesting.
+    internal const val MAX_PRESIZE = 1 shl 16 // 65_536 entries pre-allocated
+    internal const val MAX_BINARY_LENGTH = 16 * 1024 * 1024 // 16 MiB
+    internal const val MAX_DEPTH = 64
+
+    /** Raised when a frame's declared structure exceeds the decode safety bounds. */
+    class DecodeBoundsException(message: String) : IllegalArgumentException(message)
+
     fun encodeFrame(kind: Int, payload: Map<String, Any?>): ByteArray {
         val out = ByteArrayOutputStream()
         MessagePack.newDefaultPacker(out).use { packer ->
@@ -308,7 +325,7 @@ internal object FrickMsgPack {
             if (arity < 2) return null
             val kind = unpacker.unpackInt()
             @Suppress("UNCHECKED_CAST")
-            val map = (unpackAny(unpacker) as? Map<String, Any?>) ?: emptyMap()
+            val map = (unpackAny(unpacker, depth = 0) as? Map<String, Any?>) ?: emptyMap()
             return kind to map
         }
     }
@@ -355,7 +372,12 @@ internal object FrickMsgPack {
         }
     }
 
-    private fun unpackAny(unpacker: MessageUnpacker): Any? {
+    private fun unpackAny(unpacker: MessageUnpacker, depth: Int): Any? {
+        if (depth > MAX_DEPTH) {
+            // Bound recursion so a deeply-nested array/map frame can't blow the
+            // stack (StackOverflowError) — caught by onMessage as a decode error.
+            throw DecodeBoundsException("msgpack nesting deeper than $MAX_DEPTH")
+        }
         if (!unpacker.hasNext()) return null
         val format = unpacker.nextFormat
         return when (format.valueType) {
@@ -366,21 +388,38 @@ internal object FrickMsgPack {
             ValueType.STRING -> unpacker.unpackString()
             ValueType.BINARY -> {
                 val len = unpacker.unpackBinaryHeader()
+                if (len < 0 || len > MAX_BINARY_LENGTH) {
+                    throw DecodeBoundsException("binary length $len exceeds cap $MAX_BINARY_LENGTH")
+                }
                 unpacker.readPayload(len)
             }
             ValueType.ARRAY -> {
                 val len = unpacker.unpackArrayHeader()
-                buildList(len) { repeat(len) { add(unpackAny(unpacker)) } }
+                if (len < 0 || len > MAX_PRESIZE) {
+                    // Reject (don't pre-size or loop) any array whose declared
+                    // length exceeds the cap. A msgpack header declares its length
+                    // before the elements, so an attacker can claim ~2.1e9 entries
+                    // in a tiny frame; pre-sizing OOMs and even an incremental loop
+                    // would spin len times. Legitimate frames stay well under the
+                    // cap.
+                    throw DecodeBoundsException("array length $len exceeds cap $MAX_PRESIZE")
+                }
+                val list = ArrayList<Any?>(len)
+                repeat(len) { list.add(unpackAny(unpacker, depth + 1)) }
+                list
             }
             ValueType.MAP -> {
                 val len = unpacker.unpackMapHeader()
-                buildMap<String, Any?>(len) {
-                    repeat(len) {
-                        val key = unpackAny(unpacker)?.toString() ?: ""
-                        val value = unpackAny(unpacker)
-                        put(key, value)
-                    }
+                if (len < 0 || len > MAX_PRESIZE) {
+                    throw DecodeBoundsException("map length $len exceeds cap $MAX_PRESIZE")
                 }
+                val map = LinkedHashMap<String, Any?>(len)
+                repeat(len) {
+                    val key = unpackAny(unpacker, depth + 1)?.toString() ?: ""
+                    val value = unpackAny(unpacker, depth + 1)
+                    map[key] = value
+                }
+                map
             }
             ValueType.EXTENSION -> {
                 // Skip extension types — protocol does not use them today.
@@ -513,6 +552,36 @@ class FrickSyncSocket internal constructor(
 
     private fun signalDisconnected() {
         if (!disconnectedSignal.isCompleted) disconnectedSignal.complete(Unit)
+    }
+
+    /**
+     * Fail every outstanding [upsertObject] / [callCommand] deferred with a
+     * synthetic "connection closed" envelope so their awaiting caller coroutines
+     * resume instead of hanging forever. Called on every disconnect path
+     * (onClosed / onFailure / close()): a write/call frame sent just before a
+     * transport drop, server crash, or token expiry would otherwise leave its
+     * awaiter suspended indefinitely with no timeout and no error surfaced.
+     *
+     * Drains both maps by snapshotting and removing entries first so the
+     * `invokeOnCompletion` eviction registered per request can't race the
+     * iteration. Completing an already-settled deferred is a no-op, so this is
+     * safe to call repeatedly and from multiple close paths.
+     */
+    private fun failPendingRequests(reason: String) {
+        val envelope = FrickErrorEnvelope(
+            code = FrickErrorCodes.SyncReconnectExhausted,
+            message = reason,
+            requestId = "",
+            retryable = true,
+        )
+        val writes = pendingObjectWrites.keys.toList()
+        for (requestId in writes) {
+            pendingObjectWrites.remove(requestId)?.complete(ObjectWriteResult.Failed(envelope))
+        }
+        val calls = pendingCallCommands.keys.toList()
+        for (requestId in calls) {
+            pendingCallCommands.remove(requestId)?.complete(CallCommandResult.Failed(envelope))
+        }
     }
 
     /**
@@ -757,6 +826,11 @@ class FrickSyncSocket internal constructor(
         val frame = FrickMsgPack.encodeFrame(FrameKindCodes.OBJECT_UPSERT, payload)
         val deferred = CompletableDeferred<ObjectWriteResult>()
         pendingObjectWrites[requestId] = deferred
+        // Evict the map entry whenever the deferred settles — including when the
+        // caller's coroutine is cancelled (the await() below unwinds but the
+        // requestId would otherwise linger forever, an unbounded leak under
+        // churny screens/reconnects).
+        deferred.invokeOnCompletion { pendingObjectWrites.remove(requestId) }
         sendOrQueue(FrameKindCodes.OBJECT_UPSERT, frame)
         val result = deferred.await()
         return when (result) {
@@ -791,6 +865,8 @@ class FrickSyncSocket internal constructor(
         val frame = FrickMsgPack.encodeFrame(FrameKindCodes.CALL_COMMAND, payload)
         val deferred = CompletableDeferred<CallCommandResult>()
         pendingCallCommands[requestId] = deferred
+        // Evict on settle/cancel so a cancelled caller doesn't leak the entry.
+        deferred.invokeOnCompletion { pendingCallCommands.remove(requestId) }
         sendOrQueue(FrameKindCodes.CALL_COMMAND, frame)
         return deferred.await()
     }
@@ -835,6 +911,9 @@ class FrickSyncSocket internal constructor(
         finishConnectionTelemetrySpan(NORMAL_CLOSURE)
         webSocket = null
         _status.value = FrickSyncStatus.Disconnected
+        // Resume any caller awaiting an in-flight write/call before the scope is
+        // cancelled, so close() never strands a suspended awaiter.
+        failPendingRequests("Sync connection closed")
         signalDisconnected()
         scope.cancel()
     }
@@ -1087,6 +1166,10 @@ class FrickSyncSocket internal constructor(
             finishConnectionTelemetrySpan(code)
             _events.tryEmit(FrickInboundEvent.Disconnected)
             _status.value = FrickSyncStatus.Disconnected
+            // The Ack/Nack/CallCommandResult that would settle an in-flight
+            // write/call can no longer arrive on this dropped connection — fail
+            // its awaiter rather than leave the caller coroutine hung.
+            failPendingRequests("Sync connection closed (code $code)")
             signalDisconnected()
         }
 
@@ -1097,6 +1180,9 @@ class FrickSyncSocket internal constructor(
             finishConnectionTelemetrySpan(ABNORMAL_CLOSURE)
             _events.tryEmit(FrickInboundEvent.Disconnected)
             _status.value = FrickSyncStatus.Failed(t.message ?: "socket failure")
+            // Fail in-flight writes/calls so their awaiters resume with an error
+            // instead of hanging until the process dies.
+            failPendingRequests(t.message ?: "Sync connection failed")
             signalDisconnected()
         }
     }

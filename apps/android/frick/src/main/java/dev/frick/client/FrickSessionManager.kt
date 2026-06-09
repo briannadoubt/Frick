@@ -43,13 +43,17 @@ data class SessionState(
  * [StateFlow]<[SessionState]> + suspend verbs.
  *
  * [FrickClient] already owns *durable* session persistence: it saves the active
- * [FrickSession] to its injected [FrickStorage] (the encrypted SQLite store by
- * default — the Android analogue of the iOS Keychain path) on every install via
- * the auth verbs, and exposes the restored session through
- * [FrickClient.currentSession]. What it does NOT provide is an *observable*
- * auth-STATE surface for Compose to gate on. This type fills that gap: it wraps
- * a [FrickClient], mirrors the client's session into an observable
- * [SessionState], and exposes the auth verbs a sign-in UI calls.
+ * [FrickSession] to its injected [FrickStorage] on every install via the auth
+ * verbs, and exposes the restored session through [FrickClient.currentSession].
+ * With the default [SQLiteFrickStorage] the **session secret** (the bearer token
+ * and identity) is encrypted at rest via a [SessionSecretStore] — by default
+ * EncryptedSharedPreferences over an AndroidKeyStore key, the Android analogue
+ * of the iOS Keychain path. (The non-secret local cache — synced object rows,
+ * stream events — stays in plain SQLite; only the credential is encrypted.) What
+ * the client does NOT provide is an *observable* auth-STATE surface for Compose
+ * to gate on. This type fills that gap: it wraps a [FrickClient], mirrors the
+ * client's session into an observable [SessionState], and exposes the auth verbs
+ * a sign-in UI calls.
  *
  * Apps drop their own ad-hoc session persistence (a `SharedPreferences` session
  * blob and the like) and instead:
@@ -57,13 +61,14 @@ data class SessionState(
  *   1. collect [state] (or [SessionState.isAuthenticated]) to gate their UI, and
  *   2. call [signIn] / [signUp] / [signOut] / [requestPasswordReset] /
  *      [resetPassword], which delegate to the underlying [FrickClient] and ride
- *      its existing encrypted persistence — strictly more secure than a
- *      `SharedPreferences` reimplementation, and less code.
+ *      its persistence (encrypted session secret by default) — strictly more
+ *      secure than a plaintext `SharedPreferences` reimplementation, and less
+ *      code.
  *
  * The manager seeds [SessionState.session] from [FrickClient.currentSession] at
- * construction, so a session the client restored from the encrypted store is
- * reflected immediately — the UI starts at the right gate on a warm launch
- * without any app-side restore code.
+ * construction, so a session the client restored from its store is reflected
+ * immediately — the UI starts at the right gate on a warm launch without any
+ * app-side restore code.
  *
  * The wrapped [client] is exposed read-only so screens that need the client
  * directly (a per-entity store, sync-socket setup) don't have to route through

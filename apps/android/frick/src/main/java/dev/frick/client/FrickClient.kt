@@ -432,12 +432,48 @@ object NoopFrickStorage : FrickStorage {
     override fun clearCache() = Unit
 }
 
+/**
+ * SQLite-backed [FrickStorage] for the Android SDK.
+ *
+ * Persistence is split by sensitivity:
+ *  - The durable **session secret** (the bearer [FrickSession.sessionToken] and
+ *    the identity it authenticates) is routed through an injectable
+ *    [SessionSecretStore]. The default ([keystoreBackedSessionSecretStore]) is
+ *    [EncryptedSharedPreferences][androidx.security.crypto.EncryptedSharedPreferences]
+ *    over an AndroidKeyStore master key, so the secret is AES-256-GCM encrypted
+ *    at rest — never plaintext on disk. This is the Android analogue of the iOS
+ *    Keychain path.
+ *  - The **non-secret cache** (object rows, stream events, pending appends,
+ *    cache metadata) lives in plain SQLite. None of it is a credential.
+ *
+ * The legacy plaintext `auth_session` table is no longer written. On first
+ * [loadSession] any pre-existing plaintext row is migrated into the secret store
+ * and then deleted from SQLite, so an upgraded install does not leave the old
+ * cleartext token behind.
+ *
+ * [sessionSecretStore] is injectable so the `:frick` unit tests (JVM/Robolectric,
+ * no real Keystore) can substitute [InMemorySessionSecretStore], mirroring how
+ * the iOS side fakes Keychain access.
+ */
 class SQLiteFrickStorage(
     context: Context,
     name: String = "frick.sqlite",
     private val json: Json = frickJson,
+    sessionSecretStore: SessionSecretStore? = null,
 ) : SQLiteOpenHelper(context.applicationContext, name, null, DATABASE_VERSION), FrickStorage {
     private val lock = Any()
+
+    private val appContext = context.applicationContext
+
+    // The default keystore-backed store is built LAZILY so merely constructing
+    // the storage (e.g. cache-only callers, or tests that never touch the
+    // session) does not reach for the AndroidKeyStore — which is absent under
+    // Robolectric. Pass [sessionSecretStore] (e.g. [InMemorySessionSecretStore])
+    // in JVM/Robolectric unit tests with no real Keystore.
+    private val injectedSecretStore: SessionSecretStore? = sessionSecretStore
+    private val secretStore: SessionSecretStore by lazy {
+        injectedSecretStore ?: keystoreBackedSessionSecretStore(appContext)
+    }
 
     override fun loadObjectJson(type: String, id: String): String? =
         synchronized(lock) {
@@ -568,46 +604,62 @@ class SQLiteFrickStorage(
 
     override fun loadSession(): FrickSession? =
         synchronized(lock) {
-            readableDatabase.query(
-                SESSION_TABLE,
-                arrayOf(SESSION_JSON),
-                "$SESSION_ID = ?",
-                arrayOf(CURRENT_SESSION_ID),
-                null,
-                null,
-                null,
-                "1",
-            ).use { cursor ->
-                if (cursor.moveToFirst()) {
-                    val body = cursor.getString(cursor.getColumnIndexOrThrow(SESSION_JSON))
-                    runCatching { json.decodeFromString<FrickSession>(body) }.getOrNull()
-                } else {
-                    null
-                }
+            // One-time migration: an install upgraded from a build that wrote the
+            // session to the plaintext `auth_session` table still has the
+            // cleartext token on disk. Move it into the encrypted secret store and
+            // delete the plaintext row so the bearer token stops sitting in the
+            // clear. Once migrated, the secret store is the sole source of truth.
+            if (secretStore.loadSecret() == null) {
+                migrateLegacyPlaintextSession()
             }
+            val body = secretStore.loadSecret() ?: return@synchronized null
+            runCatching { json.decodeFromString<FrickSession>(body) }.getOrNull()
         }
 
     override fun saveSession(session: FrickSession) {
         synchronized(lock) {
-            writableDatabase.replace(
-                SESSION_TABLE,
-                null,
-                ContentValues().apply {
-                    put(SESSION_ID, CURRENT_SESSION_ID)
-                    put(SESSION_JSON, json.encodeToString(session))
-                },
-            )
+            secretStore.saveSecret(json.encodeToString(session))
+            // Defensively drop any legacy plaintext row so a save never leaves a
+            // cleartext copy alongside the encrypted one.
+            deleteLegacyPlaintextSession()
         }
     }
 
     override fun clearSession() {
         synchronized(lock) {
-            writableDatabase.delete(
-                SESSION_TABLE,
-                "$SESSION_ID = ?",
-                arrayOf(CURRENT_SESSION_ID),
-            )
+            secretStore.clearSecret()
+            deleteLegacyPlaintextSession()
         }
+    }
+
+    /** Migrate a legacy plaintext session row into the encrypted store, then delete it. */
+    private fun migrateLegacyPlaintextSession() {
+        val legacy = readableDatabase.query(
+            SESSION_TABLE,
+            arrayOf(SESSION_JSON),
+            "$SESSION_ID = ?",
+            arrayOf(CURRENT_SESSION_ID),
+            null,
+            null,
+            null,
+            "1",
+        ).use { cursor ->
+            if (cursor.moveToFirst()) {
+                cursor.getString(cursor.getColumnIndexOrThrow(SESSION_JSON))
+            } else {
+                null
+            }
+        } ?: return
+        secretStore.saveSecret(legacy)
+        deleteLegacyPlaintextSession()
+    }
+
+    private fun deleteLegacyPlaintextSession() {
+        writableDatabase.delete(
+            SESSION_TABLE,
+            "$SESSION_ID = ?",
+            arrayOf(CURRENT_SESSION_ID),
+        )
     }
 
     override fun loadCacheMetadata(): FrickCacheMetadata? =
@@ -987,7 +1039,9 @@ class FrickClient(
 
     /**
      * The session the client currently holds, restored from (and kept in sync
-     * with) the injected encrypted [FrickStorage]. `null` when signed out.
+     * with) the injected [FrickStorage]. With the default [SQLiteFrickStorage]
+     * the session secret is encrypted at rest (see [SessionSecretStore]). `null`
+     * when signed out.
      *
      * Mirrors Swift `FrickClient.currentSession`. This is the durable session
      * the auth verbs install — an observable auth-state holder
@@ -997,9 +1051,18 @@ class FrickClient(
     val currentSession: FrickSession?
         get() = storage.loadSession()
 
+    /**
+     * Local sign-out. Wipes ALL persisted state for the signed-out user:
+     * the session secret, any queued appends, and the local cache (synced object
+     * rows, stream events, and cache metadata). Clearing the cache too closes the
+     * data-remanence gap where a prior account's records — including records
+     * shared with them by other users — would otherwise survive sign-out on disk
+     * (a privacy / tenant-isolation concern on shared devices).
+     */
     fun signOut() {
         storage.clearPendingAppends()
         storage.clearSession()
+        storage.clearCache()
     }
 
     /**

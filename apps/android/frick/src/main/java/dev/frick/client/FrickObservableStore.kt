@@ -43,7 +43,12 @@ fun interface FrickObjectDecoder<Model : Any> {
  *    record — whenever [decoder] returns `null` for a record. Either way the row
  *    leaves [items] without a refetch.
  *  - On reconnect (the socket transitions back to Ready after a drop) the store
- *    re-subscribes automatically so the server replays a fresh snapshot.
+ *    re-subscribes automatically so the server replays a fresh snapshot. The
+ *    first delta after each (re)subscribe is treated as a **snapshot boundary**:
+ *    the cache is reconciled against the snapshot's id set so rows the server
+ *    DELETED while the client was offline (absent from the snapshot rather than
+ *    present as a `removed` entry) are pruned instead of lingering as stale
+ *    "ghost" rows. Live deltas after the boundary keep folding in as upserts.
  *
  * The store is generic over `Model` and decodes records via an injected
  * [FrickObjectDecoder]; [idOf] extracts the stable cache key from a decoded
@@ -75,6 +80,11 @@ class FrickObservableStore<Model : Any>(
     @Volatile private var lastReady = false
     @Volatile private var closed = false
 
+    // Set when a (re)subscribe is issued; the next delta is the authoritative
+    // snapshot and the cache is reconciled against it (stale rows pruned) before
+    // its upserts fold in. Guarded by `lock`.
+    private var pendingSnapshotReset = false
+
     /**
      * Begin syncing: subscribe to [type] and start applying deltas. Idempotent —
      * a second call while already running is a no-op.
@@ -94,6 +104,10 @@ class FrickObservableStore<Model : Any>(
             socket.status.collect { status ->
                 val ready = status is FrickSyncStatus.Ready
                 if (ready && !lastReady) {
+                    // Arm the snapshot-boundary reconcile: the snapshot the server
+                    // replays for this (re)subscribe is the authoritative row set,
+                    // so the next delta prunes rows deleted while we were offline.
+                    synchronized(lock) { pendingSnapshotReset = true }
                     socket.subscribeObject(type)
                 }
                 lastReady = ready
@@ -118,6 +132,30 @@ class FrickObservableStore<Model : Any>(
     private fun applyDelta(delta: FrickInboundEvent.Delta) {
         var changed = false
         synchronized(lock) {
+            // Snapshot-boundary reconcile: on the first delta after a
+            // (re)subscribe, the snapshot is the authoritative current row set.
+            // Prune any cached id that the snapshot does NOT carry — those are
+            // rows the server deleted while we were disconnected (absent from the
+            // snapshot rather than present as a `removed` entry). Live deltas
+            // after the boundary skip this and keep folding in as upserts.
+            if (pendingSnapshotReset) {
+                pendingSnapshotReset = false
+                val present = HashSet<String>()
+                for (record in delta.objects) {
+                    if (record.stringField("type") != type) continue
+                    val id = record.stringField("id") ?: continue
+                    // Only ids that decode to a live row count as "present"; a
+                    // tombstone record in the snapshot still means the row is gone.
+                    if (decoder.decode(record) != null) present.add(id)
+                }
+                val staleIterator = cache.keys.iterator()
+                while (staleIterator.hasNext()) {
+                    if (staleIterator.next() !in present) {
+                        staleIterator.remove()
+                        changed = true
+                    }
+                }
+            }
             for (record in delta.objects) {
                 if (record.stringField("type") != type) continue
                 val id = record.stringField("id") ?: continue
@@ -139,6 +177,17 @@ class FrickObservableStore<Model : Any>(
             }
         }
         if (changed) publish()
+    }
+
+    /**
+     * Test/integration seam: arm the snapshot-boundary reconcile so the next
+     * delta is treated as an authoritative snapshot (stale rows pruned). The live
+     * path arms this automatically on every (re)subscribe; tests that drive
+     * [onEvent] directly without a socket use this to exercise the reconnect
+     * reconcile.
+     */
+    internal fun markResubscribed() {
+        synchronized(lock) { pendingSnapshotReset = true }
     }
 
     /**

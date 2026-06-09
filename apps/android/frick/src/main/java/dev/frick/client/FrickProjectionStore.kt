@@ -28,7 +28,12 @@ import kotlinx.coroutines.launch
  *    map: a change with a non-null [ProjectionChange.value] upserts the row at
  *    its key; a null value deletes it (matching the TS null-deletes semantics).
  *  - On reconnect (the socket transitions back to Ready after a drop) the store
- *    re-subscribes automatically so the server replays a fresh snapshot.
+ *    re-subscribes automatically so the server replays a fresh snapshot. The
+ *    first projection delta after each (re)subscribe is treated as a snapshot
+ *    boundary: the cache is reconciled against the delta's key set so rows the
+ *    server dropped while the client was offline (absent from the snapshot) are
+ *    pruned instead of lingering as stale rows. Live deltas after the boundary
+ *    keep folding in incrementally.
  *
  * Row values are surfaced as the decoded `Map<String, Any?>` payload exactly as
  * delivered on the wire, so callers project them into their own model types.
@@ -56,6 +61,10 @@ class FrickProjectionStore(
     @Volatile private var lastReady = false
     @Volatile private var closed = false
 
+    // Armed on each (re)subscribe; the next projection delta is the authoritative
+    // snapshot and the cache is reconciled against it. Guarded by `lock`.
+    private var pendingSnapshotReset = false
+
     /**
      * Begin syncing: subscribe to [name] and start applying deltas. Idempotent —
      * a second call while already running is a no-op.
@@ -75,6 +84,7 @@ class FrickProjectionStore(
             socket.status.collect { status ->
                 val ready = status is FrickSyncStatus.Ready
                 if (ready && !lastReady) {
+                    synchronized(lock) { pendingSnapshotReset = true }
                     socket.subscribeProjection(name)
                 }
                 lastReady = ready
@@ -100,6 +110,23 @@ class FrickProjectionStore(
         if (delta.projection != name) return
         var changed = false
         synchronized(lock) {
+            // Snapshot-boundary reconcile on the first delta after a (re)subscribe:
+            // prune any cached key the authoritative snapshot does not carry (rows
+            // the server dropped while we were offline). Only keys with a non-null
+            // value count as present; an explicit null is still a deletion.
+            if (pendingSnapshotReset) {
+                pendingSnapshotReset = false
+                val present = delta.changes
+                    .filter { it.value != null }
+                    .mapTo(HashSet()) { it.key }
+                val staleIterator = cache.keys.iterator()
+                while (staleIterator.hasNext()) {
+                    if (staleIterator.next() !in present) {
+                        staleIterator.remove()
+                        changed = true
+                    }
+                }
+            }
             for (change in delta.changes) {
                 val value = change.value
                 if (value == null) {
@@ -111,6 +138,15 @@ class FrickProjectionStore(
             }
         }
         if (changed) publish()
+    }
+
+    /**
+     * Test/integration seam: arm the snapshot-boundary reconcile so the next
+     * delta is treated as an authoritative snapshot (stale rows pruned). The live
+     * path arms this automatically on every (re)subscribe.
+     */
+    internal fun markResubscribed() {
+        synchronized(lock) { pendingSnapshotReset = true }
     }
 
     /** Current row payload for [key], or null if absent. */

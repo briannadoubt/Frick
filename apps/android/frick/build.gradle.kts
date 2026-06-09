@@ -57,6 +57,9 @@ dependencies {
     implementation("io.ktor:ktor-client-core:$ktorVersion")
     implementation("io.ktor:ktor-client-okhttp:$ktorVersion")
     implementation("com.squareup.okhttp3:okhttp:$okhttpVersion")
+    // Encryption-at-rest for the durable session secret: EncryptedSharedPreferences
+    // over an AndroidKeyStore master key (see FrickSessionSecretStore.kt).
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:$serializationVersion")
     implementation("org.msgpack:msgpack-core:$msgpackVersion")

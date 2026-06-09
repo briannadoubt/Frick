@@ -4,7 +4,9 @@ import android.database.sqlite.SQLiteDatabase
 import java.util.UUID
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -21,6 +23,16 @@ class FrickSQLiteStorageTest {
         val context = RuntimeEnvironment.getApplication()
         databaseNames.forEach(context::deleteDatabase)
     }
+
+    private fun session(userId: String, token: String): FrickSession =
+        FrickSession(
+            schemaHash = FRICK_SCHEMA_HASH,
+            sessionToken = token,
+            userId = userId,
+            deviceId = "android-device",
+            replicaId = "android-replica",
+            expiresAt = "2026-05-09T22:00:00.000Z",
+        )
 
     @Test
     fun persistsFoundationObjectsStreamEventsAndPendingAppendsAcrossInstances() {
@@ -128,6 +140,123 @@ class FrickSQLiteStorageTest {
             )
             storage.saveCacheMetadata(scoped)
             assertEquals(scoped, storage.loadCacheMetadata())
+        }
+    }
+
+    // -- native-android-1: session secret is NOT in plaintext SQLite ----------
+
+    @Test
+    fun sessionSecretIsRoutedThroughTheSecretStoreNotPlaintextSqlite() {
+        val context = RuntimeEnvironment.getApplication()
+        val databaseName = "frick-test-${UUID.randomUUID()}.sqlite"
+        databaseNames += databaseName
+        val secretStore = InMemorySessionSecretStore()
+        val token = "super-secret-bearer-token"
+
+        SQLiteFrickStorage(context, name = databaseName, sessionSecretStore = secretStore).use { storage ->
+            storage.saveSession(session("user-ada", token))
+
+            // Round-trips through the (here: in-memory, prod: encrypted) secret store.
+            assertEquals(token, storage.loadSession()?.sessionToken)
+            assertNotNull(secretStore.loadSecret())
+            assertTrue(secretStore.loadSecret()!!.contains(token))
+        }
+
+        // The raw SQLite file must NOT contain the bearer token anywhere — in
+        // particular the legacy `auth_session` table must be empty.
+        context.openOrCreateDatabase(databaseName, 0, null).use { database ->
+            database.rawQuery("SELECT COUNT(*) FROM auth_session", null).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(0, cursor.getInt(0))
+            }
+        }
+    }
+
+    @Test
+    fun clearSessionWipesTheSecretStore() {
+        val context = RuntimeEnvironment.getApplication()
+        val databaseName = "frick-test-${UUID.randomUUID()}.sqlite"
+        databaseNames += databaseName
+        val secretStore = InMemorySessionSecretStore()
+
+        SQLiteFrickStorage(context, name = databaseName, sessionSecretStore = secretStore).use { storage ->
+            storage.saveSession(session("user-ada", "tok"))
+            assertNotNull(storage.loadSession())
+
+            storage.clearSession()
+
+            assertNull(storage.loadSession())
+            assertNull(secretStore.loadSecret())
+        }
+    }
+
+    @Test
+    fun migratesLegacyPlaintextSessionIntoTheSecretStoreThenDeletesIt() {
+        val context = RuntimeEnvironment.getApplication()
+        val databaseName = "frick-test-${UUID.randomUUID()}.sqlite"
+        databaseNames += databaseName
+        val token = "legacy-plaintext-token"
+        val legacyJson =
+            """{"schemaHash":"$FRICK_SCHEMA_HASH","sessionToken":"$token","userId":"user-leg","deviceId":"d","replicaId":"r","expiresAt":"2026-05-09T22:00:00.000Z"}"""
+
+        // Seed the DB the way an OLD build did: a plaintext row in `auth_session`.
+        SQLiteFrickStorage(context, name = databaseName, sessionSecretStore = InMemorySessionSecretStore()).use { storage ->
+            // Touch the DB so SQLiteOpenHelper runs onCreate and the auth_session
+            // table exists, then write a legacy plaintext row by hand.
+            storage.loadCacheMetadata()
+            storage.writableDatabase.execSQL(
+                "INSERT OR REPLACE INTO auth_session (session_id, json) VALUES ('current', ?)",
+                arrayOf(legacyJson),
+            )
+        }
+
+        val secretStore = InMemorySessionSecretStore()
+        SQLiteFrickStorage(context, name = databaseName, sessionSecretStore = secretStore).use { storage ->
+            // First load migrates the plaintext row into the secret store.
+            assertEquals(token, storage.loadSession()?.sessionToken)
+            assertNotNull(secretStore.loadSecret())
+        }
+
+        // The plaintext row is gone afterward — no cleartext token left behind.
+        context.openOrCreateDatabase(databaseName, 0, null).use { database ->
+            database.rawQuery("SELECT COUNT(*) FROM auth_session", null).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(0, cursor.getInt(0))
+            }
+        }
+    }
+
+    // -- native-android-3: clearCache leaves no cached rows on disk ------------
+
+    @Test
+    fun clearCacheWipesObjectsStreamEventsAndMetadataButNotSecretStore() {
+        val context = RuntimeEnvironment.getApplication()
+        val databaseName = "frick-test-${UUID.randomUUID()}.sqlite"
+        databaseNames += databaseName
+        val secretStore = InMemorySessionSecretStore()
+
+        SQLiteFrickStorage(context, name = databaseName, sessionSecretStore = secretStore).use { storage ->
+            storage.saveSession(session("user-ada", "tok"))
+            storage.saveObjectJson(type = "User", id = "user-ada", json = """{"id":"user-ada"}""", version = 1)
+            storage.saveStreamEvent(
+                FrickStreamEvent(
+                    stream = "MessageStream",
+                    streamId = "c1",
+                    sequence = 1,
+                    eventId = "e1",
+                    event = "MessageSent",
+                    payload = mapOf("body" to "hi"),
+                ),
+            )
+            storage.saveCacheMetadata(FrickCacheMetadata.currentSchema)
+
+            storage.clearCache()
+
+            assertNull(storage.loadObjectJson(type = "User", id = "user-ada"))
+            assertTrue(storage.loadStreamEvents(stream = "MessageStream", key = "c1").isEmpty())
+            assertNull(storage.loadCacheMetadata())
+            // The session secret is independent of the cache and survives clearCache().
+            assertNotNull(storage.loadSession())
         }
     }
 

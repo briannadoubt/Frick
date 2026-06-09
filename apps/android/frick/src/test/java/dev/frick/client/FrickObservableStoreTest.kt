@@ -238,6 +238,77 @@ class FrickObservableStoreTest {
     }
 
     @Test
+    fun reconnectSnapshotPrunesRowsDeletedWhileOffline() {
+        // native-android-5: a server-side deletion that happened while the client
+        // was disconnected is absent from the reconnect snapshot (not present as a
+        // `removed` entry). The store must prune it instead of leaving a ghost row.
+        val socket = newSocket()
+        val store = newStore(socket)
+        try {
+            // Online: two rows are cached.
+            store.onEvent(
+                delta(
+                    listOf(
+                        objectRecord("a", mapOf("title" to "keep")),
+                        objectRecord("b", mapOf("title" to "deleted-while-offline")),
+                    ),
+                ),
+            )
+            assertEquals(listOf("a", "b"), store.items.value.map { it.id })
+
+            // Reconnect: the store re-subscribes (armed here) and the server
+            // replays an authoritative snapshot that NO LONGER contains "b".
+            store.markResubscribed()
+            store.onEvent(
+                delta(
+                    listOf(
+                        objectRecord("a", mapOf("title" to "keep-updated")),
+                        objectRecord("c", mapOf("title" to "new-since-reconnect")),
+                    ),
+                ),
+            )
+
+            // "b" is pruned; "a" updated; "c" added.
+            assertEquals(listOf("a", "c"), store.items.value.map { it.id })
+            assertEquals("keep-updated", store.get("a")?.title)
+            assertNull(store.get("b"))
+        } finally {
+            store.close()
+            socket.close()
+        }
+    }
+
+    @Test
+    fun snapshotBoundaryAppliesOnlyToTheFirstDeltaAfterResubscribe() {
+        // Only the FIRST delta after a (re)subscribe is a snapshot boundary; a
+        // subsequent live delta must NOT prune rows it simply doesn't mention.
+        val socket = newSocket()
+        val store = newStore(socket)
+        try {
+            store.markResubscribed()
+            store.onEvent(
+                delta(
+                    listOf(
+                        objectRecord("a", mapOf("title" to "a")),
+                        objectRecord("b", mapOf("title" to "b")),
+                    ),
+                ),
+            )
+            assertEquals(listOf("a", "b"), store.items.value.map { it.id })
+
+            // A later live delta touches only "a" — "b" must survive.
+            store.onEvent(delta(listOf(objectRecord("a", mapOf("title" to "a2")))))
+
+            assertEquals(listOf("a", "b"), store.items.value.map { it.id })
+            assertEquals("a2", store.get("a")?.title)
+            assertEquals("b", store.get("b")?.title)
+        } finally {
+            store.close()
+            socket.close()
+        }
+    }
+
+    @Test
     fun ignoresDeltaObjectsOfOtherTypes() {
         val socket = newSocket()
         val store = newStore(socket)

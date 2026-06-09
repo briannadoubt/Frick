@@ -102,6 +102,64 @@ class FrickProjectionStoreTest {
     }
 
     @Test
+    fun reconnectSnapshotPrunesRowsDroppedWhileOffline() {
+        // native-android-5: a row the server dropped while the client was offline
+        // is absent from the reconnect snapshot (not an explicit null deletion);
+        // the store must prune it rather than keep it as a stale row.
+        val socket = newSocket()
+        val store = newStore(socket)
+        try {
+            store.onEvent(
+                delta(
+                    changes = arrayOf(
+                        row("a", mapOf("title" to "Alpha")),
+                        row("b", mapOf("title" to "Bravo")),
+                    ),
+                ),
+            )
+            assertEquals(2, store.rows.value.size)
+
+            // Reconnect: re-subscribe armed; the snapshot omits "b".
+            store.markResubscribed()
+            store.onEvent(delta(changes = arrayOf(row("a", mapOf("title" to "Alpha2")))))
+
+            assertEquals(setOf("a"), store.rows.value.keys)
+            assertNull(store.get("b"))
+            assertEquals("Alpha2", store.get("a")?.get("title"))
+        } finally {
+            store.close()
+            socket.close()
+        }
+    }
+
+    @Test
+    fun snapshotBoundaryAppliesOnlyToFirstDeltaAfterResubscribe() {
+        val socket = newSocket()
+        val store = newStore(socket)
+        try {
+            store.markResubscribed()
+            store.onEvent(
+                delta(
+                    changes = arrayOf(
+                        row("a", mapOf("title" to "Alpha")),
+                        row("b", mapOf("title" to "Bravo")),
+                    ),
+                ),
+            )
+            assertEquals(2, store.rows.value.size)
+
+            // A later live delta touches only "a" — "b" must survive.
+            store.onEvent(delta(changes = arrayOf(row("a", mapOf("title" to "Alpha2")))))
+
+            assertEquals(setOf("a", "b"), store.rows.value.keys)
+            assertEquals("Bravo", store.get("b")?.get("title"))
+        } finally {
+            store.close()
+            socket.close()
+        }
+    }
+
+    @Test
     fun ignoresDeltaForOtherProjection() {
         val socket = newSocket()
         val store = newStore(socket, name = "inbox")

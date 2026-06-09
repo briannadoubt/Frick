@@ -328,6 +328,90 @@ class FrickSyncSocketTest {
     }
 
     @Test
+    fun upsertObjectFailsAwaiterWhenSocketClosesWithoutAck() = runBlocking {
+        // Server acks the Hello but never replies to the ObjectUpsert.
+        enqueueWebSocketHandler(
+            onMessage = { _, frame ->
+                if (frame.first == FrameKindCodes.HELLO) {
+                    sendFrame(
+                        FrameKindCodes.HELLO_ACK,
+                        mapOf(
+                            "schemaHash" to FRICK_SCHEMA_HASH,
+                            "schemaId" to FRICK_SCHEMA_ID,
+                            "schemaRevision" to FRICK_SCHEMA_REVISION,
+                            "schemaCompatibility" to mapOf("status" to "compatible"),
+                            "serverCapabilities" to emptyMap<String, Any?>(),
+                        ),
+                    )
+                }
+            },
+        )
+        val socket = newSocket()
+        try {
+            socket.awaitReady()
+            @OptIn(DelicateCoroutinesApi::class)
+            val upsertDeferred = GlobalScope.async {
+                withTimeout(2_000) {
+                    try {
+                        socket.upsertObject(type = "Conversation", id = "c-1", value = mapOf("title" to "x"))
+                        null
+                    } catch (e: FrickHttpException) {
+                        e
+                    }
+                }
+            }
+            delay(100) // let the upsert frame go out and register its deferred
+            // Drop the connection mid-flight: the awaiter must resume with an
+            // error rather than hang forever.
+            socket.close()
+            val error = upsertDeferred.await()
+            assertNotNull(error)
+            assertEquals(FrickErrorCodes.SyncReconnectExhausted, error!!.envelope?.code)
+        } finally {
+            socket.close()
+        }
+    }
+
+    @Test
+    fun upsertObjectFailsAwaiterOnServerInitiatedClose() = runBlocking {
+        // Server acks Hello, then closes the connection abnormally without ever
+        // acking the upsert — exercises the onClosed drain path.
+        enqueueWebSocketHandler(
+            onMessage = { ws, frame ->
+                when (frame.first) {
+                    FrameKindCodes.HELLO -> sendFrame(
+                        FrameKindCodes.HELLO_ACK,
+                        mapOf(
+                            "schemaHash" to FRICK_SCHEMA_HASH,
+                            "schemaId" to FRICK_SCHEMA_ID,
+                            "schemaRevision" to FRICK_SCHEMA_REVISION,
+                            "schemaCompatibility" to mapOf("status" to "compatible"),
+                            "serverCapabilities" to emptyMap<String, Any?>(),
+                        ),
+                    )
+                    FrameKindCodes.OBJECT_UPSERT -> ws.close(1011, "server-gone")
+                }
+            },
+        )
+        val socket = newSocket()
+        try {
+            socket.awaitReady()
+            val error = withTimeout(3_000) {
+                try {
+                    socket.upsertObject(type = "Conversation", id = "c-1", value = mapOf("title" to "x"))
+                    null
+                } catch (e: FrickHttpException) {
+                    e
+                }
+            }
+            assertNotNull(error)
+            assertEquals(FrickErrorCodes.SyncReconnectExhausted, error!!.envelope?.code)
+        } finally {
+            socket.close()
+        }
+    }
+
+    @Test
     fun reconnectsAfterServerClose() = runBlocking {
         // First socket: send HelloAck then close.
         enqueueWebSocketHandler(
@@ -406,6 +490,110 @@ class FrickSyncSocketTest {
             assertEquals(FrameKindCodes.HELLO, first.first)
             val second = takeFrame(timeoutMs = 5_000)
             assertEquals(FrameKindCodes.APPEND, second.first)
+        } finally {
+            socket.close()
+        }
+    }
+
+    // -- native-android-4: decode-path DoS bounds -----------------------------
+
+    @Test
+    fun decodeRejectsArrayHeaderClaimingAbsurdLengthWithoutOom() {
+        // A tiny frame whose inner payload position declares a ~2.1e9-element
+        // array. Pre-sizing or even looping that would OOM/spin; the decoder must
+        // reject it as a bounds violation instead.
+        val out = java.io.ByteArrayOutputStream()
+        org.msgpack.core.MessagePack.newDefaultPacker(out).use { packer ->
+            packer.packArrayHeader(2) // [kind, payload]
+            packer.packInt(FrameKindCodes.DELTA)
+            packer.packArrayHeader(Int.MAX_VALUE) // payload position: bogus huge array
+            // No elements follow — the header alone is the attack.
+        }
+        val ex = try {
+            FrickMsgPack.decodeFrame(out.toByteArray())
+            null
+        } catch (e: Throwable) {
+            e
+        }
+        assertNotNull(ex)
+        assertTrue(ex is FrickMsgPack.DecodeBoundsException)
+    }
+
+    @Test
+    fun decodeRejectsMapHeaderClaimingAbsurdLength() {
+        val out = java.io.ByteArrayOutputStream()
+        org.msgpack.core.MessagePack.newDefaultPacker(out).use { packer ->
+            packer.packArrayHeader(2)
+            packer.packInt(FrameKindCodes.DELTA)
+            packer.packMapHeader(Int.MAX_VALUE) // bogus huge map
+        }
+        val ex = try {
+            FrickMsgPack.decodeFrame(out.toByteArray())
+            null
+        } catch (e: Throwable) {
+            e
+        }
+        assertNotNull(ex)
+        assertTrue(ex is FrickMsgPack.DecodeBoundsException)
+    }
+
+    @Test
+    fun decodeRejectsDeeplyNestedFrameInsteadOfStackOverflow() {
+        // Nest arrays far past MAX_DEPTH. Unbounded recursion would StackOverflow;
+        // the decoder must throw a bounded DecodeBoundsException.
+        val out = java.io.ByteArrayOutputStream()
+        org.msgpack.core.MessagePack.newDefaultPacker(out).use { packer ->
+            packer.packArrayHeader(2)
+            packer.packInt(FrameKindCodes.DELTA)
+            // payload position: a chain of single-element arrays, deeper than the cap.
+            repeat(FrickMsgPack.MAX_DEPTH + 50) { packer.packArrayHeader(1) }
+            packer.packNil()
+        }
+        val ex = try {
+            FrickMsgPack.decodeFrame(out.toByteArray())
+            null
+        } catch (e: Throwable) {
+            e
+        }
+        assertNotNull(ex)
+        assertTrue(ex is FrickMsgPack.DecodeBoundsException)
+    }
+
+    @Test
+    fun onMessageSurfacesDecodeBoundsAsFailedStatusWithoutCrashing() = runBlocking {
+        // The malicious frame arrives over the live socket: onMessage must catch
+        // the bounds error and flip status to Failed rather than crash the process.
+        enqueueWebSocketHandler(
+            onMessage = { _, frame ->
+                if (frame.first == FrameKindCodes.HELLO) {
+                    sendFrame(
+                        FrameKindCodes.HELLO_ACK,
+                        mapOf(
+                            "schemaHash" to FRICK_SCHEMA_HASH,
+                            "schemaId" to FRICK_SCHEMA_ID,
+                            "schemaRevision" to FRICK_SCHEMA_REVISION,
+                            "schemaCompatibility" to mapOf("status" to "compatible"),
+                            "serverCapabilities" to emptyMap<String, Any?>(),
+                        ),
+                    )
+                    // Then a hostile frame with a bogus huge array header.
+                    val out = java.io.ByteArrayOutputStream()
+                    org.msgpack.core.MessagePack.newDefaultPacker(out).use { packer ->
+                        packer.packArrayHeader(2)
+                        packer.packInt(FrameKindCodes.DELTA)
+                        packer.packArrayHeader(Int.MAX_VALUE)
+                    }
+                    serverSocket?.send(out.toByteArray().toByteString())
+                }
+            },
+        )
+        val socket = newSocket()
+        try {
+            socket.awaitReady()
+            val failed = withTimeout(2_000) {
+                socket.status.filter { it is FrickSyncStatus.Failed }.first() as FrickSyncStatus.Failed
+            }
+            assertTrue(failed.reason.startsWith("decode:"))
         } finally {
             socket.close()
         }
