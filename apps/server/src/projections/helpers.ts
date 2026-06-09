@@ -13,15 +13,21 @@ import type {
 } from "./registry.js";
 
 /**
- * Typed `ctx.store.listObjects(ctx.tenantId, type)` — read every object of
- * `type` in the apply/read context's tenant, cast to `T`. Saves the
- * `as unknown as T[]` dance in every projection handler.
+ * Typed `ctx.store.listObjects(ctx.tenantId, type, ctx.appId)` — read every
+ * object of `type` in the apply/read context's tenant AND app partition, cast
+ * to `T`. Saves the `as unknown as T[]` dance in every projection handler.
+ *
+ * App scoping (FR-153 / tenant-app-isolation-7): the context carries the
+ * originating write's `appId`, so a per-app projection reads its OWN app's
+ * objects, not the `_default` partition. `ctx.appId` is `undefined` for
+ * single-app servers, which the store overload defaults to `_default` — so
+ * existing single-app behaviour is byte-for-byte unchanged.
  */
 export async function listProjectionObjects<T = PlainObject>(
   ctx: FrickProjectionContext,
   type: string,
 ): Promise<T[]> {
-  return (await ctx.store.listObjects(ctx.tenantId, type)) as unknown as T[];
+  return (await ctx.store.listObjects(ctx.tenantId, type, ctx.appId)) as unknown as T[];
 }
 
 /**

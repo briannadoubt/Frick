@@ -43,6 +43,26 @@ describe("listProjectionObjects", () => {
     expect(rows.map((r) => r.id).sort()).toEqual(["c1", "c2"]);
     expect(rows.map((r) => r.title).sort()).toEqual(["One", "Two"]);
   });
+
+  it("honors ctx.appId so a per-app projection reads its OWN app, not _default (tenant-app-isolation-7)", async () => {
+    store = new FrickStore({ path: ":memory:", seed: true, schema: productTestSchema });
+    // Same tenant, same object type, but two distinct app partitions. Write
+    // through the object store so we can target the app partition directly.
+    await store.objects.upsert("_default", "Conversation", "default-1", { kind: "group", title: "Default", createdBy: "u" }, 0, "_default");
+    await store.objects.upsert("_default", "Conversation", "appb-1", { kind: "group", title: "AppB", createdBy: "u" }, 0, "app-b");
+
+    // A projection context originating from a write under app-b.
+    const ctx: FrickProjectionContext = {
+      tenantId: "_default",
+      appId: "app-b",
+      store,
+      logger: undefined as never,
+    };
+    const rows = await listProjectionObjects<{ id: string }>(ctx, "Conversation");
+    // Before the fix this read `_default` and returned `default-1`; the helper
+    // must now read app-b's partition only.
+    expect(rows.map((r) => r.id)).toEqual(["appb-1"]);
+  });
 });
 
 describe("projectionSourceObjectTypes", () => {
