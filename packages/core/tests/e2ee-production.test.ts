@@ -320,6 +320,143 @@ describe("SFrameCipherTransform replay protection", () => {
     // The genuine frame at that counter still decrypts (window not poisoned).
     expect(new TextDecoder().decode(await recv.decrypt(real))).toBe("real");
   });
+
+  // -- crypto-e2ee-2: concurrent decrypts of the same counter must not both pass --
+
+  it("crypto-e2ee-2: two concurrent decrypts of the SAME frame accept it at most once", async () => {
+    const epochs = new CallKeyEpochManager({ keyFactory: deterministicKeyFactory, now: () => 1000 });
+    epochs.rotate([ALICE]);
+    const sender = new SFrameCipherTransform({ epochs, senderId: 1, aead: new FakeAead(), kdf: new FakeKdf() });
+    const recv = new SFrameCipherTransform({ epochs, senderId: 2, aead: new FakeAead(), kdf: new FakeKdf() });
+
+    const f = await sender.encrypt(new TextEncoder().encode("dup"));
+    // Fire both decrypts WITHOUT awaiting between them — they straddle the
+    // seen()/check() seam concurrently. Before the fix both pre-screened false and
+    // both authenticated → the replay was accepted twice. Serialization means
+    // exactly one succeeds and the other is rejected as a replay.
+    const results = await Promise.allSettled([recv.decrypt(f), recv.decrypt(f)]);
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r) => r.status === "rejected");
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason.message).toMatch(/replayed or stale/);
+  });
+
+  it("crypto-e2ee-2: serialization does not break legitimate concurrent distinct frames", async () => {
+    const epochs = new CallKeyEpochManager({ keyFactory: deterministicKeyFactory, now: () => 1000 });
+    epochs.rotate([ALICE]);
+    const sender = new SFrameCipherTransform({ epochs, senderId: 1, aead: new FakeAead(), kdf: new FakeKdf() });
+    const recv = new SFrameCipherTransform({ epochs, senderId: 2, aead: new FakeAead(), kdf: new FakeKdf() });
+
+    const frames = await Promise.all(
+      [1, 2, 3, 4, 5].map((n) => sender.encrypt(new TextEncoder().encode(`f${n}`))),
+    );
+    // All five distinct counters decrypt even when fired concurrently.
+    const out = await Promise.all(frames.map((f) => recv.decrypt(f)));
+    expect(out.map((b) => new TextDecoder().decode(b))).toEqual(["f1", "f2", "f3", "f4", "f5"]);
+  });
+
+  // -- crypto-e2ee-3: no unbounded pre-auth allocation; bounded + pruned state --
+
+  it("crypto-e2ee-3: a flood of forged senderIds does NOT allocate replay windows (pre-auth)", async () => {
+    const epochs = new CallKeyEpochManager({ keyFactory: deterministicKeyFactory, now: () => 1000 });
+    epochs.rotate([ALICE]);
+    const recv = new SFrameCipherTransform({
+      epochs,
+      senderId: 9,
+      aead: new FakeAead(),
+      kdf: new FakeKdf(),
+    });
+
+    // Inject 1000 frames each with a NOVEL attacker-controlled senderId and a
+    // corrupt body so auth fails. Before the fix each allocated a permanent
+    // ReplayWindow keyed on the unauthenticated senderId (memory-exhaustion DoS).
+    for (let s = 0; s < 1000; s++) {
+      const header = encodeSFrameV2Header({ version: 2, epochId: 0, senderId: s, counter: 1n });
+      // Garbage ciphertext (2-byte tag area) → auth will fail.
+      const payload = new Uint8Array(SFRAME_V2_HEADER_BYTES + 4);
+      payload.set(header, 0);
+      await expect(recv.decrypt(payload)).rejects.toThrow();
+    }
+    // No window was retained for any unauthenticated sender.
+    expect(recv.trackedState().replayWindows).toBe(0);
+
+    // A genuine frame still allocates exactly one window (for the real sender).
+    const sender = new SFrameCipherTransform({ epochs, senderId: 1, aead: new FakeAead(), kdf: new FakeKdf() });
+    const real = await sender.encrypt(new TextEncoder().encode("real"));
+    await recv.decrypt(real);
+    expect(recv.trackedState().replayWindows).toBe(1);
+  });
+
+  it("crypto-e2ee-3: authenticated senders per epoch are LRU-bounded", async () => {
+    const epochs = new CallKeyEpochManager({ keyFactory: deterministicKeyFactory, now: () => 1000 });
+    epochs.rotate([ALICE]);
+    const recv = new SFrameCipherTransform({
+      epochs,
+      senderId: 9999,
+      aead: new FakeAead(),
+      kdf: new FakeKdf(),
+      maxSendersPerEpoch: 4,
+    });
+    // Each distinct (authenticated) sender encrypts one frame; the receiver tracks
+    // at most `maxSendersPerEpoch` windows even though 10 real senders appear.
+    for (let s = 0; s < 10; s++) {
+      const sender = new SFrameCipherTransform({ epochs, senderId: s, aead: new FakeAead(), kdf: new FakeKdf() });
+      const f = await sender.encrypt(new TextEncoder().encode(`s${s}`));
+      await recv.decrypt(f);
+    }
+    expect(recv.trackedState().replayWindows).toBeLessThanOrEqual(4);
+  });
+
+  it("crypto-e2ee-3: per-epoch state is pruned when an epoch ages out", async () => {
+    let clock = 1000;
+    const epochs = new CallKeyEpochManager({
+      keyFactory: deterministicKeyFactory,
+      previousEpochWindowMs: 5_000,
+      now: () => clock,
+    });
+    const sender = new SFrameCipherTransform({ epochs, senderId: 1, aead: new FakeAead(), kdf: new FakeKdf() });
+    const recv = new SFrameCipherTransform({ epochs, senderId: 1, aead: new FakeAead(), kdf: new FakeKdf() });
+
+    epochs.rotate([ALICE, BOB]); // epoch 0
+    const f0 = await sender.encrypt(new TextEncoder().encode("e0"));
+    await recv.decrypt(f0); // allocates state for epoch 0
+    expect(recv.trackedState().replayWindows).toBe(1);
+    expect(recv.trackedState().derivedEpochs).toBeGreaterThanOrEqual(1);
+
+    epochs.rotate([ALICE]); // epoch 1
+    // Age epoch 0 out of the transition window, then trigger a decrypt that
+    // resolves no key for it → stale per-epoch state is pruned.
+    clock = 1000 + 5_000;
+    const staleHeader = encodeSFrameV2Header({ version: 2, epochId: 0, senderId: 1, counter: 2n });
+    const stalePayload = new Uint8Array(SFRAME_V2_HEADER_BYTES + 4);
+    stalePayload.set(staleHeader, 0);
+    await expect(recv.decrypt(stalePayload)).rejects.toThrow(/no key for epoch 0/);
+    // Epoch 0's window and derived material are gone.
+    expect(recv.trackedState().replayWindows).toBe(0);
+  });
+
+  // -- crypto-e2ee-7: senderId must be a valid 32-bit ordinal (no silent truncation) --
+
+  it("crypto-e2ee-7: rejects a senderId outside [0, 2^32) instead of truncating", () => {
+    const epochs = new CallKeyEpochManager({ keyFactory: deterministicKeyFactory, now: () => 1000 });
+    // 2^32 truncates to 0 via `>>> 0`; 2^33 + 5 collides with 5 — both would have
+    // silently aliased another sender's nonce stream. They must throw instead.
+    expect(() => new SFrameCipherTransform({ epochs, senderId: 2 ** 32, aead: new FakeAead(), kdf: new FakeKdf() })).toThrow(
+      /senderId must be an integer in \[0, 2\^32\)/,
+    );
+    expect(() => new SFrameCipherTransform({ epochs, senderId: -1, aead: new FakeAead(), kdf: new FakeKdf() })).toThrow(
+      /senderId/,
+    );
+    expect(() => new SFrameCipherTransform({ epochs, senderId: 1.5, aead: new FakeAead(), kdf: new FakeKdf() })).toThrow(
+      /senderId/,
+    );
+    // The valid extremes are accepted.
+    expect(() => new SFrameCipherTransform({ epochs, senderId: 0, aead: new FakeAead(), kdf: new FakeKdf() })).not.toThrow();
+    expect(
+      () => new SFrameCipherTransform({ epochs, senderId: 2 ** 32 - 1, aead: new FakeAead(), kdf: new FakeKdf() }),
+    ).not.toThrow();
+  });
 });
 
 // -- key-epoch distribution over the signal relay ----------------------------

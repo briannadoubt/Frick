@@ -155,6 +155,105 @@ describe("CallKeyEpochManager", () => {
     mgr.adopt({ ...peerEpoch, epochId: 0 });
     expect(mgr.current?.epochId).toBe(1);
   });
+
+  // -- crypto-e2ee-1: transition window measured from supersession (local clock) --
+
+  it("crypto-e2ee-1: keeps the previous epoch for the FULL window even if it was current for a long time", () => {
+    let clock = 1000;
+    const mgr = new CallKeyEpochManager({
+      keyFactory: deterministicKeyFactory,
+      previousEpochWindowMs: 5_000,
+      now: () => clock,
+    });
+    // Epoch 0 is created at t=1000 and stays current for a long time (60s) — far
+    // longer than the 5s window — before a membership change supersedes it.
+    mgr.rotate([ALICE, BOB]); // epoch 0, createdAt = 1000
+    clock = 1000 + 60_000;
+    mgr.rotate([ALICE]); // epoch 1 supersedes epoch 0 at t=61000
+
+    // BEFORE the fix this computed now()-createdAt = 60s >= 5s and dropped epoch 0
+    // instantly. The window must be measured from SUPERSESSION, so epoch 0 is
+    // still resolvable for ~5s after the rotation (in-flight frames decrypt).
+    expect(mgr.keyFor(0)).toBeDefined();
+    clock = 1000 + 60_000 + 4_999;
+    expect(mgr.keyFor(0)).toBeDefined();
+    // And it drops exactly `windowMs` after demotion, not after creation.
+    clock = 1000 + 60_000 + 5_000;
+    expect(mgr.keyFor(0)).toBeUndefined();
+    expect(mgr.keyFor(1)).toBeDefined();
+  });
+
+  it("crypto-e2ee-1: adopt() times the window on the LOCAL clock, not the remote createdAt", () => {
+    let clock = 1000;
+    const mgr = new CallKeyEpochManager({
+      keyFactory: deterministicKeyFactory,
+      previousEpochWindowMs: 5_000,
+      now: () => clock,
+    });
+    mgr.rotate([ALICE, BOB]); // epoch 0 (local createdAt = 1000)
+    // A peer announces epoch 1 whose createdAt is FAR in the future (remote clock
+    // ahead by an hour). Adopting it must demote epoch 0 on OUR clock at t=1000.
+    mgr.adopt({
+      epochId: 1,
+      key: new Uint8Array(32).fill(9),
+      members: ["alice:d1"],
+      createdAt: 1000 + 3_600_000, // remote announcer is +1h skewed
+    });
+    // Without the fix, now()-previous.createdAt would use epoch 0's createdAt
+    // (1000) — but more importantly a positive remote skew on a FUTURE-demoted
+    // epoch made now()-createdAt negative and lingered the key past the window.
+    // With the fix the window is exactly 5s from the local demotion at t=1000.
+    clock = 1000 + 4_999;
+    expect(mgr.keyFor(0)).toBeDefined();
+    clock = 1000 + 5_000;
+    expect(mgr.keyFor(0)).toBeUndefined();
+  });
+
+  // -- crypto-e2ee-5: monotonic counter cannot be poisoned by an absurd epochId --
+
+  it("crypto-e2ee-5: rejects an implausibly-large epoch jump so later legitimate epochs still adopt", () => {
+    const mgr = new CallKeyEpochManager({
+      keyFactory: deterministicKeyFactory,
+      now: () => 1000,
+      maxEpochJump: 1024,
+    });
+    mgr.rotate([ALICE]); // epoch 0
+    // A forged announcement carries a huge epochId (2^31). Before the fix adopt()
+    // accepted any epochId > current, poisoning the counter so all real epochs
+    // (1,2,3,…) were forever <= current and silently dropped.
+    const adopted = mgr.adopt({
+      epochId: 2 ** 31,
+      key: new Uint8Array(32).fill(1),
+      members: ["alice:d1"],
+      createdAt: 1000,
+    });
+    expect(adopted).toBe(false);
+    expect(mgr.current?.epochId).toBe(0); // unchanged — no poisoning
+
+    // The next legitimate epoch (1) still adopts normally.
+    const ok = mgr.adopt({
+      epochId: 1,
+      key: new Uint8Array(32).fill(2),
+      members: ["alice:d1"],
+      createdAt: 1000,
+    });
+    expect(ok).toBe(true);
+    expect(mgr.current?.epochId).toBe(1);
+  });
+
+  it("crypto-e2ee-5: a jump within maxEpochJump is still allowed (tolerates churn/missed announcements)", () => {
+    const mgr = new CallKeyEpochManager({
+      keyFactory: deterministicKeyFactory,
+      now: () => 1000,
+      maxEpochJump: 1024,
+    });
+    mgr.rotate([ALICE]); // epoch 0
+    // Missing a few announcements is normal; a modest forward jump must succeed.
+    expect(
+      mgr.adopt({ epochId: 500, key: new Uint8Array(32).fill(3), members: [], createdAt: 1000 }),
+    ).toBe(true);
+    expect(mgr.current?.epochId).toBe(500);
+  });
 });
 
 // -- SFrame header -----------------------------------------------------------

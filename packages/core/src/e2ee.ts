@@ -263,6 +263,17 @@ export interface CallKeyEpochManagerOptions {
   readonly keyFactory?: EpochKeyFactory;
   /** Override the clock (tests inject a fake). Default `Date.now`. */
   readonly now?: () => number;
+  /**
+   * Largest forward jump in epochId a single {@link CallKeyEpochManager.adopt}
+   * is allowed to take relative to the current epoch. An adopted epoch beyond
+   * `current.epochId + maxEpochJump` is rejected (no state change), so even an
+   * *authenticated* but malicious announcement carrying an implausibly large
+   * epochId (e.g. 2^31) cannot leap the local counter and wedge all subsequent
+   * legitimate epochs (which only ever advance by ~1 per membership change).
+   * Generous default (1024) tolerates missed announcements / churn bursts while
+   * still bounding the blast radius. See crypto-e2ee-5.
+   */
+  readonly maxEpochJump?: number;
 }
 
 /** A stable, sorted member-id list from a membership snapshot. */
@@ -303,14 +314,24 @@ function defaultKeyFactory(): Uint8Array {
 export class CallKeyEpochManager {
   #current: KeyEpoch | undefined;
   #previous: KeyEpoch | undefined;
+  /**
+   * Local-clock timestamp (this.#now()) at the moment #previous was DEMOTED from
+   * current — NOT the epoch's createdAt. The transition window is measured from
+   * supersession, on the local clock, so it is correct regardless of how long the
+   * superseded epoch was current and immune to remote announcer clock skew
+   * (createdAt may be a peer's clock). See crypto-e2ee-1.
+   */
+  #previousDemotedAt = 0;
   readonly #windowMs: number;
   readonly #keyFactory: EpochKeyFactory;
   readonly #now: () => number;
+  readonly #maxEpochJump: number;
 
   constructor(options: CallKeyEpochManagerOptions = {}) {
     this.#windowMs = options.previousEpochWindowMs ?? 5_000;
     this.#keyFactory = options.keyFactory ?? ((_id, _members) => defaultKeyFactory());
     this.#now = options.now ?? Date.now;
+    this.#maxEpochJump = options.maxEpochJump ?? 1024;
   }
 
   /** The current epoch, or undefined before the first {@link rotate}. */
@@ -344,7 +365,9 @@ export class CallKeyEpochManager {
     };
     // The just-superseded epoch becomes the transition-window "previous"; any
     // older previous is dropped immediately (we keep at most one prior epoch).
-    this.#previous = this.#current;
+    // Stamp the demotion on the LOCAL clock so the window is measured from
+    // supersession, not from the epoch's createdAt (crypto-e2ee-1).
+    this.#demote(this.#current);
     this.#current = epoch;
     return epoch;
   }
@@ -355,11 +378,32 @@ export class CallKeyEpochManager {
    * did NOT trigger the rotation: the rotation initiator distributes the new
    * epoch and everyone else adopts it so all participants converge on the same
    * `(epochId, key)`. Ignores an epoch we already have or an older one.
+   *
+   * Defends against monotonic-counter poisoning (crypto-e2ee-5): an epoch whose
+   * id leaps more than `maxEpochJump` past the current one is rejected outright
+   * — no state change — so a single (even authenticated) malicious announcement
+   * carrying an absurd epochId cannot wedge adoption of all later legitimate
+   * epochs. Returns true iff the epoch was adopted.
    */
-  adopt(epoch: KeyEpoch): void {
-    if (this.#current && epoch.epochId <= this.#current.epochId) return;
-    this.#previous = this.#current;
+  adopt(epoch: KeyEpoch): boolean {
+    if (this.#current && epoch.epochId <= this.#current.epochId) return false;
+    if (this.#current && epoch.epochId - this.#current.epochId > this.#maxEpochJump) {
+      // Implausible forward jump → refuse so the local counter can't be poisoned.
+      return false;
+    }
+    this.#demote(this.#current);
     this.#current = epoch;
+    return true;
+  }
+
+  /**
+   * Move `epoch` into the transition-window "previous" slot, stamping the LOCAL
+   * clock so {@link #expirePrevious} measures the window from supersession (not
+   * the epoch's createdAt, which may be a remote announcer's clock).
+   */
+  #demote(epoch: KeyEpoch | undefined): void {
+    this.#previous = epoch;
+    if (epoch) this.#previousDemotedAt = this.#now();
   }
 
   /**
@@ -378,7 +422,10 @@ export class CallKeyEpochManager {
 
   #expirePrevious(): void {
     if (!this.#previous) return;
-    if (this.#now() - this.#previous.createdAt >= this.#windowMs) {
+    // Measure from the LOCAL demotion timestamp, never the (possibly remote)
+    // createdAt — so the window is exactly `windowMs` from supersession and is
+    // not skewed by a peer's clock (crypto-e2ee-1).
+    if (this.#now() - this.#previousDemotedAt >= this.#windowMs) {
       this.#previous = undefined;
     }
   }
@@ -783,6 +830,15 @@ export interface SFrameCipherTransformOptions {
   readonly kdf?: KeyDerivationProvider;
   /** Replay window size (frames). Default 1024. */
   readonly replayWindow?: number;
+  /**
+   * Maximum number of distinct senders tracked per epoch on the receive path.
+   * Replay windows (and derived state) are allocated only AFTER a frame
+   * authenticates (crypto-e2ee-3), and the count of authenticated senders per
+   * epoch is capped here (LRU-evicted) so an attacker cannot grow memory without
+   * bound. A real call has a handful of senders; the default (256) is far above
+   * any plausible participant count while still bounding the blast radius.
+   */
+  readonly maxSendersPerEpoch?: number;
 }
 
 /**
@@ -810,19 +866,44 @@ export class SFrameCipherTransform implements SFrameTransform {
   readonly #aead: AeadCryptoProvider;
   readonly #kdf: KeyDerivationProvider;
   readonly #replayWindowSize: number;
+  readonly #maxSendersPerEpoch: number;
   /** Cached derived (key,salt) per epoch id, keyed by the epoch's identity. */
   readonly #derived = new Map<EpochId, { secret: Uint8Array; keys: Promise<DerivedEpochKeys> }>();
   /** Outbound per-epoch frame counter for THIS sender. */
   readonly #counters = new Map<EpochId, bigint>();
-  /** Inbound replay windows, keyed by `${epochId}:${senderId}`. */
+  /**
+   * Inbound replay windows, keyed by `${epochId}:${senderId}`. A Map preserves
+   * insertion order, which we use for LRU eviction (crypto-e2ee-3). Entries are
+   * created ONLY after a frame authenticates, never on a pre-auth header lookup.
+   */
   readonly #replay = new Map<string, ReplayWindow>();
+  /**
+   * Per-(epoch,sender) serialization tail. The replay pre-screen and the
+   * post-auth commit straddle two awaits; without serialization two concurrent
+   * decrypts of the SAME counter could both pass the pre-screen and both succeed
+   * (crypto-e2ee-2). Chaining each decrypt for a given key behind the previous
+   * one makes seen()→…→check() atomic with respect to other frames of that
+   * stream, so a duplicated counter is accepted at most once.
+   */
+  readonly #decryptTail = new Map<string, Promise<unknown>>();
 
   constructor(options: SFrameCipherTransformOptions) {
     this.#epochs = options.epochs;
-    this.#senderId = options.senderId >>> 0;
+    // Reject an out-of-range senderId instead of silently truncating to 32 bits
+    // (crypto-e2ee-7): truncation would let two distinct logical senders collapse
+    // to one 32-bit ordinal and reuse the (key, nonce) pair under AES-GCM. The
+    // caller MUST assign a collision-free per-call ordinal in [0, 2^32).
+    if (!Number.isInteger(options.senderId) || options.senderId < 0 || options.senderId > 0xffff_ffff) {
+      throw new RangeError(
+        `SFrameCipherTransform: senderId must be an integer in [0, 2^32); got ${options.senderId}. ` +
+          `Assign a collision-free per-call ordinal (e.g. the sorted member index).`,
+      );
+    }
+    this.#senderId = options.senderId;
     this.#aead = options.aead ?? new WebCryptoAeadProvider();
     this.#kdf = options.kdf ?? new WebCryptoKeyDerivation();
     this.#replayWindowSize = options.replayWindow ?? 1024;
+    this.#maxSendersPerEpoch = options.maxSendersPerEpoch ?? 256;
   }
 
   async encrypt(frame: Uint8Array): Promise<Uint8Array> {
@@ -852,18 +933,43 @@ export class SFrameCipherTransform implements SFrameTransform {
     if (header.version !== SFRAME_V2_VERSION) {
       throw new Error(`SFrameCipherTransform.decrypt: unsupported SFrame version ${header.version}`);
     }
+    // Serialize all decrypts for one (epoch,sender) stream so the replay
+    // pre-screen and post-auth commit are atomic — two concurrent decrypts of
+    // the same counter cannot both pass (crypto-e2ee-2). Different streams stay
+    // fully parallel. We chain on a tail promise and clean it up when we are the
+    // last in line.
+    const streamKey = `${header.epochId}:${header.senderId}`;
+    const prior = this.#decryptTail.get(streamKey) ?? Promise.resolve();
+    const run = prior.then(
+      () => this.#decryptSerialized(payload, header),
+      () => this.#decryptSerialized(payload, header),
+    );
+    this.#decryptTail.set(streamKey, run);
+    try {
+      return await run;
+    } finally {
+      if (this.#decryptTail.get(streamKey) === run) this.#decryptTail.delete(streamKey);
+    }
+  }
+
+  /** The body of {@link decrypt}, run under the per-stream serialization lock. */
+  async #decryptSerialized(payload: Uint8Array, header: SFrameV2Header): Promise<Uint8Array> {
     const secret = this.#epochs.keyFor(header.epochId);
     if (!secret) {
+      // The epoch is gone (expired/unknown). Drop any state we no longer need so
+      // long-lived calls don't leak across rotations (crypto-e2ee-3).
+      this.#pruneStaleEpochs();
       throw new Error(
         `SFrameCipherTransform.decrypt: no key for epoch ${header.epochId} (expired or unknown)`,
       );
     }
-    // Replay check BEFORE doing crypto so a flood of replays is cheap to reject.
-    // We pre-screen with `seen()` (non-mutating) and only commit the counter to
-    // the window AFTER the AEAD authenticates, so a forged frame that fails
-    // decryption can't poison the window and lock out the real (future) frame.
-    const window = this.#replayWindowFor(header.epochId, header.senderId);
-    if (window.seen(header.counter)) {
+    // Replay pre-screen against an EXISTING window only — we never allocate a new
+    // window for an unauthenticated header (crypto-e2ee-3), so an attacker varying
+    // senderId on injected frames can't grow memory before auth. `seen()` is
+    // non-mutating; the counter is committed only after the AEAD authenticates,
+    // so a forged frame can't poison the window and starve the real future frame.
+    const existing = this.#replay.get(`${header.epochId}:${header.senderId}`);
+    if (existing?.seen(header.counter)) {
       throw new Error(
         `SFrameCipherTransform.decrypt: replayed or stale frame (epoch ${header.epochId} sender ${header.senderId} counter ${header.counter})`,
       );
@@ -877,20 +983,81 @@ export class SFrameCipherTransform implements SFrameTransform {
       ciphertext,
       associatedData: headerBytes,
     });
-    // Commit the counter only now that the frame is authenticated, so a forged
-    // frame can't advance the window and starve the genuine future frame.
-    window.check(header.counter);
+    // Authenticated: now it is safe to allocate the window (bounded per epoch) and
+    // commit the counter. A second concurrent decrypt of this counter, serialized
+    // behind us, will now see it via seen() and be rejected (crypto-e2ee-2).
+    // Defense-in-depth: gate the RETURN on check() too — if a concurrent committer
+    // already recorded this counter, check() returns false and we reject rather
+    // than emit a duplicate plaintext, so a replay is never accepted twice even if
+    // the serialization above were somehow bypassed.
+    const window = this.#commitWindowFor(header.epochId, header.senderId);
+    if (!window.check(header.counter)) {
+      throw new Error(
+        `SFrameCipherTransform.decrypt: replayed or stale frame (epoch ${header.epochId} sender ${header.senderId} counter ${header.counter})`,
+      );
+    }
     return plaintext;
   }
 
-  #replayWindowFor(epochId: EpochId, senderId: SenderId): ReplayWindow {
+  /**
+   * Look up (or lazily create) the replay window for an AUTHENTICATED frame,
+   * bounding the number of senders tracked per epoch via LRU eviction so memory
+   * cannot grow without bound even if many distinct senders legitimately appear
+   * (crypto-e2ee-3). Touch-on-access keeps active senders hot.
+   */
+  #commitWindowFor(epochId: EpochId, senderId: SenderId): ReplayWindow {
     const k = `${epochId}:${senderId}`;
-    let w = this.#replay.get(k);
-    if (!w) {
-      w = new ReplayWindow(this.#replayWindowSize);
-      this.#replay.set(k, w);
+    const found = this.#replay.get(k);
+    if (found) {
+      // Refresh LRU recency (re-insert at the tail).
+      this.#replay.delete(k);
+      this.#replay.set(k, found);
+      return found;
     }
+    // Evict the least-recently-used sender(s) for THIS epoch if at capacity.
+    const prefix = `${epochId}:`;
+    let tracked = 0;
+    for (const key of this.#replay.keys()) if (key.startsWith(prefix)) tracked++;
+    if (tracked >= this.#maxSendersPerEpoch) {
+      for (const key of this.#replay.keys()) {
+        if (key.startsWith(prefix)) {
+          this.#replay.delete(key); // oldest insertion for this epoch
+          break;
+        }
+      }
+    }
+    const w = new ReplayWindow(this.#replayWindowSize);
+    this.#replay.set(k, w);
     return w;
+  }
+
+  /**
+   * Drop derived-key / counter / replay state for epochs the manager can no
+   * longer resolve (neither current nor inside the previous-epoch window), so a
+   * long-lived call doesn't accumulate per-epoch state forever (crypto-e2ee-3).
+   */
+  #pruneStaleEpochs(): void {
+    const live = new Set<EpochId>();
+    const cur = this.#epochs.current;
+    const prev = this.#epochs.previous;
+    if (cur) live.add(cur.epochId);
+    if (prev) live.add(prev.epochId);
+    for (const epochId of this.#derived.keys()) if (!live.has(epochId)) this.#derived.delete(epochId);
+    for (const epochId of this.#counters.keys()) if (!live.has(epochId)) this.#counters.delete(epochId);
+    for (const key of this.#replay.keys()) {
+      const epochId = Number(key.slice(0, key.indexOf(":")));
+      if (!live.has(epochId)) this.#replay.delete(key);
+    }
+  }
+
+  /**
+   * Diagnostic snapshot of the receive-side bookkeeping: how many replay windows
+   * (one per authenticated `(epoch,sender)`) and per-epoch derived-key entries
+   * are currently retained. Used for operational metrics and to assert the
+   * memory bounds (crypto-e2ee-3) in tests. Reading it never mutates state.
+   */
+  trackedState(): { readonly replayWindows: number; readonly derivedEpochs: number } {
+    return { replayWindows: this.#replay.size, derivedEpochs: this.#derived.size };
   }
 
   #deriveFor(epochId: EpochId, secret: Uint8Array): Promise<DerivedEpochKeys> {
@@ -1011,6 +1178,19 @@ export interface SignalKeyDistributorOptions {
   readonly randomNonce?: () => Uint8Array;
   /** Signal type name; defaults to the shared WebRTC signal relay type. */
   readonly signalType?: string;
+  /**
+   * Largest forward jump in epochId the receiver will surface in a single
+   * `poll()` relative to the highest already seen. Bounds monotonic-counter
+   * poisoning (crypto-e2ee-5): a single room-secret holder cannot push an absurd
+   * epochId that wedges all later legitimate epochs. Default 1024.
+   *
+   * NOTE on authentication (crypto-e2ee-4): the symmetric scheme authenticates
+   * only that the announcer holds the ROOM SECRET — every current member does, so
+   * any member (or a leaked-secret holder) can forge an announcement. This is
+   * inherent to sender-key distribution; use {@link AsymmetricKeyDistributor}
+   * with a {@link SenderKeyDirectory} for per-sender authentication.
+   */
+  readonly maxEpochJump?: number;
 }
 
 const WRAP_KEY_LABEL = "fricken/sframe/v2 keywrap";
@@ -1047,6 +1227,7 @@ export class SignalKeyDistributor implements KeyDistributor {
   readonly #kdf: KeyDerivationProvider;
   readonly #randomNonce: () => Uint8Array;
   readonly #signalType: string;
+  readonly #maxEpochJump: number;
   readonly #listeners = new Set<(epoch: KeyEpoch) => void>();
   #wrapKey: Promise<Uint8Array> | undefined;
   #processed = 0;
@@ -1061,6 +1242,7 @@ export class SignalKeyDistributor implements KeyDistributor {
     this.#kdf = options.kdf ?? new WebCryptoKeyDerivation();
     this.#randomNonce = options.randomNonce ?? defaultRandomNonce;
     this.#signalType = options.signalType ?? "WebRTCSignal";
+    this.#maxEpochJump = options.maxEpochJump ?? 1024;
   }
 
   #wrapKeyMaterial(): Promise<Uint8Array> {
@@ -1118,8 +1300,15 @@ export class SignalKeyDistributor implements KeyDistributor {
     for (let i = this.#processed; i < entries.length; i++) {
       const raw = entries[i] as Partial<KeyEpochSignal>;
       if (!raw || raw.kind !== "keyEpoch") continue;
+      // Skip the asymmetric variant — it rides the same signal kind but is
+      // unwrappable here; routing by `wrap` keeps the two distributors disjoint.
+      if ((raw as { wrap?: string }).wrap === "ecdh") continue;
       if (raw.senderDeviceId === this.#senderDeviceId) continue; // our own echo
       if (typeof raw.epochId !== "number" || raw.epochId <= this.#highestSeen) continue;
+      // Bound the forward jump so an absurd epochId can't poison #highestSeen and
+      // wedge later legitimate epochs (crypto-e2ee-5). Never advances #highestSeen
+      // on rejection.
+      if (raw.epochId - this.#highestSeen > this.#maxEpochJump) continue;
       const epoch = await this.#tryUnwrap(raw, wrapKey);
       if (!epoch) continue;
       this.#highestSeen = epoch.epochId;
@@ -1316,6 +1505,142 @@ export class MapMemberKeyDirectory implements MemberKeyDirectory {
   }
 }
 
+// -- sender authentication seam (crypto-e2ee-4) ------------------------------
+
+/**
+ * Signs/verifies an epoch announcement with the SENDER's long-term identity key
+ * so a receiver can prove WHO produced it before adopting. Injectable — like
+ * {@link AsymmetricCryptoProvider} — so tests use a deterministic fake and the
+ * runtime signature scheme (Ed25519 / ECDSA-P256) is a provider choice.
+ *
+ * Without this, the ECDH wrap authenticates only that *someone who knows a
+ * recipient's PUBLIC key* (i.e. anyone, since the directory is public) produced
+ * the blob — NOT that a legitimate member did. The relay, or any directory
+ * reader, could forge an epoch the victim adopts (crypto-e2ee-4). The signature
+ * binds the whole announcement to the sender's identity key.
+ */
+export interface SignatureProvider {
+  /** Sign `message` with the sender's long-term private signing key. */
+  sign(args: {
+    readonly privateKey: Uint8Array;
+    readonly message: Uint8Array;
+  }): Promise<Uint8Array>;
+  /**
+   * Verify `signature` over `message` against `publicKey`. MUST return false
+   * (never throw) on any mismatch / malformed input — the caller fails closed.
+   */
+  verify(args: {
+    readonly publicKey: Uint8Array;
+    readonly message: Uint8Array;
+    readonly signature: Uint8Array;
+  }): Promise<boolean>;
+}
+
+/**
+ * Default {@link SignatureProvider} backed by `globalThis.crypto.subtle` ECDSA
+ * over P-256 / SHA-256. Public keys are **raw** (uncompressed point), private
+ * keys **PKCS8**, signatures the raw `r||s` IEEE-P1363 form — matching the
+ * encodings {@link WebCryptoAsymmetric} uses so a deployment can publish one
+ * P-256 key pair per member for both ECDH wrapping and announcement signing if
+ * it chooses (separate key pairs are still recommended). Lazily touches subtle.
+ */
+export class WebCryptoSignature implements SignatureProvider {
+  #subtle(): EcdsaSubtleLike {
+    const subtle = (globalThis as { crypto?: { subtle?: EcdsaSubtleLike } }).crypto?.subtle;
+    if (!subtle) {
+      throw new Error(
+        "WebCryptoSignature requires globalThis.crypto.subtle; inject a SignatureProvider in non-browser environments",
+      );
+    }
+    return subtle;
+  }
+
+  async sign(args: { privateKey: Uint8Array; message: Uint8Array }): Promise<Uint8Array> {
+    const subtle = this.#subtle();
+    const key = await subtle.importKey(
+      "pkcs8",
+      args.privateKey,
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["sign"],
+    );
+    const sig = await subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, args.message);
+    return new Uint8Array(sig);
+  }
+
+  async verify(args: {
+    publicKey: Uint8Array;
+    message: Uint8Array;
+    signature: Uint8Array;
+  }): Promise<boolean> {
+    try {
+      const subtle = this.#subtle();
+      const key = await subtle.importKey(
+        "raw",
+        args.publicKey,
+        { name: "ECDSA", namedCurve: "P-256" },
+        false,
+        ["verify"],
+      );
+      return await subtle.verify(
+        { name: "ECDSA", hash: "SHA-256" },
+        key,
+        args.signature,
+        args.message,
+      );
+    } catch {
+      return false;
+    }
+  }
+}
+
+/** The slice of `SubtleCrypto` {@link WebCryptoSignature} uses. */
+interface EcdsaSubtleLike {
+  importKey(
+    format: "raw" | "pkcs8",
+    keyData: Uint8Array,
+    algorithm: { name: "ECDSA"; namedCurve: string },
+    extractable: boolean,
+    keyUsages: readonly string[],
+  ): Promise<CryptoKeyLike>;
+  sign(
+    algorithm: { name: "ECDSA"; hash: string },
+    key: CryptoKeyLike,
+    data: Uint8Array,
+  ): Promise<ArrayBuffer>;
+  verify(
+    algorithm: { name: "ECDSA"; hash: string },
+    key: CryptoKeyLike,
+    signature: Uint8Array,
+    data: Uint8Array,
+  ): Promise<boolean>;
+}
+
+/**
+ * Resolves the published long-term **signing** public key for a member id, so
+ * the receiver can verify who signed an announcement. Authentication of these
+ * keys (key transparency, safety numbers, …) is app-side, exactly like
+ * {@link MemberKeyDirectory}. `undefined` → no key on file → the announcement
+ * cannot be authenticated → it is dropped (fail closed).
+ */
+export interface SenderKeyDirectory {
+  signingKeyFor(memberId: string): Promise<Uint8Array | undefined> | (Uint8Array | undefined);
+}
+
+/** In-memory {@link SenderKeyDirectory}: a plain `memberId → signingPublicKey` map. */
+export class MapSenderKeyDirectory implements SenderKeyDirectory {
+  readonly #keys = new Map<string, Uint8Array>();
+  constructor(entries?: Iterable<readonly [string, Uint8Array]>) {
+    if (entries) for (const [id, key] of entries) this.#keys.set(id, key);
+  }
+  set(memberId: string, signingPublicKey: Uint8Array): void {
+    this.#keys.set(memberId, signingPublicKey);
+  }
+  signingKeyFor(memberId: string): Uint8Array | undefined {
+    return this.#keys.get(memberId);
+  }
+}
+
 /** One recipient's wrapped epoch key inside an asymmetric `"keyEpoch"` signal. */
 export interface AsymmetricWrappedBlob {
   /** `memberKey(member)` the blob is wrapped to. */
@@ -1344,6 +1669,16 @@ export interface AsymmetricKeyEpochSignal {
   readonly ephemeralPublicKey: string;
   /** Per-recipient wrapped epoch-key blobs. */
   readonly blobs: readonly AsymmetricWrappedBlob[];
+  /**
+   * The announcing member's id (`memberKey` form). Bound into the AAD and the
+   * signed digest, and the key under which the receiver verifies {@link signature}
+   * against the {@link SenderKeyDirectory}. Optional only for back-compat with
+   * unsigned legacy announcements; a distributor configured with a sender
+   * directory drops any announcement lacking a valid signature (crypto-e2ee-4).
+   */
+  readonly signerId?: string;
+  /** Base64 signature over the announcement digest, made with the sender's identity key. */
+  readonly signature?: string;
 }
 
 const ASYM_KEK_LABEL = "fricken/sframe/v2 ecdh-kek";
@@ -1373,6 +1708,30 @@ export interface AsymmetricKeyDistributorOptions {
   readonly randomNonce?: () => Uint8Array;
   /** Signal type name; defaults to the shared WebRTC signal relay type. */
   readonly signalType?: string;
+  // -- sender authentication (crypto-e2ee-4) --
+  /**
+   * Signature provider used to SIGN our announcements and VERIFY peers'.
+   * Defaults to {@link WebCryptoSignature} (ECDSA P-256). Authentication is
+   * ACTIVE iff BOTH a `signingPrivateKey` (to sign) and a `senderDirectory` (to
+   * verify) are supplied; otherwise the distributor runs in legacy unauthenticated
+   * mode (back-compat) and only the AAD binding protects against tampering.
+   */
+  readonly signature?: SignatureProvider;
+  /** This member's long-term signing private key (used to sign announcements). */
+  readonly signingPrivateKey?: Uint8Array;
+  /**
+   * Resolves each member's signing public key. When present, the distributor
+   * REQUIRES every adopted announcement to carry a valid signature from the
+   * member it claims to be (`signerId`), and fails closed otherwise.
+   */
+  readonly senderDirectory?: SenderKeyDirectory;
+  /**
+   * Largest forward jump in epochId the receiver will surface in a single
+   * `poll()` relative to the highest already seen. Bounds monotonic-counter
+   * poisoning (crypto-e2ee-5) even from an authenticated-but-malicious member.
+   * Default 1024.
+   */
+  readonly maxEpochJump?: number;
 }
 
 /**
@@ -1406,6 +1765,10 @@ export class AsymmetricKeyDistributor implements KeyDistributor {
   readonly #kdf: KeyDerivationProvider;
   readonly #randomNonce: () => Uint8Array;
   readonly #signalType: string;
+  readonly #sig: SignatureProvider;
+  readonly #signingPrivateKey: Uint8Array | undefined;
+  readonly #senderDirectory: SenderKeyDirectory | undefined;
+  readonly #maxEpochJump: number;
   readonly #listeners = new Set<(epoch: KeyEpoch) => void>();
   #processed = 0;
   #highestSeen = -1;
@@ -1422,6 +1785,10 @@ export class AsymmetricKeyDistributor implements KeyDistributor {
     this.#kdf = options.kdf ?? new WebCryptoKeyDerivation();
     this.#randomNonce = options.randomNonce ?? defaultRandomNonce;
     this.#signalType = options.signalType ?? "WebRTCSignal";
+    this.#sig = options.signature ?? new WebCryptoSignature();
+    this.#signingPrivateKey = options.signingPrivateKey;
+    this.#senderDirectory = options.senderDirectory;
+    this.#maxEpochJump = options.maxEpochJump ?? 1024;
   }
 
   /** Derive the per-recipient KEK from an ECDH shared secret. */
@@ -1431,6 +1798,7 @@ export class AsymmetricKeyDistributor implements KeyDistributor {
 
   async announce(epoch: KeyEpoch): Promise<void> {
     const ephemeral = await this.#asym.generateKeyPair();
+    const ephemeralB64 = toBase64(ephemeral.publicKey);
     const blobs: AsymmetricWrappedBlob[] = [];
     for (const recipientId of epoch.members) {
       const recipientPub = await this.#directory.publicKeyFor(recipientId);
@@ -1441,7 +1809,15 @@ export class AsymmetricKeyDistributor implements KeyDistributor {
       });
       const kek = await this.#deriveKek(shared);
       const nonce = this.#randomNonce();
-      const aad = encodeAsymWrapAad(this.#callId, epoch.epochId, recipientId);
+      // Bind the sender device + ephemeral key into the AAD so a relay cannot
+      // splice a victim's blob under a DIFFERENT sender/ephemeral key (crypto-e2ee-4).
+      const aad = encodeAsymWrapAad(
+        this.#callId,
+        epoch.epochId,
+        recipientId,
+        this.#senderDeviceId,
+        ephemeralB64,
+      );
       const wrapped = await this.#aead.seal({
         key: kek,
         nonce,
@@ -1454,16 +1830,31 @@ export class AsymmetricKeyDistributor implements KeyDistributor {
         wrappedKey: toBase64(wrapped),
       });
     }
-    const signal: AsymmetricKeyEpochSignal = {
+    const base: AsymmetricKeyEpochSignal = {
       senderDeviceId: this.#senderDeviceId,
       kind: "keyEpoch",
       wrap: "ecdh",
       epochId: epoch.epochId,
       members: epoch.members,
       createdAt: epoch.createdAt,
-      ephemeralPublicKey: toBase64(ephemeral.publicKey),
+      ephemeralPublicKey: ephemeralB64,
       blobs,
+      signerId: this.#selfMemberId,
     };
+    // Sign the whole announcement with our identity key so receivers can prove
+    // WHO produced it before adopting (crypto-e2ee-4). Skipped only in legacy
+    // unauthenticated mode (no signing key configured).
+    const signal: AsymmetricKeyEpochSignal = this.#signingPrivateKey
+      ? {
+          ...base,
+          signature: toBase64(
+            await this.#sig.sign({
+              privateKey: this.#signingPrivateKey,
+              message: encodeAnnouncementDigest(this.#callId, base),
+            }),
+          ),
+        }
+      : base;
     await this.#client.sendSignal(
       this.#signalType,
       this.#callId,
@@ -1477,11 +1868,13 @@ export class AsymmetricKeyDistributor implements KeyDistributor {
   }
 
   /**
-   * Drain new asymmetric `"keyEpoch"` signals off the relay, unwrap OUR blob, and
-   * deliver each reconstructed epoch to listeners. Idempotent + monotonic: skips
-   * our own echoes, foreign/symmetric/malformed signals, stale epoch ids, and any
-   * announcement with no blob addressed to us (fail-closed — e.g. we were
-   * removed). The caller drives this from the same place it drains SDP/ICE.
+   * Drain new asymmetric `"keyEpoch"` signals off the relay, AUTHENTICATE the
+   * sender (when a sender directory is configured), unwrap OUR blob, and deliver
+   * each reconstructed epoch to listeners. Idempotent + monotonic: skips our own
+   * echoes, foreign/symmetric/malformed signals, stale epoch ids, implausible
+   * forward jumps (crypto-e2ee-5), unsigned/forged announcements (crypto-e2ee-4),
+   * and any announcement with no blob addressed to us (fail-closed). The caller
+   * drives this from the same place it drains SDP/ICE.
    */
   async poll(): Promise<void> {
     const entries = this.#client.signalChannel(this.#signalType, this.#callId).get();
@@ -1490,6 +1883,14 @@ export class AsymmetricKeyDistributor implements KeyDistributor {
       if (!raw || raw.kind !== "keyEpoch" || raw.wrap !== "ecdh") continue;
       if (raw.senderDeviceId === this.#senderDeviceId) continue; // our own echo
       if (typeof raw.epochId !== "number" || raw.epochId <= this.#highestSeen) continue;
+      // Bound the forward jump so an absurd epochId can't poison #highestSeen and
+      // wedge later legitimate epochs (crypto-e2ee-5). Applied BEFORE we advance
+      // #highestSeen, and the guard never advances it on rejection.
+      if (raw.epochId - this.#highestSeen > this.#maxEpochJump) continue;
+      // Sender authentication gate (crypto-e2ee-4): only authenticated epochs may
+      // advance #highestSeen or be surfaced. A failed/forged/unsigned announcement
+      // is dropped WITHOUT touching #highestSeen.
+      if (!(await this.#verifySender(raw))) continue;
       const epoch = await this.#tryUnwrap(raw);
       if (!epoch) continue;
       this.#highestSeen = epoch.epochId;
@@ -1504,13 +1905,44 @@ export class AsymmetricKeyDistributor implements KeyDistributor {
     this.#processed = entries.length;
   }
 
+  /**
+   * Authenticate the announcement's claimed sender. When a {@link SenderKeyDirectory}
+   * is configured, REQUIRE a signature that verifies under the signing key the
+   * directory holds for `signerId` (and that `signerId` is a declared member).
+   * With no sender directory, runs in legacy unauthenticated mode (returns true).
+   */
+  async #verifySender(raw: Partial<AsymmetricKeyEpochSignal>): Promise<boolean> {
+    if (!this.#senderDirectory) return true; // legacy unauthenticated mode
+    const signerId = raw.signerId;
+    const signatureB64 = raw.signature;
+    if (typeof signerId !== "string" || typeof signatureB64 !== "string") return false;
+    // The signer must be one of the members the announcement itself declares —
+    // a non-member cannot legitimately rotate the epoch.
+    const members = Array.isArray(raw.members) ? raw.members : [];
+    if (!members.includes(signerId)) return false;
+    const signingPub = await this.#senderDirectory.signingKeyFor(signerId);
+    if (!signingPub) return false; // no key on file → cannot authenticate → drop
+    try {
+      // Reconstruct the exact digest the sender signed (everything but the signature).
+      const { signature: _sig, ...signed } = raw as AsymmetricKeyEpochSignal;
+      return await this.#sig.verify({
+        publicKey: signingPub,
+        message: encodeAnnouncementDigest(this.#callId, signed),
+        signature: fromBase64(signatureB64),
+      });
+    } catch {
+      return false;
+    }
+  }
+
   async #tryUnwrap(raw: Partial<AsymmetricKeyEpochSignal>): Promise<KeyEpoch | undefined> {
     try {
       const blobs = raw.blobs;
       if (!Array.isArray(blobs)) return undefined;
       const mine = blobs.find((b) => b?.recipientId === this.#selfMemberId);
       if (!mine) return undefined; // no blob for us → fail closed (e.g. removed member)
-      const ephemeralPub = fromBase64(raw.ephemeralPublicKey as string);
+      const ephemeralB64 = raw.ephemeralPublicKey as string;
+      const ephemeralPub = fromBase64(ephemeralB64);
       const shared = await this.#asym.deriveSharedSecret({
         privateKey: this.#privateKey,
         publicKey: ephemeralPub,
@@ -1518,7 +1950,14 @@ export class AsymmetricKeyDistributor implements KeyDistributor {
       const kek = await this.#deriveKek(shared);
       const nonce = fromBase64(mine.wrapNonce);
       const wrapped = fromBase64(mine.wrappedKey);
-      const aad = encodeAsymWrapAad(this.#callId, raw.epochId as number, this.#selfMemberId);
+      // Must match the AAD the announcer bound: call+epoch+recipient+sender+ephemeral.
+      const aad = encodeAsymWrapAad(
+        this.#callId,
+        raw.epochId as number,
+        this.#selfMemberId,
+        raw.senderDeviceId as string,
+        ephemeralB64,
+      );
       const key = await this.#aead.open({ key: kek, nonce, ciphertext: wrapped, associatedData: aad });
       return {
         epochId: raw.epochId as number,
@@ -1533,9 +1972,48 @@ export class AsymmetricKeyDistributor implements KeyDistributor {
   }
 }
 
-/** AAD binding a wrapped blob to its call + epoch + RECIPIENT (no cross-recipient/epoch replay). */
-function encodeAsymWrapAad(callId: string, epochId: EpochId, recipientId: string): Uint8Array {
-  return new TextEncoder().encode(`keyEpoch:ecdh:${callId}:${epochId}:${recipientId}`);
+/**
+ * AAD binding a wrapped blob to its call + epoch + RECIPIENT + SENDER + ephemeral
+ * key, so it can't be replayed cross-recipient/epoch NOR spliced under a different
+ * sender/ephemeral key by a relay (crypto-e2ee-4).
+ */
+function encodeAsymWrapAad(
+  callId: string,
+  epochId: EpochId,
+  recipientId: string,
+  senderDeviceId: string,
+  ephemeralPublicKeyB64: string,
+): Uint8Array {
+  return new TextEncoder().encode(
+    `keyEpoch:ecdh:${callId}:${epochId}:${recipientId}:${senderDeviceId}:${ephemeralPublicKeyB64}`,
+  );
+}
+
+/**
+ * Canonical, signature-free digest of an asymmetric announcement — the exact
+ * bytes the sender signs and the receiver verifies (crypto-e2ee-4). Includes
+ * every security-relevant field (call/epoch/members/sender/ephemeral key + every
+ * recipient blob) in a fixed order so signer and verifier agree byte-for-byte.
+ */
+function encodeAnnouncementDigest(
+  callId: string,
+  signal: Omit<AsymmetricKeyEpochSignal, "signature">,
+): Uint8Array {
+  const blobs = [...signal.blobs]
+    .map((b) => `${b.recipientId}|${b.wrapNonce}|${b.wrappedKey}`)
+    .sort()
+    .join(",");
+  const canonical = [
+    "keyEpoch:ecdh:sig:v1",
+    callId,
+    signal.epochId,
+    signal.senderDeviceId,
+    signal.signerId ?? "",
+    [...signal.members].sort().join(","),
+    signal.ephemeralPublicKey,
+    blobs,
+  ].join("\n");
+  return new TextEncoder().encode(canonical);
 }
 
 // ===========================================================================

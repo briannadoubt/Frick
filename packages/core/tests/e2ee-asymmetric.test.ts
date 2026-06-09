@@ -3,6 +3,7 @@ import {
   AsymmetricKeyDistributor,
   CallKeyEpochManager,
   MapMemberKeyDirectory,
+  MapSenderKeyDirectory,
   SFrameCipherTransform,
   decodeSFrameV2Header,
   type AeadCryptoProvider,
@@ -11,7 +12,9 @@ import {
   type AsymmetricKeyPair,
   type EpochId,
   type KeyDerivationProvider,
+  type KeyEpoch,
   type SignalRelayClient,
+  type SignatureProvider,
 } from "../src/index.js";
 
 /**
@@ -135,6 +138,43 @@ class FakeAsymmetric implements AsymmetricCryptoProvider {
 
 /** Build a static key pair for a member from a fixed scalar (deterministic). */
 function staticPair(scalar: number): AsymmetricKeyPair {
+  return { publicKey: Uint8Array.of(0x02, scalar), privateKey: Uint8Array.of(0x01, scalar) };
+}
+
+/**
+ * Deterministic signature stand-in (crypto-e2ee-4 tests). A signing key pair is
+ * a single scalar carried in BOTH keys (tag byte distinguishes pub/priv, like
+ * {@link FakeAsymmetric}). `sign` = a keyed digest of the scalar + message;
+ * `verify` recomputes it for the public scalar and compares. A wrong public key
+ * (different scalar) or any tampered message fails. NOT secure; only
+ * deterministic + verifying.
+ */
+class FakeSignature implements SignatureProvider {
+  #digest(scalar: number, message: Uint8Array): Uint8Array {
+    const out = new Uint8Array(8);
+    let t = (scalar * 2654435761) >>> 0;
+    for (let i = 0; i < message.length; i++) t = (t * 31 + message[i]! + 1) >>> 0;
+    for (let i = 0; i < 8; i++) out[i] = (t >>> (i * 4)) & 0xff;
+    return out;
+  }
+  async sign(args: { privateKey: Uint8Array; message: Uint8Array }): Promise<Uint8Array> {
+    return this.#digest(args.privateKey[1]!, args.message);
+  }
+  async verify(args: {
+    publicKey: Uint8Array;
+    message: Uint8Array;
+    signature: Uint8Array;
+  }): Promise<boolean> {
+    const expected = this.#digest(args.publicKey[1]!, args.message);
+    if (args.signature.length !== expected.length) return false;
+    let ok = true;
+    for (let i = 0; i < expected.length; i++) if (args.signature[i] !== expected[i]) ok = false;
+    return ok;
+  }
+}
+
+/** Signing key pair = the same scalar in both keys (pub tag 0x02, priv tag 0x01). */
+function staticSigningPair(scalar: number): AsymmetricKeyPair {
   return { publicKey: Uint8Array.of(0x02, scalar), privateKey: Uint8Array.of(0x01, scalar) };
 }
 
@@ -376,6 +416,222 @@ describe("AsymmetricKeyDistributor", () => {
     const signal = bus.entries[0] as AsymmetricKeyEpochSignal;
     // No blob for Carol (no published key), but A and B are keyed.
     expect(signal.blobs.map((b) => b.recipientId).sort()).toEqual([ALICE, BOB]);
+    await bob.dist.poll();
+    expect(bob.epochs.current?.epochId).toBe(0);
+  });
+});
+
+// ===========================================================================
+// crypto-e2ee-4 / crypto-e2ee-5 — authenticated epoch announcements
+// ===========================================================================
+
+/** Member ↔ signing scalar (the signing pub key the directory publishes). */
+const SIGNING_SCALARS: Record<string, number> = { [ALICE]: 211, [BOB]: 222, [CAROL]: 233 };
+
+function makeSenderDirectory(): MapSenderKeyDirectory {
+  return new MapSenderKeyDirectory([
+    [ALICE, staticSigningPair(SIGNING_SCALARS[ALICE]!).publicKey],
+    [BOB, staticSigningPair(SIGNING_SCALARS[BOB]!).publicKey],
+    [CAROL, staticSigningPair(SIGNING_SCALARS[CAROL]!).publicKey],
+  ]);
+}
+
+/** Like {@link makeMember} but with sender authentication (signing) wired in. */
+function makeAuthedMember(
+  bus: MemorySignalBus,
+  args: {
+    deviceId: string;
+    selfMemberId: string;
+    scalar: number;
+    directory: MapMemberKeyDirectory;
+    senderDirectory: MapSenderKeyDirectory;
+    signingScalar?: number;
+    maxEpochJump?: number;
+  },
+): { dist: AsymmetricKeyDistributor; epochs: CallKeyEpochManager } {
+  const epochs = new CallKeyEpochManager({ keyFactory: deterministicKeyFactory, now: () => 1000 });
+  const dist = new AsymmetricKeyDistributor({
+    client: bus.clientFor(),
+    callId: CALL_ID,
+    senderDeviceId: args.deviceId,
+    selfMemberId: args.selfMemberId,
+    privateKey: staticPair(args.scalar).privateKey,
+    directory: args.directory,
+    asymmetric: new FakeAsymmetric(),
+    aead: new FakeAead(),
+    kdf: new FakeKdf(),
+    randomNonce: fixedNonce,
+    signature: new FakeSignature(),
+    signingPrivateKey: staticSigningPair(
+      args.signingScalar ?? SIGNING_SCALARS[args.selfMemberId]!,
+    ).privateKey,
+    senderDirectory: args.senderDirectory,
+    maxEpochJump: args.maxEpochJump,
+  });
+  dist.onEpoch((e) => epochs.adopt(e));
+  return { dist, epochs };
+}
+
+describe("AsymmetricKeyDistributor sender authentication (crypto-e2ee-4)", () => {
+  it("a correctly-signed announcement is authenticated and adopted", async () => {
+    const bus = new MemorySignalBus();
+    const directory = makeDirectory();
+    const senderDirectory = makeSenderDirectory();
+    const alice = makeAuthedMember(bus, { deviceId: "d1", selfMemberId: ALICE, scalar: 11, directory, senderDirectory });
+    const bob = makeAuthedMember(bus, { deviceId: "d2", selfMemberId: BOB, scalar: 22, directory, senderDirectory });
+
+    const epoch = alice.epochs.rotate([{ userId: "alice", deviceId: "d1" }, { userId: "bob", deviceId: "d2" }]);
+    await alice.dist.announce(epoch);
+
+    // The announcement carries the signer id + signature.
+    const sent = bus.entries[0] as AsymmetricKeyEpochSignal;
+    expect(sent.signerId).toBe(ALICE);
+    expect(typeof sent.signature).toBe("string");
+
+    await bob.dist.poll();
+    expect(bob.epochs.current?.epochId).toBe(epoch.epochId);
+    expect(Array.from(bob.epochs.current!.key)).toEqual(Array.from(epoch.key));
+  });
+
+  it("crypto-e2ee-4: a FORGED announcement (attacker-known key, no valid signature) is rejected", async () => {
+    const bus = new MemorySignalBus();
+    const directory = makeDirectory();
+    const senderDirectory = makeSenderDirectory();
+    // Victim Bob requires authentication.
+    const bob = makeAuthedMember(bus, { deviceId: "d2", selfMemberId: BOB, scalar: 22, directory, senderDirectory });
+
+    // The relay/attacker knows Bob's PUBLIC ECDH key (it is in the public
+    // directory) and forges an epoch wrapped to Bob with an attacker-chosen key.
+    // It uses an UNAUTHENTICATED distributor (no signing key) impersonating Alice.
+    const forger = new AsymmetricKeyDistributor({
+      client: bus.clientFor(),
+      callId: CALL_ID,
+      senderDeviceId: "evil-relay",
+      selfMemberId: ALICE, // claims to be Alice
+      privateKey: staticPair(11).privateKey,
+      directory,
+      asymmetric: new FakeAsymmetric(777),
+      aead: new FakeAead(),
+      kdf: new FakeKdf(),
+      randomNonce: fixedNonce,
+      // No signature / signingPrivateKey / senderDirectory → unsigned announcement.
+    });
+    const attackerEpochs = new CallKeyEpochManager({ keyFactory: () => new Uint8Array(32).fill(0xee), now: () => 1000 });
+    await forger.announce(
+      attackerEpochs.rotate([{ userId: "alice", deviceId: "d1" }, { userId: "bob", deviceId: "d2" }]),
+    );
+
+    // Bob polls: the announcement is unsigned → authentication fails → NOT adopted.
+    await bob.dist.poll();
+    expect(bob.epochs.current).toBeUndefined();
+  });
+
+  it("crypto-e2ee-4: a tampered signature / wrong-signer signature is rejected", async () => {
+    const bus = new MemorySignalBus();
+    const directory = makeDirectory();
+    const senderDirectory = makeSenderDirectory();
+    const alice = makeAuthedMember(bus, { deviceId: "d1", selfMemberId: ALICE, scalar: 11, directory, senderDirectory });
+    // Alice signs with a DIFFERENT (wrong) signing key than the directory holds.
+    const aliceWrongKey = makeAuthedMember(bus, {
+      deviceId: "d1b",
+      selfMemberId: ALICE,
+      scalar: 11,
+      directory,
+      senderDirectory,
+      signingScalar: 9999, // not the scalar the directory publishes for Alice
+    });
+    const bob = makeAuthedMember(bus, { deviceId: "d2", selfMemberId: BOB, scalar: 22, directory, senderDirectory });
+
+    // A validly-signed announcement from Alice → adopted.
+    await alice.dist.announce(
+      alice.epochs.rotate([{ userId: "alice", deviceId: "d1" }, { userId: "bob", deviceId: "d2" }]),
+    );
+    await bob.dist.poll();
+    expect(bob.epochs.current?.epochId).toBe(0);
+
+    // A LATER announcement signed with the wrong key → signature verify fails → dropped.
+    const e1 = aliceWrongKey.epochs.rotate([{ userId: "alice", deviceId: "d1" }, { userId: "bob", deviceId: "d2" }]);
+    // Force epoch 1 (the wrong-key member starts its own counter at 0).
+    expect(e1.epochId).toBe(0);
+    const e1b = aliceWrongKey.epochs.rotate([{ userId: "alice", deviceId: "d1" }, { userId: "bob", deviceId: "d2" }]);
+    expect(e1b.epochId).toBe(1);
+    await aliceWrongKey.dist.announce(e1b);
+    await bob.dist.poll();
+    // Bob did NOT advance to the forged epoch 1.
+    expect(bob.epochs.current?.epochId).toBe(0);
+  });
+
+  it("crypto-e2ee-4: tampering with the blobs after signing breaks the signature", async () => {
+    const bus = new MemorySignalBus();
+    const directory = makeDirectory();
+    const senderDirectory = makeSenderDirectory();
+    const alice = makeAuthedMember(bus, { deviceId: "d1", selfMemberId: ALICE, scalar: 11, directory, senderDirectory });
+    const bob = makeAuthedMember(bus, { deviceId: "d2", selfMemberId: BOB, scalar: 22, directory, senderDirectory });
+
+    await alice.dist.announce(
+      alice.epochs.rotate([{ userId: "alice", deviceId: "d1" }, { userId: "bob", deviceId: "d2" }]),
+    );
+    // The relay swaps Bob's wrapped blob for a different one (after the signature
+    // was computed). The digest covers every blob → verification fails.
+    const sig = bus.entries[0] as AsymmetricKeyEpochSignal;
+    const bobBlob = sig.blobs.find((b) => b.recipientId === BOB)!;
+    (bobBlob as { wrappedKey: string }).wrappedKey = bobBlob.wrappedKey.slice(0, -2) + "ZZ";
+
+    await bob.dist.poll();
+    expect(bob.epochs.current).toBeUndefined();
+  });
+
+  it("crypto-e2ee-5: a signed announcement with an absurd epochId cannot poison the receiver", async () => {
+    const bus = new MemorySignalBus();
+    const directory = makeDirectory();
+    const senderDirectory = makeSenderDirectory();
+    const alice = makeAuthedMember(bus, {
+      deviceId: "d1",
+      selfMemberId: ALICE,
+      scalar: 11,
+      directory,
+      senderDirectory,
+      maxEpochJump: 1024,
+    });
+    const bob = makeAuthedMember(bus, {
+      deviceId: "d2",
+      selfMemberId: BOB,
+      scalar: 22,
+      directory,
+      senderDirectory,
+      maxEpochJump: 1024,
+    });
+
+    // Alice (a real, authenticated member) misbehaves: announces a VALID-signed
+    // epoch with epochId 2^31. The jump bound on the receiver drops it WITHOUT
+    // advancing #highestSeen, so subsequent legitimate epochs still arrive.
+    const huge: KeyEpoch = {
+      epochId: 2 ** 31,
+      key: new Uint8Array(32).fill(0xaa),
+      members: [ALICE, BOB],
+      createdAt: 1000,
+    };
+    await alice.dist.announce(huge);
+    await bob.dist.poll();
+    expect(bob.epochs.current).toBeUndefined(); // not poisoned
+
+    // A normal epoch 0 from Alice still gets through.
+    await alice.dist.announce(
+      alice.epochs.rotate([{ userId: "alice", deviceId: "d1" }, { userId: "bob", deviceId: "d2" }]),
+    );
+    await bob.dist.poll();
+    expect(bob.epochs.current?.epochId).toBe(0);
+  });
+
+  it("legacy mode (no senderDirectory) still adopts unsigned announcements (back-compat)", async () => {
+    const bus = new MemorySignalBus();
+    const directory = makeDirectory();
+    // No sender directory anywhere → unauthenticated mode, unchanged behavior.
+    const alice = makeMember(bus, { deviceId: "d1", selfMemberId: ALICE, scalar: 11, directory });
+    const bob = makeMember(bus, { deviceId: "d2", selfMemberId: BOB, scalar: 22, directory });
+    await alice.dist.announce(
+      alice.epochs.rotate([{ userId: "alice", deviceId: "d1" }, { userId: "bob", deviceId: "d2" }]),
+    );
     await bob.dist.poll();
     expect(bob.epochs.current?.epochId).toBe(0);
   });
