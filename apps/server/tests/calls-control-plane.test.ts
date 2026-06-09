@@ -329,6 +329,113 @@ describe("FR-79 — CallControlPlane", () => {
     expect(ended).toBeInstanceOf(CallStateError);
   });
 
+  // -- audit regressions ---------------------------------------------------
+
+  it("lets the creator join their own call and issues them a media grant (calls-correctness-1)", async () => {
+    await plane.createCall(alice, { conversationId: "conv-1", inviteeUserIds: ["bob"] });
+
+    // The creator (no invite row) can join and become a real participant.
+    const joined = await plane.joinCall(alice, "call-1");
+    expect(joined.participant.userId).toBe("alice");
+    expect(joined.participant.state).toBe("joined");
+    expect(joined.room.state).toBe("active");
+    expect(joined.mediaGrant.callId).toBe("call-1");
+
+    // acceptInvite is a no-op success for the creator (synthetic self-invite).
+    const accepted = await plane.acceptInvite(alice, "call-1");
+    expect(accepted.status).toBe("accepted");
+    expect(accepted.inviteeUserId).toBe("alice");
+
+    // The creator can also set their own media state as a participant.
+    const updated = await plane.setMediaState(alice, "call-1", { micEnabled: false });
+    expect(updated.micEnabled).toBe(false);
+  });
+
+  it("still rejects a non-invitee, non-creator join (calls-correctness-1 guard)", async () => {
+    await plane.createCall(alice, { conversationId: "conv-1", inviteeUserIds: ["bob"] });
+    await expect(plane.joinCall(carol, "call-1")).rejects.toMatchObject({
+      name: "CallAuthzError",
+      reason: "notInvitee",
+    });
+  });
+
+  it("#finalizeEnd fails closed (callNotFound) when the room vanishes mid-end (calls-stability-1)", async () => {
+    // Simulate a delete/end race: the room is readable when leaveCall checks it,
+    // but gone by the time #finalizeEnd re-reads it. The guard must throw
+    // callNotFound rather than persist a corrupt `{ state, endedAt }` record.
+    const realStore = store;
+    let roomReads = 0;
+    const racingStore = new Proxy(realStore, {
+      get(target, prop, receiver) {
+        if (prop === "readObject") {
+          return (...args: unknown[]) => {
+            const [, type, id] = args as [string, string, string];
+            // The 2nd read of THIS room (the one inside #finalizeEnd) returns
+            // undefined — the room was deleted concurrently.
+            if (type === "CallRoom" && id === "race-1") {
+              roomReads += 1;
+              if (roomReads >= 2) {
+                return Promise.resolve(undefined);
+              }
+            }
+            return (target.readObject as (...a: unknown[]) => unknown)(...args);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as FrickStore;
+
+    const racingPlane = new CallControlPlane({
+      store: racingStore,
+      mediaPlane: new FakeMediaPlaneAdapter({ now: () => 1_000 }),
+      generateId: () => "race-1",
+      now: () => new Date(1_000),
+    });
+
+    await racingPlane.createCall(alice, { conversationId: "conv-1", inviteeUserIds: ["bob"] });
+    await racingPlane.joinCall(bob, "race-1");
+    roomReads = 0; // start counting from the leave flow.
+
+    // leaveCall of the last participant auto-ends → #finalizeEnd re-reads the
+    // (now-deleted) room and must fail closed.
+    await expect(racingPlane.leaveCall(bob, "race-1")).rejects.toMatchObject({
+      name: "CallStateError",
+      reason: "callNotFound",
+    });
+  });
+
+  it("enforces the P2P media plane participant cap of 2 (sfu-media-4)", async () => {
+    const p2pMedia = new FakeMediaPlaneAdapter({ transport: "p2p", now: () => 1_000 });
+    let ids = 0;
+    const p2pPlane = new CallControlPlane({
+      store,
+      mediaPlane: p2pMedia,
+      generateId: () => `p2p-${++ids}`,
+      now: () => new Date(1_000),
+    });
+
+    // creator + 2 invitees = 3 > 2 → rejected at create time.
+    await expect(
+      p2pPlane.createCall(alice, { conversationId: "conv-1", inviteeUserIds: ["bob", "carol"] }),
+    ).rejects.toMatchObject({ name: "CallStateError", reason: "capacityExceeded" });
+
+    // The rejected create threw before generating an id, so the next call is
+    // "p2p-1". creator + 1 invitee = 2 is fine; both can join.
+    await p2pPlane.createCall(alice, { conversationId: "conv-1", inviteeUserIds: ["bob"] });
+    await p2pPlane.joinCall(alice, "p2p-1");
+    await p2pPlane.joinCall(bob, "p2p-1");
+
+    // A third, uninvited user is rejected outright.
+    const dave: CallActor = callActor("dave", "dave-web");
+    await expect(p2pPlane.joinCall(dave, "p2p-1")).rejects.toMatchObject({
+      name: "CallAuthzError",
+      reason: "notInvitee",
+    });
+    // A re-join by an already-joined participant is a free seat (no cap trip).
+    await expect(p2pPlane.joinCall(bob, "p2p-1")).resolves.toBeDefined();
+  });
+
   // -- FR-155: SFU media negotiation forwarding ----------------------------
 
   describe("FR-155 — SFU produce/consume forwarding", () => {

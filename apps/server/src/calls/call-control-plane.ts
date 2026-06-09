@@ -54,7 +54,8 @@ export type CallStateErrorReason =
   | "notInvited"
   | "notParticipant"
   | "noInvitees"
-  | "inviteAlreadyResolved";
+  | "inviteAlreadyResolved"
+  | "capacityExceeded";
 
 export class CallStateError extends Error {
   readonly reason: CallStateErrorReason;
@@ -271,6 +272,16 @@ export class CallControlPlane {
       );
     }
 
+    // Enforce the media plane's participant cap up front (sfu-media-4): a P2P
+    // plane advertises maxParticipants:2, so creator + invitees must fit.
+    const maxParticipants = this.#media.describe().maxParticipants;
+    if (maxParticipants !== undefined && invitees.length + 1 > maxParticipants) {
+      throw new CallStateError(
+        "capacityExceeded",
+        `Call exceeds the media plane capacity of ${maxParticipants} participants`,
+      );
+    }
+
     const callId = this.#genId();
     const createdAt = this.#now().toISOString();
     const kind: CallKind = input.kind ?? "video";
@@ -334,8 +345,12 @@ export class CallControlPlane {
    */
   async acceptInvite(actor: CallActor, callId: string): Promise<CallInviteRecord> {
     const room = await this.#requireLiveRoom(actor.tenantId, callId);
-    const invite = await this.#requireInvitee(actor.tenantId, callId, actor.userId);
-    void room;
+    const invite = await this.#requireInviteeOrCreator(room, actor.tenantId, actor.userId);
+    // The creator has no invite to accept — they are an implicit member of their
+    // own call. Return a synthetic, already-accepted self-invite (no writes).
+    if (!invite) {
+      return this.#creatorSelfInvite(callId, actor.userId);
+    }
     if (invite.status === "declined" || invite.status === "cancelled") {
       throw new CallStateError(
         "inviteAlreadyResolved",
@@ -364,8 +379,8 @@ export class CallControlPlane {
    */
   async joinCall(actor: CallActor, callId: string): Promise<JoinCallResult> {
     const room = await this.#requireLiveRoom(actor.tenantId, callId);
-    const invite = await this.#requireInvitee(actor.tenantId, callId, actor.userId);
-    if (invite.status === "declined" || invite.status === "cancelled") {
+    const invite = await this.#requireInviteeOrCreator(room, actor.tenantId, actor.userId);
+    if (invite && (invite.status === "declined" || invite.status === "cancelled")) {
       throw new CallStateError(
         "inviteAlreadyResolved",
         `Invite for ${actor.userId} is ${invite.status}; cannot join`,
@@ -373,7 +388,12 @@ export class CallControlPlane {
     }
 
     const joinedAt = this.#now().toISOString();
-    if (invite.status !== "accepted") {
+    // Enforce the media plane's participant cap before allocating a grant
+    // (sfu-media-4): a P2P plane advertises maxParticipants:2.
+    await this.#assertParticipantCapacity(actor.tenantId, callId, actor.userId, actor.deviceId);
+    // The creator has no invite row to flip; only an invitee's invite is
+    // implicitly accepted on first join.
+    if (invite && invite.status !== "accepted") {
       await this.#writeInvite(actor.tenantId, {
         ...invite,
         status: "accepted",
@@ -643,7 +663,17 @@ export class CallControlPlane {
   ): Promise<CallRoomRecord> {
     const endedAt = this.#now().toISOString();
     const room = await this.#readRoom(tenantId, callId);
-    const ended: CallRoomRecord = { ...(room as CallRoomRecord), state: "ended", endedAt };
+    // Guard against a delete/end race that removed the room between the caller's
+    // read and this re-read: spreading `undefined` would persist a corrupt
+    // CallRoom record (no id/createdBy/conversationId). Fail closed instead
+    // (calls-stability-1). An already-ended room is returned idempotently.
+    if (!room) {
+      throw new CallStateError("callNotFound", `Call ${callId} does not exist`);
+    }
+    if (room.state === "ended") {
+      return room;
+    }
+    const ended: CallRoomRecord = { ...room, state: "ended", endedAt };
     await this.#writeRoom(tenantId, ended);
     await this.#appendEvent(tenantId, callId, this.#names.events.ended, {
       callId,
@@ -665,16 +695,25 @@ export class CallControlPlane {
     return room;
   }
 
-  async #requireInvitee(
+  /**
+   * Resolve the actor's invite, or `undefined` when the actor is the room
+   * creator (who has no invite row but is an implicit, always-accepted member of
+   * their own call — calls-correctness-1). Throws `notInvitee` for anyone who is
+   * neither an invitee nor the creator.
+   */
+  async #requireInviteeOrCreator(
+    room: CallRoomRecord,
     tenantId: string,
-    callId: string,
     userId: string,
-  ): Promise<CallInviteRecord> {
-    const invite = await this.#readInvite(tenantId, callId, userId);
+  ): Promise<CallInviteRecord | undefined> {
+    if (room.createdBy === userId) {
+      return undefined;
+    }
+    const invite = await this.#readInvite(tenantId, room.id, userId);
     if (!invite) {
       throw new CallAuthzError(
         "notInvitee",
-        `${userId} was not invited to call ${callId}`,
+        `${userId} was not invited to call ${room.id}`,
       );
     }
     return invite;
@@ -683,6 +722,55 @@ export class CallControlPlane {
   async #activeParticipantCount(tenantId: string, callId: string): Promise<number> {
     const participants = await this.listParticipants(tenantId, callId);
     return participants.filter((p) => p.state === "joined").length;
+  }
+
+  /**
+   * Reject a join that would push the call past the media plane's participant
+   * cap (sfu-media-4). Counts *distinct active users* and treats an already-
+   * joined (userId,deviceId) as a free rejoin so a reconnect never trips the cap.
+   */
+  async #assertParticipantCapacity(
+    tenantId: string,
+    callId: string,
+    userId: string,
+    deviceId: string,
+  ): Promise<void> {
+    const maxParticipants = this.#media.describe().maxParticipants;
+    if (maxParticipants === undefined) {
+      return;
+    }
+    const participants = await this.listParticipants(tenantId, callId);
+    const activeUsers = new Set(
+      participants.filter((p) => p.state === "joined").map((p) => p.userId),
+    );
+    // A rejoin by an already-joined participant (same user+device) does not add
+    // a new seat.
+    const isRejoin = participants.some(
+      (p) => p.state === "joined" && p.userId === userId && p.deviceId === deviceId,
+    );
+    if (isRejoin || activeUsers.has(userId)) {
+      return;
+    }
+    if (activeUsers.size + 1 > maxParticipants) {
+      throw new CallStateError(
+        "capacityExceeded",
+        `Call ${callId} is full (media plane capacity is ${maxParticipants})`,
+      );
+    }
+  }
+
+  /** Synthetic, always-accepted self-invite returned for the room creator. */
+  #creatorSelfInvite(callId: string, userId: string): CallInviteRecord {
+    const at = this.#now().toISOString();
+    return {
+      id: `${callId}:${userId}`,
+      callId,
+      inviteeUserId: userId,
+      status: "accepted",
+      invitedBy: userId,
+      invitedAt: at,
+      respondedAt: at,
+    };
   }
 
   async #readRoom(tenantId: string, callId: string): Promise<CallRoomRecord | undefined> {
