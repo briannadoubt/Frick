@@ -191,6 +191,54 @@ MirrorMaker) implements the same `FrickRegionBus` interface, the same way
 `RedisClusterBus` implements `FrickClusterBus`. That adapter is intentionally **not**
 part of FR-105 (no real cross-region infra in this deliverable).
 
+## Cross-region trust boundary (security)
+
+**The cross-region channel is a cross-tenant trust boundary.** An inbound
+`RegionEnvelope` is re-injected into the receiving region's local cluster bus and
+fanned out to WebSocket subscribers purely on the strength of the envelope's
+self-asserted `tenantId` — there is no per-record re-authorization on the
+federation hop. So *anyone able to PUBLISH to the channel* (a compromised peer
+region, a leaked or shared Redis credential, a misconfigured/shared broker, a
+malicious peer operator in a federated deployment) can otherwise forge stream
+events, object deletes, presence, and signals for **any tenant in every
+subscribing region** — defeating tenant isolation across the WAN (finding
+multi-region-1).
+
+`RedisRegionBus` closes this at the **application layer** with an optional
+per-deployment **shared secret** (`regionSecret` on `RedisRegionBusOptions` /
+`createRedisRegionBus`):
+
+- every outbound frame is wrapped in a signed envelope carrying an
+  **HMAC-SHA256** over the encoded `RegionEnvelope` bytes, plus a per-frame
+  **random nonce** and a **timestamp** for replay resistance;
+- inbound frames are **verified (timing-safe) before any handler dispatch** —
+  frames that are unsigned, carry a bad MAC, are stale (outside the replay
+  window, default 5 min), or replay a recently-seen nonce are **dropped and
+  logged**;
+- the secret MUST be **identical across every region** in the deployment.
+
+Operational guidance:
+
+- **Configure `regionSecret` on every region** in any genuinely multi-region or
+  federated deployment. Distribute it like any other high-value secret (secrets
+  manager / sealed config), rotate it on suspected compromise, and never log it.
+- **The HMAC is defense in depth, not a substitute for transport security.** The
+  region channel SHOULD additionally run over a **mutually-authenticated
+  transport** — mTLS, a dedicated private network/VPC peering, and/or per-region
+  Redis ACLs — so the secret is never the *only* thing standing between a
+  network attacker and cross-tenant forgery.
+- **Validate before trust.** Decoded frames are structurally validated (a
+  non-null object with a string `originRegionId` and a well-formed inner
+  `envelope` with a `kind`) before the loop guard and re-injection, so a
+  malformed-but-decodable payload can never be re-published as a null/garbage
+  envelope (finding multi-region-4).
+- **Back-compat / single trust domain.** With no `regionSecret` configured the
+  wire format and behavior are unchanged (bare encoded `RegionEnvelope`). This
+  is only safe when the channel is a *single, fully-trusted tenant trust
+  domain* (e.g. a single-region deployment, the in-memory test fabric, or a
+  private broker no untrusted party can reach). Treat an unauthenticated
+  cross-region channel as a cross-tenant data-forgery surface.
+
 ## Write-region routing + conflict handling (FR-106)
 
 FR-105 carries realtime fan-out across regions but takes **no position on
