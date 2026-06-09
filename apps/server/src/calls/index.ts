@@ -48,6 +48,11 @@ export { FakeSfuBackend, type FakeSfuBackendOptions } from "./fake-sfu-backend.j
 export {
   MediasoupSfuBackend,
   type MediasoupSfuBackendOptions,
+  type MediasoupWorker,
+  type MediasoupRouter,
+  type MediasoupTransport,
+  type MediasoupProducer,
+  type MediasoupConsumer,
 } from "./mediasoup-sfu-backend.js";
 export {
   SfuMediaPlaneAdapter,

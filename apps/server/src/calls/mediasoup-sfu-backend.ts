@@ -51,18 +51,25 @@ import {
 interface MediasoupModule {
   createWorker(options: unknown): Promise<MediasoupWorker>;
 }
-interface MediasoupWorker {
+/**
+ * Minimal structural view of a mediasoup worker. Exported so an injected
+ * {@link MediasoupSfuBackendOptions.createWorker} factory (tests) can return a
+ * compatible double without importing mediasoup.
+ */
+export interface MediasoupWorker {
   createRouter(options: { mediaCodecs: unknown[] }): Promise<MediasoupRouter>;
+  /** Worker lifecycle events (notably `'died'` when the C++ process crashes). */
+  on?(event: string, listener: (...args: unknown[]) => void): void;
   close(): void;
 }
-interface MediasoupRouter {
+export interface MediasoupRouter {
   readonly id: string;
   readonly rtpCapabilities: RtpCapabilities;
   canConsume(options: { producerId: string; rtpCapabilities: RtpCapabilities }): boolean;
   createWebRtcTransport(options: unknown): Promise<MediasoupTransport>;
   close(): void;
 }
-interface MediasoupTransport {
+export interface MediasoupTransport {
   readonly id: string;
   readonly iceParameters: TransportHandle["iceParameters"];
   readonly iceCandidates: readonly TransportHandle["iceCandidates"][number][];
@@ -76,12 +83,12 @@ interface MediasoupTransport {
   }): Promise<MediasoupConsumer>;
   close(): void;
 }
-interface MediasoupProducer {
+export interface MediasoupProducer {
   readonly id: string;
   readonly kind: string;
   close(): void;
 }
-interface MediasoupConsumer {
+export interface MediasoupConsumer {
   readonly id: string;
   readonly producerId: string;
   readonly kind: string;
@@ -100,6 +107,17 @@ export interface MediasoupSfuBackendOptions {
   readonly rtcMaxPort?: number;
   /** mediasoup worker log level. Defaults to `"warn"`. */
   readonly logLevel?: "debug" | "warn" | "error" | "none";
+  /**
+   * Injectable worker factory. Defaults to the lazy `import("mediasoup")` +
+   * `createWorker`. Tests inject a deterministic fake so the worker-init retry
+   * (sfu-media-5) and 'died'-handler (sfu-media-6) paths are exercisable without
+   * building the native module.
+   */
+  readonly createWorker?: (config: {
+    logLevel: "debug" | "warn" | "error" | "none";
+    rtcMinPort: number;
+    rtcMaxPort: number;
+  }) => Promise<MediasoupWorker>;
 }
 
 const DEFAULT_RTC_MIN_PORT = 40000;
@@ -273,27 +291,68 @@ export class MediasoupSfuBackend implements SfuBackend {
     if (!this.#workerInit) {
       this.#workerInit = this.#startWorker();
     }
-    this.#worker = await this.#workerInit;
+    try {
+      this.#worker = await this.#workerInit;
+    } catch (error) {
+      // Do NOT cache a rejected init promise: a transient createWorker failure
+      // (ENOMEM, no free ports, EAGAIN spawning the C++ worker) would otherwise
+      // brick the backend forever, with every future call re-awaiting the same
+      // stale rejection. Clear it so the next call retries a fresh worker
+      // (sfu-media-5).
+      this.#workerInit = undefined;
+      throw error;
+    }
     return this.#worker;
   }
 
   async #startWorker(): Promise<MediasoupWorker> {
-    let mediasoup: MediasoupModule;
-    try {
-      // Narrow `any` at the native-module boundary: see the file doc comment.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      mediasoup = (await import("mediasoup" as string)) as any as MediasoupModule;
-    } catch {
-      throw new SfuBackendError(
-        "mediasoup is not installed. Enable the real SFU backend with " +
-          "`pnpm add mediasoup --filter @fricken/server` (it is an optional native dependency).",
-      );
-    }
-    return mediasoup.createWorker({
-      logLevel: this.#options.logLevel ?? "warn",
+    const config = {
+      logLevel: this.#options.logLevel ?? ("warn" as const),
       rtcMinPort: this.#options.rtcMinPort ?? DEFAULT_RTC_MIN_PORT,
       rtcMaxPort: this.#options.rtcMaxPort ?? DEFAULT_RTC_MAX_PORT,
+    };
+    const create = this.#options.createWorker;
+    let worker: MediasoupWorker;
+    if (create) {
+      worker = await create(config);
+    } else {
+      let mediasoup: MediasoupModule;
+      try {
+        // Narrow `any` at the native-module boundary: see the file doc comment.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        mediasoup = (await import("mediasoup" as string)) as any as MediasoupModule;
+      } catch {
+        throw new SfuBackendError(
+          "mediasoup is not installed. Enable the real SFU backend with " +
+            "`pnpm add mediasoup --filter @fricken/server` (it is an optional native dependency).",
+        );
+      }
+      worker = await mediasoup.createWorker(config);
+    }
+    // A mediasoup worker is a separate C++ process that can crash. When it dies,
+    // every router under it is dead too: drop our handle + the now-orphaned
+    // router entries so the next operation re-allocates a fresh worker/routers
+    // instead of silently forwarding nothing (sfu-media-6).
+    worker.on?.("died", () => {
+      this.#handleWorkerDeath(worker);
     });
+    return worker;
+  }
+
+  /**
+   * React to a mediasoup worker 'died' event: if it is still our active worker,
+   * drop it and invalidate all routers spawned from it so callers re-allocate.
+   * Guarded against a stale event from a worker we already replaced.
+   */
+  #handleWorkerDeath(worker: MediasoupWorker): void {
+    if (this.#worker !== undefined && this.#worker !== worker) {
+      return;
+    }
+    this.#worker = undefined;
+    this.#workerInit = undefined;
+    // Routers from the dead worker are unusable — drop them so ensureRouter
+    // rebuilds on a fresh worker rather than handing back dead handles.
+    this.#routers.clear();
   }
 
   #requireRouter(callId: string): RouterEntry {
