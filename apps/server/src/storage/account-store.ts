@@ -31,8 +31,16 @@ interface AccountRow {
   created_at: string;
 }
 
+/**
+ * Plaintext hashed once to produce the constant fake hash used by
+ * {@link AccountStore.verifyDummyPassword}. Never a real credential.
+ */
+const DUMMY_VERIFY_SECRET = "frick-constant-work-dummy-verify-secret";
+
 export class AccountStore {
   readonly #hasher: FrickPasswordHasher;
+  /** Lazily-computed fake hash for constant-work dummy verification. */
+  #dummyHash: string | undefined;
   private readonly sql: SqlDriver;
 
   constructor(sql: SqlDriver, hasher?: FrickPasswordHasher) {
@@ -140,6 +148,27 @@ export class AccountStore {
     }
 
     return fromRow(row);
+  }
+
+  /**
+   * Constant-work password verification against a fixed fake hash (auth-core-2).
+   * Always returns false, but performs the SAME Argon2id (or configured KDF)
+   * work a real {@link verifyPassword} miss would, so a caller can equalize
+   * login timing on the unknown-account / revoked-account branches and not leak
+   * account existence via a fast-vs-slow 401. The fake hash is computed lazily
+   * once per process with the active hasher's parameters so it tracks the real
+   * verify cost.
+   */
+  async verifyDummyPassword(password: string): Promise<false> {
+    if (this.#dummyHash === undefined) {
+      this.#dummyHash = await this.#hasher.hash(DUMMY_VERIFY_SECRET);
+    }
+    try {
+      await this.#hasher.verify(password, this.#dummyHash);
+    } catch {
+      // Ignore — this path exists solely to spend time, never to authenticate.
+    }
+    return false;
   }
 
   /**

@@ -1491,6 +1491,16 @@ export class FrickStore {
     return this.accounts.verifyPassword(DEFAULT_TENANT_ID, a, b);
   }
 
+  /**
+   * Constant-work dummy password verification (auth-core-2). Spends the same
+   * KDF time a real verify would, always returning false. Used by the login
+   * handler to keep the unknown-account / revoked-account branches timing-equal
+   * with the wrong-password branch so login can't be used to enumerate accounts.
+   */
+  verifyDummyPassword(password: string): Promise<false> {
+    return this.accounts.verifyDummyPassword(password);
+  }
+
   async createSession(input: {
     sessionToken: string;
     userId: string;

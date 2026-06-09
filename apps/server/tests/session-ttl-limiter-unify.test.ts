@@ -270,4 +270,72 @@ describe("FR-29 — shared auth-attempt limiter on provider routes", () => {
     expect(statuses[3]).toBe(429);
     expect(statuses[4]).toBe(429);
   });
+
+  // auth-core-1: /auth/email/login must be throttled like the other auth routes
+  // so passwords can't be brute-forced against it.
+  it("rate-limits repeated email/login attempts (brute-force guard)", async () => {
+    await startEmailServer({ config: { env: "test" }, limits: { maxAuthAttemptsPerWindow: 3 } });
+    const statuses: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      const res = await fetch(`${baseUrl}/auth/email/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: "brute@example.com", password: `guess-${i}` }),
+      });
+      statuses.push(res.status);
+    }
+    // First 3 reach the handler (unknown account → 401); 4 and 5 throttled → 429.
+    expect(statuses.slice(0, 3).every((s) => s === 401)).toBe(true);
+    expect(statuses[3]).toBe(429);
+    expect(statuses[4]).toBe(429);
+  });
+
+  // auth-core-1 / auth-core-6: /auth/email/signup must be throttled so the 409
+  // already-registered existence oracle can't be probed at scale.
+  it("rate-limits repeated email/signup attempts", async () => {
+    await startEmailServer({ config: { env: "test" }, limits: { maxAuthAttemptsPerWindow: 2 } });
+    const statuses: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      const res = await fetch(`${baseUrl}/auth/email/signup`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: "spam@example.com", password: "correct-horse-battery" }),
+      });
+      statuses.push(res.status);
+    }
+    // First 2 reach the handler (200 then 409); the limiter trips after.
+    expect(statuses[0]).toBe(200);
+    expect(statuses[1]).toBe(409);
+    expect(statuses[2]).toBe(429);
+    expect(statuses[3]).toBe(429);
+  });
+});
+
+// auth-core-2: login must not leak account existence via response status. The
+// unknown-account and wrong-password branches return the identical 401 body.
+describe("auth-core-2 — login does not enumerate accounts", () => {
+  it("unknown email and wrong password return the same 401 invalid_credentials", async () => {
+    await startEmailServer({ config: { env: "test" } });
+    await fetch(`${baseUrl}/auth/email/signup`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "real@example.com", password: "correct-horse-battery" }),
+    });
+
+    const unknown = await fetch(`${baseUrl}/auth/email/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "ghost@example.com", password: "whatever" }),
+    });
+    const wrongPw = await fetch(`${baseUrl}/auth/email/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "real@example.com", password: "wrong" }),
+    });
+
+    expect(unknown.status).toBe(401);
+    expect(wrongPw.status).toBe(401);
+    expect((await unknown.json()).error).toBe("invalid_credentials");
+    expect((await wrongPw.json()).error).toBe("invalid_credentials");
+  });
 });

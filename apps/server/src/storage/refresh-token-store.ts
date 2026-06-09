@@ -13,9 +13,13 @@ import type { SqlDriver } from "./sql-driver.js";
  * original login used.
  *
  * Rotation: `rotate()` validates the presented token and, in a single
- * transaction, marks it revoked and issues a fresh one — so a stolen-then-used
- * refresh token is detectable (the original is already revoked) and a single
- * leaked token cannot be replayed indefinitely.
+ * transaction, marks it revoked and issues a fresh one. Every token in a
+ * rotation lineage shares a `family_id` (seeded by `issue()` and carried
+ * forward on each rotation), which powers reuse/family detection (auth-core-3):
+ * replaying an ALREADY-revoked token is the theft signal, so `rotate()` revokes
+ * the entire family and refuses, forcing a full re-login. This contains a
+ * stolen-then-used refresh token rather than letting the attacker's derived
+ * chain stay live indefinitely.
  */
 
 export interface IssuedRefreshToken {
@@ -45,6 +49,8 @@ interface RefreshTokenRow {
   created_at: string;
   expires_at: string;
   revoked_at: string | null;
+  /** Rotation-lineage id; null for tokens issued before migration 0023. */
+  family_id: string | null;
 }
 
 export class RefreshTokenStore {
@@ -66,10 +72,12 @@ export class RefreshTokenStore {
     const token = randomBytes(32).toString("base64url");
     const now = new Date();
     const expiresAt = new Date(now.getTime() + ttlSeconds * 1000);
+    // auth-core-3: a brand-new login seeds a fresh rotation family.
+    const familyId = randomBytes(16).toString("base64url");
     await this.sql.run(
       `INSERT INTO auth_refresh_tokens
-          (token_hash, tenant_id, user_id, device_id, replica_id, created_at, expires_at, revoked_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
+          (token_hash, tenant_id, user_id, device_id, replica_id, created_at, expires_at, revoked_at, family_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
       [
         hashToken(token),
         args.tenantId,
@@ -78,6 +86,7 @@ export class RefreshTokenStore {
         args.replicaId,
         now.toISOString(),
         expiresAt.toISOString(),
+        familyId,
       ],
     );
     return {
@@ -111,9 +120,16 @@ export class RefreshTokenStore {
 
   /**
    * Validate the presented token, revoke it, and issue a fresh one — all in a
-   * single transaction. Returns both the new token and the record it inherits,
-   * or undefined when the presented token is unknown/revoked/expired. Used for
-   * refresh-token rotation.
+   * single transaction. The fresh token inherits the presented token's rotation
+   * family. Returns the new token + inherited record, or undefined when the
+   * presented token is unknown, expired, or a REUSE.
+   *
+   * auth-core-3 — reuse/family detection: if the presented token exists but is
+   * already revoked (it was rotated before), that is the theft signal. We revoke
+   * the ENTIRE family (every token sharing its `family_id`) and return undefined,
+   * so neither the attacker's nor the victim's chain survives and a full
+   * re-login is forced. A token with no `family_id` (issued before migration
+   * 0023) falls back to single-token revocation.
    */
   async rotate(token: string, ttlSeconds?: number): Promise<IssuedRefreshToken | undefined> {
     const now = new Date();
@@ -122,7 +138,22 @@ export class RefreshTokenStore {
         "SELECT * FROM auth_refresh_tokens WHERE token_hash = ?",
         [hashToken(token)],
       );
-      if (!row || row.revoked_at !== null || Date.parse(row.expires_at) <= now.getTime()) {
+      if (!row) {
+        return undefined;
+      }
+      // Reuse detection: an already-revoked token being presented for rotation
+      // means a previously-rotated (and therefore possibly stolen) token is
+      // being replayed — burn the whole family.
+      if (row.revoked_at !== null) {
+        if (row.family_id !== null) {
+          await tx.run(
+            "UPDATE auth_refresh_tokens SET revoked_at = ? WHERE family_id = ? AND revoked_at IS NULL",
+            [now.toISOString(), row.family_id],
+          );
+        }
+        return undefined;
+      }
+      if (Date.parse(row.expires_at) <= now.getTime()) {
         return undefined;
       }
       await tx.run(
@@ -134,8 +165,8 @@ export class RefreshTokenStore {
       const expiresAt = new Date(now.getTime() + ttl * 1000);
       await tx.run(
         `INSERT INTO auth_refresh_tokens
-            (token_hash, tenant_id, user_id, device_id, replica_id, created_at, expires_at, revoked_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
+            (token_hash, tenant_id, user_id, device_id, replica_id, created_at, expires_at, revoked_at, family_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
         [
           hashToken(fresh),
           row.tenant_id,
@@ -144,6 +175,7 @@ export class RefreshTokenStore {
           row.replica_id,
           now.toISOString(),
           expiresAt.toISOString(),
+          row.family_id,
         ],
       );
       return {

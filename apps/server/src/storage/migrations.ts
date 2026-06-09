@@ -1059,6 +1059,25 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
         ON presence_leases (app_id, tenant_id, presence_type, presence_key);
     `,
   },
+  {
+    // auth-core-3: refresh-token reuse / family detection. A `family_id` ties
+    // every token in a rotation lineage together: the first token of a login
+    // seeds a family, and each rotation carries the same `family_id` forward.
+    // When an already-revoked token is replayed (the theft signal), the store
+    // revokes the entire family, forcing a full re-login instead of letting a
+    // stolen-then-rotated chain stay live indefinitely. Nullable so legacy rows
+    // (issued before this migration) remain valid and are treated as their own
+    // single-token family.
+    id: "0024_refresh_token_family",
+    schemaRevision: 1,
+    description:
+      "Add family_id to auth_refresh_tokens for refresh-token reuse/family detection (auth-core-3).",
+    sql: `
+      ALTER TABLE auth_refresh_tokens ADD COLUMN family_id TEXT;
+      CREATE INDEX IF NOT EXISTS idx_refresh_tokens_by_family
+        ON auth_refresh_tokens (family_id);
+    `,
+  },
 ];
 
 /** Names of all framework tables (and indexes) the runner manages. Used by the

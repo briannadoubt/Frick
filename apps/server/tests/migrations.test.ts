@@ -77,6 +77,7 @@ describe("framework migration runner", () => {
       "0021_app_boundary",
       "0022_jobs_idempotency_app_scope",
       "0023_app_scoped_idempotency_presence_keys",
+      "0024_refresh_token_family",
     ]);
     expect(result.applied[0]?.schemaRevision).toBe(1);
     expect(result.applied[0]?.checksum).toMatch(/^sha256-[0-9a-f]{64}$/);
@@ -107,6 +108,7 @@ describe("framework migration runner", () => {
       "0021_app_boundary",
       "0022_jobs_idempotency_app_scope",
       "0023_app_scoped_idempotency_presence_keys",
+      "0024_refresh_token_family",
     ]);
 
     const tables = listTables(db);
@@ -128,10 +130,10 @@ describe("framework migration runner", () => {
       supportedSchemaRevision: foundationSchema.schemaRevision,
     });
 
-    expect(first.applied).toHaveLength(23);
+    expect(first.applied).toHaveLength(24);
     expect(second.applied).toHaveLength(0);
-    expect(second.alreadyApplied).toHaveLength(23);
-    expect(listAppliedMigrations(db)).toHaveLength(23);
+    expect(second.alreadyApplied).toHaveLength(24);
+    expect(listAppliedMigrations(db)).toHaveLength(24);
 
     db.close();
   });
@@ -276,6 +278,7 @@ describe("framework migration runner", () => {
       "0021_app_boundary",
       "0022_jobs_idempotency_app_scope",
       "0023_app_scoped_idempotency_presence_keys",
+      "0024_refresh_token_family",
       "9000_test_extra",
     ]);
     expect(listTables(db)).toContain("test_extra");

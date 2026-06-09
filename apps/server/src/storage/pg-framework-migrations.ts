@@ -813,6 +813,20 @@ export const FRAMEWORK_MIGRATIONS_PG: readonly FrameworkMigration[] = [
         ON presence_leases (app_id, tenant_id, presence_type, presence_key);
     `,
   },
+  {
+    // auth-core-3: refresh-token reuse / family detection. See the SQLite
+    // migration for the full rationale. `family_id` ties a rotation lineage
+    // together so replaying an already-revoked token revokes the whole family.
+    id: "0024_refresh_token_family",
+    schemaRevision: 1,
+    description:
+      "Add family_id to auth_refresh_tokens for refresh-token reuse/family detection (auth-core-3).",
+    sql: `
+      ALTER TABLE auth_refresh_tokens ADD COLUMN IF NOT EXISTS family_id TEXT;
+      CREATE INDEX IF NOT EXISTS idx_refresh_tokens_by_family
+        ON auth_refresh_tokens (family_id);
+    `,
+  },
 ];
 
 /** Names of all framework tables the Postgres runner manages. Used by dev-reset. */

@@ -33,10 +33,15 @@ import { SignedXml } from "xml-crypto";
  *   4. **Conditions window** — `NotBefore` / `NotOnOrAfter` on `<Conditions>`
  *      (and `<SubjectConfirmationData>` when present) bound the current time,
  *      within a configurable clock-skew tolerance.
- *   5. **Recipient / InResponseTo** — when the SP issued an AuthnRequest and
- *      supplied the expected request id, `InResponseTo` must match; when a
- *      `Recipient` is present on the SubjectConfirmationData it must equal the
- *      configured ACS URL.
+ *   5. **Recipient / InResponseTo** — when a `Recipient` is present on the
+ *      SubjectConfirmationData it must equal the configured ACS URL. The
+ *      optional `expectedInResponseTo` adds an equality check on `InResponseTo`,
+ *      but this module does NOT issue or persist AuthnRequest ids: the expected
+ *      value is supplied by the caller, not derived from server-side state
+ *      (auth-saml-5). So `InResponseTo` here is a defense-in-depth equality
+ *      check for callers that track their own request id out-of-band, NOT a
+ *      server-verified SP-initiated / anti-CSRF binding. The real IdP HTTP-POST
+ *      binding is treated as unsolicited / IdP-initiated SSO.
  *   6. **Replay** — the assertion `ID` must not have been consumed before.
  *      Enforced by the caller via the `SamlAssertionStore` seam; this module
  *      surfaces the assertion ID + freshness window for that check.
@@ -55,6 +60,28 @@ import { SignedXml } from "xml-crypto";
 const SAML_PROTOCOL_NS = "urn:oasis:names:tc:SAML:2.0:protocol";
 const SAML_ASSERTION_NS = "urn:oasis:names:tc:SAML:2.0:assertion";
 const DSIG_NS = "http://www.w3.org/2000/09/xmldsig#";
+
+/**
+ * Signature-algorithm allowlist (auth-saml-1). xml-crypto registers
+ * `rsa-sha1` + the SHA1 digest in its default maps, so without an explicit
+ * check a collision-broken SHA1 XML-DSIG signature would verify and be
+ * accepted. We pin the SignatureMethod to RSA/ECDSA over SHA-256/384/512 and
+ * each Reference's DigestMethod to SHA-256/384/512 — anything weaker (or
+ * unrecognized) is rejected before its `signedElementIds` are trusted. SHA1 is
+ * deliberately absent.
+ */
+const ALLOWED_SIGNATURE_ALGORITHMS: ReadonlySet<string> = new Set([
+  "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
+  "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512",
+  "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256",
+  "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha384",
+  "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha512",
+]);
+const ALLOWED_DIGEST_ALGORITHMS: ReadonlySet<string> = new Set([
+  "http://www.w3.org/2001/04/xmlenc#sha256",
+  "http://www.w3.org/2001/04/xmlenc#sha512",
+  "http://www.w3.org/2001/04/xmldsig-more#sha384",
+]);
 
 export interface SamlAttributeMappings {
   /** Source assertion attribute (or NameID) for the User's email. Default: `email`. */
@@ -94,8 +121,13 @@ export interface SamlProviderConfig {
    * block) the IdP signs assertions with. The signature MUST verify against
    * this cert; the cert embedded in the document's own `<KeyInfo>` is never
    * trusted on its own.
+   *
+   * Accepts either a single cert or an array of certs (auth-saml-6). When an
+   * array is supplied the signature is accepted if it verifies under ANY of the
+   * configured certs, which permits zero-downtime IdP signing-key rotation
+   * (trust old + new simultaneously across the rollover window).
    */
-  idpCertificate: string;
+  idpCertificate: string | string[];
   /**
    * Optional SP signing/encryption certificate (PEM) advertised in SP
    * metadata so the IdP can encrypt to / verify the SP. Metadata-only; not
@@ -115,10 +147,18 @@ export interface VerifiedSamlIdentity {
   assertionId: string;
   /**
    * The assertion's effective expiry (the earliest `NotOnOrAfter` seen on
-   * Conditions / SubjectConfirmationData), ISO 8601. The caller pins the
-   * replay-guard row to this so it can be GC'd once the assertion is stale.
+   * Conditions / SubjectConfirmationData), ISO 8601.
    */
   notOnOrAfter: string;
+  /**
+   * The timestamp (ISO 8601) the replay-guard row should live until: the
+   * effective expiry PLUS the clock-skew tolerance (auth-saml-4). The freshness
+   * check accepts an assertion until `notOnOrAfter + clockToleranceSec`, so the
+   * replay row must survive at least that long — otherwise a purged row could
+   * predate a still-acceptable assertion and open a one-shot replay window. The
+   * caller pins the replay-guard row to THIS value.
+   */
+  replayExpiresAt: string;
   /** Verified email, if mapped/present. */
   email: string | undefined;
   /** Display name resolved from the mapped attribute. */
@@ -159,7 +199,12 @@ export interface VerifySamlOptions {
  * empty set for an unsigned document or a signature that doesn't verify.
  */
 export interface SamlSignatureVerifier {
-  verify(input: { xml: string; certificate: string }): SamlSignatureResult;
+  /**
+   * `certificate` is one trusted IdP cert or an array of them (the signature is
+   * valid if it verifies under any one). Single-string remains accepted for
+   * back-compat with custom/test verifiers.
+   */
+  verify(input: { xml: string; certificate: string | string[] }): SamlSignatureResult;
 }
 
 export interface SamlSignatureResult {
@@ -188,7 +233,11 @@ interface ResolvedSamlProvider {
   idpEntityId: string;
   spEntityId: string;
   acsUrl: string;
-  idpCertificate: string;
+  /**
+   * One or more trusted IdP signing certs. A signature is valid if it verifies
+   * under ANY entry (auth-saml-6: supports overlapping keys during rotation).
+   */
+  idpCertificates: string[];
   spCertificate: string | undefined;
   attributeMappings: Required<Omit<SamlAttributeMappings, "extra">> & {
     extra: Record<string, string>;
@@ -207,7 +256,7 @@ function resolveProvider(config: SamlProviderConfig): ResolvedSamlProvider {
     idpEntityId: config.idpEntityId,
     spEntityId: config.spEntityId,
     acsUrl: config.acsUrl,
-    idpCertificate: config.idpCertificate,
+    idpCertificates: normalizeCertList(config.idpCertificate),
     spCertificate: config.spCertificate,
     attributeMappings: {
       email: config.attributeMappings?.email ?? DEFAULT_ATTR_MAPPINGS.email,
@@ -253,7 +302,7 @@ export function createSamlProviderRuntime(
     // 1. Signature. Reject unsigned / non-verifying documents up front.
     let signature: SamlSignatureResult;
     try {
-      signature = verifier.verify({ xml, certificate: resolved.idpCertificate });
+      signature = verifier.verify({ xml, certificate: resolved.idpCertificates });
     } catch (err) {
       throw new SamlValidationError(
         `SAML signature verification failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -316,7 +365,11 @@ export function createSamlProviderRuntime(
     if (conditions) {
       const nb = attr(conditions, "NotBefore");
       const noa = attr(conditions, "NotOnOrAfter");
-      if (nb && now.getTime() + skewMs < Date.parse(nb)) {
+      // auth-saml-2: a malformed timestamp must be a HARD failure, not a
+      // silently-satisfied bound. `Date.parse` returns NaN for garbage and
+      // every relational comparison with NaN is false, which would otherwise
+      // disable the freshness window. parseInstant throws on NaN.
+      if (nb && now.getTime() + skewMs < parseInstant(nb, "Conditions NotBefore")) {
         throw new SamlValidationError(
           "SAML assertion is not yet valid (Conditions NotBefore)",
           "SamlNotYetValid",
@@ -324,26 +377,33 @@ export function createSamlProviderRuntime(
       }
       if (noa) {
         notOnOrAfter = noa;
-        if (now.getTime() - skewMs >= Date.parse(noa)) {
+        if (now.getTime() - skewMs >= parseInstant(noa, "Conditions NotOnOrAfter")) {
           throw new SamlValidationError(
             "SAML assertion has expired (Conditions NotOnOrAfter)",
             "SamlExpired",
           );
         }
       }
-      // 3. Audience restriction.
-      const audiences = collectAudiences(conditions);
-      if (audiences.length > 0 && !audiences.includes(resolved.spEntityId)) {
-        throw new SamlValidationError(
-          "SAML assertion audience does not include this SP entityID",
-          "SamlAudienceMismatch",
-        );
-      }
-      if (audiences.length === 0) {
+      // 3. Audience restriction. Per SAML core, multiple <AudienceRestriction>
+      // blocks are CONJUNCTIVE (the SP must satisfy ALL of them) while multiple
+      // <Audience> within one block are DISJUNCTIVE. auth-saml-3: evaluate each
+      // block on its own and require the SP entityID in EVERY block — never
+      // flatten, which would let a second, narrower restriction scoped to a
+      // different RP pass.
+      const restrictionBlocks = collectAudienceRestrictions(conditions);
+      if (restrictionBlocks.length === 0) {
         throw new SamlValidationError(
           "SAML assertion has no AudienceRestriction",
           "SamlNoAudience",
         );
+      }
+      for (const block of restrictionBlocks) {
+        if (!block.includes(resolved.spEntityId)) {
+          throw new SamlValidationError(
+            "SAML assertion audience does not include this SP entityID",
+            "SamlAudienceMismatch",
+          );
+        }
       }
     } else {
       throw new SamlValidationError(
@@ -367,14 +427,19 @@ export function createSamlProviderRuntime(
       }
       const scNotOnOrAfter = attr(confirmationData, "NotOnOrAfter");
       if (scNotOnOrAfter) {
-        if (now.getTime() - skewMs >= Date.parse(scNotOnOrAfter)) {
+        const scExpiry = parseInstant(
+          scNotOnOrAfter,
+          "SubjectConfirmationData NotOnOrAfter",
+        );
+        if (now.getTime() - skewMs >= scExpiry) {
           throw new SamlValidationError(
             "SAML SubjectConfirmationData has expired (NotOnOrAfter)",
             "SamlExpired",
           );
         }
-        // Pin replay TTL to the earliest expiry we can prove.
-        if (!notOnOrAfter || Date.parse(scNotOnOrAfter) < Date.parse(notOnOrAfter)) {
+        // Pin replay TTL to the earliest expiry we can prove. `notOnOrAfter`,
+        // when set, already parsed cleanly above.
+        if (!notOnOrAfter || scExpiry < parseInstant(notOnOrAfter, "Conditions NotOnOrAfter")) {
           notOnOrAfter = scNotOnOrAfter;
         }
       }
@@ -415,13 +480,22 @@ export function createSamlProviderRuntime(
       if (value !== undefined) extraUserFields[destField] = value;
     }
 
+    // If no NotOnOrAfter was present anywhere, fall back to "now + skew" so the
+    // replay row still has a bounded lifetime.
+    const effectiveNotOnOrAfter =
+      notOnOrAfter ?? new Date(now.getTime() + skewMs).toISOString();
+    // auth-saml-4: pad the replay TTL by the clock-skew tolerance so a purged
+    // row can never predate an assertion that is still freshness-acceptable.
+    // `effectiveNotOnOrAfter` parsed cleanly above (or was constructed here).
+    const replayExpiresAt = new Date(
+      Date.parse(effectiveNotOnOrAfter) + skewMs,
+    ).toISOString();
+
     return {
       subject: nameId,
       assertionId,
-      // If no NotOnOrAfter was present anywhere, fall back to "now + skew" so
-      // the replay row still has a bounded lifetime.
-      notOnOrAfter:
-        notOnOrAfter ?? new Date(now.getTime() + skewMs).toISOString(),
+      notOnOrAfter: effectiveNotOnOrAfter,
+      replayExpiresAt,
       email,
       name,
       extraUserFields,
@@ -455,25 +529,65 @@ export function createXmlCryptoSignatureVerifier(): SamlSignatureVerifier {
       if (signatureNodes.length === 0) {
         return { valid: false, signedElementIds: [] };
       }
-      const pem = normalizeCertToPem(certificate);
+      // auth-saml-6: accept the signature if it verifies under ANY configured
+      // cert, so old + new IdP signing keys can overlap during a rotation.
+      const pems = normalizeCertList(certificate).map(normalizeCertToPem);
+      if (pems.length === 0) {
+        // No trusted cert configured — nothing can verify.
+        return { valid: false, signedElementIds: [] };
+      }
+      const firstPem = pems[0] as string;
       const signedIds: string[] = [];
       let anyValid = false;
       for (const sigNode of signatureNodes) {
-        const sig = new SignedXml();
-        // Pin the key: always verify against the configured cert, never the
-        // cert embedded in the document.
-        sig.publicCert = pem;
-        sig.getCertFromKeyInfo = () => null;
-        sig.loadSignature(sigNode as unknown as Node);
+        // auth-saml-1: load the signature once so we can inspect the declared
+        // SignatureMethod / DigestMethod, and reject anything outside the
+        // allowlist BEFORE crediting its references — a rsa-sha1 / sha1-digest
+        // signature must never contribute to signedElementIds even if the
+        // (collision-broken) math checks out.
+        const probe = new SignedXml();
+        probe.publicCert = firstPem;
+        probe.getCertFromKeyInfo = () => null;
+        probe.loadSignature(sigNode as unknown as Node);
+        const sigAlg = probe.signatureAlgorithm;
+        if (sigAlg === undefined || !ALLOWED_SIGNATURE_ALGORITHMS.has(sigAlg)) {
+          throw new SamlValidationError(
+            `SAML signature uses a disallowed SignatureMethod algorithm: ${sigAlg ?? "(none)"}`,
+            "SamlSignatureInvalid",
+          );
+        }
+        for (const ref of probe.getReferences()) {
+          const digestAlg = (ref as { digestAlgorithm?: string }).digestAlgorithm;
+          if (digestAlg === undefined || !ALLOWED_DIGEST_ALGORITHMS.has(digestAlg)) {
+            throw new SamlValidationError(
+              `SAML signature reference uses a disallowed DigestMethod algorithm: ${digestAlg ?? "(none)"}`,
+              "SamlSignatureInvalid",
+            );
+          }
+        }
+
         let ok = false;
-        try {
-          ok = sig.checkSignature(xml);
-        } catch {
-          ok = false;
+        // Verify against each trusted cert until one accepts; a fresh SignedXml
+        // per attempt keeps verification state isolated.
+        for (const pem of pems) {
+          const sig = new SignedXml();
+          // Pin the key: always verify against a configured cert, never the
+          // cert embedded in the document.
+          sig.publicCert = pem;
+          sig.getCertFromKeyInfo = () => null;
+          sig.loadSignature(sigNode as unknown as Node);
+          try {
+            if (sig.checkSignature(xml)) {
+              ok = true;
+              break;
+            }
+          } catch {
+            // Try the next cert.
+          }
         }
         if (!ok) continue;
         anyValid = true;
-        for (const ref of sig.getReferences()) {
+        for (const ref of probe.getReferences()) {
           const uri = (ref as { uri?: string }).uri ?? "";
           const id = uri.startsWith("#") ? uri.slice(1) : uri;
           if (id) signedIds.push(id);
@@ -566,26 +680,59 @@ function textOf(el: Element | undefined): string | undefined {
   return text.length > 0 ? text : undefined;
 }
 
-function collectAudiences(conditions: Element): string[] {
-  const out: string[] = [];
-  const restrictions = conditions.getElementsByTagNameNS(
-    SAML_ASSERTION_NS,
-    "Audience",
-  );
-  for (let i = 0; i < restrictions.length; i++) {
-    const t = textOf(restrictions[i] as Element);
-    if (t) out.push(t);
+/**
+ * Parse a SAML timestamp into epoch milliseconds, throwing
+ * {@link SamlValidationError} when it is unparseable (auth-saml-2). A bare
+ * `Date.parse` returns NaN for garbage, and `NaN >= x` / `NaN < x` are both
+ * false — so a malformed NotBefore/NotOnOrAfter would silently disable the
+ * freshness window. We treat an unparseable bound as a hard rejection instead.
+ */
+function parseInstant(value: string, label: string): number {
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) {
+    throw new SamlValidationError(
+      `SAML ${label} is not a parseable timestamp: "${value}"`,
+      "SamlMalformedTimestamp",
+    );
   }
-  if (out.length === 0) {
-    // Unqualified fallback.
-    const all = conditions.getElementsByTagName("*");
-    for (let i = 0; i < all.length; i++) {
-      const node = all[i] as Element;
-      if (localName(node) === "Audience") {
-        const t = textOf(node);
-        if (t) out.push(t);
-      }
+  return parsed;
+}
+
+/**
+ * Collect the <Audience> values per <AudienceRestriction> block (auth-saml-3).
+ * Returns one inner array per restriction block (OR within the block); the
+ * caller ANDs across blocks. Blocks with no parseable <Audience> are dropped so
+ * an empty restriction can't vacuously satisfy the AND.
+ */
+function collectAudienceRestrictions(conditions: Element): string[][] {
+  const blocks: string[][] = [];
+  const restrictionEls = elementsByLocalName(conditions, "AudienceRestriction");
+  for (const restriction of restrictionEls) {
+    const audiences: string[] = [];
+    for (const audienceEl of elementsByLocalName(restriction, "Audience")) {
+      const t = textOf(audienceEl);
+      if (t) audiences.push(t);
     }
+    if (audiences.length > 0) blocks.push(audiences);
+  }
+  return blocks;
+}
+
+/**
+ * All descendant elements of `el` with the given local name, namespace-agnostic
+ * (handles both the SAML-assertion namespace and unqualified test fixtures).
+ */
+function elementsByLocalName(el: Element, name: string): Element[] {
+  const out: Element[] = [];
+  const nsList = el.getElementsByTagNameNS(SAML_ASSERTION_NS, name);
+  if (nsList.length > 0) {
+    for (let i = 0; i < nsList.length; i++) out.push(nsList[i] as Element);
+    return out;
+  }
+  const all = el.getElementsByTagName("*");
+  for (let i = 0; i < all.length; i++) {
+    const node = all[i] as Element;
+    if (localName(node) === name) out.push(node);
   }
   return out;
 }
@@ -618,6 +765,17 @@ function collectAttributes(assertion: Element): Record<string, string> {
     if (value !== undefined && out[name] === undefined) out[name] = value;
   }
   return out;
+}
+
+/**
+ * Coerce a single-cert-or-array `idpCertificate` into a non-empty array of
+ * trimmed cert strings (auth-saml-6). Empty/blank entries are dropped.
+ */
+function normalizeCertList(certificate: string | string[]): string[] {
+  const list = (Array.isArray(certificate) ? certificate : [certificate])
+    .map((c) => (typeof c === "string" ? c.trim() : ""))
+    .filter((c) => c.length > 0);
+  return list;
 }
 
 function normalizeCertToPem(certificate: string): string {

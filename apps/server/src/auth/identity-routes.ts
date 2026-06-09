@@ -578,12 +578,23 @@ export function createIdentityRouter(
     res: ServerResponse;
     route: string;
     identifier: string;
+    /**
+     * auth-core-4: when true, the throttle bucket is keyed on the identifier
+     * COMBINED with the client IP, so one attacker IP can only drain its own
+     * (identifier, IP) bucket and cannot lock out the victim's own
+     * (identifier, victim-IP) bucket. Used by forgot-password, where keying on
+     * the victim email alone lets an attacker deny a victim's reset capability.
+     */
+    keyByIp?: boolean;
   }): boolean {
     if (!authThrottle) return false;
+    const ip = authThrottle.clientIp(input.req);
+    const identifier =
+      input.keyByIp && input.identifier ? `${input.identifier} ip:${ip}` : input.identifier;
     const limited = authThrottle.check({
       route: input.route,
-      identifier: input.identifier,
-      ip: authThrottle.clientIp(input.req),
+      identifier,
+      ip,
     });
     if (!limited) return false;
     sendRateLimited(input.res, limited.retryAfterSeconds);
@@ -1125,6 +1136,14 @@ export function createIdentityRouter(
             ? body.SAMLResponse
             : "";
       relayState = typeof body.relayState === "string" ? body.relayState : undefined;
+      // auth-saml-5: this value is supplied by the same party that submits the
+      // assertion, so it is NOT a server-verified SP-initiated binding — it only
+      // lets a trusted backend-to-backend caller (which issued its own
+      // AuthnRequest and tracks the id out-of-band) assert an additional
+      // equality check. The framework does not issue/persist AuthnRequest ids,
+      // so the real IdP HTTP-POST binding (the `else` form path below) treats
+      // the flow as unsolicited/IdP-initiated and never trusts a client-echoed
+      // InResponseTo. Do not rely on this for CSRF/login-binding guarantees.
       expectedInResponseTo =
         typeof body.expectedInResponseTo === "string" ? body.expectedInResponseTo : undefined;
       deviceId = typeof body.deviceId === "string" ? body.deviceId : undefined;
@@ -1164,10 +1183,13 @@ export function createIdentityRouter(
     }
 
     // Replay protection: record the assertion ID; a second presentation loses.
+    // auth-saml-4: pin the row to the skew-padded replay TTL (notOnOrAfter +
+    // clockToleranceSec) so a GC'd row can never predate a still-acceptable
+    // assertion and reopen a one-shot replay window.
     const fresh = await options.store.samlAssertions.markSeen({
       providerId,
       assertionId: verified.assertionId,
-      expiresAt: verified.notOnOrAfter,
+      expiresAt: verified.replayExpiresAt,
     });
     if (!fresh) {
       log.info("auth.saml.replay_blocked", {
@@ -1332,6 +1354,10 @@ export function createIdentityRouter(
       });
       return;
     }
+    // auth-core-1 / auth-core-6: throttle signup by email (+ IP fallback) so the
+    // 409 already-registered existence oracle can't be probed at scale and the
+    // route can't be abused for account-spam. Runs before the duplicate lookup.
+    if (throttled({ req, res, route: "email-signup", identifier: email })) return;
 
     // Duplicate-email check via the schema User index. Frick's
     // auth_accounts has its own UNIQUE on (tenant_id, handle) so the
@@ -1451,6 +1477,10 @@ export function createIdentityRouter(
       sendJson(res, 400, { error: "email_and_password_required" });
       return;
     }
+    // auth-core-1: throttle login by email (+ IP fallback) so an attacker can't
+    // brute-force passwords against this route, which performs the same password
+    // verification as the throttled built-in /auth/login.
+    if (throttled({ req, res, route: "email-login", identifier: email })) return;
 
     const user = await findUserBySubject(
       options.store,
@@ -1458,17 +1488,14 @@ export function createIdentityRouter(
       userObject.emailField,
       email,
     );
-    if (!user) {
-      // Same response shape as bad-password so we don't leak whether
-      // the email is registered.
+    // auth-core-2: keep timing + response uniform whether or not the account
+    // exists (and whether or not it is revoked) so login can't be used to
+    // enumerate accounts. The unknown-email and revoked branches spend the same
+    // Argon2id work a real verify miss would (constant-work dummy verify) and
+    // return the identical 401 — never a fast 401 or a distinct revoked status.
+    if (!user || user[userObject.revokedAtField]) {
+      await options.store.verifyDummyPassword(password);
       sendJson(res, 401, { error: "invalid_credentials" });
-      return;
-    }
-    if (user[userObject.revokedAtField]) {
-      sendJson(res, 403, {
-        error: "user_revoked",
-        message: "This account has been revoked.",
-      });
       return;
     }
 
@@ -1665,10 +1692,14 @@ export function createIdentityRouter(
       sendJson(res, 400, { error: "invalid_email" });
       return;
     }
-    // FR-29: throttle by email (+ IP fallback) so reset-token issuance can't be
-    // hammered for one address; runs before lookup so it also caps unknown
-    // emails without leaking whether an account exists.
-    if (throttled({ req, res, route: "forgot-password", identifier: email })) return;
+    // FR-29: throttle reset-token issuance so it can't be hammered for one
+    // address; runs before lookup so it also caps unknown emails without leaking
+    // whether an account exists. auth-core-4: key on email AND client IP so an
+    // attacker IP drains only its own (email, IP) bucket and cannot lock out the
+    // victim's legitimate reset requests from their own IP.
+    if (throttled({ req, res, route: "forgot-password", identifier: email, keyByIp: true })) {
+      return;
+    }
     const user = await findUserBySubject(
       options.store,
       userObject,
@@ -2054,6 +2085,14 @@ async function findUserBySubject(
   subjectField: string,
   subject: string,
 ): Promise<UserRow | undefined> {
+  // auth-core-5: this is an O(N) scan of all User rows. Objects are persisted as
+  // opaque packed blobs (see ObjectStore.list), so there is no per-field SQL
+  // column to index on without a storage-layer change — a true indexed lookup is
+  // tracked as follow-up. The unauthenticated DoS amplification the scan enabled
+  // is now bounded because every unauthenticated caller of this helper (email
+  // login/signup/forgot-password and the apple/google/oidc/saml verifies) is
+  // gated behind the shared auth-attempt throttle BEFORE reaching here, so the
+  // scan can no longer be driven by an unthrottled request flood.
   const users = (await store.listObjects(SYSTEM_TENANT, userObject.type)) as unknown as UserRow[];
   return users.find((u) => u[subjectField] === subject);
 }
@@ -2147,6 +2186,15 @@ async function mintSession(input: {
   return { sessionToken, userId: input.userId, tenantId: input.tenantId, deviceId, replicaId, expiresAt };
 }
 
+// auth-core-9: device binding (FR-32) ties a session to the deviceId/replicaId
+// stored server-side, and the gateway rejects a Hello from a different device.
+// Note this is NOT a token-theft countermeasure: `deviceId`/`replicaId` are
+// echoed back in the sign-in response below, so an attacker who captures the
+// full sign-in response also obtains the values needed to satisfy the binding.
+// Device binding defends the "legitimate client's device changed" re-auth case,
+// not exfiltration of the whole session payload. To harden against theft, bind
+// to a value the server derives independently (e.g. a channel-bound key) rather
+// than a client-chosen, response-echoed id.
 function toFrickSessionShape(session: MintedSession, schemaHash: string) {
   return {
     schemaHash,

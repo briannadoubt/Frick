@@ -41,12 +41,25 @@ export class PasswordResetTokenStore {
     const tokenHash = hashToken(token);
     const now = new Date();
     const expiresAt = new Date(now.getTime() + ttl * 60_000);
-    await this.sql.run(
-      `INSERT INTO auth_password_reset_tokens
-          (token_hash, tenant_id, user_id, created_at, expires_at, consumed_at)
-          VALUES (?, ?, ?, ?, ?, NULL)`,
-      [tokenHash, args.tenantId, args.userId, now.toISOString(), expiresAt.toISOString()],
-    );
+    // auth-core-8: enforce single-outstanding-token-per-user. Mark every prior
+    // unconsumed token for (tenant, user) consumed BEFORE inserting the new one,
+    // in a single transaction, so a previously-issued (possibly leaked-but-
+    // unused) link stops verifying the moment a fresh reset is requested. Only
+    // the most recent token remains valid.
+    await this.sql.transaction(async (tx) => {
+      await tx.run(
+        `UPDATE auth_password_reset_tokens
+            SET consumed_at = ?
+            WHERE tenant_id = ? AND user_id = ? AND consumed_at IS NULL`,
+        [now.toISOString(), args.tenantId, args.userId],
+      );
+      await tx.run(
+        `INSERT INTO auth_password_reset_tokens
+            (token_hash, tenant_id, user_id, created_at, expires_at, consumed_at)
+            VALUES (?, ?, ?, ?, ?, NULL)`,
+        [tokenHash, args.tenantId, args.userId, now.toISOString(), expiresAt.toISOString()],
+      );
+    });
     return {
       token,
       tenantId: args.tenantId,

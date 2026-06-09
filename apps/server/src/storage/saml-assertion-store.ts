@@ -16,10 +16,13 @@ import type { SqlDriver } from "./sql-driver.js";
  * `(provider_id, assertion_id)` makes a duplicate insert fail, so even two
  * concurrent submissions of the same assertion can't both win.
  *
- * Rows are kept until `expires_at` (the assertion's NotOnOrAfter, with a small
- * skew pad supplied by the caller); after that the assertion is no longer
- * acceptable on freshness grounds anyway, so the replay row can be GC'd by
- * `purgeExpired`.
+ * Rows are kept until `expires_at` (the assertion's NotOnOrAfter, with a skew
+ * pad supplied by the caller — see auth-saml-4); after that the assertion is no
+ * longer acceptable on freshness grounds anyway, so the replay row can be GC'd
+ * by `purgeExpired`. Because no global scheduler invokes `purgeExpired`,
+ * `markSeen` opportunistically sweeps already-expired rows on each first
+ * sighting so the table stays bounded by the number of *currently in-window*
+ * assertions rather than growing with every successful SAML login.
  */
 export class SamlAssertionStore {
   constructor(private readonly sql: SqlDriver) {}
@@ -28,8 +31,8 @@ export class SamlAssertionStore {
    * Atomically record that `assertionId` (for `providerId`) has been consumed.
    * Returns true when this call was the FIRST to record it (the assertion is
    * fresh and may be accepted), or false when the ID was already present (a
-   * replay — the caller MUST reject). `expiresAt` is the assertion's
-   * NotOnOrAfter (ISO 8601); the row is GC-eligible after it passes.
+   * replay — the caller MUST reject). `expiresAt` is the skew-padded replay TTL
+   * (ISO 8601); the row is GC-eligible after it passes.
    */
   async markSeen(input: {
     providerId: string;
@@ -44,8 +47,19 @@ export class SamlAssertionStore {
             VALUES (?, ?, ?, ?)`,
         [input.providerId, input.assertionId, now, input.expiresAt],
       );
+      const won = Number(result.changes) > 0;
+      if (won) {
+        // auth-saml-4: opportunistically GC expired replay rows on the way in so
+        // the table is bounded without depending on an external scheduler.
+        // Best-effort — a failed sweep must never fail the login.
+        try {
+          await this.purgeExpired();
+        } catch {
+          // ignore
+        }
+      }
       // A successful insert means we won the race / first sighting.
-      return Number(result.changes) > 0;
+      return won;
     } catch {
       // Unique-constraint violation (SQLite + Postgres both throw) → the
       // assertion ID was already recorded: this is a replay.

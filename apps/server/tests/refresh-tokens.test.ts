@@ -105,6 +105,39 @@ describe("refresh tokens (FR-33)", () => {
     expect(replay.status).toBe(401);
   });
 
+  // auth-core-3: replaying an already-rotated token (the theft signal) must
+  // burn the whole rotation family, so even the legitimate live token dies.
+  it("revokes the rotation family when an already-rotated token is reused", async () => {
+    app = await startServer({ refresh: {} });
+    const body = await signup(app.httpUrl);
+
+    // Legit rotation: body.refreshToken -> rotated.refreshToken.
+    const rotatedRes = await fetch(`${app.httpUrl}/auth/refresh`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ refreshToken: body.refreshToken }),
+    });
+    expect(rotatedRes.status).toBe(200);
+    const rotated = (await rotatedRes.json()) as SignupBody;
+    expect(rotated.refreshToken).toBeTruthy();
+
+    // Attacker reuses the original (already-rotated) token: rejected.
+    const reuse = await fetch(`${app.httpUrl}/auth/refresh`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ refreshToken: body.refreshToken }),
+    });
+    expect(reuse.status).toBe(401);
+
+    // The reuse burned the family — the legitimate live token is now dead too.
+    const afterBurn = await fetch(`${app.httpUrl}/auth/refresh`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ refreshToken: rotated.refreshToken }),
+    });
+    expect(afterBurn.status).toBe(401);
+  });
+
   it("does not rotate when rotateOnRefresh is false", async () => {
     app = await startServer({ refresh: { rotateOnRefresh: false } });
     const body = await signup(app.httpUrl);
