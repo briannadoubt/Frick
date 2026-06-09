@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTN64ZNNVV32AY6JW43FXTCF",
+  "ts": "2026-06-09T03:17:22.229Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTN46588BFSS4XH9CW11F9EW",
+    "commentId": "01KTN64ZNNVV32AY6JW43FXTCE",
+    "author": "claude",
+    "body": "Wave 1 remediation merged green (45 findings): crypto/E2EE (core 118), auth+SAML (server 1135), Swift client (174), Android client (encrypt-at-rest + decode bounds + hung-deferred drains), storage atomicity/isolation, blob-GC data-loss hardening. Integrated gate: typecheck 0, server 1135, core 118, swift 174, android :frick/:frick-compose green."
+  }
+}
