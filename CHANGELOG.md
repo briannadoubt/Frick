@@ -6,6 +6,8 @@ Each package version is independent — a release header documents which package
 
 ## Unreleased
 
+## 0.3.0 — 2026-06-09
+
 ## 0.2.0 — 2026-06-08
 
 All public TypeScript packages (`@fricken/protocol`, `@fricken/core`, `@fricken/react`, `@fricken/design`, `@fricken/design-web`, `@fricken/devtools`, `@fricken/agent-kit`, `@fricken/mcp`, `@fricken/server`) and the Android `:frick` SDK move `0.1.1 → 0.2.0`; the Swift SDK is tagged `swift-v0.2.0`. This release lands the native client observation tiers (Swift + Android), realtime calls (P2P + self-hosted SFU + E2EE), multi-region bus federation, the WorkspaceShell, multi-app/tenant isolation — and a deep security audit of the entire delta with all 70 findings fixed.
