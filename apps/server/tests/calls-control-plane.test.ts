@@ -359,6 +359,34 @@ describe("FR-79 — CallControlPlane", () => {
     });
   });
 
+  it("scopes call records to the actor's appId — app B cannot see app A's call (calls-isolation-1)", async () => {
+    const aliceA: CallActor = { ...alice, appId: "app-a" };
+    const bobA: CallActor = { ...bob, appId: "app-a" };
+    const bobB: CallActor = { ...bob, appId: "app-b" };
+
+    await plane.createCall(aliceA, { conversationId: "conv-1", inviteeUserIds: ["bob"] });
+
+    // Same tenant, different app: the room is not visible.
+    expect(await plane.getRoom(alice.tenantId, "call-1", "app-b")).toBeUndefined();
+    // And the room IS visible within its own app.
+    expect((await plane.getRoom(alice.tenantId, "call-1", "app-a"))?.state).toBe("ringing");
+
+    // An invitee connecting under a different app cannot join the app-a call.
+    await expect(plane.joinCall(bobB, "call-1")).rejects.toMatchObject({
+      name: "CallStateError",
+      reason: "callNotFound",
+    });
+
+    // The invitee under the correct app joins fine, and its participant record
+    // lands in app-a's namespace (not the default app).
+    const joined = await plane.joinCall(bobA, "call-1");
+    expect(joined.participant.state).toBe("joined");
+    expect(await plane.listParticipants(alice.tenantId, "call-1", "app-a")).toHaveLength(1);
+    expect(await plane.listParticipants(alice.tenantId, "call-1", "app-b")).toHaveLength(0);
+    // Default-app readers also see nothing for an app-scoped call.
+    expect(await plane.listParticipants(alice.tenantId, "call-1")).toHaveLength(0);
+  });
+
   it("#finalizeEnd fails closed (callNotFound) when the room vanishes mid-end (calls-stability-1)", async () => {
     // Simulate a delete/end race: the room is readable when leaveCall checks it,
     // but gone by the time #finalizeEnd re-reads it. The guard must throw

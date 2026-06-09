@@ -1697,6 +1697,10 @@ export class SyncGateway {
       tenantId: principal.tenantId,
       userId: principal.userId,
       deviceId: principal.deviceId,
+      // FR-153 app isolation: scope every call record/event to the connection's
+      // app so calls are app-partitioned like objects/streams/presence
+      // (calls-isolation-1).
+      appId: this.#appIdFor(client),
     };
     const command = payload.command;
     try {

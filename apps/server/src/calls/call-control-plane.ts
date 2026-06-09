@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { PlainObject } from "@fricken/protocol";
 import type { FrickStore } from "../store.js";
+import { DEFAULT_APP_ID } from "../app-id.js";
 import { DEFAULT_TENANT_ID } from "../tenant.js";
 import {
   DEFAULT_CALL_TYPE_NAMES,
@@ -82,6 +83,13 @@ export interface CallActor {
   readonly tenantId: string;
   readonly userId: string;
   readonly deviceId: string;
+  /**
+   * App namespace the actor is pinned to (FR-153). Threaded into every call
+   * record/event store op so calls are app-partitioned like objects/streams/
+   * presence (calls-isolation-1). Defaults to the framework default app when
+   * omitted (single-app deployments / direct unit tests).
+   */
+  readonly appId?: string;
 }
 
 export type CallKind = "audio" | "video";
@@ -282,6 +290,7 @@ export class CallControlPlane {
       );
     }
 
+    const appId = appIdOf(actor);
     const callId = this.#genId();
     const createdAt = this.#now().toISOString();
     const kind: CallKind = input.kind ?? "video";
@@ -303,9 +312,9 @@ export class CallControlPlane {
       mediaSessionId: session.mediaSessionId,
       transport: session.transport,
     };
-    await this.#writeRoom(actor.tenantId, room);
+    await this.#writeRoom(actor.tenantId, appId, room);
 
-    await this.#appendEvent(actor.tenantId, callId, this.#names.events.created, {
+    await this.#appendEvent(actor.tenantId, appId, callId, this.#names.events.created, {
       callId,
       conversationId: input.conversationId,
       createdBy: actor.userId,
@@ -323,8 +332,8 @@ export class CallControlPlane {
         invitedBy: actor.userId,
         invitedAt: createdAt,
       };
-      await this.#writeInvite(actor.tenantId, invite);
-      await this.#appendEvent(actor.tenantId, callId, this.#names.events.inviteSent, {
+      await this.#writeInvite(actor.tenantId, appId, invite);
+      await this.#appendEvent(actor.tenantId, appId, callId, this.#names.events.inviteSent, {
         callId,
         inviteeUserId,
         invitedBy: actor.userId,
@@ -344,8 +353,9 @@ export class CallControlPlane {
    * for an ended call is rejected.
    */
   async acceptInvite(actor: CallActor, callId: string): Promise<CallInviteRecord> {
-    const room = await this.#requireLiveRoom(actor.tenantId, callId);
-    const invite = await this.#requireInviteeOrCreator(room, actor.tenantId, actor.userId);
+    const appId = appIdOf(actor);
+    const room = await this.#requireLiveRoom(actor.tenantId, appId, callId);
+    const invite = await this.#requireInviteeOrCreator(room, actor.tenantId, appId, actor.userId);
     // The creator has no invite to accept — they are an implicit member of their
     // own call. Return a synthetic, already-accepted self-invite (no writes).
     if (!invite) {
@@ -362,8 +372,8 @@ export class CallControlPlane {
     }
     const respondedAt = this.#now().toISOString();
     const updated: CallInviteRecord = { ...invite, status: "accepted", respondedAt };
-    await this.#writeInvite(actor.tenantId, updated);
-    await this.#appendEvent(actor.tenantId, callId, this.#names.events.inviteAccepted, {
+    await this.#writeInvite(actor.tenantId, appId, updated);
+    await this.#appendEvent(actor.tenantId, appId, callId, this.#names.events.inviteAccepted, {
       callId,
       inviteeUserId: actor.userId,
     });
@@ -378,8 +388,9 @@ export class CallControlPlane {
    * Joining also implicitly accepts a still-`ringing` invite.
    */
   async joinCall(actor: CallActor, callId: string): Promise<JoinCallResult> {
-    const room = await this.#requireLiveRoom(actor.tenantId, callId);
-    const invite = await this.#requireInviteeOrCreator(room, actor.tenantId, actor.userId);
+    const appId = appIdOf(actor);
+    const room = await this.#requireLiveRoom(actor.tenantId, appId, callId);
+    const invite = await this.#requireInviteeOrCreator(room, actor.tenantId, appId, actor.userId);
     if (invite && (invite.status === "declined" || invite.status === "cancelled")) {
       throw new CallStateError(
         "inviteAlreadyResolved",
@@ -390,16 +401,22 @@ export class CallControlPlane {
     const joinedAt = this.#now().toISOString();
     // Enforce the media plane's participant cap before allocating a grant
     // (sfu-media-4): a P2P plane advertises maxParticipants:2.
-    await this.#assertParticipantCapacity(actor.tenantId, callId, actor.userId, actor.deviceId);
+    await this.#assertParticipantCapacity(
+      actor.tenantId,
+      appId,
+      callId,
+      actor.userId,
+      actor.deviceId,
+    );
     // The creator has no invite row to flip; only an invitee's invite is
     // implicitly accepted on first join.
     if (invite && invite.status !== "accepted") {
-      await this.#writeInvite(actor.tenantId, {
+      await this.#writeInvite(actor.tenantId, appId, {
         ...invite,
         status: "accepted",
         respondedAt: joinedAt,
       });
-      await this.#appendEvent(actor.tenantId, callId, this.#names.events.inviteAccepted, {
+      await this.#appendEvent(actor.tenantId, appId, callId, this.#names.events.inviteAccepted, {
         callId,
         inviteeUserId: actor.userId,
       });
@@ -416,16 +433,16 @@ export class CallControlPlane {
       cameraEnabled: DEFAULT_MEDIA_STATE.cameraEnabled,
       screenSharing: DEFAULT_MEDIA_STATE.screenSharing,
     };
-    await this.#writeParticipant(actor.tenantId, participant);
+    await this.#writeParticipant(actor.tenantId, appId, participant);
 
     // First join activates the room.
     let activeRoom = room;
     if (room.state === "ringing") {
       activeRoom = { ...room, state: "active", startedAt: joinedAt };
-      await this.#writeRoom(actor.tenantId, activeRoom);
+      await this.#writeRoom(actor.tenantId, appId, activeRoom);
     }
 
-    await this.#appendEvent(actor.tenantId, callId, this.#names.events.participantJoined, {
+    await this.#appendEvent(actor.tenantId, appId, callId, this.#names.events.participantJoined, {
       callId,
       userId: actor.userId,
       deviceId: actor.deviceId,
@@ -452,9 +469,11 @@ export class CallControlPlane {
     callId: string,
     next: Partial<MediaState>,
   ): Promise<CallParticipantRecord> {
-    await this.#requireLiveRoom(actor.tenantId, callId);
+    const appId = appIdOf(actor);
+    await this.#requireLiveRoom(actor.tenantId, appId, callId);
     const participant = await this.#readParticipant(
       actor.tenantId,
+      appId,
       callId,
       actor.userId,
       actor.deviceId,
@@ -471,8 +490,8 @@ export class CallControlPlane {
       cameraEnabled: next.cameraEnabled ?? participant.cameraEnabled,
       screenSharing: next.screenSharing ?? participant.screenSharing,
     };
-    await this.#writeParticipant(actor.tenantId, updated);
-    await this.#appendEvent(actor.tenantId, callId, this.#names.events.participantMediaChanged, {
+    await this.#writeParticipant(actor.tenantId, appId, updated);
+    await this.#appendEvent(actor.tenantId, appId, callId, this.#names.events.participantMediaChanged, {
       callId,
       userId: actor.userId,
       deviceId: actor.deviceId,
@@ -544,9 +563,11 @@ export class CallControlPlane {
         `Call ${callId} is not brokered over an SFU media plane; SFU media negotiation is unsupported`,
       );
     }
-    await this.#requireLiveRoom(actor.tenantId, callId);
+    const appId = appIdOf(actor);
+    await this.#requireLiveRoom(actor.tenantId, appId, callId);
     const participant = await this.#readParticipant(
       actor.tenantId,
+      appId,
       callId,
       actor.userId,
       actor.deviceId,
@@ -569,7 +590,8 @@ export class CallControlPlane {
    * rejection (`notParticipant`).
    */
   async leaveCall(actor: CallActor, callId: string): Promise<CallRoomRecord> {
-    const room = await this.#readRoom(actor.tenantId, callId);
+    const appId = appIdOf(actor);
+    const room = await this.#readRoom(actor.tenantId, appId, callId);
     if (!room) {
       throw new CallStateError("callNotFound", `Call ${callId} does not exist`);
     }
@@ -579,6 +601,7 @@ export class CallControlPlane {
     }
     const participant = await this.#readParticipant(
       actor.tenantId,
+      appId,
       callId,
       actor.userId,
       actor.deviceId,
@@ -590,8 +613,8 @@ export class CallControlPlane {
       );
     }
     const leftAt = this.#now().toISOString();
-    await this.#writeParticipant(actor.tenantId, { ...participant, state: "left", leftAt });
-    await this.#appendEvent(actor.tenantId, callId, this.#names.events.participantLeft, {
+    await this.#writeParticipant(actor.tenantId, appId, { ...participant, state: "left", leftAt });
+    await this.#appendEvent(actor.tenantId, appId, callId, this.#names.events.participantLeft, {
       callId,
       userId: actor.userId,
       deviceId: actor.deviceId,
@@ -606,9 +629,9 @@ export class CallControlPlane {
     }
 
     // Auto-end when the last active participant leaves.
-    const remaining = await this.#activeParticipantCount(actor.tenantId, callId);
+    const remaining = await this.#activeParticipantCount(actor.tenantId, appId, callId);
     if (remaining === 0 && room.state === "active") {
-      return this.#finalizeEnd(actor.tenantId, callId, actor.userId);
+      return this.#finalizeEnd(actor.tenantId, appId, callId, actor.userId);
     }
     return room;
   }
@@ -621,7 +644,8 @@ export class CallControlPlane {
    * an already-ended call.
    */
   async endCall(actor: CallActor, callId: string): Promise<CallRoomRecord> {
-    const room = await this.#readRoom(actor.tenantId, callId);
+    const appId = appIdOf(actor);
+    const room = await this.#readRoom(actor.tenantId, appId, callId);
     if (!room) {
       throw new CallStateError("callNotFound", `Call ${callId} does not exist`);
     }
@@ -631,24 +655,36 @@ export class CallControlPlane {
     if (room.state === "ended") {
       return room;
     }
-    return this.#finalizeEnd(actor.tenantId, callId, actor.userId);
+    return this.#finalizeEnd(actor.tenantId, appId, callId, actor.userId);
   }
 
   // -- reads (for clients / reconnect) ------------------------------------
 
-  async getRoom(tenantId: string, callId: string): Promise<CallRoomRecord | undefined> {
-    return this.#readRoom(tenantId, callId);
+  async getRoom(
+    tenantId: string,
+    callId: string,
+    appId: string = DEFAULT_APP_ID,
+  ): Promise<CallRoomRecord | undefined> {
+    return this.#readRoom(tenantId, appId, callId);
   }
 
-  async listInvites(tenantId: string, callId: string): Promise<CallInviteRecord[]> {
-    const rows = await this.#store.listObjects(tenantId, this.#names.callInvite);
+  async listInvites(
+    tenantId: string,
+    callId: string,
+    appId: string = DEFAULT_APP_ID,
+  ): Promise<CallInviteRecord[]> {
+    const rows = await this.#store.listObjects(tenantId, this.#names.callInvite, appId);
     return rows
       .filter((r) => r["callId"] === callId)
       .map((r) => r as unknown as CallInviteRecord);
   }
 
-  async listParticipants(tenantId: string, callId: string): Promise<CallParticipantRecord[]> {
-    const rows = await this.#store.listObjects(tenantId, this.#names.callParticipant);
+  async listParticipants(
+    tenantId: string,
+    callId: string,
+    appId: string = DEFAULT_APP_ID,
+  ): Promise<CallParticipantRecord[]> {
+    const rows = await this.#store.listObjects(tenantId, this.#names.callParticipant, appId);
     return rows
       .filter((r) => r["callId"] === callId)
       .map((r) => r as unknown as CallParticipantRecord);
@@ -658,11 +694,12 @@ export class CallControlPlane {
 
   async #finalizeEnd(
     tenantId: string,
+    appId: string,
     callId: string,
     endedBy: string,
   ): Promise<CallRoomRecord> {
     const endedAt = this.#now().toISOString();
-    const room = await this.#readRoom(tenantId, callId);
+    const room = await this.#readRoom(tenantId, appId, callId);
     // Guard against a delete/end race that removed the room between the caller's
     // read and this re-read: spreading `undefined` would persist a corrupt
     // CallRoom record (no id/createdBy/conversationId). Fail closed instead
@@ -674,8 +711,8 @@ export class CallControlPlane {
       return room;
     }
     const ended: CallRoomRecord = { ...room, state: "ended", endedAt };
-    await this.#writeRoom(tenantId, ended);
-    await this.#appendEvent(tenantId, callId, this.#names.events.ended, {
+    await this.#writeRoom(tenantId, appId, ended);
+    await this.#appendEvent(tenantId, appId, callId, this.#names.events.ended, {
       callId,
       endedBy,
       endedAt,
@@ -684,8 +721,12 @@ export class CallControlPlane {
     return ended;
   }
 
-  async #requireLiveRoom(tenantId: string, callId: string): Promise<CallRoomRecord> {
-    const room = await this.#readRoom(tenantId, callId);
+  async #requireLiveRoom(
+    tenantId: string,
+    appId: string,
+    callId: string,
+  ): Promise<CallRoomRecord> {
+    const room = await this.#readRoom(tenantId, appId, callId);
     if (!room) {
       throw new CallStateError("callNotFound", `Call ${callId} does not exist`);
     }
@@ -704,12 +745,13 @@ export class CallControlPlane {
   async #requireInviteeOrCreator(
     room: CallRoomRecord,
     tenantId: string,
+    appId: string,
     userId: string,
   ): Promise<CallInviteRecord | undefined> {
     if (room.createdBy === userId) {
       return undefined;
     }
-    const invite = await this.#readInvite(tenantId, room.id, userId);
+    const invite = await this.#readInvite(tenantId, appId, room.id, userId);
     if (!invite) {
       throw new CallAuthzError(
         "notInvitee",
@@ -719,8 +761,12 @@ export class CallControlPlane {
     return invite;
   }
 
-  async #activeParticipantCount(tenantId: string, callId: string): Promise<number> {
-    const participants = await this.listParticipants(tenantId, callId);
+  async #activeParticipantCount(
+    tenantId: string,
+    appId: string,
+    callId: string,
+  ): Promise<number> {
+    const participants = await this.listParticipants(tenantId, callId, appId);
     return participants.filter((p) => p.state === "joined").length;
   }
 
@@ -731,6 +777,7 @@ export class CallControlPlane {
    */
   async #assertParticipantCapacity(
     tenantId: string,
+    appId: string,
     callId: string,
     userId: string,
     deviceId: string,
@@ -739,7 +786,7 @@ export class CallControlPlane {
     if (maxParticipants === undefined) {
       return;
     }
-    const participants = await this.listParticipants(tenantId, callId);
+    const participants = await this.listParticipants(tenantId, callId, appId);
     const activeUsers = new Set(
       participants.filter((p) => p.state === "joined").map((p) => p.userId),
     );
@@ -773,13 +820,18 @@ export class CallControlPlane {
     };
   }
 
-  async #readRoom(tenantId: string, callId: string): Promise<CallRoomRecord | undefined> {
-    const row = await this.#store.readObject(tenantId, this.#names.callRoom, callId);
+  async #readRoom(
+    tenantId: string,
+    appId: string,
+    callId: string,
+  ): Promise<CallRoomRecord | undefined> {
+    const row = await this.#store.readObject(tenantId, this.#names.callRoom, callId, appId);
     return row as unknown as CallRoomRecord | undefined;
   }
 
   async #readInvite(
     tenantId: string,
+    appId: string,
     callId: string,
     userId: string,
   ): Promise<CallInviteRecord | undefined> {
@@ -787,12 +839,14 @@ export class CallControlPlane {
       tenantId,
       this.#names.callInvite,
       `${callId}:${userId}`,
+      appId,
     );
     return row as unknown as CallInviteRecord | undefined;
   }
 
   async #readParticipant(
     tenantId: string,
+    appId: string,
     callId: string,
     userId: string,
     deviceId: string,
@@ -801,29 +855,48 @@ export class CallControlPlane {
       tenantId,
       this.#names.callParticipant,
       `${callId}:${userId}:${deviceId}`,
+      appId,
     );
     return row as unknown as CallParticipantRecord | undefined;
   }
 
-  async #writeRoom(tenantId: string, room: CallRoomRecord): Promise<void> {
-    await this.#store.upsertObject(tenantId, this.#names.callRoom, room.id, toPlain(room));
-  }
-
-  async #writeInvite(tenantId: string, invite: CallInviteRecord): Promise<void> {
-    await this.#store.upsertObject(tenantId, this.#names.callInvite, invite.id, toPlain(invite));
-  }
-
-  async #writeParticipant(tenantId: string, participant: CallParticipantRecord): Promise<void> {
-    await this.#store.upsertObject(
+  async #writeRoom(tenantId: string, appId: string, room: CallRoomRecord): Promise<void> {
+    await this.#store.upsertObjectWithPolicy({
       tenantId,
-      this.#names.callParticipant,
-      participant.id,
-      toPlain(participant),
-    );
+      appId,
+      type: this.#names.callRoom,
+      id: room.id,
+      value: toPlain(room),
+    });
+  }
+
+  async #writeInvite(tenantId: string, appId: string, invite: CallInviteRecord): Promise<void> {
+    await this.#store.upsertObjectWithPolicy({
+      tenantId,
+      appId,
+      type: this.#names.callInvite,
+      id: invite.id,
+      value: toPlain(invite),
+    });
+  }
+
+  async #writeParticipant(
+    tenantId: string,
+    appId: string,
+    participant: CallParticipantRecord,
+  ): Promise<void> {
+    await this.#store.upsertObjectWithPolicy({
+      tenantId,
+      appId,
+      type: this.#names.callParticipant,
+      id: participant.id,
+      value: toPlain(participant),
+    });
   }
 
   async #appendEvent(
     tenantId: string,
+    appId: string,
     callId: string,
     event: string,
     payload: PlainObject,
@@ -831,6 +904,7 @@ export class CallControlPlane {
     this.#seq += 1;
     await this.#store.appendEvent({
       tenantId,
+      appId,
       requestId: `call-${callId}-${event}-${this.#seq}`,
       replicaId: "call-control-plane",
       stream: this.#names.callEventStream,
@@ -859,6 +933,11 @@ function dedupe(values: readonly string[]): string[] {
 /** Project a {@link CallActor} onto the media plane's {@link MediaParticipant}. */
 function mediaActor(actor: CallActor): MediaParticipant {
   return { userId: actor.userId, deviceId: actor.deviceId };
+}
+
+/** Resolve the actor's app namespace, defaulting to the framework default app. */
+function appIdOf(actor: CallActor): string {
+  return actor.appId ?? DEFAULT_APP_ID;
 }
 
 /** Convenience: build a {@link CallActor} for the default tenant. */
