@@ -101,6 +101,21 @@ function constantTimeEquals(a: string, b: string): boolean {
 }
 
 export class AdminAuditStore {
+  /**
+   * In-process serialization gate for {@link record} (server-storage-1). The
+   * hash chain's read-previous + insert is a critical section: if two record()
+   * calls interleave at an `await`, both read the same tail and chain off the
+   * same predecessor, forking the chain. A wrapping transaction alone does NOT
+   * fix this on SQLite — the async seam runs `node:sqlite` synchronously, so two
+   * record() calls still interleave at the `await` between the SELECT and the
+   * INSERT, and the seam's nested-transaction reuse means the second call does
+   * not get its own BEGIN. We therefore serialize record() through this promise
+   * chain so each call's SELECT observes the prior call's INSERT. (For
+   * multi-process Postgres, the LOCK TABLE inside the transaction below adds the
+   * cross-process guard the in-process mutex can't provide.)
+   */
+  #recordTail: Promise<unknown> = Promise.resolve();
+
   constructor(
     private readonly sql: SqlDriver,
     private readonly now: () => Date = () => new Date(),
@@ -109,56 +124,85 @@ export class AdminAuditStore {
   async record(
     input: Omit<AdminAuditRow, "id" | "occurredAt" | "previousHash" | "entryHash">,
   ): Promise<AdminAuditRow> {
+    // Chain this call after any in-flight record() so the read-previous + insert
+    // critical section never interleaves with another in-process record() — see
+    // #recordTail. The tail swallows rejections so one failed record() can't
+    // wedge the queue, while this call still surfaces its own error.
+    const run = this.#recordTail.then(() => this.#recordLocked(input));
+    this.#recordTail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  async #recordLocked(
+    input: Omit<AdminAuditRow, "id" | "occurredAt" | "previousHash" | "entryHash">,
+  ): Promise<AdminAuditRow> {
     const occurredAt = this.now().toISOString();
     const target = input.target ?? null;
     const detail = input.detail ?? null;
 
-    // Look up the most-recent row's entry_hash to chain against. We order by
-    // `id DESC` because `id` is the AUTOINCREMENT insertion order — clock
-    // skew on `occurred_at` would otherwise let two rows tie. Empty string
-    // for the genesis row keeps the canonical input stable.
-    const previousRow = await this.sql.get<{ entry_hash: string | null }>(
-      `SELECT entry_hash FROM admin_audit_log ORDER BY id DESC LIMIT 1`,
-    );
-    const previousHash = previousRow?.entry_hash ?? "";
+    // server-storage-1: the read-previous + insert MUST be atomic, or two
+    // concurrent record() calls can both read the same tail before either
+    // inserts and chain off the same predecessor — forking the hash chain so
+    // verifyChain() reports a false `{valid:false}` on a legitimate concurrent
+    // pair. The #recordTail mutex serializes record() in-process; the
+    // transaction makes the pair durable-atomic, and on Postgres an explicit
+    // table lock (SHARE ROW EXCLUSIVE: blocks other writers/lockers, allows
+    // concurrent reads) serializes record() across processes too.
+    return this.sql.transaction(async (tx) => {
+      if (tx.dialect === "postgres") {
+        await tx.exec("LOCK TABLE admin_audit_log IN SHARE ROW EXCLUSIVE MODE");
+      }
 
-    const canonical = canonicalJson({
-      occurredAt,
-      adminTokenFingerprint: input.adminTokenFingerprint,
-      action: input.action,
-      target,
-      outcome: input.outcome,
-      detail,
-    });
-    const entryHash = computeEntryHash(previousHash, canonical);
+      // Look up the most-recent row's entry_hash to chain against. We order by
+      // `id DESC` because `id` is the AUTOINCREMENT insertion order — clock
+      // skew on `occurred_at` would otherwise let two rows tie. Empty string
+      // for the genesis row keeps the canonical input stable.
+      const previousRow = await tx.get<{ entry_hash: string | null }>(
+        `SELECT entry_hash FROM admin_audit_log ORDER BY id DESC LIMIT 1`,
+      );
+      const previousHash = previousRow?.entry_hash ?? "";
 
-    const result = await this.sql.run(
-      `INSERT INTO admin_audit_log
-           (occurred_at, admin_token_fingerprint, action, target, outcome, detail, previous_hash, entry_hash)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-           RETURNING id`,
-      [
+      const canonical = canonicalJson({
         occurredAt,
-        input.adminTokenFingerprint,
-        input.action,
+        adminTokenFingerprint: input.adminTokenFingerprint,
+        action: input.action,
         target,
-        input.outcome,
+        outcome: input.outcome,
         detail,
+      });
+      const entryHash = computeEntryHash(previousHash, canonical);
+
+      const result = await tx.run(
+        `INSERT INTO admin_audit_log
+             (occurred_at, admin_token_fingerprint, action, target, outcome, detail, previous_hash, entry_hash)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             RETURNING id`,
+        [
+          occurredAt,
+          input.adminTokenFingerprint,
+          input.action,
+          target,
+          input.outcome,
+          detail,
+          previousHash,
+          entryHash,
+        ],
+      );
+      return {
+        id: Number(result.lastInsertRowid),
+        occurredAt,
+        adminTokenFingerprint: input.adminTokenFingerprint,
+        action: input.action,
+        ...(input.target !== undefined ? { target: input.target } : {}),
+        outcome: input.outcome,
+        ...(input.detail !== undefined ? { detail: input.detail } : {}),
         previousHash,
         entryHash,
-      ],
-    );
-    return {
-      id: Number(result.lastInsertRowid),
-      occurredAt,
-      adminTokenFingerprint: input.adminTokenFingerprint,
-      action: input.action,
-      ...(input.target !== undefined ? { target: input.target } : {}),
-      outcome: input.outcome,
-      ...(input.detail !== undefined ? { detail: input.detail } : {}),
-      previousHash,
-      entryHash,
-    };
+      };
+    });
   }
 
   async list(options: AdminAuditListOptions = {}): Promise<AdminAuditRow[]> {

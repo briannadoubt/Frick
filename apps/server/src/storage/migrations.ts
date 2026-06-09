@@ -994,6 +994,71 @@ export const FRAMEWORK_MIGRATIONS: readonly FrameworkMigration[] = [
         WHERE idempotency_key IS NOT NULL;
     `,
   },
+  {
+    // server-storage-2 / tenant-app-isolation-5: the `idempotency_keys` and
+    // `presence_leases` PRIMARY KEYs were `(tenant_id, …)` with `app_id` an
+    // additive 0021 column NOT in the key. Two apps sharing a (tenant, replica,
+    // request) — or (tenant, presence_type, presence_key) — tuple therefore
+    // collided on the PK: an `INSERT … ON CONFLICT(<old PK>) DO UPDATE` from app
+    // B would rewrite app A's row (including its `app_id` stamp), so A's
+    // app-scoped lookup then missed and A either minted a duplicate stream event
+    // (idempotency bypass) or saw its presence lease evicted. Rescope BOTH keys
+    // to include `app_id` so the two apps occupy distinct rows — the same fix
+    // 0022 applied to the jobs idempotency index, here applied to the PKs.
+    //
+    // SQLite cannot ALTER a PRIMARY KEY in place, so each table is rebuilt via
+    // the copy-and-rename idiom used by 0003/0021. Existing rows all carry
+    // `app_id = '_default'` (the 0021 backfill default), so a single-app server
+    // is byte-for-byte unaffected: every row keeps its identity, just with
+    // `_default` now contributing to the key. Additive + safe for existing rows.
+    //
+    // Schema revision stays at 1: the wire protocol is unchanged.
+    id: "0023_app_scoped_idempotency_presence_keys",
+    schemaRevision: 1,
+    description:
+      "Rescope idempotency_keys and presence_leases primary keys to include app_id so two apps never clobber each other's idempotency record / presence lease (server-storage-2, server-storage-3, tenant-app-isolation-5).",
+    sql: `
+      -- idempotency_keys: rebuild so the primary key includes app_id.
+      CREATE TABLE idempotency_keys_new (
+        app_id TEXT NOT NULL DEFAULT '_default',
+        tenant_id TEXT NOT NULL DEFAULT '_default',
+        replica_id TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        result_event_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (app_id, tenant_id, replica_id, request_id)
+      );
+      INSERT INTO idempotency_keys_new
+        (app_id, tenant_id, replica_id, request_id, result_event_id, created_at)
+        SELECT app_id, tenant_id, replica_id, request_id, result_event_id, created_at
+          FROM idempotency_keys;
+      DROP TABLE idempotency_keys;
+      ALTER TABLE idempotency_keys_new RENAME TO idempotency_keys;
+      CREATE INDEX idx_idempotency_keys_created_at
+        ON idempotency_keys (created_at);
+      CREATE INDEX idx_idempotency_keys_app_tenant
+        ON idempotency_keys (app_id, tenant_id, replica_id, request_id);
+
+      -- presence_leases: rebuild so the primary key includes app_id.
+      CREATE TABLE presence_leases_new (
+        app_id TEXT NOT NULL DEFAULT '_default',
+        tenant_id TEXT NOT NULL DEFAULT '_default',
+        presence_type TEXT NOT NULL,
+        presence_key TEXT NOT NULL,
+        packed BLOB NOT NULL,
+        expires_at INTEGER NOT NULL,
+        PRIMARY KEY (app_id, tenant_id, presence_type, presence_key)
+      );
+      INSERT INTO presence_leases_new
+        (app_id, tenant_id, presence_type, presence_key, packed, expires_at)
+        SELECT app_id, tenant_id, presence_type, presence_key, packed, expires_at
+          FROM presence_leases;
+      DROP TABLE presence_leases;
+      ALTER TABLE presence_leases_new RENAME TO presence_leases;
+      CREATE INDEX idx_presence_leases_app_tenant
+        ON presence_leases (app_id, tenant_id, presence_type, presence_key);
+    `,
+  },
 ];
 
 /** Names of all framework tables (and indexes) the runner manages. Used by the

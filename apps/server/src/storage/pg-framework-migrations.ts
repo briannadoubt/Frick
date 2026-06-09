@@ -753,6 +753,66 @@ export const FRAMEWORK_MIGRATIONS_PG: readonly FrameworkMigration[] = [
         WHERE idempotency_key IS NOT NULL;
     `,
   },
+  {
+    // Postgres mirror of the SQLite 0023_app_scoped_idempotency_presence_keys
+    // migration. See that migration's comment for the full rationale
+    // (server-storage-2 / server-storage-3 / tenant-app-isolation-5).
+    //
+    // We rebuild both tables via copy-and-rename rather than
+    // `ALTER TABLE … DROP CONSTRAINT … ADD PRIMARY KEY` because the inline PK
+    // constraint these tables received in 0003 is named after the table's
+    // creation-time name (`idempotency_keys_new_pkey` /
+    // `presence_leases_new_pkey`, since Postgres does not rename constraints
+    // when a table is renamed). The rebuild is name-independent and matches the
+    // pattern 0003 already uses for these exact tables. Strictly additive:
+    // existing rows all carry `app_id = '_default'` (0021 backfill), so a
+    // single-app server keeps every row's identity.
+    id: "0023_app_scoped_idempotency_presence_keys",
+    schemaRevision: 1,
+    description:
+      "Rescope idempotency_keys and presence_leases primary keys to include app_id so two apps never clobber each other's idempotency record / presence lease (server-storage-2, server-storage-3, tenant-app-isolation-5).",
+    sql: `
+      -- idempotency_keys: rebuild so the primary key includes app_id.
+      CREATE TABLE idempotency_keys_new (
+        app_id TEXT NOT NULL DEFAULT '_default',
+        tenant_id TEXT NOT NULL DEFAULT '_default',
+        replica_id TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        result_event_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (app_id, tenant_id, replica_id, request_id)
+      );
+      INSERT INTO idempotency_keys_new
+        (app_id, tenant_id, replica_id, request_id, result_event_id, created_at)
+        SELECT app_id, tenant_id, replica_id, request_id, result_event_id, created_at
+          FROM idempotency_keys;
+      DROP TABLE idempotency_keys;
+      ALTER TABLE idempotency_keys_new RENAME TO idempotency_keys;
+      CREATE INDEX idx_idempotency_keys_created_at
+        ON idempotency_keys (created_at);
+      CREATE INDEX idx_idempotency_keys_app_tenant
+        ON idempotency_keys (app_id, tenant_id, replica_id, request_id);
+
+      -- presence_leases: rebuild so the primary key includes app_id.
+      CREATE TABLE presence_leases_new (
+        app_id TEXT NOT NULL DEFAULT '_default',
+        tenant_id TEXT NOT NULL DEFAULT '_default',
+        presence_type TEXT NOT NULL,
+        presence_key TEXT NOT NULL,
+        packed BYTEA NOT NULL,
+        expires_at BIGINT NOT NULL,
+        PRIMARY KEY (app_id, tenant_id, presence_type, presence_key)
+      );
+      INSERT INTO presence_leases_new
+        (app_id, tenant_id, presence_type, presence_key, packed, expires_at)
+        SELECT app_id, tenant_id, presence_type, presence_key, packed, expires_at
+          FROM presence_leases;
+      DROP TABLE presence_leases;
+      ALTER TABLE presence_leases_new RENAME TO presence_leases;
+      CREATE INDEX idx_presence_leases_app_tenant
+        ON presence_leases (app_id, tenant_id, presence_type, presence_key);
+    `,
+  },
 ];
 
 /** Names of all framework tables the Postgres runner manages. Used by dev-reset. */

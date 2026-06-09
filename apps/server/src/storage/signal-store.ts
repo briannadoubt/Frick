@@ -49,20 +49,24 @@ export class SignalStore {
     key: string,
     appId: string = DEFAULT_APP_ID,
   ): Promise<PlainObject[]> {
+    // server-storage-4: read-then-delete MUST be a single atomic statement, or
+    // two concurrent drains can both SELECT the same rows before either DELETEs
+    // and each return the same payloads — at-least-once instead of at-most-once
+    // delivery. A single `DELETE … RETURNING` reads and deletes in one statement
+    // (supported by both SQLite and Postgres), so each row is claimed by exactly
+    // one drain. RETURNING does not guarantee row order on either dialect, so we
+    // re-impose the original `id ASC` order in JS after the fact.
     const rows = await this.sql.all<SignalRow>(
-      `SELECT id, packed FROM signal_outbox
+      `DELETE FROM signal_outbox
           WHERE app_id = ? AND tenant_id = ? AND signal_type = ? AND signal_key = ? AND expires_at > ?
-          ORDER BY id ASC`,
+          RETURNING id, packed`,
       [appId, tenantId, type, key, Date.now()],
     );
     if (rows.length === 0) {
       return [];
     }
 
-    const ids = rows.map((row) => row.id);
-    const placeholders = ids.map(() => "?").join(", ");
-    await this.sql.run(`DELETE FROM signal_outbox WHERE id IN (${placeholders})`, ids);
-
+    rows.sort((a, b) => Number(a.id) - Number(b.id));
     return rows.map((row) =>
       unpackSignalEnvelope(this.schema, decode(row.packed) as PackedSignalEnvelope).value,
     );

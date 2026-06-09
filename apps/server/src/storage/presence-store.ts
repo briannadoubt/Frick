@@ -18,11 +18,13 @@ interface PresenceRow {
  * App partitioning (FR-153): every method takes a trailing `appId` defaulting
  * to {@link DEFAULT_APP_ID}, so single-app callers are byte-for-byte
  * unaffected. Reads filter by `app_id`; writes stamp it. The
- * `presence_leases` PRIMARY KEY is `(tenant_id, presence_type, presence_key)`
- * with `app_id` an additive FR-36 column — set() stamps app_id on both the
- * insert and the ON CONFLICT update so an existing lease's app stamp is
- * preserved, and read()/clear() filter by it so app A never observes or
- * clears app B's presence at the same key.
+ * `presence_leases` PRIMARY KEY is
+ * `(app_id, tenant_id, presence_type, presence_key)` as of migration 0023 —
+ * app_id is part of the key, so two apps holding a lease at the same
+ * (tenant, type, key) occupy DISTINCT rows. set()'s ON CONFLICT can therefore
+ * only match a row of the same app, so app B can neither overwrite nor evict
+ * app A's lease (server-storage-3), and read()/clear() filter by app_id so app
+ * A never observes or clears app B's presence at the same key.
  */
 export class PresenceStore {
   constructor(
@@ -43,8 +45,7 @@ export class PresenceStore {
       `INSERT INTO presence_leases
           (app_id, tenant_id, presence_type, presence_key, packed, expires_at)
           VALUES (?, ?, ?, ?, ?, ?)
-          ON CONFLICT(tenant_id, presence_type, presence_key) DO UPDATE SET
-            app_id = excluded.app_id,
+          ON CONFLICT(app_id, tenant_id, presence_type, presence_key) DO UPDATE SET
             packed = excluded.packed,
             expires_at = excluded.expires_at`,
       [appId, tenantId, type, key, Buffer.from(encode(packed)), Date.now() + ttlMs],

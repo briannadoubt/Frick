@@ -80,6 +80,21 @@ export interface StreamRetentionPolicy {
   maxAgeMs?: number;
   /** Keep only the newest N events per `(tenant, stream, streamId)`. */
   maxEvents?: number;
+  /**
+   * Optional tenant scope (server-storage-7). By design a stream-type retention
+   * policy is SERVER-WIDE: with `tenantId` omitted, `maxAgeMs`/`maxEvents` prune
+   * the stream type's events for EVERY tenant uniformly (the FR-145 operator
+   * model). That global blast radius is a footgun — a single over-aggressive
+   * `maxAgeMs` deletes history for all tenants of that stream type at once — so
+   * an operator who wants per-tenant retention can set `tenantId` to bound the
+   * DELETE to one tenant. Omit for the legacy server-wide behaviour.
+   */
+  tenantId?: string;
+  /**
+   * Optional app scope (server-storage-7). Like {@link tenantId}, narrows both
+   * prune branches to a single app partition. Omit for server-wide (all apps).
+   */
+  appId?: string;
 }
 
 /**
@@ -191,20 +206,21 @@ export class StreamStore {
     // lookup above treats it as not-seen and we mint a fresh event, but the old
     // idempotency row may still exist (the window is enforced at lookup time,
     // independent of retention/pruning). Rewrite the row to point at the new
-    // event with a fresh created_at so we don't trip the (tenant, replica,
-    // request) primary key and so subsequent in-window replays dedupe to the
-    // fresh event.
-    // idempotency_keys PRIMARY KEY is (tenant_id, replica_id, request_id);
-    // app_id is an additive column (FR-36) stamped here and filtered on lookup,
-    // so two apps sharing a (tenant, replica, request) tuple do not collide in
-    // practice because lookups (readIdempotentEvent) are app-scoped. The
-    // ON CONFLICT target stays the PK and refreshes app_id alongside the result.
+    // event with a fresh created_at so we don't trip the
+    // (app, tenant, replica, request) primary key and so subsequent in-window
+    // replays dedupe to the fresh event.
+    // idempotency_keys PRIMARY KEY is (app_id, tenant_id, replica_id, request_id)
+    // as of migration 0023: app_id is part of the key, so two apps sharing a
+    // (tenant, replica, request) tuple occupy DISTINCT rows and never clobber
+    // each other's idempotency record (server-storage-2 / tenant-app-isolation-5).
+    // The ON CONFLICT target is the full app-scoped PK; app_id is never rewritten
+    // by another app because a conflict can only match a row of the same app.
     await this.sql.run(
       `INSERT INTO idempotency_keys
           (app_id, tenant_id, replica_id, request_id, result_event_id, created_at)
           VALUES (?, ?, ?, ?, ?, ?)
-          ON CONFLICT(tenant_id, replica_id, request_id)
-          DO UPDATE SET app_id = excluded.app_id, result_event_id = excluded.result_event_id, created_at = excluded.created_at`,
+          ON CONFLICT(app_id, tenant_id, replica_id, request_id)
+          DO UPDATE SET result_event_id = excluded.result_event_id, created_at = excluded.created_at`,
       [appId, input.tenantId, input.replicaId, input.requestId, eventId, createdAt],
     );
 
@@ -400,6 +416,17 @@ export class StreamStore {
    * policy, `maxAgeMs` drops events older than the cutoff and `maxEvents` keeps
    * only the newest N per `(tenant, stream, streamId)`. Idempotent: re-running
    * with the same data prunes nothing further.
+   *
+   * server-storage-7 — BLAST RADIUS: retention is SERVER-WIDE per stream type
+   * by default. A policy with `maxAgeMs`/`maxEvents` but no `tenantId`/`appId`
+   * prunes the stream type's events across EVERY tenant and app uniformly (the
+   * FR-145 operator model — this is invoked from a single global policy map,
+   * never a request-reachable path, so it is not a cross-tenant leak). The
+   * footgun is operational: one over-aggressive `maxAgeMs` value silently
+   * deletes history for all tenants of that stream type at once. Validate policy
+   * values before applying. An operator who wants per-tenant (or per-app)
+   * retention can set `policy.tenantId` / `policy.appId`, which bounds BOTH the
+   * age-based and count-based DELETE to that scope.
    */
   async pruneRetention(
     policies: StreamRetentionPolicies,
@@ -408,11 +435,25 @@ export class StreamStore {
     let prunedByAge = 0;
     let prunedByCount = 0;
     for (const [streamType, policy] of Object.entries(policies)) {
+      // Optional tenant/app scoping (server-storage-7). When omitted the policy
+      // stays server-wide; when present the DELETE is bounded to that scope.
+      const scopeClauses: string[] = [];
+      const scopeParams: Array<string | number> = [];
+      if (policy.tenantId !== undefined) {
+        scopeClauses.push("tenant_id = ?");
+        scopeParams.push(policy.tenantId);
+      }
+      if (policy.appId !== undefined) {
+        scopeClauses.push("app_id = ?");
+        scopeParams.push(policy.appId);
+      }
+      const scopeSql = scopeClauses.length > 0 ? ` AND ${scopeClauses.join(" AND ")}` : "";
+
       if (policy.maxAgeMs !== undefined && policy.maxAgeMs > 0) {
         const cutoff = new Date(now() - policy.maxAgeMs).toISOString();
         const result = await this.sql.run(
-          "DELETE FROM stream_events WHERE stream_type = ? AND created_at < ?",
-          [streamType, cutoff],
+          `DELETE FROM stream_events WHERE stream_type = ? AND created_at < ?${scopeSql}`,
+          [streamType, cutoff, ...scopeParams],
         );
         prunedByAge += Number(result.changes ?? 0);
       }
@@ -429,8 +470,8 @@ export class StreamStore {
                   WHERE s2.tenant_id = stream_events.tenant_id
                     AND s2.stream_type = stream_events.stream_type
                     AND s2.stream_id = stream_events.stream_id
-                ) - ?`,
-          [streamType, policy.maxEvents],
+                ) - ?${scopeSql}`,
+          [streamType, policy.maxEvents, ...scopeParams],
         );
         prunedByCount += Number(result.changes ?? 0);
       }
