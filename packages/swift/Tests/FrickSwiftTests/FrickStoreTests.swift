@@ -249,6 +249,96 @@ final class FrickStoreTests: XCTestCase {
         XCTAssertEqual(source.subscribedTypes, ["Widget"])
     }
 
+    // MARK: native-swift-5 — snapshot reconciliation drops stale rows
+
+    /// A reconnect snapshot that omits a row deleted while the client was
+    /// disconnected must drop that row. The deletion generates no
+    /// `.objectsRemoved` event (the row is simply absent from the snapshot), so
+    /// pre-fix the pure-merge `.objectsDelta` path left it lingering forever.
+    /// `.objectsSnapshot` is the authoritative full set and must reconcile.
+    func testSnapshotDropsRowDeletedWhileDisconnected() async {
+        let source = StubEventSource()
+        let store = FrickStore<WidgetModel>(source: source, sort: { $0.id < $1.id })
+        store.start()
+        await waitUntil { !source.subscribedTypes.isEmpty }
+
+        // Initial snapshot: two rows.
+        source.emit(.objectsSnapshot(records: [
+            widget("1", name: "Apple"),
+            widget("2", name: "Banana"),
+        ], cursor: 1))
+        await waitUntil { store.items.count == 2 }
+        XCTAssertEqual(store.items.map(\.id), ["1", "2"])
+
+        // Reconnect snapshot: row "2" was deleted while offline → omitted.
+        source.emit(.objectsSnapshot(records: [
+            widget("1", name: "Apple"),
+        ], cursor: 2))
+        await waitUntil { store.items.count == 1 }
+        XCTAssertEqual(store.items.map(\.id), ["1"], "row deleted while offline must be dropped on snapshot reconcile")
+    }
+
+    /// Snapshot reconciliation must still merge same-id rows in place (preserve
+    /// instance identity) for rows that persist across the snapshot, and insert
+    /// genuinely-new rows — i.e. it reconciles, it doesn't blow the cache away.
+    func testSnapshotReconcileMergesAndInsertsWithoutLosingIdentity() async {
+        let source = StubEventSource()
+        let store = FrickStore<WidgetModel>(source: source, sort: { $0.id < $1.id })
+        store.start()
+        await waitUntil { !source.subscribedTypes.isEmpty }
+
+        source.emit(.objectsSnapshot(records: [widget("1", name: "Apple")], cursor: 1))
+        await waitUntil { store.items.count == 1 }
+        let original = store.items[0]
+
+        // New snapshot: "1" persists (edited), "2" is new.
+        source.emit(.objectsSnapshot(records: [
+            widget("1", name: "Apricot"),
+            widget("2", name: "Banana"),
+        ], cursor: 2))
+        await waitUntil { store.items.count == 2 }
+
+        XCTAssertEqual(store.items.map(\.id), ["1", "2"])
+        XCTAssertEqual(store.items.first?.name, "Apricot")
+        XCTAssertTrue(store.items[0] === original, "persisting row must merge in place, not be replaced")
+    }
+
+    /// An empty snapshot is not provably this type's authoritative set (it may
+    /// belong to a sibling type's subscription on the shared socket), so it must
+    /// NOT clear the cache — only mark bootstrapped.
+    func testEmptySnapshotDoesNotClearCache() async {
+        let source = StubEventSource()
+        let store = FrickStore<WidgetModel>(source: source)
+        store.start()
+        await waitUntil { !source.subscribedTypes.isEmpty }
+
+        source.emit(.objectsSnapshot(records: [widget("1", name: "Apple")], cursor: 1))
+        await waitUntil { store.items.count == 1 }
+
+        // Empty snapshot (could be a different type's) — must leave us intact.
+        source.emit(.objectsSnapshot(records: [], cursor: 2))
+        await waitUntil({ false }, timeout: 0.2)
+        XCTAssertEqual(store.items.map(\.id), ["1"])
+    }
+
+    /// A snapshot containing only sibling-type rows must not touch this store
+    /// (it isn't authoritative for those types).
+    func testSnapshotOfOtherTypesLeavesCacheUntouched() async {
+        let source = StubEventSource()
+        let store = FrickStore<WidgetModel>(source: source)
+        store.start()
+        await waitUntil { !source.subscribedTypes.isEmpty }
+
+        source.emit(.objectsSnapshot(records: [widget("1", name: "Apple")], cursor: 1))
+        await waitUntil { store.items.count == 1 }
+
+        source.emit(.objectsSnapshot(records: [
+            FrickObjectRecord(type: "OtherType", id: "z", value: ["name": "nope"]),
+        ], cursor: 2))
+        await waitUntil({ false }, timeout: 0.2)
+        XCTAssertEqual(store.items.map(\.id), ["1"], "a sibling-type snapshot must not clear this store")
+    }
+
     func testStatusErrorSurfacesAsLastError() async {
         let source = StubEventSource()
         let store = FrickStore<WidgetModel>(source: source)

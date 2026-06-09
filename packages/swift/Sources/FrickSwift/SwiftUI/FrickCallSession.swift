@@ -155,6 +155,8 @@ public final class FrickCallSession {
             try await source.subscribeObject(type: FrickCallObjectType.participant)
             for try await event in await source.events {
                 switch event {
+                case let .objectsSnapshot(records, _):
+                    reconcile(snapshot: records)
                 case let .objectsDelta(records, _):
                     apply(records: records)
                 case let .objectsRemoved(removals, _):
@@ -173,6 +175,53 @@ public final class FrickCallSession {
     }
 
     // MARK: Apply
+
+    /// Reconcile the room/participant caches to an authoritative snapshot (the
+    /// full set on subscribe / reconnect). For each object type the snapshot
+    /// actually carries, drop cached rows of that type absent from it — so a
+    /// room or participant deleted while the client was disconnected (which
+    /// emits no removal event, it's just missing from the reconnect snapshot)
+    /// finally leaves the cache instead of lingering stale (native-swift-5). A
+    /// type the snapshot doesn't carry is left untouched (it isn't authoritative
+    /// for that type), so an empty/sibling snapshot can't wrongly clear state.
+    private func reconcile(snapshot records: [FrickObjectRecord]) {
+        let rooms = records.filter { $0.type == FrickCallObjectType.room }
+        let participants = records.filter { $0.type == FrickCallObjectType.participant }
+        var touched = false
+
+        if !rooms.isEmpty {
+            let present = Set(rooms.map(\.id))
+            for id in roomsById.keys where !present.contains(id) {
+                roomsById.removeValue(forKey: id)
+                touched = true
+            }
+            for record in rooms {
+                if let room = FrickCallRoomRecord(record: record) {
+                    roomsById[room.id] = room
+                    touched = true
+                }
+            }
+        }
+
+        if !participants.isEmpty {
+            let present = Set(participants.map(\.id))
+            for id in participantsById.keys where !present.contains(id) {
+                participantsById.removeValue(forKey: id)
+                touched = true
+            }
+            for record in participants {
+                if let participant = FrickCallParticipantRecord(record: record) {
+                    participantsById[participant.id] = participant
+                    touched = true
+                }
+            }
+        }
+
+        // A snapshot arrival completes bootstrap regardless of membership; only
+        // recompose the observable state when the cache actually changed.
+        hasBootstrapped = true
+        if touched { recompose() }
+    }
 
     private func apply(records: [FrickObjectRecord]) {
         var touched = false

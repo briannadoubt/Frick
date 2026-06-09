@@ -1026,6 +1026,353 @@ final class FrickSyncSocketTests: XCTestCase {
         XCTAssertEqual(frickWebSocketCloseCategory(nil), "unknown")
     }
 
+    // MARK: native-swift-1 — events stream must broadcast to every consumer
+
+    /// Two independent `events` iterators on one socket must BOTH receive every
+    /// inbound delta. Pre-fix `events` returned the same single-consumer stream,
+    /// so each delta reached only one iterator (round-robin) — a delta for one
+    /// store was silently swallowed by another store's iterator. The fix fans a
+    /// single internal consumer out to per-subscriber child streams.
+    func testEventsBroadcastsToMultipleConsumers() async throws {
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+        let socket = makeSocket(factory: factory)
+
+        let firstGotBoth = expectation(description: "first consumer sees both deltas")
+        let secondGotBoth = expectation(description: "second consumer sees both deltas")
+
+        let firstStream = await socket.events
+        let secondStream = await socket.events
+
+        func collectTwoDeltaCursors(_ stream: AsyncThrowingStream<FrickInboundEvent, Error>, _ done: XCTestExpectation) -> Task<Void, Never> {
+            Task {
+                var seen: Set<Int> = []
+                do {
+                    for try await event in stream {
+                        if case .delta(_, _, let cursor) = event {
+                            seen.insert(cursor)
+                            if seen.contains(101) && seen.contains(102) {
+                                done.fulfill()
+                                return
+                            }
+                        }
+                    }
+                } catch { /* finished */ }
+            }
+        }
+
+        let l1 = collectTwoDeltaCursors(firstStream, firstGotBoth)
+        let l2 = collectTwoDeltaCursors(secondStream, secondGotBoth)
+
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+        task.deliver(.data(helloAckFrame()))
+
+        for cursor in [101, 102] {
+            let delta = FrickMsgPackCodec.encodeFrame(FrickFrame(kind: .delta, payload: .map([
+                (.string("cursor"), .int(Int64(cursor))),
+                (.string("objects"), .array([])),
+                (.string("events"), .array([
+                    .map([
+                        (.string("stream"), .string("S")),
+                        (.string("streamId"), .string("k")),
+                        (.string("sequence"), .int(Int64(cursor))),
+                        (.string("eventId"), .string("e-\(cursor)")),
+                        (.string("event"), .string("E")),
+                        (.string("payload"), .map([])),
+                    ]),
+                ])),
+            ])))
+            task.deliver(.data(delta))
+        }
+
+        await fulfillment(of: [firstGotBoth, secondGotBoth], timeout: 2)
+        l1.cancel(); l2.cancel()
+        await socket.close()
+    }
+
+    /// A consumer registered before `connect()` must still receive deltas
+    /// delivered after connect — the broadcast registry persists across the
+    /// connection lifecycle (it isn't tied to a single connection's stream).
+    func testEventsConsumerRegisteredBeforeConnectStillReceives() async throws {
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+        let socket = makeSocket(factory: factory)
+
+        let got = expectation(description: "pre-connect consumer receives delta")
+        let stream = await socket.events
+        let listener = Task {
+            for try await event in stream {
+                if case .delta(_, _, let cursor) = event, cursor == 7 {
+                    got.fulfill(); return
+                }
+            }
+        }
+
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+        task.deliver(.data(helloAckFrame()))
+
+        let delta = FrickMsgPackCodec.encodeFrame(FrickFrame(kind: .delta, payload: .map([
+            (.string("cursor"), .int(7)),
+            (.string("objects"), .array([])),
+            (.string("events"), .array([
+                .map([
+                    (.string("stream"), .string("S")), (.string("streamId"), .string("k")),
+                    (.string("sequence"), .int(7)), (.string("eventId"), .string("e7")),
+                    (.string("event"), .string("E")), (.string("payload"), .map([])),
+                ]),
+            ])),
+        ])))
+        task.deliver(.data(delta))
+
+        await fulfillment(of: [got], timeout: 2)
+        listener.cancel()
+        await socket.close()
+    }
+
+    /// `close()` must finish every subscriber stream so each `for try await`
+    /// loop terminates (no leaked iterators hanging on a dead socket).
+    func testCloseFinishesAllEventSubscribers() async throws {
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+        let socket = makeSocket(factory: factory)
+
+        let firstFinished = expectation(description: "first subscriber finished")
+        let secondFinished = expectation(description: "second subscriber finished")
+        let s1 = await socket.events
+        let s2 = await socket.events
+        let l1 = Task { for try await _ in s1 {}; firstFinished.fulfill() }
+        let l2 = Task { for try await _ in s2 {}; secondFinished.fulfill() }
+
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+        await socket.close()
+
+        await fulfillment(of: [firstFinished, secondFinished], timeout: 2)
+        l1.cancel(); l2.cancel()
+    }
+
+    // MARK: native-swift-2 — in-flight continuation must not hang on drop
+
+    /// An `upsertObject` awaited across a mid-flight socket drop must resume
+    /// (throwing `connectionDropped`) instead of hanging forever. Pre-fix
+    /// `handleDisconnect` tore down the task without draining `pendingResponders`,
+    /// so the continuation leaked until `close()`.
+    func testUpsertObjectInFlightFailsOnDisconnect() async throws {
+        let factory = MockWebSocketFactory()
+        let firstTask = MockWebSocketTask()
+        let secondTask = MockWebSocketTask()
+        factory.enqueue(firstTask)
+        factory.enqueue(secondTask)
+        let socket = makeSocket(factory: factory) { _ in /* no-op sleep */ }
+
+        await socket.connect()
+        _ = await waitForCondition { firstTask.sentFrameCount >= 1 }
+        firstTask.deliver(.data(helloAckFrame()))
+        _ = await waitForCondition {
+            let s = await socket.status
+            return s.state == .connected && s.serverCapabilities != nil
+        }
+
+        async let upsert: Int = socket.upsertObject(type: "User", id: "u1", value: ["displayName": "Ada"])
+        // Wait for the upsert frame to be sent, then drop the socket before any Ack.
+        _ = await waitForCondition { firstTask.sentFrameCount >= 2 }
+        firstTask.deliverError(URLError(.networkConnectionLost))
+
+        do {
+            _ = try await upsert
+            XCTFail("upsert should not resolve after a mid-flight disconnect")
+        } catch let error as FrickSyncSocketError {
+            XCTAssertEqual(error, .connectionDropped)
+        }
+
+        await socket.close()
+    }
+
+    /// Same guarantee for `callCommand` — a `join`/`leave`/`setMediaState`
+    /// awaited across a drop must throw, not leave the call UI spinner hung.
+    func testCallCommandInFlightFailsOnDisconnect() async throws {
+        let factory = MockWebSocketFactory()
+        let firstTask = MockWebSocketTask()
+        let secondTask = MockWebSocketTask()
+        factory.enqueue(firstTask)
+        factory.enqueue(secondTask)
+        let socket = makeSocket(factory: factory) { _ in /* no-op sleep */ }
+
+        await socket.connect()
+        _ = await waitForCondition { firstTask.sentFrameCount >= 1 }
+        firstTask.deliver(.data(helloAckFrame()))
+        _ = await waitForCondition {
+            let s = await socket.status
+            return s.state == .connected && s.serverCapabilities != nil
+        }
+
+        async let result: FrickCallCommandResult = socket.callCommand(.join(callId: "call-1"))
+        _ = await waitForCondition { firstTask.sentFrameCount >= 2 }
+        firstTask.deliverError(URLError(.networkConnectionLost))
+
+        do {
+            _ = try await result
+            XCTFail("callCommand should not resolve after a mid-flight disconnect")
+        } catch let error as FrickSyncSocketError {
+            XCTAssertEqual(error, .connectionDropped)
+        }
+
+        await socket.close()
+    }
+
+    // MARK: native-swift-6 — join media token not broadcast over events
+
+    /// `handleCallCommandResult` must deliver the full result (incl.
+    /// `mediaGrant.token`) ONLY to the awaiting caller; the copy broadcast on
+    /// the shared `events` stream must have `mediaGrant` stripped, so an events
+    /// observer (e.g. a logger) can't capture the participant media credential.
+    func testJoinMediaGrantNotBroadcastOnEventsStream() async throws {
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+        let socket = makeSocket(factory: factory)
+
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+        task.deliver(.data(helloAckFrame()))
+        _ = await waitForCondition {
+            let s = await socket.status
+            return s.state == .connected && s.serverCapabilities != nil
+        }
+
+        let observed = expectation(description: "events observer sees callCommandResult")
+        let events = await socket.events
+        let observer = Task { () -> FrickCallCommandResult? in
+            do {
+                for try await event in events {
+                    if case .callCommandResult(let result) = event {
+                        observed.fulfill()
+                        return result
+                    }
+                }
+            } catch { /* stream finished */ }
+            return nil
+        }
+
+        async let joinResult: FrickCallCommandResult = socket.callCommand(.join(callId: "call-1"))
+        _ = await waitForCondition { task.sentFrameCount >= 2 }
+        let joinFrame = try FrickMsgPackCodec.decodeFrame(task.sentFrame(at: 1))
+        let requestId = try XCTUnwrap(joinFrame.payload.mapValue?["requestId"]?.stringValue)
+
+        // Reply with a CallCommandResult carrying a media grant + token.
+        let resultFrame = FrickMsgPackCodec.encodeFrame(FrickFrame(kind: .callCommandResult, payload: .map([
+            (.string("requestId"), .string(requestId)),
+            (.string("op"), .string("join")),
+            (.string("room"), .map([
+                (.string("id"), .string("call-1")),
+                (.string("conversationId"), .string("conv-1")),
+                (.string("state"), .string("active")),
+                (.string("createdBy"), .string("u1")),
+                (.string("kind"), .string("video")),
+                (.string("createdAt"), .string("t0")),
+            ])),
+            (.string("participant"), .map([
+                (.string("id"), .string("p-1")),
+                (.string("callId"), .string("call-1")),
+                (.string("userId"), .string("u1")),
+                (.string("deviceId"), .string("d-1")),
+                (.string("joinedAt"), .string("t1")),
+            ])),
+            (.string("mediaGrant"), .map([
+                (.string("callId"), .string("call-1")),
+                (.string("mediaSessionId"), .string("ms-1")),
+                (.string("userId"), .string("u1")),
+                (.string("deviceId"), .string("d-1")),
+                (.string("token"), .string("SUPER-SECRET-MEDIA-TOKEN")),
+                (.string("expiresAt"), .string("t2")),
+            ])),
+        ])))
+        task.deliver(.data(resultFrame))
+
+        // The caller gets the grant + token.
+        let caller = try await joinResult
+        XCTAssertEqual(caller.mediaGrant?.token, "SUPER-SECRET-MEDIA-TOKEN")
+
+        // The broadcast observer gets the result but WITHOUT the media grant.
+        await fulfillment(of: [observed], timeout: 2)
+        let broadcast = await observer.value
+        XCTAssertEqual(broadcast?.op, "join")
+        XCTAssertNil(broadcast?.mediaGrant, "media grant/token must not ride the broadcast events stream")
+
+        observer.cancel()
+        await socket.close()
+    }
+
+    // MARK: native-swift-7 — flushPending uses stored kind (no re-decode)
+
+    /// After a reconnect, the flushed queued append must still be sent AND its
+    /// telemetry counter labeled with the correct frame kind — now sourced from
+    /// the kind captured at enqueue time rather than a hot-path re-decode.
+    func testFlushedAppendRecordsCorrectKindAfterReconnect() async throws {
+        let factory = MockWebSocketFactory()
+        let firstTask = MockWebSocketTask()
+        let secondTask = MockWebSocketTask()
+        factory.enqueue(firstTask)
+        factory.enqueue(secondTask)
+        let telemetry = FlushRecordingTelemetry()
+        let socket = makeSocket(factory: factory, sleepFor: { _ in /* no-op */ }, telemetry: telemetry)
+
+        // Queue an append before connecting (lands in `pending` with its kind).
+        try await socket.append(stream: "MessageStream", key: "c1", event: "MessageSent", payload: ["body": "queued"])
+
+        await socket.connect()
+        // Hello + flushed append on the first task.
+        _ = await waitForCondition { firstTask.sentFrameCount >= 2 }
+
+        // The flushed append must be sent as an Append frame.
+        let kinds = firstTask.allSentFrames().compactMap { try? FrickMsgPackCodec.decodeFrame($0).kind }
+        XCTAssertTrue(kinds.contains(.append), "queued append should flush on connect")
+
+        // Telemetry must have labeled a sent Append frame via the stored kind.
+        let labeled = await waitForCondition {
+            await telemetry.sentKinds().contains("Append")
+        }
+        XCTAssertTrue(labeled, "flush should record the Append kind without re-decoding")
+
+        await socket.close()
+    }
+
+}
+
+// MARK: - Flush telemetry spy (native-swift-7)
+
+private actor FlushRecordingStore {
+    private(set) var sentKinds: [String] = []
+    func append(_ kind: String) { sentKinds.append(kind) }
+}
+
+private final class FlushRecordingTelemetry: FrickClientTelemetryRuntime, @unchecked Sendable {
+    private let store = FlushRecordingStore()
+
+    func startSpan(_ input: FrickClientTelemetrySpanStart) throws -> any FrickClientTelemetrySpan {
+        FlushNoopSpan()
+    }
+
+    func recordCounter(name: String, value: Double, attributes: FrickClientTelemetryAttributes) throws {
+        guard name == "frick.client.ws.frames.sent.total" else { return }
+        if case .string(let kind)? = attributes["kind"] {
+            let store = self.store
+            Task { await store.append(kind) }
+        }
+    }
+
+    func recordHistogram(name: String, value: Double, attributes: FrickClientTelemetryAttributes) throws {}
+
+    func sentKinds() async -> [String] { await store.sentKinds }
+}
+
+private final class FlushNoopSpan: FrickClientTelemetrySpan, @unchecked Sendable {
+    func end(_ result: FrickClientTelemetrySpanResult?) throws {}
 }
 
 // MARK: - Telemetry spy

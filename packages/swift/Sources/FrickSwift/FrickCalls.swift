@@ -444,6 +444,25 @@ public struct FrickCallCommandResult: Sendable, Equatable {
         self.mediaGrant = map["mediaGrant"]?.mapValue.flatMap(FrickCallMediaGrant.init(map:))
         self.invite = map["invite"]?.mapValue.flatMap(FrickCallInviteRecord.init(map:))
     }
+
+    /// A copy with `mediaGrant` cleared, for delivery over the shared, broadcast
+    /// `events` stream. `mediaGrant.token` is a short-lived participant-scoped
+    /// media credential only the requesting caller needs — it rides the awaited
+    /// `callCommand` return value, not the broadcast event surface (every store
+    /// / telemetry sink / observer iterates `events`, so a logged unrecognized
+    /// event would otherwise capture the token, native-swift-6).
+    func redactingMediaGrant() -> FrickCallCommandResult {
+        guard mediaGrant != nil else { return self }
+        return FrickCallCommandResult(
+            requestId: requestId,
+            op: op,
+            room: room,
+            invites: invites,
+            participant: participant,
+            mediaGrant: nil,
+            invite: invite
+        )
+    }
 }
 
 // MARK: - Object type names

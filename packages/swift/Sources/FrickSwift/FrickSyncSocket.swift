@@ -161,9 +161,20 @@ public indirect enum FrickMsgPackValue: Sendable, Equatable {
 
     public var intValue: Int? {
         switch self {
-        case .int(let v): return Int(v)
+        // `Int(exactly:)` rejects out-of-range values (returning nil) rather
+        // than trapping, so a 64-bit wire int that overflows the platform Int
+        // surfaces as "no value" instead of crashing the receive loop.
+        case .int(let v): return Int(exactly: v)
         case .uint(let v): return Int(exactly: v)
-        case .double(let v): return Int(v)
+        // A decoded msgpack float can be any bit pattern, including NaN/Inf.
+        // `Int(Double.nan)` / `Int(.infinity)` is a fatal runtime trap, so a
+        // crafted frame carrying a non-finite float in a field this getter
+        // feeds (frame kind, array lengths, ids) would hard-crash the client
+        // (remote DoS, native-swift-3). Reject non-finite values, and round
+        // toward zero before an `Int(exactly:)` range check.
+        case .double(let v):
+            guard v.isFinite else { return nil }
+            return Int(exactly: v.rounded(.towardZero))
         default: return nil
         }
     }
@@ -493,9 +504,24 @@ public enum FrickMsgPackCodec {
         return slice
     }
 
+    /// Clamp an attacker-controlled element/pair count to a capacity the
+    /// remaining buffer could plausibly produce before `reserveCapacity`.
+    ///
+    /// A length header (`0xDC..0xDF`) can declare a count near `UInt32.max`
+    /// while the body is truncated; reserving that many slots up front forces
+    /// an immediate multi-gigabyte allocation (memory DoS, native-swift-4)
+    /// even though the subsequent `decode` would throw `.truncated`. Every
+    /// element needs at least 1 byte on the wire, so `count` can never exceed
+    /// the bytes left after the header — clamp the *reservation* to that. The
+    /// loop still runs `count` iterations so a genuinely-short buffer surfaces
+    /// the normal `.truncated` error; only the pre-allocation is bounded.
+    private static func boundedReserve(_ count: Int, remainingBytes: Int) -> Int {
+        max(0, min(count, remainingBytes))
+    }
+
     private static func readArray(_ data: Data, cursor: inout Int, count: Int) throws -> FrickMsgPackValue {
         var items: [FrickMsgPackValue] = []
-        items.reserveCapacity(count)
+        items.reserveCapacity(boundedReserve(count, remainingBytes: data.count - cursor))
         for _ in 0..<count {
             items.append(try decode(data, cursor: &cursor))
         }
@@ -504,7 +530,9 @@ public enum FrickMsgPackCodec {
 
     private static func readMap(_ data: Data, cursor: inout Int, count: Int) throws -> FrickMsgPackValue {
         var pairs: [(FrickMsgPackValue, FrickMsgPackValue)] = []
-        pairs.reserveCapacity(count)
+        // Each pair is two values ≥1 byte each, so remaining bytes still bounds
+        // the pair count safely (an over-estimate at worst, never under).
+        pairs.reserveCapacity(boundedReserve(count, remainingBytes: data.count - cursor))
         for _ in 0..<count {
             let k = try decode(data, cursor: &cursor)
             let v = try decode(data, cursor: &cursor)
@@ -694,6 +722,18 @@ public enum FrickInboundEvent: Sendable {
     /// `FrickSchemaDescriptor`. Carried separately from `.delta` so existing
     /// stream-event consumers don't need to change.
     case objectsDelta(records: [FrickObjectRecord], cursor: Int)
+    /// Inbound object **snapshot** — the authoritative full row set for a type,
+    /// surfaced from a `Snapshot` frame (the server's reply to an object
+    /// subscribe, also re-sent after a reconnect). Unlike `.objectsDelta` (an
+    /// incremental merge), a snapshot is the complete current membership: a
+    /// store must reconcile to it, dropping any cached row of that type NOT
+    /// present here. This is what lets a row deleted *while the client was
+    /// disconnected* — which generates no removal event, it simply doesn't
+    /// appear in the reconnect snapshot — finally leave the cache instead of
+    /// lingering as a stale (possibly access-revoked) row (native-swift-5).
+    /// A snapshot may span multiple types; reconcile each type independently
+    /// and only against types the snapshot actually carries.
+    case objectsSnapshot(records: [FrickObjectRecord], cursor: Int)
     /// Inbound object removals (FR-142/FR-144). Surfaced when a Delta frame
     /// carries a non-empty `removed` list so consumers can drop the deleted
     /// rows directly without a refetch. The server also emits a back-compat
@@ -809,6 +849,10 @@ public struct URLSessionWebSocketFactory: FrickWebSocketFactory {
 private struct PendingSocketAppend: Sendable {
     let requestId: String
     let frame: Data
+    /// Frame kind captured at enqueue time so `flushPending` can label the
+    /// telemetry counter without re-decoding the (potentially large) encoded
+    /// frame on the reconnect hot path (native-swift-7).
+    let kind: FrickFrameKind
 }
 
 // MARK: - FrickSyncSocket
@@ -907,8 +951,20 @@ public actor FrickSyncSocket {
 
     private var statusValue: FrickSyncStatus = .initial
     private var statusContinuations: [UUID: AsyncStream<FrickSyncStatus>.Continuation] = [:]
-    private var eventContinuation: AsyncThrowingStream<FrickInboundEvent, Error>.Continuation?
-    private var eventStream: AsyncThrowingStream<FrickInboundEvent, Error>!
+
+    /// Internal fan-out registry. Every inbound event is broadcast to ALL
+    /// registered subscriber continuations (native-swift-1). An
+    /// `AsyncThrowingStream` is single-consumer — each yielded element reaches
+    /// exactly one awaiting iterator — so the previous design (handing the same
+    /// backing stream to every caller via `events`) let 2+ stores/sessions on
+    /// one socket race each yielded delta round-robin, silently dropping rows
+    /// (e.g. an `Account` delta consumed and discarded by a `ContactStore`
+    /// iterator). Each `events` access now vends a *fresh* child stream whose
+    /// continuation is registered here, and `broadcast(_:)`/`finishSubscribers`
+    /// fan every event/termination to all of them. The map is keyed by a
+    /// per-subscriber `UUID` so `onTermination` can deregister an iterator that
+    /// goes away (cancelled task / dropped store).
+    private var eventSubscribers: [UUID: AsyncThrowingStream<FrickInboundEvent, Error>.Continuation] = [:]
 
     public init(
         baseURL: URL,
@@ -934,12 +990,6 @@ public actor FrickSyncSocket {
         self.schemaHash = schemaHash
         self.descriptor = descriptor
         self.telemetry = telemetry
-
-        // Defer construction of the AsyncThrowingStream until after self init so
-        // we can capture the continuation.
-        let (stream, cont) = makeEventStream()
-        self.eventStream = stream
-        self.eventContinuation = cont
     }
 
     // MARK: Public surface
@@ -961,7 +1011,56 @@ public actor FrickSyncSocket {
         statusContinuations.removeValue(forKey: id)
     }
 
-    public var events: AsyncThrowingStream<FrickInboundEvent, Error> { eventStream }
+    /// A fresh broadcast subscription to the socket's inbound events. Each
+    /// access vends an independent child stream, so multiple consumers (several
+    /// `FrickStore`s / a `FrickProjectionStore` / a `FrickCallSession` on one
+    /// socket) each receive EVERY event rather than racing for a single shared
+    /// stream (native-swift-1). The child finishes when the socket is `close()`d
+    /// or when the iterator's task is cancelled (its `onTermination` deregisters
+    /// it). Buffering is unbounded so a slow consumer never drops events.
+    public var events: AsyncThrowingStream<FrickInboundEvent, Error> {
+        let id = UUID()
+        return AsyncThrowingStream<FrickInboundEvent, Error>(bufferingPolicy: .unbounded) { continuation in
+            registerEventSubscriber(id: id, continuation: continuation)
+            continuation.onTermination = { [weak self] _ in
+                Task { await self?.removeEventSubscriber(id: id) }
+            }
+        }
+    }
+
+    private func registerEventSubscriber(
+        id: UUID,
+        continuation: AsyncThrowingStream<FrickInboundEvent, Error>.Continuation
+    ) {
+        // If the socket is already closed, finish the new subscriber
+        // immediately so its `for try await` loop terminates instead of
+        // hanging on a stream that will never receive events.
+        if statusValue.state == .closed {
+            continuation.finish()
+            return
+        }
+        eventSubscribers[id] = continuation
+    }
+
+    private func removeEventSubscriber(id: UUID) {
+        eventSubscribers.removeValue(forKey: id)
+    }
+
+    /// Fan an inbound event out to every registered subscriber.
+    private func broadcast(_ event: FrickInboundEvent) {
+        for (_, continuation) in eventSubscribers {
+            continuation.yield(event)
+        }
+    }
+
+    /// Finish every subscriber stream (clean socket shutdown). Mirrors the
+    /// single-stream `finish()` the old design called in `close()`.
+    private func finishSubscribers() {
+        for (_, continuation) in eventSubscribers {
+            continuation.finish()
+        }
+        eventSubscribers.removeAll()
+    }
 
     public func connect() {
         explicitlyClosed = false
@@ -990,7 +1089,7 @@ public actor FrickSyncSocket {
         // normal-closure code (1000), matching the TS normal-close path.
         finishConnectionTelemetry(closeCode: 1000)
         updateStatus { $0.state = .closed }
-        eventContinuation?.finish()
+        finishSubscribers()
     }
 
     // MARK: Send paths
@@ -1169,12 +1268,12 @@ public actor FrickSyncSocket {
                 try await task.send(.data(encoded))
                 recordFrameTelemetry(direction: "sent", kind: frame.kind)
             } catch {
-                pending.append(PendingSocketAppend(requestId: requestId, frame: encoded))
+                pending.append(PendingSocketAppend(requestId: requestId, frame: encoded, kind: frame.kind))
                 updateStatus { $0.pendingAppendCount = pending.count }
                 throw error
             }
         } else {
-            pending.append(PendingSocketAppend(requestId: requestId, frame: encoded))
+            pending.append(PendingSocketAppend(requestId: requestId, frame: encoded, kind: frame.kind))
             updateStatus { $0.pendingAppendCount = pending.count }
         }
     }
@@ -1187,7 +1286,7 @@ public actor FrickSyncSocket {
         // the WS upgrade and hit `notConnected`. `flushPending()` drains the
         // buffer right after the hello lands, preserving FIFO order.
         guard statusValue.state == .connected, let task else {
-            pending.append(PendingSocketAppend(requestId: "", frame: encoded))
+            pending.append(PendingSocketAppend(requestId: "", frame: encoded, kind: frame.kind))
             updateStatus { $0.pendingAppendCount = pending.count }
             return
         }
@@ -1195,7 +1294,7 @@ public actor FrickSyncSocket {
             try await task.send(.data(encoded))
             recordFrameTelemetry(direction: "sent", kind: frame.kind)
         } catch {
-            pending.append(PendingSocketAppend(requestId: "", frame: encoded))
+            pending.append(PendingSocketAppend(requestId: "", frame: encoded, kind: frame.kind))
             updateStatus { $0.pendingAppendCount = pending.count }
             throw error
         }
@@ -1209,9 +1308,11 @@ public actor FrickSyncSocket {
         for entry in drained {
             do {
                 try await task.send(.data(entry.frame))
-                if let kind = try? FrickMsgPackCodec.decodeFrame(entry.frame).kind {
-                    recordFrameTelemetry(direction: "sent", kind: kind)
-                }
+                // Use the kind captured at enqueue time — re-decoding every
+                // drained frame here just for the telemetry label re-parses
+                // potentially large payloads on the reconnect hot path
+                // (native-swift-7).
+                recordFrameTelemetry(direction: "sent", kind: entry.kind)
             } catch {
                 // Re-queue at front; we'll retry on the next connection.
                 pending.insert(entry, at: 0)
@@ -1306,7 +1407,7 @@ public actor FrickSyncSocket {
         case .helloAck:
             handleHelloAck(payload: frame.payload)
         case .schema:
-            eventContinuation?.yield(.schema)
+            broadcast(.schema)
         case .ping:
             // Respond with pong; mirror the sentAt timestamp if present.
             let pongPayload: FrickMsgPackValue
@@ -1343,7 +1444,7 @@ public actor FrickSyncSocket {
             if let map = frame.payload.mapValue {
                 let connected = map["connected"]?.boolValue ?? false
                 let inFlight = map["inFlight"]?.intValue ?? 0
-                eventContinuation?.yield(.syncStatus(connected: connected, inFlight: inFlight))
+                broadcast(.syncStatus(connected: connected, inFlight: inFlight))
             }
         default:
             break
@@ -1375,7 +1476,10 @@ public actor FrickSyncSocket {
                 records.append(decoded)
             }
         }
-        eventContinuation?.yield(.objectsDelta(records: records, cursor: cursor))
+        // Surface as the authoritative full set so stores reconcile to it
+        // (dropping rows deleted while disconnected), rather than a pure merge
+        // that would leave such rows lingering (native-swift-5).
+        broadcast(.objectsSnapshot(records: records, cursor: cursor))
     }
 
     private func handleDelta(payload: FrickMsgPackValue) {
@@ -1389,7 +1493,7 @@ public actor FrickSyncSocket {
             }
         }
         if !objectRecords.isEmpty {
-            eventContinuation?.yield(.objectsDelta(records: objectRecords, cursor: cursor))
+            broadcast(.objectsDelta(records: objectRecords, cursor: cursor))
         }
         // Object removals (FR-142/FR-144): the gateway carries a `removed`
         // list alongside the back-compat tombstone records in `objects`.
@@ -1406,7 +1510,7 @@ public actor FrickSyncSocket {
             }
         }
         if !removals.isEmpty {
-            eventContinuation?.yield(.objectsRemoved(removed: removals, cursor: cursor))
+            broadcast(.objectsRemoved(removed: removals, cursor: cursor))
         }
         let eventArray = map["events"]?.arrayValue ?? []
         var streamEvents: [FrickStreamEvent] = []
@@ -1438,7 +1542,7 @@ public actor FrickSyncSocket {
             ))
         }
         let streamName = streamEvents.first?.stream
-        eventContinuation?.yield(.delta(stream: streamName, events: streamEvents, cursor: cursor))
+        broadcast(.delta(stream: streamName, events: streamEvents, cursor: cursor))
     }
 
     /// Decode a `PackedObjectRecord` tuple
@@ -1533,7 +1637,7 @@ public actor FrickSyncSocket {
                 changes.append(FrickProjectionChange(key: key, value: nil))
             }
         }
-        eventContinuation?.yield(.projectionDelta(projection: projection, changes: changes))
+        broadcast(.projectionDelta(projection: projection, changes: changes))
     }
 
     private func handlePresenceDelta(payload: FrickMsgPackValue) {
@@ -1564,17 +1668,26 @@ public actor FrickSyncSocket {
             }
         }
         let cleared = (map["cleared"]?.arrayValue ?? []).compactMap { $0.stringValue }
-        eventContinuation?.yield(.presenceDelta(name: name, records: records, cleared: cleared))
+        broadcast(.presenceDelta(name: name, records: records, cleared: cleared))
     }
 
     private func handleCallCommandResult(payload: FrickMsgPackValue) {
         guard let map = payload.mapValue,
               let requestId = map["requestId"]?.stringValue else { return }
         let result = FrickCallCommandResult(map: map)
+        // The awaiting caller gets the full result (it needs `mediaGrant` to
+        // join the media plane).
         if let cont = pendingCallResponders.removeValue(forKey: requestId) {
             cont.resume(returning: result)
         }
-        eventContinuation?.yield(.callCommandResult(result))
+        // But the shared `events` stream is a broadcast surface every store /
+        // telemetry sink / app observer iterates. `mediaGrant.token` is a
+        // short-lived participant-scoped media credential that only the caller
+        // needs; broadcasting it widens its exposure (e.g. an observer logging
+        // unrecognized events would capture the token, native-swift-6). Strip
+        // it from the broadcast copy — the caller already received the grant
+        // via the awaited return value above.
+        broadcast(.callCommandResult(result.redactingMediaGrant()))
     }
 
     private func handleAck(payload: FrickMsgPackValue) {
@@ -1584,7 +1697,7 @@ public actor FrickSyncSocket {
         if let cont = pendingResponders.removeValue(forKey: requestId) {
             cont.resume(returning: version)
         }
-        eventContinuation?.yield(.ack(requestId: requestId, version: version, cursor: cursor))
+        broadcast(.ack(requestId: requestId, version: version, cursor: cursor))
     }
 
     private func handleNack(payload: FrickMsgPackValue) {
@@ -1610,7 +1723,7 @@ public actor FrickSyncSocket {
             let serverError = FrickServerError(httpStatusCode: 0, envelope: envelope, body: Data())
             cont.resume(throwing: serverError)
         }
-        eventContinuation?.yield(.nack(envelope: envelope, requestId: requestId))
+        broadcast(.nack(envelope: envelope, requestId: requestId))
     }
 
     private static func stringify(_ value: FrickMsgPackValue) -> String {
@@ -1637,6 +1750,26 @@ public actor FrickSyncSocket {
         task = nil
         receiveLoop?.cancel()
         receiveLoop = nil
+
+        // Fail every in-flight request/command awaiter (native-swift-2). The
+        // frame was already sent on the now-dead socket, so its Ack/Nack/
+        // CallCommandResult will never arrive: only `activeSubscriptions` and
+        // the `pending` outbound buffer are replayed on reconnect, not an
+        // already-transmitted request frame. Without this, an `upsertObject` /
+        // `callCommand` (`join`/`leave`/`setMediaState`/…) awaited across a
+        // mid-flight reconnect hangs forever — the call UI spinner never
+        // resolves and the task leaks until `close()`. Mirror `close()`: drain
+        // both responder maps and resume each throwing, so awaiters get a
+        // reconnect error they can retry on instead of blocking.
+        let disconnectError = FrickSyncSocketError.connectionDropped
+        for (_, cont) in pendingResponders {
+            cont.resume(throwing: disconnectError)
+        }
+        pendingResponders.removeAll()
+        for (_, cont) in pendingCallResponders {
+            cont.resume(throwing: disconnectError)
+        }
+        pendingCallResponders.removeAll()
 
         // The connection dropped on an error/receive failure with no clean
         // close handshake — categorize as abnormal (1006), matching the TS
@@ -1691,7 +1824,7 @@ public actor FrickSyncSocket {
         for (_, cont) in statusContinuations {
             cont.yield(statusValue)
         }
-        eventContinuation?.yield(.status(statusValue))
+        broadcast(.status(statusValue))
     }
 
     // MARK: Telemetry
@@ -1789,18 +1922,15 @@ private struct MutableStatus {
     }
 }
 
-private func makeEventStream() -> (AsyncThrowingStream<FrickInboundEvent, Error>, AsyncThrowingStream<FrickInboundEvent, Error>.Continuation) {
-    var capturedCont: AsyncThrowingStream<FrickInboundEvent, Error>.Continuation!
-    let stream = AsyncThrowingStream<FrickInboundEvent, Error>(bufferingPolicy: .unbounded) { continuation in
-        capturedCont = continuation
-    }
-    return (stream, capturedCont)
-}
-
 // MARK: - Errors
 
 public enum FrickSyncSocketError: Error, Equatable, Sendable {
     case notConnected
     case helloAckTimeout
     case unexpectedFrame(Int)
+    /// The socket dropped (network error / abnormal close) while a request or
+    /// call command was in-flight. The already-sent frame is not replayed on
+    /// reconnect, so the awaiter is resumed with this rather than left to hang
+    /// forever (native-swift-2). Idempotent retriable operations may re-issue.
+    case connectionDropped
 }

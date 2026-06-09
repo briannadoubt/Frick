@@ -166,6 +166,36 @@ final class FrickCallSessionTests: XCTestCase {
         XCTAssertFalse(session.hasBootstrapped)
     }
 
+    // MARK: native-swift-5 — snapshot reconciliation drops stale participants
+
+    /// A reconnect snapshot that omits a participant who left/was removed while
+    /// the client was disconnected must drop that participant. The deletion
+    /// emits no `.objectsRemoved` event (the row is simply absent from the
+    /// snapshot), so pre-fix the merge-only path left the stale tile rendered.
+    func testSnapshotDropsParticipantRemovedWhileDisconnected() async {
+        let source = CallStubSource()
+        let session = FrickCallSession(callId: "call-1", source: source)
+        session.start()
+
+        // Initial snapshot: room + two participants.
+        source.emit(.objectsSnapshot(records: [
+            roomRecord(id: "call-1", state: "active"),
+            participantRecord(id: "p-1", callId: "call-1", userId: "u1", deviceId: "d-1"),
+            participantRecord(id: "p-2", callId: "call-1", userId: "u2", deviceId: "d-2"),
+        ], cursor: 1))
+        await waitUntil { session.participants.count == 2 }
+
+        // Reconnect snapshot: p-2 left while offline → omitted. Room persists.
+        source.emit(.objectsSnapshot(records: [
+            roomRecord(id: "call-1", state: "active"),
+            participantRecord(id: "p-1", callId: "call-1", userId: "u1", deviceId: "d-1"),
+        ], cursor: 2))
+        await waitUntil { session.participants.count == 1 }
+
+        XCTAssertEqual(session.participants.map(\.userId), ["u1"])
+        XCTAssertEqual(session.room?.id, "call-1", "the room must survive reconcile")
+    }
+
     func testActionWithoutSocketRecordsError() async {
         let source = CallStubSource()
         let session = FrickCallSession(callId: "call-1", source: source)

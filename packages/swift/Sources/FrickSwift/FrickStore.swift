@@ -64,7 +64,9 @@ extension FrickSyncSocket: FrickStoreEventSource {}
 /// socket, maintains an in-memory cache keyed by id, and exposes the
 /// collection as observable state for SwiftUI. It applies, in order:
 ///
-/// - the **initial snapshot** (the first `.objectsDelta` after subscribe),
+/// - the **snapshot** (`.objectsSnapshot`, the full row set on subscribe /
+///   reconnect), reconciling the cache to it — dropping rows of this type
+///   that are absent (e.g. deleted while disconnected, native-swift-5),
 /// - live **upserts** (`.objectsDelta`), merging same-id rows in place, and
 /// - live **removals** (`.objectsRemoved`, FR-144), dropping rows by id.
 ///
@@ -162,6 +164,8 @@ open class FrickStore<Model: FrickModel> {
             try await source.subscribeObject(type: Model.objectType)
             for try await event in await source.events {
                 switch event {
+                case let .objectsSnapshot(records, _):
+                    reconcile(snapshot: records)
                 case let .objectsDelta(records, _):
                     apply(records: records)
                 case let .objectsRemoved(removals, _):
@@ -169,8 +173,8 @@ open class FrickStore<Model: FrickModel> {
                 case let .status(status):
                     if let err = status.lastError { lastError = err }
                     // On a fresh (re)connect the socket replays the object
-                    // subscription itself; nothing to do here but note that
-                    // the snapshot will re-arrive and reconcile the cache.
+                    // subscription itself; the snapshot re-arrives and
+                    // reconciles the cache (see `reconcile(snapshot:)`).
                 default:
                     continue
                 }
@@ -185,6 +189,47 @@ open class FrickStore<Model: FrickModel> {
     }
 
     // MARK: Apply
+
+    /// Reconcile the cache to an authoritative **snapshot** (the full current
+    /// row set for the subscribed type, e.g. the reply to the object subscribe,
+    /// re-sent after a reconnect). Unlike `apply(records:)` — an incremental
+    /// merge that never removes — this drops cached rows of the model's type
+    /// that are absent from the snapshot. That is what finally evicts a row
+    /// deleted *while the client was disconnected*: such a deletion produces no
+    /// `.objectsRemoved` event, the row is simply missing from the reconnect
+    /// snapshot, so a pure merge would leave it stale (native-swift-5).
+    ///
+    /// Only rows of `Model.objectType` are reconciled. A snapshot from a sibling
+    /// type's subscription that happens to carry no rows of this type leaves
+    /// this cache untouched (it isn't authoritative for this type), so an empty
+    /// snapshot for another type can't wrongly clear this store. The trade-off:
+    /// if *every* row of this type was deleted offline the snapshot is empty and
+    /// indistinguishable from an unrelated empty snapshot, so that rare all-gone
+    /// case still relies on an explicit removal or `reset()`.
+    private func reconcile(snapshot records: [FrickObjectRecord]) {
+        let mine = records.filter { $0.type == Model.objectType }
+        // An empty snapshot is not provably authoritative for this type (it may
+        // be a sibling type's snapshot), so don't clear on it — see note above.
+        guard !mine.isEmpty else {
+            hasBootstrapped = true
+            return
+        }
+        let present = Set(mine.map(\.id))
+        // Drop cached rows of this type no longer in the authoritative set.
+        for id in byId.keys where !present.contains(id) {
+            byId.removeValue(forKey: id)
+        }
+        // Insert/merge the snapshot rows (in place, preserving identity).
+        for record in mine {
+            if let existing = byId[record.id] {
+                existing.merge(record: record)
+            } else if let model = Model(record: record) {
+                byId[record.id] = model
+            }
+        }
+        hasBootstrapped = true
+        reemit()
+    }
 
     /// Apply a batch of upserts. New ids are inserted; existing ids are merged
     /// in place. Records for other object types are ignored (object
