@@ -77,6 +77,7 @@ import {
   type FrickProjectionWriteEvent,
 } from "./projections/registry.js";
 import { DEFAULT_APP_ID } from "./app-id.js";
+import { createAppScopedStore } from "./store-app-scoped.js";
 import type { FrickPerAppRegistries } from "./apps/per-app-registries.js";
 import {
   createFrickSearchIndexRegistry,
@@ -920,6 +921,26 @@ export class FrickStore {
     return this.db;
   }
 
+  /**
+   * Return a view of this store whose object/stream/presence/signal/job write
+   * facades default to `appId` instead of {@link DEFAULT_APP_ID}
+   * (tenant-app-isolation-2). A per-app background-job handler receives one of
+   * these as `ctx.store`, so a write it makes through the legacy
+   * `store.upsertObject(...)` / `store.appendEvent({...})` / `store.setPresence`
+   * / `store.enqueueSignal` / `store.jobs.enqueue` facades lands in the
+   * originating app's partition rather than `_default`. A handler that passes
+   * an explicit `appId` still wins — the injection only fills the omitted
+   * default. Reads and every other facade delegate to the underlying store
+   * unchanged; `forApp(DEFAULT_APP_ID)` (or the single-app default) returns the
+   * store itself so existing single-app behaviour is byte-for-byte identical.
+   */
+  forApp(appId: string | undefined): FrickStore {
+    if (appId === undefined || appId === DEFAULT_APP_ID) {
+      return this;
+    }
+    return createAppScopedStore(this, appId);
+  }
+
   // ---- Tenant-scoped facades --------------------------------------------
   //
   // The legacy API used method names like `upsertObject(type, id, value)`
@@ -930,26 +951,33 @@ export class FrickStore {
   // tenant boundary through every public surface.
 
   async upsertObject(type: string, id: string, value: PlainObject, version?: number): Promise<void>;
-  async upsertObject(tenantId: string, type: string, id: string, value: PlainObject, version?: number): Promise<void>;
+  async upsertObject(tenantId: string, type: string, id: string, value: PlainObject, version?: number, appId?: string): Promise<void>;
   async upsertObject(
     a: string,
     b: string | PlainObject,
     c?: string | PlainObject | number,
     d?: PlainObject | number,
     e?: number,
+    f?: string,
   ): Promise<void> {
     if (typeof b === "string" && (typeof c === "string" || c === undefined)) {
-      // 5-arg form: (tenantId, type, id, value, version?)
+      // 6-arg form: (tenantId, type, id, value, version?, appId?)
       const tenantId = a;
       const type = b;
       const id = c as string;
       const value = d as PlainObject;
       const version = (e as number | undefined) ?? 0;
-      await this.objects.upsert(tenantId, type, id, value, version);
-      const stored = (await this.objects.read(tenantId, type, id)) ?? value;
+      // App partition (FR-153). Trailing `appId` is additive — omitted callers
+      // keep writing the `_default` partition byte-for-byte. The app-scoped
+      // store facade (see `forApp`) injects the job/connection's app here so a
+      // per-app job handler's legacy `upsertObject` write lands in its own app.
+      const appId = f ?? DEFAULT_APP_ID;
+      await this.objects.upsert(tenantId, type, id, value, version, appId);
+      const stored = (await this.objects.read(tenantId, type, id, appId)) ?? value;
       await this.#notifyProjections({
         kind: "objectUpsert",
         tenantId,
+        appId,
         objectType: type,
         objectId: id,
         object: stored,
@@ -958,6 +986,7 @@ export class FrickStore {
       this.#notifyWriteListener({
         kind: "objectUpsert",
         tenantId,
+        appId,
         objectType: type,
         objectId: id,
         object: stored,

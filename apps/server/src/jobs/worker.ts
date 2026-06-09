@@ -144,7 +144,12 @@ export function createFrickJobWorker(options: FrickJobWorkerOptions): FrickJobWo
       jobType: job.jobType,
       payload: job.payload,
       attemptCount: job.attemptCount,
-      store,
+      // App-scoped store facade (tenant-app-isolation-2): a handler's legacy
+      // store writes (`upsertObject`/`appendEvent`/`setPresence`/`enqueueSignal`
+      // /`jobs.enqueue`) default to THIS job's app partition, not `_default`, so
+      // a per-app handler's output lands in its own app. `forApp(_default)`
+      // returns the store itself, so single-app servers are unchanged.
+      store: store.forApp(job.appId),
       logger: log.child({
         jobId: job.id,
         jobType: job.jobType,

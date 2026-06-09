@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { productTestSchema } from "@fricken/protocol";
 import { FrickStore } from "../src/store.js";
 import { createNoopLogger } from "../src/logger.js";
 import { createFrickPerAppRegistries } from "../src/apps/per-app-registries.js";
@@ -136,5 +137,57 @@ describe("per-app job dispatch (FR-153)", () => {
     await waitFor(async () => (await store!.jobs.getById(bJob.id))?.status === "dead_lettered");
 
     expect(ranByA).toEqual(["a"]);
+  });
+
+  it("a per-app handler's store writes land in its OWN app partition, not _default (tenant-app-isolation-2)", async () => {
+    store = new FrickStore({ path: ":memory:", seed: true, schema: productTestSchema });
+
+    const perAppRegistries = createFrickPerAppRegistries();
+    // Each app's handler does the SAME legacy write: upsert a Conversation via
+    // the tenant-aware overload WITHOUT an explicit appId. Before the fix this
+    // always wrote the _default partition; now ctx.store defaults to the job's
+    // app, so app-a's output lands in app-a and app-b's in app-b.
+    perAppRegistries.for("app-a").jobs.register("Emit", async (ctx) => {
+      await ctx.store.upsertObject(ctx.tenantId, "Conversation", "c-a", {
+        kind: "group",
+        title: "from-a",
+        createdBy: "u",
+      });
+      return { status: "completed" };
+    });
+    perAppRegistries.for("app-b").jobs.register("Emit", async (ctx) => {
+      await ctx.store.upsertObject(ctx.tenantId, "Conversation", "c-b", {
+        kind: "group",
+        title: "from-b",
+        createdBy: "u",
+      });
+      return { status: "completed" };
+    });
+
+    worker = createFrickJobWorker({
+      store,
+      registry: perAppRegistries.for("_default").jobs,
+      perAppRegistries,
+      logger: createNoopLogger(),
+      pollIntervalMs: 10,
+      workerId: "worker-app-write",
+    });
+    worker.start();
+
+    const aJob = await store.jobs.enqueue({ tenantId: "_default", appId: "app-a", jobType: "Emit", payload: {} });
+    const bJob = await store.jobs.enqueue({ tenantId: "_default", appId: "app-b", jobType: "Emit", payload: {} });
+    await waitFor(async () => (await store!.jobs.getById(aJob.id))?.status === "completed");
+    await waitFor(async () => (await store!.jobs.getById(bJob.id))?.status === "completed");
+
+    // Each row is readable ONLY from its own app partition.
+    const aFromAppA = await store.readObject("_default", "Conversation", "c-a", "app-a");
+    const aFromDefault = await store.readObject("_default", "Conversation", "c-a", "_default");
+    const bFromAppB = await store.readObject("_default", "Conversation", "c-b", "app-b");
+    const bFromDefault = await store.readObject("_default", "Conversation", "c-b", "_default");
+
+    expect(aFromAppA?.title).toBe("from-a");
+    expect(aFromDefault).toBeUndefined();
+    expect(bFromAppB?.title).toBe("from-b");
+    expect(bFromDefault).toBeUndefined();
   });
 });
