@@ -1125,11 +1125,52 @@ export class SyncGateway {
         // schema. Falls back to the store's schema in single-app mode (no
         // registry) or when no app id matches — the compatibility check
         // below then surfaces the mismatch with the active app id.
+        //
+        // Authorization (tenant-app-isolation-4). The app a connection is
+        // pinned to is CLIENT-SELECTED via the advertised schema id. App
+        // membership is tenant-wide by design (see app-id.ts): every member of
+        // the authenticated principal's tenant may select any app REGISTERED on
+        // this server — there is no per-principal app grant, exactly as on the
+        // HTTP boundary (which derives the app from the URL prefix under the
+        // same tenant gate). What we MUST reject is an UNREGISTERED app id: a
+        // multi-app server must not let a client pin to a schema id that maps to
+        // no registered app and is not this server's own schema, both because it
+        // is meaningless and so the partition a connection lands in is always a
+        // known, registered one. The block below validates exactly that.
         const clientCaps = frame[1].clientCapabilities;
         const advertisedSchemaId = clientCaps?.schema.schemaId;
         const matchedApp = advertisedSchemaId
           ? this.#appRegistry?.findBySchemaId(advertisedSchemaId)
           : undefined;
+        const registeredApps = this.#appRegistry?.list() ?? [];
+        if (
+          // Genuine multi-app server (single-app/foundation servers keep the
+          // legacy fall-through to the store schema, byte-for-byte).
+          registeredApps.length > 1 &&
+          advertisedSchemaId !== undefined &&
+          matchedApp === undefined &&
+          // The store's own schema is always acceptable (the foundation/default
+          // partition); only an UNKNOWN, unregistered schema id is rejected.
+          advertisedSchemaId !== this.store.schema.schemaId
+        ) {
+          const envelope = createFrickErrorEnvelope({
+            code: "auth.forbidden",
+            message: "Advertised schemaId does not match any registered app",
+            requestId: "hello",
+            retryable: false,
+            details: {
+              reason: "appNotAuthorized",
+              knownAppIds: registeredApps.map((a) => a.id),
+            },
+            schemaHash: this.store.schema.hash,
+            schemaRevision: this.store.schema.schemaRevision,
+          });
+          this.#sendFrame(client, [
+            FrameKind.Nack,
+            { requestId: "hello", error: envelope, code: envelope.code, message: envelope.message },
+          ]);
+          return;
+        }
         const targetSchema = matchedApp?.schema ?? this.store.schema;
         const targetAppId = matchedApp?.id;
         // Pin the storage app id for this connection (FR-153). In single-app

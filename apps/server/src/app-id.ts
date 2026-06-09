@@ -7,8 +7,24 @@
  * hosts — apps that today are routed only by URL prefix / WebSocket Hello
  * schema id, with storage server-SHARED. Every framework storage table carries
  * an `app_id` column (migration `0021_app_boundary`, FR-36); the per-store
- * layer filters reads by it and stamps writes with it (FR-37), so an app can
- * neither read nor write another app's objects, streams, or jobs.
+ * layer filters reads by it and stamps writes with it (FR-37), so a request
+ * pinned to app A can neither read nor write app B's objects, streams, or jobs.
+ *
+ * TRUST MODEL (tenant-app-isolation-4). `appId` is a per-TENANT NAMESPACING
+ * axis, NOT a per-principal trust boundary. The app a connection is pinned to
+ * is *client-selected* — the HTTP boundary derives it from the URL prefix and
+ * the WebSocket boundary from the advertised Hello schema id — and the only
+ * authorization gate is the principal's TENANT membership (the same gate the
+ * single-app path uses). The framework does NOT model per-principal app
+ * membership: every member of a tenant may select any app REGISTERED on the
+ * server and operate within that app's partition, bounded by the tenant
+ * boundary and the per-record / policy-hook authz that apply regardless of app.
+ * Unknown / unregistered app ids are rejected at the boundary, so a connection
+ * can only ever land in a registered app's partition — never an arbitrary one.
+ * Apps are therefore a product/namespacing separation between cooperating
+ * surfaces of the same tenant, not a security wall between mutually distrustful
+ * tenants of distinct products. A deployment that needs distinct products to be
+ * mutually untrusting must put them in distinct TENANTS, not distinct apps.
  *
  * The default deployment is implicitly single-app — all legacy rows and every
  * caller that does not specify an app live in the {@link DEFAULT_APP_ID} app,

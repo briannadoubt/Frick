@@ -119,7 +119,71 @@ describe("FR-153 end-to-end app isolation (WebSocket)", () => {
     chatSocket.close();
     docsSocket.close();
   });
+
+  it("rejects a Hello advertising an UNREGISTERED app schemaId (tenant-app-isolation-4)", async () => {
+    app = await startMultiAppServer();
+    const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    // A schema whose schemaId matches no registered app on this server.
+    const rogueSchema: FrickSchema = {
+      ...productTestSchema,
+      schemaId: "frick.rogue.ws",
+      hash: "rogue-ws-hash",
+    };
+
+    const socket = new WebSocket(app.url, { headers: { authorization: `Bearer ${ada.sessionToken}` } });
+    await new Promise<void>((resolve) => socket.once("open", resolve));
+    const frame = await sendHelloAwaitFrame(socket, ada.sessionToken, rogueSchema);
+
+    expect(frame[0]).toBe(FrameKind.Nack);
+    expect(frame[1]).toMatchObject({ requestId: "hello", code: "auth.forbidden" });
+    expect(
+      (frame[1] as { error: { details: { reason: string } } }).error.details.reason,
+    ).toBe("appNotAuthorized");
+    socket.close();
+  });
+
+  it("still accepts a Hello advertising a REGISTERED app schemaId (no regression)", async () => {
+    app = await startMultiAppServer();
+    const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
+
+    const socket = new WebSocket(app.url, { headers: { authorization: `Bearer ${ada.sessionToken}` } });
+    await new Promise<void>((resolve) => socket.once("open", resolve));
+    const frame = await sendHelloAwaitFrame(socket, ada.sessionToken, chatSchema);
+
+    // A registered app id is tenant-wide acceptable: HelloAck, not a nack.
+    expect(frame[0]).toBe(FrameKind.HelloAck);
+    socket.close();
+  });
 });
+
+/** Send a Hello advertising `schema` and resolve the FIRST returned frame. */
+function sendHelloAwaitFrame(
+  socket: WebSocket,
+  sessionToken: string,
+  schema: FrickSchema,
+): Promise<FrickFrame> {
+  const result = new Promise<FrickFrame>((resolve) => {
+    socket.once("message", (data: Buffer) => resolve(decodeFrame(data)));
+  });
+  socket.send(
+    encodeFrame([
+      FrameKind.Hello,
+      {
+        replicaId: `replica-${schema.hash}`,
+        deviceId: `device-${schema.hash}`,
+        schemaHash: schema.hash,
+        knownCursors: {},
+        clientCapabilities: defaultClientCapabilities({
+          platform: "web",
+          sdkVersion: "0.0.0-test",
+          schema,
+        }),
+      },
+    ]),
+  );
+  return result;
+}
 
 async function startServer(options: Parameters<typeof createFrickServer>[0] = {}) {
   const server = createFrickServer({ port: 0, dbPath: ":memory:", ...options });

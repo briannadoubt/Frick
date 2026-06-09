@@ -163,7 +163,7 @@ describe("multi-app server", () => {
     expect(frames[1]).toEqual([FrameKind.Schema, chatSchema]);
   });
 
-  it("hello with an unknown schemaId nacks with knownAppIds in details", async () => {
+  it("hello with an unknown schemaId nacks as appNotAuthorized with knownAppIds (tenant-app-isolation-4)", async () => {
     app = await startServer({
       apps: [
         { id: "chat", schema: chatSchema, basePath: "/chat" },
@@ -180,9 +180,14 @@ describe("multi-app server", () => {
     expect(frames).toHaveLength(1);
     expect(frames[0]![0]).toBe(FrameKind.Nack);
     const payload = frames[0]![1] as {
-      error: { code: string; details?: { knownAppIds?: string[] } };
+      error: { code: string; details?: { reason?: string; knownAppIds?: string[] } };
     };
-    expect(payload.error.code).toBe("schema.incompatible");
+    // tenant-app-isolation-4: an advertised schemaId that maps to no registered
+    // app is now rejected explicitly at the app-authorization layer (before the
+    // schema-compat check), so a client can never pin a WS connection to an
+    // unregistered app partition.
+    expect(payload.error.code).toBe("auth.forbidden");
+    expect(payload.error.details?.reason).toBe("appNotAuthorized");
     expect(payload.error.details?.knownAppIds).toEqual(["chat", "docs"]);
   });
 
