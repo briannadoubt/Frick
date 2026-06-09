@@ -296,6 +296,7 @@ export async function startSfuCall(
         .callCommand({
           op: "sfuConnectTransport",
           callId,
+          token: grant.token,
           transportId: transport.id,
           dtlsParameters,
         })
@@ -316,6 +317,7 @@ export async function startSfuCall(
       .callCommand({
         op: "sfuProduce",
         callId,
+        token: grant.token,
         transportId: sendTransport.id,
         kind,
         rtpParameters,
@@ -363,6 +365,7 @@ export async function startSfuCall(
       const result = await client.callCommand({
         op: "sfuConsume",
         callId,
+        token: grant.token,
         transportId: recvTransport.id,
         producerId,
         rtpCapabilities: device.rtpCapabilities,

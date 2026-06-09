@@ -60,7 +60,7 @@ describe("P2PWebRTCAdapter", () => {
   });
 
   it("mints ephemeral TURN credentials with the coturn REST convention", async () => {
-    const sharedSecret = "s3cr3t";
+    const sharedSecret = "s3cr3t-at-least-16-bytes";
     const now = 1_700_000_000_000; // fixed clock
     const ttlMs = 60_000;
     const adapter = new P2PWebRTCAdapter({
@@ -97,7 +97,7 @@ describe("P2PWebRTCAdapter", () => {
     const now = 1_700_000_000_000;
     const ttlMs = 120_000;
     const adapter = new P2PWebRTCAdapter({
-      turn: { urls: "turn:turn.example.org:3478", sharedSecret: "k" },
+      turn: { urls: "turn:turn.example.org:3478", sharedSecret: "k-at-least-16-bytes" },
       now: () => now,
     });
     await adapter.allocateSession("call-1");

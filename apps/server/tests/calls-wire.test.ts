@@ -157,7 +157,7 @@ describe("FR-15 — call command wire", () => {
       backend: new FakeSfuBackend(),
       announcedIp: "203.0.113.9",
       mediaCodecs: DEFAULT_SFU_MEDIA_CODECS,
-      tokenSecret: "wire-secret",
+      tokenSecret: "wire-secret-at-least-16-bytes",
     });
     app = await startServer({ mediaPlane: sfuPlane });
     const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
@@ -172,12 +172,14 @@ describe("FR-15 — call command wire", () => {
 
     const bobSocket = await connectAndHello(app.url, app.schemaHash, bob.sessionToken, "device-bob");
     const joined = await sendCommand(bobSocket, { op: "join", callId });
+    const token = joined.mediaGrant!.token;
     const send = JSON.parse(joined.mediaGrant!.connection!["sendTransport"]!) as SfuTransportParams;
     const recv = JSON.parse(joined.mediaGrant!.connection!["recvTransport"]!) as SfuTransportParams;
 
     const connected = await sendCommand(bobSocket, {
       op: "sfuConnectTransport",
       callId,
+      token,
       transportId: send.id,
       dtlsParameters: { fingerprints: [{ algorithm: "sha-256", value: "AA:BB" }] },
     });
@@ -186,6 +188,7 @@ describe("FR-15 — call command wire", () => {
     const produced = await sendCommand(bobSocket, {
       op: "sfuProduce",
       callId,
+      token,
       transportId: send.id,
       kind: "audio",
       rtpParameters: { codecs: [] },
@@ -196,6 +199,7 @@ describe("FR-15 — call command wire", () => {
     const consumed = await sendCommand(bobSocket, {
       op: "sfuConsume",
       callId,
+      token,
       transportId: recv.id,
       producerId: produced.producer!.producerId,
       rtpCapabilities: { codecs: [] },
@@ -226,6 +230,7 @@ describe("FR-15 — call command wire", () => {
     const nack = await sendCommandExpectingNack(bobSocket, {
       op: "sfuProduce",
       callId,
+      token: "tok",
       transportId: "t",
       kind: "audio",
       rtpParameters: {},

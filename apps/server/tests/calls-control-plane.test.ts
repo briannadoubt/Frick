@@ -351,7 +351,7 @@ describe("FR-79 — CallControlPlane", () => {
         backend,
         announcedIp: "203.0.113.9",
         mediaCodecs: DEFAULT_SFU_MEDIA_CODECS,
-        tokenSecret: "test-secret",
+        tokenSecret: "test-secret-at-least-16-bytes",
         now: () => 1_000,
       });
       idCounter = 0;
@@ -363,30 +363,35 @@ describe("FR-79 — CallControlPlane", () => {
       });
     });
 
-    async function joinedCall(): Promise<{ callId: string; send: string; recv: string }> {
+    async function joinedCall(): Promise<{
+      callId: string;
+      send: string;
+      recv: string;
+      token: string;
+    }> {
       await sfuPlane.createCall(alice, { conversationId: "conv-1", inviteeUserIds: ["bob"] });
       const joined = await sfuPlane.joinCall(bob, "call-1");
       const { send, recv } = grantTransports(joined.mediaGrant.connection!);
-      return { callId: "call-1", send, recv };
+      return { callId: "call-1", send, recv, token: joined.mediaGrant.token };
     }
 
     it("connects a transport, produces a track, and consumes a remote producer", async () => {
-      const { callId, send, recv } = await joinedCall();
+      const { callId, send, recv, token } = await joinedCall();
 
       // connectTransport forwards to the backend (transport becomes connected).
-      await sfuPlane.sfuConnectTransport(bob, callId, send, {
+      await sfuPlane.sfuConnectTransport(bob, callId, token, send, {
         fingerprints: [{ algorithm: "sha-256", value: "AA:BB" }],
       });
 
       // produce → a server-assigned producer id.
-      const producer = await sfuPlane.sfuProduce(bob, callId, send, "audio", {
+      const producer = await sfuPlane.sfuProduce(bob, callId, token, send, "audio", {
         codecs: [{ payloadType: 111 }],
       });
       expect(producer.id).toMatch(/^fake-producer-/);
       expect(producer.kind).toBe("audio");
 
       // consume that producer onto the recv transport → a consumer w/ rtpParameters.
-      const consumer = await sfuPlane.sfuConsume(bob, callId, recv, producer.id, {
+      const consumer = await sfuPlane.sfuConsume(bob, callId, token, recv, producer.id, {
         codecs: ["client-caps"],
       });
       expect(consumer.producerId).toBe(producer.id);
@@ -395,17 +400,17 @@ describe("FR-79 — CallControlPlane", () => {
     });
 
     it("rejects SFU ops from a non-participant (notParticipant)", async () => {
-      const { callId, send } = await joinedCall();
+      const { callId, send, token } = await joinedCall();
       await expect(
-        sfuPlane.sfuProduce(carol, callId, send, "audio", {}),
+        sfuPlane.sfuProduce(carol, callId, token, send, "audio", {}),
       ).rejects.toMatchObject({ name: "CallStateError", reason: "notParticipant" });
     });
 
     it("rejects SFU ops on an ended call", async () => {
-      const { callId, send } = await joinedCall();
+      const { callId, send, token } = await joinedCall();
       await sfuPlane.endCall(alice, callId);
       await expect(
-        sfuPlane.sfuConnectTransport(bob, callId, send, { fingerprints: [] }),
+        sfuPlane.sfuConnectTransport(bob, callId, token, send, { fingerprints: [] }),
       ).rejects.toBeInstanceOf(CallStateError);
     });
 
@@ -415,7 +420,7 @@ describe("FR-79 — CallControlPlane", () => {
       await plane.createCall(alice, { conversationId: "conv-1", inviteeUserIds: ["bob"] });
       await plane.joinCall(bob, "call-1");
       const error = await plane
-        .sfuProduce(bob, "call-1", "t", "audio", {})
+        .sfuProduce(bob, "call-1", "tok", "t", "audio", {})
         .catch((e: unknown) => e);
       expect(error).toBeInstanceOf(CallMediaUnsupportedError);
       expect((error as CallMediaUnsupportedError).reason).toBe("sfuUnsupported");

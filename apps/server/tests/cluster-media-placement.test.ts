@@ -35,7 +35,7 @@ function adapterFor(placement: ClusterMediaPlacement) {
     backend,
     placement,
     mediaCodecs: DEFAULT_SFU_MEDIA_CODECS,
-    tokenSecret: "secret",
+    tokenSecret: "secret-at-least-16-bytes",
   });
   return { backend, adapter };
 }
@@ -220,7 +220,7 @@ describe("LocalMediaPlacement (single-box) is unchanged under FR-154", () => {
       backend,
       announcedIp: IP_A,
       mediaCodecs: DEFAULT_SFU_MEDIA_CODECS,
-      tokenSecret: "secret",
+      tokenSecret: "secret-at-least-16-bytes",
     });
     const session = await adapter.allocateSession("call-1");
     expect(session.connection!["homeNodeId"]).toBe("local");

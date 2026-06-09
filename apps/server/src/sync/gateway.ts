@@ -1749,6 +1749,7 @@ export class SyncGateway {
           await plane.sfuConnectTransport(
             actor,
             command.callId,
+            command.token,
             command.transportId,
             // Opaque client-supplied DTLS params, forwarded verbatim to mediasoup.
             command.dtlsParameters as unknown as DtlsParameters,
@@ -1760,6 +1761,7 @@ export class SyncGateway {
           const producer = await plane.sfuProduce(
             actor,
             command.callId,
+            command.token,
             command.transportId,
             command.kind,
             command.rtpParameters,
@@ -1775,6 +1777,7 @@ export class SyncGateway {
           const consumer = await plane.sfuConsume(
             actor,
             command.callId,
+            command.token,
             command.transportId,
             command.producerId,
             command.rtpCapabilities,

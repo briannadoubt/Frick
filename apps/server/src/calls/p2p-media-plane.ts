@@ -85,6 +85,14 @@ export interface P2PMediaPlaneOptions {
 const DEFAULT_TOKEN_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_STUN: readonly P2PIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
 
+/**
+ * Minimum acceptable byte-length for the TURN shared secret. An empty/short
+ * secret makes the coturn-REST HMAC-SHA1 credential trivially forgeable (an
+ * attacker can reproduce the MAC and mint long-lived relay creds), so the
+ * adapter fails closed at construction (sfu-media-7).
+ */
+const MIN_TURN_SECRET_BYTES = 16;
+
 interface AllocatedSession extends MediaSession {
   /** Monotonic ordinal, mirrors the fake so handles are ordered/deterministic. */
   readonly ordinal: number;
@@ -102,6 +110,16 @@ export class P2PWebRTCAdapter implements MediaPlaneAdapter {
 
   constructor(options: P2PMediaPlaneOptions = {}) {
     this.#iceServers = options.iceServers ?? DEFAULT_STUN;
+    // When TURN is configured, fail closed on an empty/weak shared secret rather
+    // than silently issuing forgeable coturn-REST credentials (sfu-media-7).
+    if (
+      options.turn &&
+      Buffer.byteLength(options.turn.sharedSecret ?? "", "utf8") < MIN_TURN_SECRET_BYTES
+    ) {
+      throw new MediaPlaneError(
+        `P2PWebRTCAdapter requires a TURN sharedSecret of at least ${MIN_TURN_SECRET_BYTES} bytes`,
+      );
+    }
     this.#turn = options.turn;
     this.#defaultTokenTtlMs = options.defaultTokenTtlMs ?? DEFAULT_TOKEN_TTL_MS;
     this.#now = options.now ?? Date.now;

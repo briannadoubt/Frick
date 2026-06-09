@@ -204,6 +204,13 @@ export type CallSfuMediaKind = "audio" | "video";
 export interface ConnectSfuTransportCommand {
   readonly op: "sfuConnectTransport";
   readonly callId: string;
+  /**
+   * The join nonce the client received in its {@link CallMediaGrant} (FR-78).
+   * The server re-derives and verifies it (signature + expiry + identity
+   * binding) before forwarding the op to the SFU. Additive: older servers
+   * ignore it, newer servers require it for SFU media ops.
+   */
+  readonly token: string;
   readonly transportId: string;
   readonly dtlsParameters: CallSfuDtlsParameters;
 }
@@ -216,6 +223,8 @@ export interface ConnectSfuTransportCommand {
 export interface ProduceSfuCommand {
   readonly op: "sfuProduce";
   readonly callId: string;
+  /** Join nonce re-verified server-side before producing (see {@link ConnectSfuTransportCommand.token}). */
+  readonly token: string;
   readonly transportId: string;
   readonly kind: CallSfuMediaKind;
   readonly rtpParameters: CallSfuRtpParameters;
@@ -229,6 +238,8 @@ export interface ProduceSfuCommand {
 export interface ConsumeSfuCommand {
   readonly op: "sfuConsume";
   readonly callId: string;
+  /** Join nonce re-verified server-side before consuming (see {@link ConnectSfuTransportCommand.token}). */
+  readonly token: string;
   readonly transportId: string;
   readonly producerId: string;
   readonly rtpCapabilities: CallSfuRtpCapabilities;

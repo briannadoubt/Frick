@@ -20,7 +20,7 @@ import {
  */
 
 const ANNOUNCED_IP = "203.0.113.7";
-const SECRET = "sfu-secret";
+const SECRET = "sfu-secret-at-least-16-bytes";
 const A = { userId: "user-a", deviceId: "device-a" } as const;
 const B = { userId: "user-b", deviceId: "device-b" } as const;
 
@@ -142,13 +142,13 @@ describe("SfuMediaPlaneAdapter", () => {
   it("produce/consume throw without an allocated session", async () => {
     const { adapter } = makeAdapter();
     await expect(
-      adapter.produce("missing", "t", "audio", {}),
+      adapter.produce("missing", A, "tok", "t", "audio", {}),
     ).rejects.toBeInstanceOf(MediaPlaneError);
     await expect(
-      adapter.consume("missing", "t", "p", {}),
+      adapter.consume("missing", A, "tok", "t", "p", {}),
     ).rejects.toBeInstanceOf(MediaPlaneError);
     await expect(
-      adapter.connectTransport("missing", "t", { fingerprints: [] }),
+      adapter.connectTransport("missing", A, "tok", "t", { fingerprints: [] }),
     ).rejects.toBeInstanceOf(MediaPlaneError);
   });
 
@@ -167,15 +167,15 @@ describe("SfuMediaPlaneAdapter", () => {
     const bRecv = JSON.parse(grantB.connection!.recvTransport) as SfuTransportParams;
 
     // A connects its send transport (DTLS) and produces audio.
-    await adapter.connectTransport("call-1", aSend.id, aSend.dtlsParameters);
+    await adapter.connectTransport("call-1", A, grantA.token, aSend.id, aSend.dtlsParameters);
     expect(backend.isTransportConnected("call-1", aSend.id)).toBe(true);
-    const producer = await adapter.produce("call-1", aSend.id, "audio", { codecs: [] });
+    const producer = await adapter.produce("call-1", A, grantA.token, aSend.id, "audio", { codecs: [] });
     expect(producer.kind).toBe("audio");
     expect(backend.producerCount("call-1")).toBe(1);
 
     // B connects its recv transport and consumes A's producer.
-    await adapter.connectTransport("call-1", bRecv.id, bRecv.dtlsParameters);
-    const consumer = await adapter.consume("call-1", bRecv.id, producer.id, { codecs: [] });
+    await adapter.connectTransport("call-1", B, grantB.token, bRecv.id, bRecv.dtlsParameters);
+    const consumer = await adapter.consume("call-1", B, grantB.token, bRecv.id, producer.id, { codecs: [] });
     expect(consumer.producerId).toBe(producer.id);
     expect(consumer.kind).toBe("audio");
 

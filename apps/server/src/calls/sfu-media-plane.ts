@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 import {
   MediaPlaneError,
@@ -96,8 +96,34 @@ export interface SfuMediaPlaneOptions {
 
 const DEFAULT_TOKEN_TTL_MS = 5 * 60 * 1000;
 
+/**
+ * Minimum acceptable byte-length for the HMAC token secret. An empty or very
+ * short secret makes the minted join nonce trivially forgeable (HMAC with a
+ * guessable/empty key), so the adapter fails closed at construction rather than
+ * issuing weak credentials (sfu-media-7).
+ */
+const MIN_TOKEN_SECRET_BYTES = 16;
+
 interface AllocatedSession extends MediaSession {
   readonly ordinal: number;
+}
+
+/**
+ * The per-participant media resources minted for one (userId,deviceId) on a
+ * call's router. We bind the send/recv transport ids to their owner so the
+ * control plane can assert a participant only acts on *their own* transports
+ * (calls-media-1 / sfu-media-2), and so we can close exactly these on leave /
+ * re-join without leaking router-level transports (sfu-media-3).
+ */
+interface ParticipantMedia {
+  readonly userId: string;
+  readonly deviceId: string;
+  sendTransportId: string;
+  recvTransportId: string;
+  /** Producer ids the participant created on their send transport. */
+  readonly producerIds: Set<string>;
+  /** Consumer ids delivered onto the participant's recv transport. */
+  readonly consumerIds: Set<string>;
 }
 
 export class SfuMediaPlaneAdapter implements MediaPlaneAdapter {
@@ -109,6 +135,12 @@ export class SfuMediaPlaneAdapter implements MediaPlaneAdapter {
   readonly #now: () => number;
   readonly #softMax: number | undefined;
   readonly #sessions = new Map<string, AllocatedSession>();
+  /**
+   * Per-call, per-participant media bindings, keyed by callId then by
+   * `${userId}:${deviceId}`. Used to enforce transport ownership and to tear a
+   * participant's transports/producers/consumers down on leave/re-join.
+   */
+  readonly #participants = new Map<string, Map<string, ParticipantMedia>>();
   #counter = 0;
 
   constructor(options: SfuMediaPlaneOptions) {
@@ -120,6 +152,13 @@ export class SfuMediaPlaneAdapter implements MediaPlaneAdapter {
     } else {
       throw new MediaPlaneError(
         "SfuMediaPlaneAdapter requires either `placement` or `announcedIp`",
+      );
+    }
+    // Fail closed on an empty/weak token secret rather than silently minting
+    // forgeable join nonces (sfu-media-7).
+    if (Buffer.byteLength(options.tokenSecret ?? "", "utf8") < MIN_TOKEN_SECRET_BYTES) {
+      throw new MediaPlaneError(
+        `SfuMediaPlaneAdapter requires a tokenSecret of at least ${MIN_TOKEN_SECRET_BYTES} bytes`,
       );
     }
     this.#mediaCodecs = options.mediaCodecs;
@@ -181,6 +220,13 @@ export class SfuMediaPlaneAdapter implements MediaPlaneAdapter {
       );
     }
     const home = await this.#placement.placeFor(callId);
+
+    // Idempotent per (callId,userId,deviceId): a rejoining participant releases
+    // their previously-minted transports/producers/consumers before we mint a
+    // fresh pair, so repeated join/leave can't leak router-level transports
+    // (sfu-media-3).
+    await this.#closeParticipantMedia(callId, participant.userId, participant.deviceId);
+
     // Create the participant's send + recv transports on the call's router.
     const send = await this.#backend.createWebRtcTransport({
       callId,
@@ -191,6 +237,17 @@ export class SfuMediaPlaneAdapter implements MediaPlaneAdapter {
       callId,
       announcedIp: home.announcedIp,
       direction: "recv",
+    });
+
+    // Record the owning identity for each transport so connect/produce/consume
+    // can assert the actor owns the transport they operate on (sfu-media-2).
+    this.#participantsFor(callId).set(this.#participantKey(participant.userId, participant.deviceId), {
+      userId: participant.userId,
+      deviceId: participant.deviceId,
+      sendTransportId: send.id,
+      recvTransportId: recv.id,
+      producerIds: new Set(),
+      consumerIds: new Set(),
     });
 
     const ttlMs = options.ttlMs ?? this.#defaultTokenTtlMs;
@@ -218,6 +275,45 @@ export class SfuMediaPlaneAdapter implements MediaPlaneAdapter {
     // consumers and is a no-op for an unknown call.
     await this.#backend.closeRouter(callId);
     this.#sessions.delete(callId);
+    this.#participants.delete(callId);
+  }
+
+  /**
+   * Tear down a single participant's media (transports + their producers/
+   * consumers) without ending the whole call. Called by the control plane on
+   * `leave` so a participant's send/recv transports are reclaimed immediately
+   * instead of lingering until the call ends (sfu-media-3). Idempotent.
+   */
+  async leaveParticipant(callId: string, participant: MediaParticipant): Promise<void> {
+    await this.#closeParticipantMedia(callId, participant.userId, participant.deviceId);
+  }
+
+  /**
+   * Re-derive the join nonce for `(callId, actor)` and verify it matches `token`
+   * (constant-time) and has not expired. Throws {@link MediaPlaneError} on a
+   * malformed, forged, or expired token. This is the credential check the
+   * documented contract promised but never enforced (calls-token-1 /
+   * sfu-media-1): produce/consume/connect now require a valid nonce, so expiry
+   * and the `callId:userId:deviceId` binding are actually enforced.
+   */
+  verifyJoinToken(callId: string, actor: MediaParticipant, token: string): void {
+    const dot = token.indexOf(".");
+    if (dot <= 0) {
+      throw new MediaPlaneError("Malformed SFU join token");
+    }
+    const expirySeconds = Number(token.slice(0, dot));
+    if (!Number.isFinite(expirySeconds) || !Number.isInteger(expirySeconds)) {
+      throw new MediaPlaneError("Malformed SFU join token expiry");
+    }
+    if (this.#now() >= expirySeconds * 1000) {
+      throw new MediaPlaneError("SFU join token has expired");
+    }
+    const expected = this.#mintNonce(callId, actor, expirySeconds * 1000);
+    const got = Buffer.from(token, "utf8");
+    const want = Buffer.from(expected, "utf8");
+    if (got.length !== want.length || !timingSafeEqual(got, want)) {
+      throw new MediaPlaneError("SFU join token failed verification");
+    }
   }
 
   // -- produce/consume companion -------------------------------------------
@@ -230,33 +326,65 @@ export class SfuMediaPlaneAdapter implements MediaPlaneAdapter {
   /** Complete a transport's DTLS handshake with the client's dtlsParameters. */
   async connectTransport(
     callId: string,
+    actor: MediaParticipant,
+    token: string,
     transportId: string,
     dtlsParameters: DtlsParameters,
   ): Promise<void> {
     this.#requireSession(callId);
+    this.verifyJoinToken(callId, actor, token);
+    // A participant may only connect a transport they own (their own send or
+    // recv transport) — never another participant's (sfu-media-2).
+    this.#requireOwnedTransport(callId, actor, transportId);
     await this.#backend.connectTransport({ callId, transportId, dtlsParameters });
   }
 
   /** Start producing one of a participant's tracks on its send transport. */
   async produce(
     callId: string,
+    actor: MediaParticipant,
+    token: string,
     transportId: string,
     kind: MediaKind,
     rtpParameters: RtpParameters,
   ): Promise<ProducerHandle> {
     this.#requireSession(callId);
-    return this.#backend.produce({ callId, transportId, kind, rtpParameters });
+    this.verifyJoinToken(callId, actor, token);
+    // Producing is only allowed on the actor's own *send* transport: this stops
+    // B from attaching a producer to A's transport (calls-media-1).
+    const media = this.#requireOwnedTransport(callId, actor, transportId);
+    if (transportId !== media.sendTransportId) {
+      throw new MediaPlaneError(
+        `Transport ${transportId} is not the actor's send transport on call ${callId}`,
+      );
+    }
+    const producer = await this.#backend.produce({ callId, transportId, kind, rtpParameters });
+    media.producerIds.add(producer.id);
+    return producer;
   }
 
   /** Consume another participant's producer onto this participant's recv transport. */
   async consume(
     callId: string,
+    actor: MediaParticipant,
+    token: string,
     transportId: string,
     producerId: string,
     rtpCapabilities: RtpCapabilities,
   ): Promise<ConsumerHandle> {
     this.#requireSession(callId);
-    return this.#backend.consume({ callId, transportId, producerId, rtpCapabilities });
+    this.verifyJoinToken(callId, actor, token);
+    // Consuming is only allowed onto the actor's own *recv* transport: this
+    // stops B from steering consumers onto A's recv transport (sfu-media-2).
+    const media = this.#requireOwnedTransport(callId, actor, transportId);
+    if (transportId !== media.recvTransportId) {
+      throw new MediaPlaneError(
+        `Transport ${transportId} is not the actor's recv transport on call ${callId}`,
+      );
+    }
+    const consumer = await this.#backend.consume({ callId, transportId, producerId, rtpCapabilities });
+    media.consumerIds.add(consumer.id);
+    return consumer;
   }
 
   /** Test/inspection helper: is a session currently allocated for this call? */
@@ -281,6 +409,70 @@ export class SfuMediaPlaneAdapter implements MediaPlaneAdapter {
     const message = `${callId}:${participant.userId}:${participant.deviceId}:${expirySeconds}`;
     const mac = createHmac("sha256", this.#tokenSecret).update(message).digest("base64url");
     return `${expirySeconds}.${mac}`;
+  }
+
+  #participantKey(userId: string, deviceId: string): string {
+    return `${userId}:${deviceId}`;
+  }
+
+  #participantsFor(callId: string): Map<string, ParticipantMedia> {
+    let map = this.#participants.get(callId);
+    if (!map) {
+      map = new Map();
+      this.#participants.set(callId, map);
+    }
+    return map;
+  }
+
+  /**
+   * Resolve the actor's media binding and assert `transportId` is one of *their*
+   * transports. Throws if the actor has no live binding on the call or the
+   * transport belongs to a different participant.
+   */
+  #requireOwnedTransport(
+    callId: string,
+    actor: MediaParticipant,
+    transportId: string,
+  ): ParticipantMedia {
+    const media = this.#participants
+      .get(callId)
+      ?.get(this.#participantKey(actor.userId, actor.deviceId));
+    if (!media) {
+      throw new MediaPlaneError(
+        `${actor.userId}/${actor.deviceId} has no media session on call ${callId}`,
+      );
+    }
+    if (transportId !== media.sendTransportId && transportId !== media.recvTransportId) {
+      throw new MediaPlaneError(
+        `Transport ${transportId} is not owned by ${actor.userId}/${actor.deviceId} on call ${callId}`,
+      );
+    }
+    return media;
+  }
+
+  /**
+   * Close a participant's send/recv transports (and their producers/consumers)
+   * on the backend and drop the binding. Idempotent: a no-op when the
+   * participant has no live binding.
+   */
+  async #closeParticipantMedia(callId: string, userId: string, deviceId: string): Promise<void> {
+    const map = this.#participants.get(callId);
+    const key = this.#participantKey(userId, deviceId);
+    const media = map?.get(key);
+    if (!media || !map) {
+      return;
+    }
+    map.delete(key);
+    // Closing a transport tears down its producers/consumers, but close them
+    // explicitly too so a backend that doesn't cascade still reclaims them.
+    for (const consumerId of media.consumerIds) {
+      await this.#backend.closeConsumer(callId, consumerId);
+    }
+    for (const producerId of media.producerIds) {
+      await this.#backend.closeProducer(callId, producerId);
+    }
+    await this.#backend.closeTransport(callId, media.sendTransportId);
+    await this.#backend.closeTransport(callId, media.recvTransportId);
   }
 
   #transportParams(t: TransportHandle): SfuTransportParams {

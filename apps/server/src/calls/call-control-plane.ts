@@ -10,6 +10,7 @@ import {
 } from "./call-schema.js";
 import {
   type MediaJoinGrant,
+  type MediaParticipant,
   type MediaPlaneAdapter,
 } from "./media-plane.js";
 import type {
@@ -156,19 +157,38 @@ export interface MediaState {
  * tests can inject any compatible double. Mirrors `SfuMediaPlaneAdapter`.
  */
 export interface SfuMediaOperations {
+  /**
+   * Verify a participant's join nonce (signature + expiry + identity binding).
+   * Throws when the token is malformed, forged, or expired. The control plane
+   * calls this before forwarding any produce/consume/connect op so the minted
+   * credential is actually enforced (calls-token-1 / sfu-media-1).
+   */
+  verifyJoinToken(callId: string, actor: MediaParticipant, token: string): void;
+  /**
+   * Release a single participant's media (transports + producers/consumers)
+   * without ending the call — called on `leave` so transports don't leak until
+   * the whole call ends (sfu-media-3).
+   */
+  leaveParticipant(callId: string, participant: MediaParticipant): Promise<void>;
   connectTransport(
     callId: string,
+    actor: MediaParticipant,
+    token: string,
     transportId: string,
     dtlsParameters: DtlsParameters,
   ): Promise<void>;
   produce(
     callId: string,
+    actor: MediaParticipant,
+    token: string,
     transportId: string,
     kind: MediaKind,
     rtpParameters: RtpParameters,
   ): Promise<ProducerHandle>;
   consume(
     callId: string,
+    actor: MediaParticipant,
+    token: string,
     transportId: string,
     producerId: string,
     rtpCapabilities: RtpCapabilities,
@@ -186,7 +206,9 @@ export function supportsSfuMedia(
   return (
     typeof candidate.connectTransport === "function" &&
     typeof candidate.produce === "function" &&
-    typeof candidate.consume === "function"
+    typeof candidate.consume === "function" &&
+    typeof candidate.verifyJoinToken === "function" &&
+    typeof candidate.leaveParticipant === "function"
   );
 }
 
@@ -454,35 +476,38 @@ export class CallControlPlane {
   async sfuConnectTransport(
     actor: CallActor,
     callId: string,
+    token: string,
     transportId: string,
     dtlsParameters: DtlsParameters,
   ): Promise<void> {
     const ops = await this.#requireSfuParticipant(actor, callId);
-    await ops.connectTransport(callId, transportId, dtlsParameters);
+    await ops.connectTransport(callId, mediaActor(actor), token, transportId, dtlsParameters);
   }
 
   /** Start producing one of the participant's tracks on its send transport. */
   async sfuProduce(
     actor: CallActor,
     callId: string,
+    token: string,
     transportId: string,
     kind: MediaKind,
     rtpParameters: RtpParameters,
   ): Promise<ProducerHandle> {
     const ops = await this.#requireSfuParticipant(actor, callId);
-    return ops.produce(callId, transportId, kind, rtpParameters);
+    return ops.produce(callId, mediaActor(actor), token, transportId, kind, rtpParameters);
   }
 
   /** Consume another participant's producer onto this participant's recv transport. */
   async sfuConsume(
     actor: CallActor,
     callId: string,
+    token: string,
     transportId: string,
     producerId: string,
     rtpCapabilities: RtpCapabilities,
   ): Promise<ConsumerHandle> {
     const ops = await this.#requireSfuParticipant(actor, callId);
-    return ops.consume(callId, transportId, producerId, rtpCapabilities);
+    return ops.consume(callId, mediaActor(actor), token, transportId, producerId, rtpCapabilities);
   }
 
   /**
@@ -552,6 +577,13 @@ export class CallControlPlane {
       deviceId: actor.deviceId,
       leftAt,
     });
+
+    // Reclaim the leaving participant's SFU transports/producers/consumers
+    // immediately so repeated join/leave can't leak server-side media state
+    // (sfu-media-3). No-op on a P2P/fake plane (no leaveParticipant companion).
+    if (supportsSfuMedia(this.#media)) {
+      await this.#media.leaveParticipant(callId, mediaActor(actor));
+    }
 
     // Auto-end when the last active participant leaves.
     const remaining = await this.#activeParticipantCount(actor.tenantId, callId);
@@ -734,6 +766,11 @@ function toPlain(record: object): PlainObject {
 
 function dedupe(values: readonly string[]): string[] {
   return [...new Set(values)];
+}
+
+/** Project a {@link CallActor} onto the media plane's {@link MediaParticipant}. */
+function mediaActor(actor: CallActor): MediaParticipant {
+  return { userId: actor.userId, deviceId: actor.deviceId };
 }
 
 /** Convenience: build a {@link CallActor} for the default tenant. */
