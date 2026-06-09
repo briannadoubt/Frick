@@ -267,10 +267,11 @@ every write key has exactly one **home region** that owns its writes.
   - **`ClaimRegionOwnership`** (opt-in, dynamic) — claim-based assignment over a
     region control channel, **mirroring FR-154's `ClusterMediaPlacement`** one level
     up (region instead of node): the first region to route a write for an unowned
-    tenant **claims** home and announces it; concurrent claims converge by a
-    deterministic **lowest-`regionId`-wins** tie-break (total + symmetric, exactly
-    like FR-154's lowest-`nodeId` rule); a **TTL** backstops a missed release so a
-    crashed home self-heals.
+    tenant **claims** home and announces it; each claim carries a **monotonic fencing
+    epoch** per key (see [Split-brain](#split-brain-claim-based-ownership-is-best-effort)),
+    so conflicts converge by **higher-epoch-wins, then lowest-`regionId`** tie-break
+    (total + symmetric, like FR-154's lowest-`nodeId` rule); a **TTL** backstops a
+    missed release so a crashed home self-heals.
 
 ### Routing
 
@@ -299,6 +300,42 @@ resolved by *serialization at the home*, not by a merge rule. (The alternative �
 accept-anywhere-then-converge with a region-stamped deterministic rule such as
 "home-region wins, else lowest-`regionId`" — was considered and rejected;
 home-authoritative routing is preferred and simpler.)
+
+### Split-brain: claim-based ownership is best-effort
+
+**`ClaimRegionOwnership` provides best-effort convergence, NOT mutual exclusion.**
+Its TTL self-heal expires a crashed home's claim on each peer's *local* clock, at
+*different* wall-clock instants (each peer learned the claim at a different local
+time and runs its own clock). So on a home-region crash there is a transient
+**dual-home / split-brain window**, proportional to the TTL skew + claim-propagation
+delay, during which two regions can both believe they are home and both accept writes
+as the authoritative serialization point. The lowest-id tie-break eventually
+converges them — but only *after* the loser already accepted writes. **Do not rely on
+TTL self-heal for the single-home conflict guarantee FR-106 advertises.**
+
+To make those writes **detectable and fenceable** (finding multi-region-3), every
+claim carries a **monotonic fencing epoch** per key:
+
+- a region that (re-)claims a key bumps the epoch strictly above the highest it has
+  seen, so a claim that supersedes a crashed/stale home always wins on a **higher
+  epoch** (epoch ties — concurrent claims before either's message arrives — still
+  break on lowest `regionId`, keeping convergence total + symmetric);
+- `epochFor(key)` exposes the current epoch, which a write should be **stamped with at
+  routing time**; `acceptWriteAtHome(key, writeEpoch)` **rejects any write whose epoch
+  is older than the home's current epoch**, so a write a superseded (split-brain
+  loser) home accepted under a stale epoch is fenced once the new home's higher-epoch
+  claim is known.
+
+**What this guarantees vs. what it does not.** The epoch makes a split-brain write
+*fenceable* — the authoritative (highest-epoch) home can reject it instead of
+silently forking the stream — but it does **not** *prevent* a stale home from briefly
+accepting a write before the higher-epoch claim propagates. **Strict mutual exclusion
+(no two regions ever accept a write for the same key concurrently) requires a
+consensus / quorum lease store** (e.g. Raft/etcd/Consul-backed leases with fencing
+tokens), which is intentionally out of scope here. For deployments that need strict
+correctness, back ownership with such a store; otherwise prefer
+`StaticRegionOwnership` (zero coordination, no claim race) and treat
+`ClaimRegionOwnership`'s convergence as best-effort with epoch fencing as a safety net.
 
 ### Additive & backward-compatible
 

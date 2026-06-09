@@ -262,3 +262,115 @@ describe("ClaimRegionOwnership (dynamic, claim/tie-break/TTL)", () => {
     expect(east.homeRegionFor("acme")).toBe("us-east"); // re-claims
   });
 });
+
+describe("ClaimRegionOwnership fencing epoch (multi-region-3)", () => {
+  function build(regionId: string, fabric: MemoryOwnershipControlFabric, now: () => number, ttlMs?: number) {
+    const control = new MemoryOwnershipControl({ regionId, fabric });
+    return new ClaimRegionOwnership({
+      regionId,
+      control,
+      now,
+      ...(ttlMs !== undefined ? { ttlMs } : {}),
+    });
+  }
+
+  it("a claim carries a monotonic epoch; re-claim after TTL expiry bumps it", () => {
+    const fabric = new MemoryOwnershipControlFabric();
+    let t = 0;
+    const east = build("us-east", fabric, () => t, 1000);
+
+    east.homeRegionFor("acme");
+    expect(east.epochFor("acme")).toBe(1);
+
+    t = 1000; // TTL elapsed — entry expires.
+    east.homeRegionFor("acme"); // re-claim
+    expect(east.epochFor("acme")).toBe(2); // strictly higher, not reset to 1
+  });
+
+  it("a re-home after a crashed home bumps the epoch above the stale home's", () => {
+    // us-east claims (epoch 1). It crashes; eu-west's TTL expires the stale
+    // entry and eu-west re-claims, bumping to epoch 2 — fencing the dead home.
+    const fabric = new MemoryOwnershipControlFabric();
+    let t = 0;
+    const east = build("us-east", fabric, () => t, 1000);
+    const west = build("eu-west", fabric, () => t, 1000);
+
+    east.homeRegionFor("acme"); // east home, epoch 1; west learns it.
+    expect(west.homeForKey("acme")).toBe("us-east");
+    expect(west.epochFor("acme")).toBe(1);
+
+    // east crashes (stops announcing). west's entry ages out.
+    t = 1000;
+    expect(west.homeForKey("acme")).toBeUndefined();
+    west.homeRegionFor("acme"); // west re-claims
+    expect(west.homeForKey("acme")).toBe("eu-west");
+    expect(west.epochFor("acme")).toBe(2); // bumped above the crashed home's epoch
+  });
+
+  it("fences a write routed under a stale epoch at the new home", () => {
+    const fabric = new MemoryOwnershipControlFabric();
+    let t = 0;
+    const east = build("us-east", fabric, () => t, 1000);
+    const west = build("eu-west", fabric, () => t, 1000);
+
+    east.homeRegionFor("acme"); // epoch 1
+    const staleEpoch = east.epochFor("acme"); // 1 — a write routed now carries epoch 1
+
+    // east crashes; west re-homes with a higher epoch.
+    t = 1000;
+    west.homeRegionFor("acme"); // epoch 2 at eu-west
+    expect(west.epochFor("acme")).toBe(2);
+
+    // A write that a split-brain loser accepted under the old epoch is fenced.
+    expect(west.acceptWriteAtHome("acme", staleEpoch)).toBe(false);
+    // A write routed under the current epoch is accepted.
+    expect(west.acceptWriteAtHome("acme", 2)).toBe(true);
+  });
+
+  it("a higher-epoch peer claim supersedes the current home (fencing on receipt)", () => {
+    // A peer that re-claimed after our home crashed announces a higher epoch;
+    // we must adopt it even though our entry is still 'live' on our clock.
+    const fabric = new MemoryOwnershipControlFabric();
+    const east = build("us-east", fabric, () => 0);
+    const west = build("eu-west", fabric, () => 0);
+
+    east.homeRegionFor("acme"); // east home epoch 1; west adopts.
+    expect(west.homeForKey("acme")).toBe("us-east");
+
+    // Simulate a peer (ap-southeast) announcing a higher-epoch re-claim directly
+    // onto the channel. west must fence the old home and adopt the higher epoch.
+    const apacControl = new MemoryOwnershipControl({ regionId: "ap-southeast", fabric });
+    apacControl.publish({ kind: "ownershipClaim", key: "acme", homeRegionId: "ap-southeast", epoch: 5 });
+
+    expect(west.homeForKey("acme")).toBe("ap-southeast");
+    expect(west.epochFor("acme")).toBe(5);
+    expect(east.homeForKey("acme")).toBe("ap-southeast"); // east fenced too
+  });
+
+  it("same-epoch concurrent claims still tie-break on lowest regionId", () => {
+    // Two regions claim at the same epoch before either's message arrives.
+    // Epoch ties → lowest regionId wins, preserving total + symmetric convergence.
+    const fabric = new MemoryOwnershipControlFabric();
+    const west = build("eu-west", fabric, () => 0);
+
+    // west holds epoch 1 for acme.
+    west.homeRegionFor("acme");
+    expect(west.homeForKey("acme")).toBe("eu-west");
+    expect(west.epochFor("acme")).toBe(1);
+
+    // A peer announces a competing claim at the SAME epoch but lower id.
+    const eastControl = new MemoryOwnershipControl({ regionId: "ap-southeast", fabric });
+    eastControl.publish({ kind: "ownershipClaim", key: "acme", homeRegionId: "ap-southeast", epoch: 1 });
+
+    // ap-southeast < eu-west → west adopts ap-southeast at the same epoch.
+    expect(west.homeForKey("acme")).toBe("ap-southeast");
+    expect(west.epochFor("acme")).toBe(1);
+  });
+
+  it("acceptWriteAtHome admits any epoch for a never-claimed key (epoch 0 baseline)", () => {
+    const fabric = new MemoryOwnershipControlFabric();
+    const east = build("us-east", fabric, () => 0);
+    expect(east.epochFor("never-seen")).toBe(0);
+    expect(east.acceptWriteAtHome("never-seen", 0)).toBe(true);
+  });
+});

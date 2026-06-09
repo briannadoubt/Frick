@@ -361,7 +361,22 @@ export class MemoryRegionProxy<TPayload = unknown> implements RegionProxyTranspo
  * subscribers via a dedicated control channel.
  */
 export type OwnershipControlMessage =
-  | { readonly kind: "ownershipClaim"; readonly key: WriteKey; readonly homeRegionId: RegionId }
+  | {
+      readonly kind: "ownershipClaim";
+      readonly key: WriteKey;
+      readonly homeRegionId: RegionId;
+      /**
+       * Monotonic fencing epoch for this key's home (finding multi-region-3).
+       * A region that (re-)claims a key bumps the epoch above the highest it
+       * has seen, so a claim that supersedes a crashed/stale home carries a
+       * strictly higher epoch. Writes carry the epoch they were routed under,
+       * and the home rejects any write whose epoch is older than the current
+       * one — fencing writes accepted by a superseded (split-brain) home.
+       * Optional on the wire for back-compat: a peer that omits it is treated
+       * as epoch 0.
+       */
+      readonly epoch?: number;
+    }
   | { readonly kind: "ownershipRelease"; readonly key: WriteKey; readonly homeRegionId: RegionId };
 
 /** Handler for ownership-control messages from peer regions. */
@@ -450,6 +465,8 @@ export class MemoryOwnershipControl implements OwnershipControlChannel {
 interface OwnershipEntry {
   readonly homeRegionId: RegionId;
   readonly at: number;
+  /** Monotonic fencing epoch for this home claim (finding multi-region-3). */
+  readonly epoch: number;
 }
 
 export interface ClaimRegionOwnershipOptions {
@@ -488,6 +505,34 @@ export interface ClaimRegionOwnershipOptions {
  * for a key), which still satisfies {@link RegionOwnershipResolver}'s
  * determinism contract: from the same converged claim set, every region
  * returns the same home.
+ *
+ * ## Fencing epoch (finding multi-region-3)
+ *
+ * TTL self-heal alone is **best-effort convergence, not mutual exclusion**:
+ * when a home crashes, peers age its entry out on their own local clocks at
+ * different wall-clock instants, so during the heal two regions can both
+ * believe they are home and both accept writes — a transient dual-home /
+ * split-brain window proportional to the TTL skew. The lowest-id tie-break
+ * eventually converges them, but only *after* the loser already accepted
+ * writes as "the" authoritative serialization point.
+ *
+ * To make that detectable + fenceable, every claim carries a **monotonic
+ * fencing epoch** per key. A region that (re-)claims a key bumps the epoch
+ * strictly above the highest it has seen for that key, so a claim that
+ * supersedes a crashed/stale home always wins on a higher epoch (ties — two
+ * regions claiming at the same epoch before either's message arrives — still
+ * break on lowest `regionId`, keeping convergence total + symmetric). Reads
+ * expose the current epoch via {@link epochFor}; a write routed under an epoch
+ * is fenced at the home by {@link acceptWriteAtHome}, which **rejects any write
+ * whose epoch is older than the home's current epoch** — so writes a superseded
+ * (split-brain loser) home accepted under a stale epoch are rejected once the
+ * new home's higher-epoch claim is known.
+ *
+ * This is **not** a consensus/lease store: it does not *prevent* a stale home
+ * from briefly accepting a write, it makes that write **fenceable** so the
+ * authoritative (highest-epoch) home can reject it rather than silently forking
+ * the stream. Strict mutual exclusion still requires a consensus/quorum lease
+ * (documented in `docs/multi-region.md` → "Split-brain").
  */
 export class ClaimRegionOwnership implements RegionOwnershipResolver {
   readonly regionId: RegionId;
@@ -495,6 +540,12 @@ export class ClaimRegionOwnership implements RegionOwnershipResolver {
   readonly #ttlMs: number;
   readonly #now: () => number;
   readonly #registry = new Map<WriteKey, OwnershipEntry>();
+  /**
+   * Highest fencing epoch ever observed per key (from our own claims or peers'),
+   * even after the entry expires/releases — so a re-claim always supersedes the
+   * crashed home with a strictly higher epoch rather than resetting to 0.
+   */
+  readonly #maxEpoch = new Map<WriteKey, number>();
   #unsubscribe: (() => void) | undefined;
 
   constructor(options: ClaimRegionOwnershipOptions) {
@@ -508,9 +559,13 @@ export class ClaimRegionOwnership implements RegionOwnershipResolver {
   homeRegionFor(key: WriteKey): RegionId {
     const known = this.#liveEntry(key);
     if (known) return known.homeRegionId;
-    // Unowned (or expired) — claim it for this region and announce.
-    this.#registry.set(key, { homeRegionId: this.regionId, at: this.#now() });
-    this.#control.publish({ kind: "ownershipClaim", key, homeRegionId: this.regionId });
+    // Unowned (or expired) — claim it for this region with a bumped epoch and
+    // announce. Bumping above the highest epoch we've ever seen for the key
+    // means this claim fences any write still routed under the crashed home's
+    // older epoch (finding multi-region-3).
+    const epoch = this.#bumpEpoch(key);
+    this.#registry.set(key, { homeRegionId: this.regionId, at: this.#now(), epoch });
+    this.#control.publish({ kind: "ownershipClaim", key, homeRegionId: this.regionId, epoch });
     return this.regionId;
   }
 
@@ -533,12 +588,48 @@ export class ClaimRegionOwnership implements RegionOwnershipResolver {
     return this.#liveEntry(key)?.homeRegionId;
   }
 
+  /**
+   * The current fencing epoch for `key` (finding multi-region-3): the epoch of
+   * the live home claim if one exists, else the highest epoch ever seen for the
+   * key (0 if never claimed). A write should be stamped with the epoch returned
+   * here at routing time so the home can fence it.
+   */
+  epochFor(key: WriteKey): number {
+    const live = this.#liveEntry(key);
+    if (live) return live.epoch;
+    return this.#maxEpoch.get(key) ?? 0;
+  }
+
+  /**
+   * Fencing check at the home (finding multi-region-3): whether a write routed
+   * under `writeEpoch` may be accepted here. Rejects (`false`) any write whose
+   * epoch is older than the home's current epoch — i.e. a write accepted by a
+   * superseded split-brain home under a stale epoch is fenced once the new
+   * home's higher-epoch claim is known. A write at the current epoch (or, for
+   * an as-yet-unknown key, any epoch ≥ the highest seen) is accepted.
+   */
+  acceptWriteAtHome(key: WriteKey, writeEpoch: number): boolean {
+    return writeEpoch >= this.epochFor(key);
+  }
+
   close(): void {
     this.#unsubscribe?.();
     this.#unsubscribe = undefined;
   }
 
   // -- internals -----------------------------------------------------------
+
+  /** Next monotonic epoch for a key: one above the highest ever seen. */
+  #bumpEpoch(key: WriteKey): number {
+    const next = (this.#maxEpoch.get(key) ?? 0) + 1;
+    this.#maxEpoch.set(key, next);
+    return next;
+  }
+
+  /** Record an observed epoch, keeping #maxEpoch monotonic. */
+  #observeEpoch(key: WriteKey, epoch: number): void {
+    if (epoch > (this.#maxEpoch.get(key) ?? 0)) this.#maxEpoch.set(key, epoch);
+  }
 
   #liveEntry(key: WriteKey): OwnershipEntry | undefined {
     const entry = this.#registry.get(key);
@@ -552,7 +643,7 @@ export class ClaimRegionOwnership implements RegionOwnershipResolver {
 
   #onMessage(message: OwnershipControlMessage): void {
     if (message.kind === "ownershipClaim") {
-      this.#onPeerClaim(message.key, message.homeRegionId);
+      this.#onPeerClaim(message.key, message.homeRegionId, message.epoch ?? 0);
     } else {
       // Release — drop our cached entry; next resolve re-claims deterministically.
       const entry = this.#registry.get(message.key);
@@ -562,22 +653,34 @@ export class ClaimRegionOwnership implements RegionOwnershipResolver {
     }
   }
 
-  #onPeerClaim(key: WriteKey, peerHome: RegionId): void {
+  #onPeerClaim(key: WriteKey, peerHome: RegionId, peerEpoch: number): void {
+    this.#observeEpoch(key, peerEpoch);
     const current = this.#registry.get(key);
     if (!current) {
-      this.#registry.set(key, { homeRegionId: peerHome, at: this.#now() });
+      this.#registry.set(key, { homeRegionId: peerHome, at: this.#now(), epoch: peerEpoch });
       return;
     }
     if (current.homeRegionId === peerHome) {
-      // Re-announcement of the home we already hold — refresh TTL.
-      this.#registry.set(key, { homeRegionId: peerHome, at: this.#now() });
+      // Re-announcement of the home we already hold — refresh TTL, adopting the
+      // peer's epoch if it advanced.
+      const epoch = Math.max(current.epoch, peerEpoch);
+      this.#registry.set(key, { homeRegionId: peerHome, at: this.#now(), epoch });
       return;
     }
-    // Conflict: two homes for one key. Tie-break = lowest regionId wins.
-    if (peerHome < current.homeRegionId) {
-      this.#registry.set(key, { homeRegionId: peerHome, at: this.#now() });
+    // Conflict: two homes for one key. Fence first — a strictly higher epoch
+    // supersedes (it re-claimed after the current home was crashed/stale).
+    if (peerEpoch > current.epoch) {
+      this.#registry.set(key, { homeRegionId: peerHome, at: this.#now(), epoch: peerEpoch });
+      return;
     }
-    // else: we hold the lower id; keep ours. The peer adopts ours when our
-    // claim reaches it. Both converge on the lowest id with no further messages.
+    if (peerEpoch < current.epoch) return; // our home holds the newer epoch; keep ours.
+    // Same epoch (concurrent claims before either's message arrived):
+    // tie-break = lowest regionId wins. Total + symmetric, so all regions pick
+    // the same home from the same claims regardless of arrival order.
+    if (peerHome < current.homeRegionId) {
+      this.#registry.set(key, { homeRegionId: peerHome, at: this.#now(), epoch: peerEpoch });
+    }
+    // else: we hold the lower id at the same epoch; keep ours. The peer adopts
+    // ours when our claim reaches it. Both converge with no further messages.
   }
 }
