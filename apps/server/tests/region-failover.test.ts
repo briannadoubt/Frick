@@ -138,3 +138,81 @@ describe("RegionFailoverCoordinator", () => {
     expect(onPromote).not.toHaveBeenCalled();
   });
 });
+
+describe("RegionFailoverCoordinator deterministic candidate universe (multi-region-2)", () => {
+  it("promotes to a healthy region that was NEVER reported into the health map (ownership value)", () => {
+    // ap-southeast is referenced by the ownership map but has NO #health entry.
+    // Before the fix, promotion candidates were #health.keys() only, so
+    // ap-southeast (healthy by default) was silently excluded as a target.
+    const ownership = new StaticRegionOwnership({
+      assignments: { acme: "us-east", other: "ap-southeast" },
+      defaultHomeRegionId: "us-east",
+    });
+    const coordinator = new RegionFailoverCoordinator({
+      ownership,
+      // Only us-east + eu-west are reported; ap-southeast is absent.
+      initialHealth: { "us-east": "healthy", "eu-west": "healthy" },
+    });
+    coordinator.manageTenant("acme"); // home us-east
+
+    coordinator.markDown("us-east");
+
+    // Universe = {us-east, ap-southeast (ownership), eu-west (health)} minus the
+    // failed home, all healthy → lowest id = ap-southeast.
+    expect(ownership.homeRegionFor("acme")).toBe("ap-southeast");
+  });
+
+  it("considers configuredRegions absent from both ownership and health", () => {
+    const ownership = new StaticRegionOwnership({
+      assignments: { acme: "us-east" },
+      defaultHomeRegionId: "us-east",
+    });
+    const coordinator = new RegionFailoverCoordinator({
+      ownership,
+      initialHealth: { "us-east": "healthy" },
+      // af-south1 is known only via configuredRegions, healthy by default.
+      configuredRegions: ["af-south1", "us-east"],
+    });
+    coordinator.manageTenant("acme");
+
+    coordinator.markDown("us-east");
+
+    // Only surviving candidate is af-south1 (default-healthy).
+    expect(ownership.homeRegionFor("acme")).toBe("af-south1");
+  });
+
+  it("every region computes the IDENTICAL winner from the same ownership + configured inputs", () => {
+    // Two coordinators that observed DIFFERENT health subsets but share the
+    // same ownership + configuredRegions must still promote to the same home.
+    const make = (initialHealth: Record<string, "healthy" | "draining" | "down">) => {
+      const ownership = new StaticRegionOwnership({
+        assignments: { acme: "us-east" },
+        defaultHomeRegionId: "us-east",
+      });
+      const coordinator = new RegionFailoverCoordinator({
+        ownership,
+        initialHealth,
+        configuredRegions: ["us-east", "eu-west", "ap-southeast"],
+      });
+      coordinator.manageTenant("acme");
+      coordinator.markDown("us-east");
+      return ownership.homeRegionFor("acme");
+    };
+
+    // Coordinator B heard only us-east; coordinator C heard everything.
+    const winnerB = make({ "us-east": "healthy" });
+    const winnerC = make({ "us-east": "healthy", "eu-west": "healthy", "ap-southeast": "healthy" });
+
+    expect(winnerB).toBe("ap-southeast");
+    expect(winnerC).toBe("ap-southeast");
+    expect(winnerB).toBe(winnerC); // determinism across divergent health views
+  });
+
+  it("StaticRegionOwnership.knownRegions returns the union of assignment values + default", () => {
+    const ownership = new StaticRegionOwnership({
+      assignments: { acme: "us-east", globex: "eu-west", other: "us-east" },
+      defaultHomeRegionId: "ap-southeast",
+    });
+    expect([...ownership.knownRegions()].sort()).toEqual(["ap-southeast", "eu-west", "us-east"]);
+  });
+});

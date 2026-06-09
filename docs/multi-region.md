@@ -323,10 +323,18 @@ closes that gap with minimal, testable orchestration
 - **Deterministic promotion.** When a key's home becomes unavailable, the new home is
   the **lowest-`regionId` healthy region** among the survivors — mirroring the
   FR-106/FR-154 lowest-id tie-break, so it is total + symmetric: from the same
-  `{ownership snapshot} × {health map}` every region computes the identical promotion
-  with **no coordination messages**. Writes then re-route to the promoted home via
-  the unchanged `routeWrite` path (routing reads ownership live, so promotion is just
-  an ownership reassignment).
+  `{ownership snapshot} × {region universe} × {health map}` every region computes the
+  identical promotion with **no coordination messages**. Writes then re-route to the
+  promoted home via the unchanged `routeWrite` path (routing reads ownership live, so
+  promotion is just an ownership reassignment).
+- **Candidate universe (finding multi-region-2).** Promotion candidates are the
+  **full known region universe** — the union of the ownership map's regions
+  (assignment values + default, via `StaticRegionOwnership.knownRegions()`), the
+  coordinator's `configuredRegions` option, and every region with a reported health
+  entry — **not** merely the regions a coordinator happens to have heard health for.
+  A region absent from the health map is considered with its default `healthy` status,
+  so a genuinely healthy region that was never explicitly reported is still an eligible
+  failover target.
 - **Rejoin without flapping.** A recovered region (`down`/`draining` → `healthy`)
   does **not** auto-revert a promotion — the promoted home stays home until an
   operator (or a static-config reconcile) moves it back, avoiding write-ownership
@@ -334,6 +342,28 @@ closes that gap with minimal, testable orchestration
   promotion target again.
 - **Honest degraded state.** With zero healthy survivors there is nowhere to promote
   to, so ownership is left as-is and re-evaluated when a region comes back up.
+
+### Failover determinism — what is and is not guaranteed
+
+The promotion *rule* is deterministic: from identical inputs, every region computes
+the identical winner with no messages exchanged. After finding multi-region-2 those
+inputs are the union of the ownership map's regions, the configured-region set, and
+the reported health — with unreported regions defaulting to `healthy`. So a healthy
+region is never silently excluded as a target just because a given coordinator never
+heard a health report for it.
+
+**This determinism only holds if every coordinator is fed the same inputs.** The
+per-region `RegionFailoverCoordinator` instances exchange **no health gossip** — there
+is no built-in transport that synchronizes `#health` across regions. Operators MUST
+therefore drive every coordinator from the **same ownership snapshot, the same
+`configuredRegions`, and a consistent health view** (e.g. a shared health-check
+source / control plane that reports identical region health to each region). If two
+coordinators act on *divergent* health views, they can still promote the same key to
+different homes — the determinism is in the *rule*, not in the *inputs*. Strict,
+coordination-free cross-region agreement on ownership ultimately requires a
+consensus/lease store (see "Split-brain" below); the static promotion rule is the
+honest, dependency-free default for deployments that can guarantee a consistent health
+feed.
 
 **Operational runbook + load-balancer/DNS glue:** see
 [`docs/multi-region-operations.md`](multi-region-operations.md) — health-checking,

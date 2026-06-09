@@ -146,6 +146,20 @@ export class StaticRegionOwnership implements RegionOwnershipResolver {
   }
 
   /**
+   * Every region this ownership map can currently route a write to: the union
+   * of all assignment home values and the default home. FR-107 uses this to
+   * build a complete promotion-candidate universe so a healthy region that was
+   * never explicitly reported into the coordinator's health map is still an
+   * eligible failover target (finding multi-region-2). Deterministic for a
+   * given ownership state, so every region computes the identical set.
+   */
+  knownRegions(): ReadonlySet<RegionId> {
+    const regions = new Set<RegionId>(this.#assignments.values());
+    regions.add(this.#default);
+    return regions;
+  }
+
+  /**
    * Reassign a key's home (or clear it back to the default with
    * `undefined`). Used by FR-107 failover to promote a surviving region
    * when the current home goes down. Returns the new effective home.

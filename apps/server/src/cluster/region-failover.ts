@@ -31,6 +31,21 @@
  * {@link RegionWriteRouter.routeWrite} path — promotion is just an
  * ownership reassignment, and routing reads ownership live.
  *
+ * **Candidate universe (finding multi-region-2).** Promotion candidates are the
+ * **full known region universe** — the union of the ownership map's regions
+ * (assignment values + default), the configured regions
+ * ({@link RegionFailoverCoordinatorOptions.configuredRegions}), and every
+ * region with a reported health entry — **not** merely the regions this
+ * coordinator happens to have heard health for. A region absent from the health
+ * map is considered with its default `healthy` status, so a genuinely healthy
+ * region that was never explicitly reported is still an eligible target, and
+ * every region computes the identical winner from identical ownership +
+ * configured-region inputs. (Determinism still requires that every coordinator
+ * observe the same ownership snapshot and configured-region set + a consistent
+ * health view; the per-region instances exchange no messages, so operators must
+ * feed each the same inputs — see `docs/multi-region.md` → "Failover
+ * determinism".)
+ *
  * When a recovered region **rejoins** (`down`/`draining` → `healthy`),
  * promotion is *not* automatically reverted — the promoted home stays home
  * until an operator (or a future static-config reconcile) moves it back.
@@ -89,6 +104,17 @@ export interface RegionFailoverCoordinatorOptions {
    * `healthy` the first time they're referenced (optimistic default).
    */
   readonly initialHealth?: Readonly<Record<RegionId, RegionHealth>>;
+  /**
+   * The configured region universe — every region this deployment may promote
+   * a key to, beyond the ones referenced by the ownership map. Used together
+   * with the ownership assignments + reported health to build a complete
+   * promotion-candidate set, so a healthy region that was never explicitly
+   * reported into {@link initialHealth}/`reportHealth` is still an eligible
+   * failover target and every region computes the identical promotion winner
+   * (finding multi-region-2). Optional and additive: omit it and the candidate
+   * universe is still the union of ownership values + reported-health regions.
+   */
+  readonly configuredRegions?: Iterable<RegionId>;
   /** Called after each home promotion. */
   readonly onPromote?: HomePromotionHandler;
 }
@@ -105,14 +131,33 @@ export class RegionFailoverCoordinator {
   readonly #health = new Map<RegionId, RegionHealth>();
   /** Keys the coordinator manages, so it knows what to re-home on outage. */
   readonly #managedKeys = new Set<WriteKey>();
+  /** Statically-configured region universe (FR-107 promotion candidates). */
+  readonly #configuredRegions: ReadonlySet<RegionId>;
   readonly #onPromote: HomePromotionHandler | undefined;
 
   constructor(options: RegionFailoverCoordinatorOptions) {
     this.#ownership = options.ownership;
     this.#onPromote = options.onPromote;
+    this.#configuredRegions = new Set(options.configuredRegions ?? []);
     for (const [regionId, health] of Object.entries(options.initialHealth ?? {})) {
       this.#health.set(regionId, health);
     }
+  }
+
+  /**
+   * The full known region universe promotion considers: the union of the
+   * ownership map's regions (assignment values + default), the configured
+   * regions, and every region with a reported health entry. Driving promotion
+   * from this complete set — rather than only `#health.keys()` — means a
+   * healthy region that was never explicitly reported is still an eligible
+   * target, and every region computes the identical winner from identical
+   * ownership + configured-region inputs (finding multi-region-2).
+   */
+  #candidateUniverse(): Set<RegionId> {
+    const universe = new Set<RegionId>(this.#ownership.knownRegions());
+    for (const region of this.#configuredRegions) universe.add(region);
+    for (const region of this.#health.keys()) universe.add(region);
+    return universe;
   }
 
   /** Current health of a region (`healthy` if never reported). */
@@ -195,7 +240,12 @@ export class RegionFailoverCoordinator {
   // -- internals -----------------------------------------------------------
 
   #promoteAwayFrom(key: WriteKey, failedHome: RegionId): RegionId {
-    const target = this.promotionTargetFor(failedHome, this.#health.keys());
+    // Candidates are the FULL known region universe, not just the regions this
+    // coordinator happens to have heard health for (finding multi-region-2):
+    // a region absent from #health is considered with its default `healthy`,
+    // and every region computing promotion from the same ownership +
+    // configured-region inputs picks the identical lowest-id winner.
+    const target = this.promotionTargetFor(failedHome, this.#candidateUniverse());
     if (target === undefined) {
       // No survivor known — leave ownership as-is. The next health report
       // that brings a region up (and the eager check in manageTenant) will
