@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTNC0Q0190TS1SZCK1T5V96P",
+  "ts": "2026-06-09T04:59:53.729Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTN46588BFSS4XH9CW11F9EW",
+    "commentId": "01KTNC0Q0190TS1SZCK1T5V96N",
+    "author": "claude",
+    "body": "Wave 2a calls-security merged green (14 findings): SFU join-token verification, transport ownership, createCall membership, signal-relay call-membership gate, appId scoping, lifecycle/leak/DoS hardening. Server 1153, protocol 110. Wave 2b (isolation + multi-region, 11 findings) in progress."
+  }
+}
