@@ -658,6 +658,11 @@ export class CallControlPlane {
     return this.#finalizeEnd(actor.tenantId, appId, callId, actor.userId);
   }
 
+  /** Canonical `WebRTCSignal` type name this plane's signals are keyed under. */
+  get webrtcSignalName(): string {
+    return this.#names.webrtcSignal;
+  }
+
   // -- reads (for clients / reconnect) ------------------------------------
 
   async getRoom(
@@ -666,6 +671,45 @@ export class CallControlPlane {
     appId: string = DEFAULT_APP_ID,
   ): Promise<CallRoomRecord | undefined> {
     return this.#readRoom(tenantId, appId, callId);
+  }
+
+  /**
+   * Whether `userId` may participate in `callId`'s signaling: true iff they are
+   * the room creator, an active/left participant, or an invitee (any non-ended
+   * call). Backs the WebRTCSignal relay gate (calls-signal-1). Returns false for
+   * an unknown/ended call or a non-member. Tenant + app scoped.
+   */
+  async isSignalMember(
+    tenantId: string,
+    callId: string,
+    userId: string,
+    appId: string = DEFAULT_APP_ID,
+  ): Promise<boolean> {
+    const room = await this.#readRoom(tenantId, appId, callId);
+    if (!room || room.state === "ended") {
+      return false;
+    }
+    if (room.createdBy === userId) {
+      return true;
+    }
+    // Invite / participant lookups are best-effort: a deployment can declare
+    // CallRoom without the full CallInvite/CallParticipant types (a partial call
+    // schema). Treat a missing type as "no membership via that path" rather than
+    // crashing the signal relay — the creator check above still holds.
+    try {
+      const invite = await this.#readInvite(tenantId, appId, callId, userId);
+      if (invite && invite.status !== "declined" && invite.status !== "cancelled") {
+        return true;
+      }
+    } catch {
+      // CallInvite type absent — ignore.
+    }
+    try {
+      const participants = await this.listParticipants(tenantId, callId, appId);
+      return participants.some((p) => p.userId === userId);
+    } catch {
+      return false;
+    }
   }
 
   async listInvites(

@@ -2563,6 +2563,20 @@ export function createFrickServer(options: ServerOptions = {}) {
           signalRoute.key,
           tenantMembershipReader(store, principal.tenantId),
           policyHooks,
+          // Gate WebRTC call signals on call membership over HTTP too
+          // (calls-signal-1) — the same relay the WS gateway gates.
+          callControlPlane
+            ? {
+                signalName: callControlPlane.webrtcSignalName,
+                isCallMember: (callId, userId) =>
+                  callControlPlane.isSignalMember(
+                    principal.tenantId,
+                    callId,
+                    userId,
+                    activeAppId,
+                  ),
+              }
+            : undefined,
         );
         const value = await readJsonBody(request, tenantLimits.maxHttpBodyBytes);
         await store.enqueueSignal(
@@ -2589,6 +2603,18 @@ export function createFrickServer(options: ServerOptions = {}) {
           signalRoute.key,
           tenantMembershipReader(store, principal.tenantId),
           policyHooks,
+          callControlPlane
+            ? {
+                signalName: callControlPlane.webrtcSignalName,
+                isCallMember: (callId, userId) =>
+                  callControlPlane.isSignalMember(
+                    principal.tenantId,
+                    callId,
+                    userId,
+                    activeAppId,
+                  ),
+              }
+            : undefined,
         );
         sendJson(response, 200, {
           schemaHash: store.schema.hash,

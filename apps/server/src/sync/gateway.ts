@@ -38,6 +38,7 @@ import {
 } from "../calls/index.js";
 import {
   assertCanAppend,
+  assertCanCreateCall,
   assertCanSignal,
   assertCanSubscribe,
   assertCanWriteObject,
@@ -47,6 +48,7 @@ import {
   AuthorizationError,
   SessionExpiredError,
   tenantMembershipReader,
+  type CallSignalAuthorizer,
   type FrickCascadeGrantLookup,
   type FrickGrantLookup,
   type FrickPolicyHook,
@@ -473,6 +475,27 @@ export class SyncGateway {
    */
   #appIdFor(client: SyncClient): string {
     return client.appId ?? DEFAULT_APP_ID;
+  }
+
+  /**
+   * Build the WebRTC call-signal membership gate for a client (calls-signal-1).
+   * Returns undefined when calls are disabled (no plane) — the signal relay then
+   * keeps its default policy. The gate is tenant + app scoped to the connection.
+   */
+  #callSignalAuthorizerFor(
+    client: SyncClient,
+    principal: Principal,
+  ): CallSignalAuthorizer | undefined {
+    const plane = this.#callControlPlane;
+    if (!plane) {
+      return undefined;
+    }
+    const tenantId = principal.tenantId;
+    const appId = this.#appIdFor(client);
+    return {
+      signalName: plane.webrtcSignalName,
+      isCallMember: (callId, userId) => plane.isSignalMember(tenantId, callId, userId, appId),
+    };
   }
 
   /**
@@ -1228,6 +1251,7 @@ export class SyncGateway {
         tenantMembershipReader(this.store, principal.tenantId),
         this.#policyHooks,
         this.#cascadeGrantLookup,
+        this.#callSignalAuthorizerFor(client, principal),
       );
     } catch (error) {
       if (this.#sendAuthNack(client, payload.subscriptionId, error)) {
@@ -1635,6 +1659,7 @@ export class SyncGateway {
         payload.key,
         tenantMembershipReader(this.store, principal.tenantId),
         this.#policyHooks,
+        this.#callSignalAuthorizerFor(client, principal),
       );
     } catch (error) {
       if (this.#sendAuthNack(client, payload.requestId, error)) {
@@ -1707,6 +1732,16 @@ export class SyncGateway {
       let result: CallCommandResultPayload;
       switch (command.op) {
         case "create": {
+          // calls-authz-1: gate creation on tenant-membership of creator +
+          // invitees and any app conversation-membership policy hook, reusing
+          // the same machinery the object/signal paths use.
+          await assertCanCreateCall(
+            principal,
+            command.conversationId,
+            command.inviteeUserIds,
+            tenantMembershipReader(this.store, principal.tenantId),
+            this.#policyHooks,
+          );
           const created = await plane.createCall(actor, {
             conversationId: command.conversationId,
             inviteeUserIds: command.inviteeUserIds,
@@ -1818,6 +1853,11 @@ export class SyncGateway {
    * frame loop's outer catch surfaces them.
    */
   #sendCallCommandNack(client: SyncClient, requestId: string, error: unknown): void {
+    // Authorization/authentication failures from the call-creation membership
+    // gate (calls-authz-1) map to the standard auth nack shape.
+    if (this.#sendAuthNack(client, requestId, error)) {
+      return;
+    }
     if (error instanceof CallAuthzError) {
       const envelope = createFrickErrorEnvelope({
         code: "auth.forbidden",

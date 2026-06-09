@@ -42,6 +42,8 @@ describe("FR-15 — call command wire", () => {
   it("creates a call, returning the room + invites", async () => {
     app = await startServer();
     const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
+    // The invitee must be a real tenant member (calls-authz-1).
+    await devLogin(app.httpUrl, { userId: "user-bob" });
     const socket = await connectAndHello(app.url, app.schemaHash, ada.sessionToken, "device-ada");
 
     const result = await sendCommand(socket, {
@@ -117,6 +119,7 @@ describe("FR-15 — call command wire", () => {
     app = await startServer();
     const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
     const mallory = await devLogin(app.httpUrl, { userId: "user-mallory" });
+    await devLogin(app.httpUrl, { userId: "user-bob" });
     const adaSocket = await connectAndHello(app.url, app.schemaHash, ada.sessionToken, "device-ada");
     const created = await sendCommand(adaSocket, {
       op: "create",
@@ -148,6 +151,51 @@ describe("FR-15 — call command wire", () => {
     expect(nack.code).toBe("auth.forbidden");
     expect((nack.error.details as { reason?: string }).reason).toBe("callsDisabled");
     socket.close();
+  });
+
+  it("nacks create when an invitee is not a tenant member (calls-authz-1)", async () => {
+    app = await startServer();
+    const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
+    // user-ghost is never registered → not a tenant member.
+    const socket = await connectAndHello(app.url, app.schemaHash, ada.sessionToken, "device-ada");
+
+    const nack = await sendCommandExpectingNack(socket, {
+      op: "create",
+      conversationId: "conversation-1",
+      inviteeUserIds: ["user-ghost"],
+    });
+    expect(nack.code).toBe("auth.forbidden");
+    expect((nack.error.details as { reason?: string }).reason).toBe("notMember");
+    socket.close();
+  });
+
+  it("rejects a WebRTC signal from a non-participant of the call (calls-signal-1)", async () => {
+    app = await startServer();
+    const ada = await devLogin(app.httpUrl, { userId: "user-ada" });
+    const bob = await devLogin(app.httpUrl, { userId: "user-bob" });
+    const mallory = await devLogin(app.httpUrl, { userId: "user-mallory" });
+    const adaSocket = await connectAndHello(app.url, app.schemaHash, ada.sessionToken, "device-ada");
+    const created = await sendCommand(adaSocket, {
+      op: "create",
+      conversationId: "conversation-1",
+      inviteeUserIds: ["user-bob"],
+    });
+    const callId = created.room!.id;
+
+    // Mallory (not a participant/invitee of the call) cannot inject a signal
+    // keyed by the callId.
+    const malSocket = await connectAndHello(app.url, app.schemaHash, mallory.sessionToken, "device-mal");
+    const nack = await sendSignalExpectingNack(malSocket, callId);
+    expect(nack.code).toBe("auth.forbidden");
+    expect((nack.error.details as { reason?: string }).reason).toBe("notMember");
+
+    // The creator (ada) CAN signal their own call.
+    const adaAck = await sendSignal(adaSocket, callId);
+    expect(adaAck[0]).toBe(FrameKind.Ack);
+
+    void bob;
+    adaSocket.close();
+    malSocket.close();
   });
 
   // -- FR-155: SFU media negotiation over the wire -------------------------
@@ -310,6 +358,41 @@ async function sendCommandExpectingNack(
 ): Promise<NackPayload> {
   const requestId = `req-${Math.random().toString(36).slice(2)}`;
   const frame = await roundTrip(socket, requestId, command);
+  if (frame[0] !== FrameKind.Nack) {
+    throw new Error(`Expected Nack, got ${frame[0]}`);
+  }
+  return frame[1] as NackPayload;
+}
+
+/** Send a WebRTCSignal keyed by `callId` and resolve the Ack/Nack frame. */
+function sendSignal(socket: WebSocket, callId: string): Promise<FrickFrame> {
+  const requestId = `sig-${Math.random().toString(36).slice(2)}`;
+  return new Promise((resolve) => {
+    const onMessage = (data: Buffer) => {
+      const frame = decodeFrame(data) as FrickFrame;
+      const body = frame[1] as { requestId?: string };
+      if (body?.requestId === requestId) {
+        socket.off("message", onMessage);
+        resolve(frame);
+      }
+    };
+    socket.on("message", onMessage);
+    socket.send(
+      encodeFrame([
+        FrameKind.SignalSend,
+        {
+          requestId,
+          name: "WebRTCSignal",
+          key: callId,
+          value: { senderDeviceId: "device-x", kind: "offer", payload: new Uint8Array([1, 2, 3]) },
+        },
+      ]),
+    );
+  });
+}
+
+async function sendSignalExpectingNack(socket: WebSocket, callId: string): Promise<NackPayload> {
+  const frame = await sendSignal(socket, callId);
   if (frame[0] !== FrameKind.Nack) {
     throw new Error(`Expected Nack, got ${frame[0]}`);
   }

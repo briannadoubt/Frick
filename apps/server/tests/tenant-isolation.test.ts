@@ -128,6 +128,17 @@ describe("tenant isolation", () => {
     const a = await devLogin(app.httpUrl, { userId: "user-a-shared", tenantId: "tenant-a" });
     const b = await devLogin(app.httpUrl, { userId: "user-b-shared", tenantId: "tenant-b" });
 
+    // WebRTCSignal keys are callIds and the relay is gated on call membership
+    // (calls-signal-1). Seed a real call in tenant-a created by user-a (the
+    // creator is an implicit member), so the signal is allowed for user-a while
+    // tenant-b — which has no such call — is denied. (productTestSchema's
+    // CallRoom only declares conversationId/state/createdBy.)
+    await app.store.upsertObject("tenant-a", "CallRoom", "room-1", {
+      conversationId: "conv-shared",
+      state: "active",
+      createdBy: "user-a-shared",
+    });
+
     const post = await postJson(
       `${app.httpUrl}/signals/WebRTCSignal/room-1`,
       { senderDeviceId: "device-shared", kind: "offer", payload: "a-only" },
@@ -135,8 +146,11 @@ describe("tenant isolation", () => {
     );
     expect(post.status).toBe(200);
 
+    // tenant-b's user is not a member of tenant-a's call (and the call doesn't
+    // exist in tenant-b), so the WebRTC signal relay denies the read outright —
+    // an even stronger isolation guarantee than an empty drain.
     const drainB = await getJson(`${app.httpUrl}/signals/WebRTCSignal/room-1`, b.sessionToken);
-    expect(drainB.body.data).toEqual([]);
+    expect(drainB.status).toBe(403);
 
     const drainA = await getJson(`${app.httpUrl}/signals/WebRTCSignal/room-1`, a.sessionToken);
     expect(drainA.body.data.length).toBeGreaterThan(0);

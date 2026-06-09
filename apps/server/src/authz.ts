@@ -123,6 +123,25 @@ export interface MembershipReader {
 }
 
 /**
+ * Call-membership gate for the `WebRTCSignal` relay (calls-signal-1). The relay
+ * is keyed by `callId`; both SDP/ICE and FR-156 E2EE `keyEpoch` announcements
+ * ride it. Without this gate any authenticated tenant user who knows/guesses a
+ * callId could subscribe to or inject into a call's signaling channel (forging
+ * offers/answers/ICE, or poisoning the E2EE key epoch).
+ *
+ * `isCallMember(callId, userId)` returns `true` iff `userId` is a participant or
+ * invitee of `callId` within the principal's tenant. Supplied by the gateway,
+ * backed by the {@link CallControlPlane} participant/invite store. When no
+ * authorizer is provided (calls disabled, or a non-call signal path), the
+ * WebRTC signal gate is skipped and the default signal policy applies.
+ */
+export interface CallSignalAuthorizer {
+  /** Canonical `WebRTCSignal` type name whose key is a callId. */
+  readonly signalName: string;
+  isCallMember(callId: string, userId: string): Promise<boolean>;
+}
+
+/**
  * Build a tenant-scoped {@link MembershipReader} over a {@link FrickStore}.
  * The returned reader silently restricts every query to the supplied
  * `tenantId`. Used by the HTTP and WebSocket request paths so a principal
@@ -159,7 +178,8 @@ export type FrickAction =
   | "blob.read"
   | "blob.write"
   | "projection.read"
-  | "search.query";
+  | "search.query"
+  | "call.create";
 
 /**
  * Reasons surfaced through {@link FrickDecision}. The framework maps these to
@@ -188,7 +208,7 @@ const FOUNDATION_SEARCH_OBJECTS_WITH_SOURCE_VISIBILITY = new Set<string>();
 export function deny(
   reason: Exclude<FrickDecisionReason, "allow">,
   publicMessage: string,
-): FrickDecision {
+): FrickDecision & { allow: false } {
   return { allow: false, reason, publicMessage };
 }
 
@@ -348,6 +368,12 @@ export function decide(input: FrickPolicyInput, memberships: MembershipReader): 
     case "stream.append": {
       return ALLOW;
     }
+    case "call.create": {
+      // Baseline allow for any authenticated tenant member. Tenant-membership of
+      // the creator + invitees is checked by assertCanCreateCall; an app policy
+      // hook can TIGHTEN this to enforce conversation membership (calls-authz-1).
+      return ALLOW;
+    }
     default:
       return deny("notAuthorizedForResource", "Action not authorized");
   }
@@ -362,6 +388,35 @@ function decideSignalAccess(
   void key;
   void memberships;
   return ALLOW;
+}
+
+/**
+ * Tighten a signal decision for the `WebRTCSignal` relay: a principal may only
+ * send/read a call's WebRTC signals if they are a participant or invitee of that
+ * call (calls-signal-1). Non-call signals and the no-authorizer case are left
+ * untouched (returns the baseline). Only ever tightens an allow to a deny.
+ */
+async function gateCallSignal(
+  baseline: FrickDecision,
+  principal: Principal,
+  signalName: string,
+  key: string | undefined,
+  authorizer: CallSignalAuthorizer | undefined,
+): Promise<FrickDecision> {
+  if (!baseline.allow || !authorizer || signalName !== authorizer.signalName) {
+    return baseline;
+  }
+  // A WebRTCSignal's key is the callId. A missing/empty key cannot be a call.
+  if (!key) {
+    return deny("notMember", "WebRTC signals must target a call");
+  }
+  const member = await authorizer.isCallMember(key, principal.userId);
+  return member
+    ? baseline
+    : deny(
+        "notMember",
+        `${principal.userId} is not a participant of call ${key}`,
+      );
 }
 
 function decidePresenceAccess(
@@ -566,6 +621,7 @@ export async function assertCanSubscribe(
   memberships: MembershipReader,
   hooks?: readonly FrickPolicyHook[],
   cascadeGrantLookup?: FrickCascadeGrantLookup,
+  callSignalAuthorizer?: CallSignalAuthorizer,
 ): Promise<void> {
   if (kind === "projection") {
     const decision = await decideWithHooks(
@@ -585,7 +641,7 @@ export async function assertCanSubscribe(
     return;
   }
   if (kind === "signal") {
-    const decision = await decideWithHooks(
+    const baseline = await decideWithHooks(
       {
         principal,
         action: "signal.read",
@@ -593,6 +649,15 @@ export async function assertCanSubscribe(
       },
       memberships,
       hooks,
+    );
+    // Gate WebRTC call signals on call membership (calls-signal-1) so a
+    // subscriber can't read a call's SDP/ICE/keyEpoch unless they're in it.
+    const decision = await gateCallSignal(
+      baseline,
+      principal,
+      name,
+      key,
+      callSignalAuthorizer,
     );
     if (!decision.allow) {
       throw new AuthorizationError(decision);
@@ -874,9 +939,79 @@ export async function assertCanReadSignal(
   key: string,
   memberships: MembershipReader,
   hooks?: readonly FrickPolicyHook[],
+  callSignalAuthorizer?: CallSignalAuthorizer,
 ): Promise<void> {
-  const decision = await decideWithHooks(
+  const baseline = await decideWithHooks(
     { principal, action: "signal.read", resource: { kind: "signal", name: signal, key } },
+    memberships,
+    hooks,
+  );
+  const decision = await gateCallSignal(
+    baseline,
+    principal,
+    signal,
+    key,
+    callSignalAuthorizer,
+  );
+  if (!decision.allow) {
+    throw new AuthorizationError(decision);
+  }
+}
+
+/**
+ * Authorize a call creation (calls-authz-1). createCall previously bound a call
+ * to an arbitrary `conversationId` and rang arbitrary `inviteeUserIds` with no
+ * gate, enabling ring-spam and attaching call activity to conversations the
+ * actor can't access.
+ *
+ * Reuses the existing tenant-membership + policy-hook machinery (no parallel
+ * system):
+ *  1. The creator and every invitee must be members of the principal's tenant
+ *     (`memberships.hasUser`) — you cannot ring a non-existent / cross-tenant
+ *     user. Fails with `notMember`.
+ *  2. The framework's `call.create` decision (default ALLOW) is then run through
+ *     registered policy hooks so an app that owns conversations can TIGHTEN to a
+ *     deny when the creator/invitees are not co-members of `conversationId`
+ *     (the conversationId + invitees are surfaced in `context`).
+ *
+ * Throws {@link AuthorizationError} (auth.forbidden) on any denial.
+ */
+export async function assertCanCreateCall(
+  principal: Principal,
+  conversationId: string,
+  inviteeUserIds: readonly string[],
+  memberships: MembershipReader,
+  hooks?: readonly FrickPolicyHook[],
+): Promise<void> {
+  // The creator must be a tenant member.
+  if (!(await memberships.hasUser(principal.userId))) {
+    throw new AuthorizationError(
+      deny("notMember", `${principal.userId} is not a member of the tenant`),
+    );
+  }
+  // Every invitee must be a tenant member — no ringing unknown/cross-tenant
+  // users.
+  for (const invitee of inviteeUserIds) {
+    if (invitee === principal.userId) {
+      continue;
+    }
+    if (!(await memberships.hasUser(invitee))) {
+      throw new AuthorizationError(
+        deny("notMember", `Invitee ${invitee} is not a member of the tenant`),
+      );
+    }
+  }
+  const decision = await decideWithHooks(
+    {
+      principal,
+      action: "call.create",
+      resource: {
+        kind: "call",
+        key: conversationId,
+        tenantId: principal.tenantId,
+      },
+      context: { conversationId, inviteeUserIds: [...inviteeUserIds] },
+    },
     memberships,
     hooks,
   );
@@ -891,14 +1026,26 @@ export async function assertCanSignal(
   key: string,
   memberships?: MembershipReader,
   hooks?: readonly FrickPolicyHook[],
+  callSignalAuthorizer?: CallSignalAuthorizer,
 ): Promise<void> {
-  if (!memberships) {
+  // The WebRTC call-signal gate must run even when there's no tenant-membership
+  // reader (the default signal policy is otherwise ALLOW for any tenant user).
+  if (!memberships && !callSignalAuthorizer) {
     return;
   }
-  const decision = await decideWithHooks(
-    { principal, action: "signal.send", resource: { kind: "signal", name: signal, key } },
-    memberships,
-    hooks,
+  const baseline = memberships
+    ? await decideWithHooks(
+        { principal, action: "signal.send", resource: { kind: "signal", name: signal, key } },
+        memberships,
+        hooks,
+      )
+    : ALLOW;
+  const decision = await gateCallSignal(
+    baseline,
+    principal,
+    signal,
+    key,
+    callSignalAuthorizer,
   );
   if (!decision.allow) {
     throw new AuthorizationError(decision);
