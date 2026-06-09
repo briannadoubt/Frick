@@ -139,8 +139,9 @@ class FrickSyncSocketTelemetryTest {
         }
         val socket = newSocket(telemetry)
         withTimeout(2_000) { socket.awaitReady() }
-        // Give the inbound HelloAck counter time to record.
-        Thread.sleep(100)
+        // Wait for the inbound HelloAck counter to record (poll, not a fixed
+        // sleep, so the assertions don't flake under CI load).
+        awaitUntil { "HelloAck" in telemetry.counterKinds("frick.client.ws.frames.received.total") }
 
         // Exactly one connection span, with the mirrored attributes.
         assertEquals(1, telemetry.spans.size)
@@ -159,7 +160,8 @@ class FrickSyncSocketTelemetryTest {
         assertTrue("HelloAck" in telemetry.counterKinds("frick.client.ws.frames.received.total"))
 
         socket.close()
-        Thread.sleep(100)
+        // Wait for the close to finish the span (poll, not a fixed sleep).
+        awaitUntil { span.ended }
 
         // Span finished exactly once: normal close → ok status + category.
         assertTrue("span should be ended after close", span.ended)
@@ -194,6 +196,12 @@ class FrickSyncSocketTelemetryTest {
         } finally {
             socket.close()
         }
+    }
+
+    /** Poll until [condition] holds or the timeout elapses — avoids fixed-sleep flakiness under CI load. */
+    private fun awaitUntil(timeoutMs: Long = 2_000, condition: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (!condition() && System.currentTimeMillis() < deadline) Thread.sleep(10)
     }
 
     @Test

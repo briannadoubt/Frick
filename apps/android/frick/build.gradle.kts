@@ -38,6 +38,9 @@ android {
         warningsAsErrors = true
         disable += "AndroidGradlePluginVersion"
         disable += "NewerVersionAvailable"
+        // Advisory "a newer dependency version exists" — not a release blocker,
+        // consistent with the sibling NewerVersionAvailable/AGP checks above.
+        disable += "GradleDependency"
     }
 
     testOptions {

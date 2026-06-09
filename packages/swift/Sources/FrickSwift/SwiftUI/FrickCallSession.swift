@@ -329,7 +329,7 @@ public final class FrickCallSession {
         try await setMediaState(FrickCallMediaStatePatch(screenSharing: enabled))
     }
 
-    private func runAction<T>(_ op: String, _ body: (FrickSyncSocket) async throws -> T) async throws -> T {
+    private func runAction<T>(_ op: String, _ body: @MainActor (FrickSyncSocket) async throws -> T) async throws -> T {
         guard let actor else {
             let error = FrickCallError.missingResultField(op: op, field: "socket")
             lastError = "\(op): no socket"
