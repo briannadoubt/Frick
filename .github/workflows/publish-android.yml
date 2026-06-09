@@ -1,14 +1,15 @@
 name: Publish Android SDK
 
-# Runs on `android-vX.Y.Z` tag pushes. The Maven publication's `version` is
-# read from the gradle file (`frickVersion`); the tag triggers the publish
-# but doesn't override the coordinate. To cut a release: bump `frickVersion`
-# in `apps/android/frick/build.gradle.kts`, commit, tag `android-vX.Y.Z`,
-# push the tag.
+# Runs on the unified bare semver tag (e.g. `0.3.0`) — the whole stack ships
+# one version, so the same tag also fires the npm + Swift publishes. The Maven
+# publication's `version` is read from the gradle file (`frickVersion`), which
+# must equal the tag. To cut a release: `pnpm release:bump <version>`, commit,
+# and let release-autotag push the tag (or push it by hand).
 on:
   push:
     tags:
-      - 'android-v*'
+      - '[0-9]+.[0-9]+.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+-*'
 
 permissions:
   contents: read
@@ -17,7 +18,7 @@ permissions:
 jobs:
   publish:
     name: Publish to GitHub Packages
-    if: ${{ startsWith(github.ref, 'refs/tags/android-v') }}
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -28,13 +29,12 @@ jobs:
         run: |
           set -euo pipefail
           frickVersion="$(sed -nE 's/^[[:space:]]*val[[:space:]]+frickVersion[[:space:]]*=[[:space:]]*"([^"]+)".*$/\1/p' apps/android/frick/build.gradle.kts)"
-          expected="android-v${frickVersion}"
           if [[ -z "${frickVersion}" ]]; then
             echo "Could not read frickVersion from apps/android/frick/build.gradle.kts" >&2
             exit 1
           fi
-          if [[ "${GITHUB_REF_NAME}" != "${expected}" ]]; then
-            echo "Expected tag ${expected}, got ${GITHUB_REF_NAME}" >&2
+          if [[ "${GITHUB_REF_NAME}" != "${frickVersion}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} != frickVersion ${frickVersion}; run 'pnpm release:bump ${GITHUB_REF_NAME}' before tagging" >&2
             exit 1
           fi
           if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then

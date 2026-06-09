@@ -1,12 +1,14 @@
 name: Publish npm Packages
 
-# Runs on `framework-vX.Y.Z` tag pushes after the release commit lands on
-# main. npm trusted publishing must be configured per package for this exact
-# workflow file in npm before the first release.
+# Runs on the unified bare semver tag (e.g. `0.3.0`) after the release commit
+# lands on main. The whole stack ships one version, so the same tag also fires
+# the Swift + Android publishes. npm trusted publishing must be configured per
+# package for this exact workflow file in npm before the first release.
 on:
   push:
     tags:
-      - 'framework-v*'
+      - '[0-9]+.[0-9]+.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+-*'
 
 permissions:
   contents: read
@@ -19,7 +21,7 @@ concurrency:
 jobs:
   publish:
     name: Publish to npm with provenance
-    if: ${{ startsWith(github.ref, 'refs/tags/framework-v') }}
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -32,8 +34,8 @@ jobs:
           node --input-type=module <<'NODE'
           const refName = process.env.GITHUB_REF_NAME ?? "";
           const semverPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|[\dA-Za-z-]*[A-Za-z-][\dA-Za-z-]*)(?:\.(?:0|[1-9]\d*|[\dA-Za-z-]*[A-Za-z-][\dA-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
-          if (!refName.startsWith("framework-v") || !semverPattern.test(refName.slice("framework-v".length))) {
-            throw new Error(`Expected framework-v<semver> tag, got ${refName}`);
+          if (!semverPattern.test(refName)) {
+            throw new Error(`Expected a bare <semver> release tag, got ${refName}`);
           }
           NODE
           if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then

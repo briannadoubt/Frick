@@ -1,130 +1,73 @@
 # Release Runbook
 
-This is the operator-facing checklist for cutting a Frick framework release. The policy (semver rules, deprecation windows, surface stability) lives in [`versioning.md`](versioning.md).
+This is the operator-facing checklist for cutting a Frick release. The policy (semver rules, deprecation windows, surface stability) lives in [`versioning.md`](versioning.md).
 
-Frick has independent per-package versions. A release usually covers one or a few packages, not all of them. The `framework-v*` tag is a repository cut marker for changelog and automation; it does not require every npm package version to equal the tag version.
+**The whole stack ships as one version.** Every published TypeScript package, the Swift SDK, and the Android `:frick` SDK move together on a single **bare semver tag** (e.g. `0.3.0`). That one tag triggers all three publish workflows — there is no per-platform tag and no per-package desync to reason about. Think of `0.3.0` as "Frick 0.3.0," not "this-package@0.3.0."
 
 ## Flow
 
-1. **PR opened** against `main` with the change.
-2. **CI green** — `pnpm test`, `pnpm typecheck`, `pnpm verify:generated`,
-   the Swift package check, the Android SDK/design module check, the Postgres
-   migration-runner suite, release dry-run, and end-to-end smoke test.
-3. **Bump version** for each package that changed. See the CLI commands below.
-4. **Regenerate the changelog** entry for the upcoming version.
-5. **Tag** the release in git.
-6. **Publish** by pushing the release tag. The npm workflow publishes missing TS package versions through npm trusted publishing with provenance; native artifacts are released through their own channels.
+1. **PR opened** against `main` with the change; **CI green** (`pnpm test`, `pnpm typecheck`, `pnpm verify:generated`, Swift + Android module checks, the Postgres migration-runner suite, release dry-run, smoke test).
+2. On a clean `main` checkout after the PR lands, **bump the whole stack** to the new version:
+   ```sh
+   pnpm release:bump 0.3.0
+   ```
+   This sets every published package + the Android `frickVersion` to `0.3.0` and stitches the `CHANGELOG.md` `## Unreleased` section into a dated `## 0.3.0` header. Review the changelog entry.
+3. **Commit + push** the release:
+   ```sh
+   git commit -am "chore(release): v0.3.0"
+   git push origin HEAD:main
+   ```
+4. **Auto-tag fires.** `release-autotag.yml` sees the `chore(release):` commit, reads the version, verifies the Android version is in lockstep, and pushes a single bare **`0.3.0`** tag (via `RELEASE_TAG_TOKEN`, so the publish workflows trigger).
+5. **Publish.** The `0.3.0` tag fans out to:
+   - `publish-npm.yml` → npm trusted publishing (provenance), publishing any missing package versions.
+   - `publish-swift.yml` → mirrors `packages/swift` to the `FrickSwift` repo and tags it `0.3.0`.
+   - `publish-android.yml` → GitHub Packages Maven artifact.
 
-Steps 3-5 are also done by the release operator on a clean `main` checkout after the PR lands. Do **not** publish from a feature branch.
+Do **not** publish from a feature branch. You can also push the bare tag by hand instead of relying on auto-tag.
 
-## CLI commands
+## Swift: the monorepo is the source; the mirror is output
 
-All commands run from the repo root.
+SwiftPM cannot resolve a package nested in a subdirectory — `Package.swift` must sit at a repo root. So `packages/swift` is mirrored (with history) to **`briannadoubt/FrickSwift`**, whose root *is* the package. Consumers depend on the mirror:
 
-### Bump a TypeScript package
+```swift
+.package(url: "https://github.com/briannadoubt/FrickSwift.git", from: "0.3.0")
+```
+
+**Develop in `packages/swift` / `packages/design-swift`. Never clone or edit the FrickSwift mirror** — it is generated, publish-only output with no source of truth.
+
+The mirror push authenticates with an **SSH deploy key** (no expiry, no account scopes), not a PAT.
+
+## Required one-time secrets
+
+- **`RELEASE_TAG_TOKEN`** — a PAT (classic `repo`, or fine-grained with Contents: read & write on this repo). Tags pushed by the default `GITHUB_TOKEN` do **not** trigger downstream workflows, so the auto-tagger needs this to fire the publishes.
+- **`SWIFT_MIRROR_DEPLOY_KEY`** — the **private** half of an SSH deploy key added (with **write** access) to `briannadoubt/FrickSwift` (Settings → Deploy keys). Deploy keys never expire and need no account scopes.
+  ```sh
+  ssh-keygen -t ed25519 -f frick_mirror -N "" -C "frick-swift-mirror"
+  # add frick_mirror.pub as a write-enabled deploy key on briannadoubt/FrickSwift
+  gh secret set SWIFT_MIRROR_DEPLOY_KEY < frick_mirror   # the PRIVATE key
+  rm frick_mirror frick_mirror.pub
+  ```
+- npm **trusted publishing** must be configured for each public package (`@fricken/protocol`, `@fricken/core`, `@fricken/design`, `@fricken/react`, `@fricken/design-web`, `@fricken/devtools`, `@fricken/agent-kit`, `@fricken/mcp`, `@fricken/server`) to trust this repo + the `publish-npm.yml` workflow. No long-lived `NPM_TOKEN`.
+
+## Manual tagging (if not using auto-tag)
+
+After the `chore(release): v0.3.0` commit is on `main`:
 
 ```sh
-pnpm exec tsx scripts/bump-version.ts --package @fricken/protocol --release minor
+git tag 0.3.0
+git push origin 0.3.0   # push with a token/credential that triggers workflows
 ```
-
-This rewrites `packages/protocol/package.json` and creates a commit named `chore(release): @fricken/protocol@<version>`. Pass `--no-commit` if you want to stage other changes alongside.
-
-Valid packages match the `name` field in any workspace `package.json`. Valid release types are `major`, `minor`, `patch` (see `docs/versioning.md`).
-
-### Bump an Android module
-
-```sh
-pnpm exec tsx scripts/bump-version.ts --package android:frick --release patch
-```
-
-This edits `apps/android/frick/build.gradle.kts`, replacing `val frickVersion = "X.Y.Z"` when present or inserting a top-level `version = "X.Y.Z"` line, and emits a tag suggestion on stderr. The publish workflow accepts only `android-vX.Y.Z` tags that match `frickVersion`.
-
-Supported Android packages: `android:frick`, `android:design`.
-
-### Bump a Swift package
-
-```sh
-pnpm exec tsx scripts/bump-version.ts --package swift:frick --release patch
-```
-
-Swift Package Manager carries no version field — releases are tag-only. The script computes the next version from the latest matching tag (`swift-v*` or `swift-design-v*`) and prints the recommended `git tag` command. Nothing is committed.
-
-### Regenerate the changelog
-
-```sh
-pnpm changelog --version 1.4.0 --output CHANGELOG.next.md
-```
-
-Reads commits since the most recent `framework-v*` tag, groups them by conventional-commit prefix, and writes Markdown. Stitch the result into `CHANGELOG.md` under a new release header above `Unreleased`. Pipe to stdout (no `--output`) to preview.
-
-For a one-off range, pass `--since <ref>`:
-
-```sh
-pnpm changelog --since framework-v1.3.0 --version 1.4.0
-```
-
-### Tag
-
-After the version-bump commit lands on `main`:
-
-```sh
-git tag framework-v1.4.0
-git tag @fricken/protocol@1.4.0   # per-package tags optional but recommended
-git push origin framework-v1.4.0 @fricken/protocol@1.4.0
-```
-
-The `framework-v*` tag is what `scripts/changelog.ts` keys on for the next release. Keep tagging it on every release that ships any TS package so the next changelog has a clean cutover.
-
-## One-click tagging (CI auto-tag)
-
-The **Release (auto-tag)** workflow (`.github/workflows/release-autotag.yml`) fires **automatically** when a `chore(release): vX.Y.Z` commit lands on `main` (it is gated on the head commit message). You can also run it manually from the Actions tab or `gh workflow run release-autotag.yml --ref main`. It:
-
-- reads the release version from `packages/protocol/package.json` (or a `version` input),
-- validates that `apps/android/frick/build.gradle.kts` `frickVersion` is in lockstep,
-- creates and pushes `framework-v<version>`, `swift-v<version>`, and `android-v<version>` (each toggleable on manual dispatch; `dry_run` logs without pushing), skipping any tag that already exists.
-
-Those tag pushes trigger the three publish workflows below. npm publishes via **trusted publishing** (OIDC) — no npm token needed.
-
-> **Required secret:** `RELEASE_TAG_TOKEN` — a PAT (classic `repo`, or fine-grained with Contents: read & write) for this repo. Tags pushed by the built-in `GITHUB_TOKEN` do **not** trigger downstream workflows, so this PAT is what lets the auto-tag step fire the publish workflows. (`SWIFT_MIRROR_TOKEN` is the only other secret; Android uses the built-in token.)
-
-You can still tag by hand with the commands in [Tag](#tag) if you prefer.
-
-## Publishing
-
-TypeScript packages publish from `.github/workflows/publish-npm.yml` when a `framework-v*` tag is pushed. The workflow:
-
-- accepts only strict SemVer `framework-v<version>` tags that point at a commit on `origin/main`,
-- has `contents: read` and `id-token: write` permissions only,
-- uses pinned GitHub Actions,
-- runs the same TypeScript/generated-artifact/pack hygiene gates as CI, and
-- packs each missing package with `pnpm pack` so workspace dependencies are rewritten, then publishes that tarball with `npm publish --provenance`.
-
-Before the first automated npm release, configure npm trusted publishing for
-each package currently included in the npm workflow (`@fricken/protocol`,
-`@fricken/core`, `@fricken/design`, `@fricken/react`, `@fricken/design-web`,
-`@fricken/devtools`, `@fricken/agent-kit`, `@fricken/mcp`,
-`@fricken/server`) to trust this repository and workflow path. `@fricken/cli`
-has publish metadata and a `frick` bin, but it is not yet in the npm workflow
-package list.
-
-```text
-publish-npm.yml
-```
-
-npm's trusted-publisher form asks for the workflow filename, not the full `.github/workflows/` path. Each public package manifest must include repository metadata for the GitHub repository running the workflow (`git+https://github.com/<owner>/<repo>.git`) plus its workspace directory; the workflow fails before publishing if it does not match. Do not use long-lived `NPM_TOKEN` or `NODE_AUTH_TOKEN` secrets for framework package publishing. For Swift, push the `swift-v*` tag — the workflow mirrors `packages/swift` to the standalone `FrickSwift` repository and tags that mirror with the plain semver version. SwiftPM consumers depend on the mirror repository, not this monorepo. For Android, push the matching `android-v*` tag and let the Android publish workflow release the Maven artifact.
 
 ## Pre-publish sanity checklist
 
-- [ ] `pnpm test` passes locally on a clean checkout of the tagged commit.
-- [ ] `pnpm typecheck` passes.
-- [ ] `pnpm verify:generated` reports no schema, fixture, or design-token drift.
+- [ ] `pnpm test` + `pnpm typecheck` pass on a clean checkout of the release commit.
+- [ ] `pnpm verify:generated` reports no schema/fixture/design-token drift.
 - [ ] `pnpm release:dry-run` passes.
-- [ ] `CHANGELOG.md` has a header for the version you are about to tag.
-- [ ] Every package being shipped has the intended bumped version; Android `build.gradle.kts` versions still match their `android-v*` tags.
-- [ ] npm trusted publishing is configured for every public TypeScript package being shipped.
-- [ ] If `schemaRevision` was bumped, `@fricken/protocol` got at least a minor bump and every other TS package that imports protocol types was rebuilt at least once.
-- [ ] Deprecated APIs being removed in this release were marked deprecated at least one full minor ago.
+- [ ] `CHANGELOG.md` has a `## <version>` header for the version you're tagging.
+- [ ] Every published package + Android `frickVersion` equals the release version (`pnpm release:bump` keeps them in lockstep).
+- [ ] If `schemaRevision` was bumped, `@fricken/protocol` and every dependent package were rebuilt.
+- [ ] Deprecated APIs being removed were marked deprecated at least one full minor ago.
 
 ## Rolling back
 
-If a published version is broken, deprecate (don't unpublish) and ship a patch release. npm's unpublish window is 72 hours but consumers may already have it cached. The safer path is always `1.4.1` with the fix.
+If a published version is broken, deprecate (don't unpublish) and ship a patch. npm's unpublish window is 72h but consumers may already have it cached — the safer path is always `0.3.1` with the fix.

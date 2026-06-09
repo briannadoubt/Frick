@@ -1,21 +1,26 @@
 name: Publish Swift Package
 
-# Runs on `swift-vX.Y.Z` tag pushes. Mirrors packages/swift (with history) to
-# the standalone briannadoubt/FrickSwift repo so it can be consumed as a remote
-# SwiftPM dependency (XCRemoteSwiftPackageReference). SwiftPM can't resolve a
+# Runs on the unified bare semver tag (e.g. `0.3.0`) — the whole stack ships one
+# version, so the same tag also fires the npm + Android publishes. Mirrors
+# packages/swift (with history) to the standalone briannadoubt/FrickSwift repo so
+# it can be consumed as a remote SwiftPM dependency. SwiftPM can't resolve a
 # package nested in a subdirectory, so the mirror repo's root IS the package.
-# The monorepo stays the single source of truth; the mirror is publish-only.
+# The monorepo stays the single source of truth; the mirror is publish-only
+# OUTPUT — never develop in or clone it; edit packages/swift here.
 #
-# One-time setup: add a repository secret `SWIFT_MIRROR_TOKEN` — a PAT (classic
-# `repo`, or fine-grained with Contents: read & write) scoped to
-# briannadoubt/FrickSwift. Without it the publish step cannot push to the mirror.
+# One-time setup: add an SSH **deploy key** with write access on
+# briannadoubt/FrickSwift, and store its PRIVATE key as the repo secret
+# `SWIFT_MIRROR_DEPLOY_KEY`. Deploy keys never expire and need no account
+# scopes (unlike a PAT). Without it the publish step cannot push to the mirror.
 #
-# To cut a release: tag a commit on `main` with `swift-vX.Y.Z` and push the tag.
-# The version applied to the mirror is the tag minus the `swift-v` prefix.
+# To cut a release: `pnpm release:bump <version>`, land the `chore(release):`
+# commit, and let release-autotag push the bare tag. The mirror is tagged with
+# that same bare version.
 on:
   push:
     tags:
-      - 'swift-v*'
+      - '[0-9]+.[0-9]+.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+-*'
 
 permissions:
   contents: read
@@ -27,7 +32,7 @@ concurrency:
 jobs:
   publish:
     name: Mirror packages/swift to FrickSwift
-    if: ${{ startsWith(github.ref, 'refs/tags/swift-v') }}
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -35,18 +40,17 @@ jobs:
         with:
           fetch-depth: 0
           # Don't persist the built-in GITHUB_TOKEN as a github.com credential
-          # header — it would override the SWIFT_MIRROR_TOKEN embedded in the
-          # mirror push URL and the push would auth as github-actions[bot]
-          # (Permission denied / 403 to the FrickSwift repo).
+          # header — the mirror push authenticates with the SSH deploy key set
+          # up below, not the HTTPS token.
           persist-credentials: false
 
       - name: Verify Swift release tag
         shell: bash
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#swift-v}"
+          version="${GITHUB_REF_NAME}"
           if ! [[ "${version}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "Expected swift-v<semver> tag, got ${GITHUB_REF_NAME}" >&2
+            echo "Expected a bare <semver> release tag, got ${GITHUB_REF_NAME}" >&2
             exit 1
           fi
           if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then
@@ -66,11 +70,28 @@ jobs:
           cd packages/swift
           swift build
 
+      - name: Set up mirror deploy key
+        shell: bash
+        env:
+          DEPLOY_KEY: ${{ secrets.SWIFT_MIRROR_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${DEPLOY_KEY}" ]]; then
+            echo "SWIFT_MIRROR_DEPLOY_KEY is not set. Add an SSH deploy key with" >&2
+            echo "write access on briannadoubt/FrickSwift and store its PRIVATE" >&2
+            echo "key as the SWIFT_MIRROR_DEPLOY_KEY repo secret." >&2
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "${DEPLOY_KEY}" > ~/.ssh/frick_mirror
+          chmod 600 ~/.ssh/frick_mirror
+          ssh-keyscan -t rsa,ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+          echo "GIT_SSH_COMMAND=ssh -i $HOME/.ssh/frick_mirror -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes" >> "$GITHUB_ENV"
+
       - name: Publish mirror
         shell: bash
         env:
-          FRICK_SWIFT_MIRROR: https://x-access-token:${{ secrets.SWIFT_MIRROR_TOKEN }}@github.com/briannadoubt/FrickSwift.git
+          FRICK_SWIFT_MIRROR: git@github.com:briannadoubt/FrickSwift.git
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#swift-v}"
-          scripts/publish-swift.sh "${version}"
+          scripts/publish-swift.sh "${GITHUB_REF_NAME}"
