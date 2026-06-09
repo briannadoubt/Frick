@@ -147,6 +147,27 @@ describe("MemoryRegionProxy (non-home → home routing)", () => {
     expect(onEast).toHaveBeenCalledTimes(1);
     expect(onApac).not.toHaveBeenCalled();
   });
+
+  it("re-registering the home applier: disposing the STALE unsubscribe must not detach the live one (multi-region-7)", () => {
+    const fabric = new MemoryRegionRouterFabric();
+    const eastProxy = new MemoryRegionProxy({ regionId: "us-east", fabric });
+
+    const onH1 = vi.fn();
+    const onH2 = vi.fn();
+
+    // Register h1, then re-register h2 (replacing h1).
+    const unsubH1 = eastProxy.onProxiedWrite(onH1);
+    eastProxy.onProxiedWrite(onH2); // h2 is now the live home applier.
+
+    // Dispose the STALE h1 subscription. With the bug, this ran the shared
+    // this.#detach which pointed at h2's detach, tearing down the LIVE handler.
+    unsubH1();
+
+    // h2 must still receive proxied writes.
+    eastProxy.proxyTo("us-east", { tenantId: "acme", originRegionId: "eu-west", payload: {} });
+    expect(onH2).toHaveBeenCalledTimes(1);
+    expect(onH1).not.toHaveBeenCalled();
+  });
 });
 
 describe("ClaimRegionOwnership (dynamic, claim/tie-break/TTL)", () => {

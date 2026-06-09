@@ -45,6 +45,7 @@
 
 import type { ClusterEnvelope, ClusterEnvelopeHandler, FrickClusterBus } from "./bus.js";
 import { randomNodeId } from "./bus.js";
+import { MEDIA_PLACEMENT_TENANT } from "../calls/cluster-media-placement.js";
 
 /** Stable identifier for a region, e.g. `us-east`, `eu-west`. */
 export type RegionId = string;
@@ -212,17 +213,46 @@ export class FederatingClusterBus implements FrickClusterBus {
   readonly #local: FrickClusterBus;
   readonly #region: FrickRegionBus;
   #regionUnsub: (() => void) | undefined;
+  // Tenants this region currently serves. `undefined` = pass-through
+  // (back-compat, before the gateway declares its served set). Mirrors the
+  // intra-region bus's filter so the federation hop honors it too.
+  #subscribedTenants: ReadonlySet<string> | undefined;
 
   constructor(options: FederatingClusterBusOptions) {
     this.regionId = options.regionId;
     this.#local = options.local;
     this.#region = options.region;
 
-    // Envelopes federated from peer regions are re-injected locally so
-    // they fan out to every node in this region just like a local write.
+    // Envelopes federated from peer regions are re-injected locally so they
+    // fan out to every node in this region just like a local write — but only
+    // if this region actually serves the envelope's tenant. Re-injection goes
+    // through local.publish (the publish path, which is never tenant-filtered:
+    // the intra-region filter lives on the inbound hop), so without this guard
+    // EVERY cross-region frame for EVERY tenant would be re-published onto this
+    // region's intra-region bus and only dropped per-node downstream — forfeiting
+    // the setSubscribedTenants bandwidth/CPU saving on federated traffic
+    // (finding multi-region-6). We also defensively skip malformed inner
+    // envelopes here (finding multi-region-4).
     this.#regionUnsub = this.#region.subscribe((regionEnvelope) => {
-      this.#local.publish(regionEnvelope.envelope);
+      const inner = regionEnvelope.envelope as ClusterEnvelope | undefined;
+      if (inner === null || typeof inner !== "object" || typeof inner.kind !== "string") {
+        return; // malformed cross-region payload — never re-inject (multi-region-4).
+      }
+      if (!this.#servesTenant(inner.tenantId)) return;
+      this.#local.publish(inner);
     });
+  }
+
+  /**
+   * Whether this region currently serves `tenantId`. Pass-through until the
+   * gateway declares a served set. The media-placement sentinel tenant is
+   * always served (placement is keyed by callId, not tenant, and the gateway
+   * never lists it among real tenants) so call-routing federation is unaffected.
+   */
+  #servesTenant(tenantId: string): boolean {
+    if (this.#subscribedTenants === undefined) return true;
+    if (tenantId === MEDIA_PLACEMENT_TENANT) return true;
+    return this.#subscribedTenants.has(tenantId);
   }
 
   /** Delegates to the intra-region bus's node id — the gateway's loop guard is unchanged. */
@@ -247,6 +277,10 @@ export class FederatingClusterBus implements FrickClusterBus {
   }
 
   setSubscribedTenants(tenantIds: ReadonlySet<string>): void {
+    // Snapshot for the federation-hop filter (caller may keep mutating the set
+    // after handing it over), and delegate to the intra-region bus so the
+    // node-to-node inbound filter still applies.
+    this.#subscribedTenants = new Set(tenantIds);
     this.#local.setSubscribedTenants?.(tenantIds);
   }
 

@@ -23,6 +23,7 @@ import {
   MemoryRegionFabric,
   type RegionEnvelope,
 } from "../src/cluster/region-bus.js";
+import { MEDIA_PLACEMENT_TENANT } from "../src/calls/cluster-media-placement.js";
 
 function streamEventEnvelope(originNodeId: string, sequence: number): ClusterEnvelope {
   return {
@@ -33,6 +34,18 @@ function streamEventEnvelope(originNodeId: string, sequence: number): ClusterEnv
     streamId: "conversation-general",
     sequence,
     packed: [1, "conversation-general", sequence, `evt-${sequence}`, 1, []],
+  };
+}
+
+function tenantStreamEvent(originNodeId: string, tenantId: string, sequence: number): ClusterEnvelope {
+  return {
+    kind: "streamEvent",
+    originNodeId,
+    tenantId,
+    stream: "MessageStream",
+    streamId: `conv-${tenantId}`,
+    sequence,
+    packed: [1, `conv-${tenantId}`, sequence, `evt-${sequence}`, 1, []],
   };
 }
 
@@ -236,5 +249,111 @@ describe("FederatingClusterBus", () => {
     a.publish(streamEventEnvelope("node-a", 1));
 
     expect(onB).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("FederatingClusterBus inbound tenant filter (multi-region-6)", () => {
+  /**
+   * One receiving region (eu-west) with TWO nodes sharing an intra-region
+   * channel, federated to a sending region (us-east). We observe the
+   * receiving region's INTRA-region channel (via a peer node) to prove that an
+   * inbound cross-region envelope is only re-injected when this region serves
+   * the envelope's tenant.
+   */
+  function buildSenderAndReceiver() {
+    const fabric = new MemoryRegionFabric();
+
+    // Sender region (us-east), single node.
+    const eastLocal = new MemoryClusterBus({ channel: new MemoryClusterChannel(), nodeId: "east-1" });
+    const east = new FederatingClusterBus({
+      regionId: "us-east",
+      local: eastLocal,
+      region: new MemoryRegionBus({ regionId: "us-east", fabric }),
+    });
+
+    // Receiver region (eu-west): node west-1 is the federation seam, west-2 is
+    // a peer node on the SAME intra-region channel used to observe re-injection.
+    const westChannel = new MemoryClusterChannel();
+    const westLocal1 = new MemoryClusterBus({ channel: westChannel, nodeId: "west-1" });
+    const westLocal2 = new MemoryClusterBus({ channel: westChannel, nodeId: "west-2" });
+    const west = new FederatingClusterBus({
+      regionId: "eu-west",
+      local: westLocal1,
+      region: new MemoryRegionBus({ regionId: "eu-west", fabric }),
+    });
+    return { east, west, westPeer: westLocal2 };
+  }
+
+  it("does NOT re-inject an inbound envelope for a tenant this region does not serve", () => {
+    const { east, west, westPeer } = buildSenderAndReceiver();
+    west.setSubscribedTenants(new Set(["acme"]));
+
+    const onWestPeer = vi.fn();
+    westPeer.subscribe(onWestPeer);
+
+    // us-east federates a write for tenant "globex" — eu-west serves only "acme".
+    east.publish(tenantStreamEvent("east-1", "globex", 1));
+
+    // Without the fix this envelope is re-published onto eu-west's intra-region
+    // channel and west-2 sees it; with the fix it is short-circuited at the seam.
+    expect(onWestPeer).not.toHaveBeenCalled();
+  });
+
+  it("DOES re-inject an inbound envelope for a served tenant", () => {
+    const { east, west, westPeer } = buildSenderAndReceiver();
+    west.setSubscribedTenants(new Set(["acme"]));
+
+    const onWestPeer = vi.fn();
+    westPeer.subscribe(onWestPeer);
+
+    east.publish(tenantStreamEvent("east-1", "acme", 1));
+
+    expect(onWestPeer).toHaveBeenCalledTimes(1);
+    expect(onWestPeer.mock.calls[0]?.[0]?.tenantId).toBe("acme");
+  });
+
+  it("always re-injects the media-placement sentinel tenant (call routing federation)", () => {
+    const { east, west, westPeer } = buildSenderAndReceiver();
+    west.setSubscribedTenants(new Set(["acme"])); // sentinel NOT in served set
+
+    const onWestPeer = vi.fn();
+    westPeer.subscribe(onWestPeer);
+
+    east.publish(tenantStreamEvent("east-1", MEDIA_PLACEMENT_TENANT, 1));
+
+    expect(onWestPeer).toHaveBeenCalledTimes(1);
+  });
+
+  it("is pass-through before setSubscribedTenants is called (back-compat)", () => {
+    const { east, west, westPeer } = buildSenderAndReceiver();
+    // No setSubscribedTenants call — undefined served set = serve everything.
+
+    const onWestPeer = vi.fn();
+    westPeer.subscribe(onWestPeer);
+
+    east.publish(tenantStreamEvent("east-1", "globex", 1));
+
+    expect(onWestPeer).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a malformed inbound region envelope instead of re-injecting it (multi-region-4 defense)", () => {
+    const fabric = new MemoryRegionFabric();
+    const westChannel = new MemoryClusterChannel();
+    const westLocal1 = new MemoryClusterBus({ channel: westChannel, nodeId: "west-1" });
+    const westLocal2 = new MemoryClusterBus({ channel: westChannel, nodeId: "west-2" });
+    const regionBus = new MemoryRegionBus({ regionId: "eu-west", fabric });
+    new FederatingClusterBus({ regionId: "eu-west", local: westLocal1, region: regionBus });
+
+    const onWestPeer = vi.fn();
+    westLocal2.subscribe(onWestPeer);
+
+    // A peer region delivers a structurally-broken inner envelope (no `kind`).
+    const peer = new MemoryRegionBus({ regionId: "us-east", fabric });
+    peer.publish({
+      originRegionId: "us-east",
+      envelope: { tenantId: "acme" } as unknown as ClusterEnvelope,
+    });
+
+    expect(onWestPeer).not.toHaveBeenCalled();
   });
 });

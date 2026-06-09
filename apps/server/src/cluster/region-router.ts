@@ -314,10 +314,17 @@ export class MemoryRegionProxy<TPayload = unknown> implements RegionProxyTranspo
 
   onProxiedWrite(handler: ProxiedWriteHandler<TPayload>): () => void {
     this.#detach?.();
-    this.#detach = this.#fabric.attach(this.regionId, handler);
+    // Capture THIS registration's detach in the returned closure rather than
+    // re-reading this.#detach at unsubscribe time. If onProxiedWrite is called
+    // again (h1 then h2), the unsubscribe returned for h1 must tear down h1's
+    // attachment — not whatever is currently live — so disposing the stale
+    // subscription can't accidentally detach h2, the active handler
+    // (finding multi-region-7).
+    const detach = this.#fabric.attach(this.regionId, handler);
+    this.#detach = detach;
     return () => {
-      this.#detach?.();
-      this.#detach = undefined;
+      detach();
+      if (this.#detach === detach) this.#detach = undefined;
     };
   }
 
