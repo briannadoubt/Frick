@@ -842,6 +842,13 @@ describe("foundation sync gateway", () => {
   it("enqueues and drains HTTP signals", async () => {
     app = await startServer();
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+    // WebRTCSignal keys are callIds and the relay is gated on call membership
+    // (calls-signal-1). Seed a call created by user-ada so they may signal it.
+    await app.store.upsertObject("CallRoom", "call-http", {
+      conversationId: "conv-http",
+      state: "active",
+      createdBy: "user-ada",
+    });
 
     const postResponse = await fetch(`${app.httpUrl}/signals/WebRTCSignal/call-http`, {
       method: "POST",
@@ -881,6 +888,13 @@ describe("foundation sync gateway", () => {
   it("fans out HTTP signals to WebSocket signal subscribers", async () => {
     app = await startServer();
     const login = await devLogin(app.httpUrl, { userId: "user-ada" });
+    // Seed a call created by user-ada so they may subscribe to / post its
+    // WebRTC signals (calls-signal-1 gates the relay on call membership).
+    await app.store.upsertObject("CallRoom", "call-http-ws", {
+      conversationId: "conv-http-ws",
+      state: "active",
+      createdBy: "user-ada",
+    });
     const socket = await connectWithSession(app.url, login.sessionToken);
 
     const hello = expectHelloAckThenSchema(socket);
