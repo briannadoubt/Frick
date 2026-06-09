@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658BRRYS881CZY4HGJBT",
+  "ts": "2026-06-09T02:43:03.563Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658BRRYS881CZY4HGJBS",
+    "number": 180,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[native-android-2] callCommand / upsertObject deferreds never completed on disconnect or close — caller coroutin...",
+    "description": "AUDIT FINDING native-android-2 (high/resource-leak, confidence=high, verify-votes +2/-0)\n\nFILE: apps/android/frick/src/main/java/dev/frick/client/FrickSyncSocket.kt\nLINES: 453-457, 743-796, 826-840, 1086-1101\n\nWHAT: pendingObjectWrites and pendingCallCommands map requestId -> CompletableDeferred and are ONLY drained when a matching Ack/Nack/CallCommandResult frame arrives (lines 860-919). On close() (826-840), onClosed (1086-1091) and onFailure (1093-1101) the maps are never iterated to fail outstanding deferreds — close() cancels the socket's own `scope`, but upsertObject()/callCommand() suspend on `deferred.await()` running on the CALLER's coroutine (FrickCallManager.issue at FrickCallManager.kt:513-522 awaits on the app/viewModel scope, not the socket scope). So a write/call frame sent just before a transport drop, server crash, or token expiry leaves its awaiter suspended indefinitely — the FrickCallManager join()/create()/leave() verb (and any upsertObject) never returns and never throws, hanging the UI flow that called it. Separately, there is no deferred.invokeOnCompletion cleanup: when the caller's coroutine is cancelled (e.g. viewModelScope teardown) the await() unwinds but the requestId entry stays in the ConcurrentHashMap for the socket's whole lifetime — an unbounded leak under churny screens/reconnects.\n\nIMPACT: Permanent hang of call-control and object-write flows on any mid-flight disconnect (common on mobile), with no timeout and no error surfaced to the user. Plus a steady memory leak in pendingObjectWrites/pendingCallCommands as cancelled requests accumulate.\n\nSUGGESTED FIX: On onClosed/onFailure/close(), drain both maps and complete every outstanding deferred with a Failed/exceptional result (e.g. a synthetic 'connection closed' envelope) so awaiters resume. Register deferred.invokeOnCompletion { pendingX.remove(requestId) } in upsertObject()/callCommand() to evict the entry on caller cancellation. Consider wrapping deferred.await() in withTimeout.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "native-android"
+    ]
+  }
+}

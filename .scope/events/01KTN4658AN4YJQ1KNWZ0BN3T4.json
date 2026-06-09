@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658AN4YJQ1KNWZ0BN3T4",
+  "ts": "2026-06-09T02:43:03.562Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658AN4YJQ1KNWZ0BN3T3",
+    "number": 169,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[calls-signal-1] WebRTCSignal/keyEpoch relay has no call-membership gate — any tenant user can inject SDP/ICE/E2...",
+    "description": "AUDIT FINDING calls-signal-1 (high/isolation, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/authz.ts\nLINES: 356-365, 888-906\n\nWHAT: Calls relay SDP/ICE/renegotiate/sfuToken and (FR-156) E2EE keyEpoch over the WebRTCSignal relay keyed by callId (packages/protocol/src/calls.ts 41-55, 309-321; web App.tsx uses callKey == callId). The relay's authorization is assertCanSignal → decideSignalAccess, which is an unconditional `return ALLOW` for any authenticated tenant member (decideSignalAccess voids principal/key/memberships, lines 356-365). routeSignal then fans the signal out to every subscriber of (name,key) in the tenant+app (signal-router.ts 19-29). There is no check that sender or receiver is a participant/invitee of the call.\n\nIMPACT: Any authenticated tenant user (not just call participants) who knows/guesses a callId can subscribe to and inject into a call's signaling channel: forge offers/answers/ICE to disrupt or man-in-the-middle WebRTC negotiation, and — most seriously — broadcast forged `keyEpoch` announcements to poison/rotate the call's E2EE key, breaking confidentiality or causing denial of media. They can also passively read peers' signaling (which, for FR-156, carries wrapped key-epoch material).\n\nSUGGESTED FIX: Add a signal-name-aware authz path: for WebRTCSignal, gate signal.send/signal.read on call-participant/invitee membership of the callId (the signal key), via the CallControlPlane participant/invite store rather than the default ALLOW. At minimum require the principal to be a participant of the call before relaying or delivering its WebRTCSignals.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "calls-authz"
+    ]
+  }
+}

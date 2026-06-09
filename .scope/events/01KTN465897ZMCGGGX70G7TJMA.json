@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN465897ZMCGGGX70G7TJMA",
+  "ts": "2026-06-09T02:43:03.561Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN465897ZMCGGGX70G7TJM9",
+    "number": 164,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[native-android-1] Session token + identity persisted in plaintext SQLite while docs/commit claim encrypted storage",
+    "description": "AUDIT FINDING native-android-1 (critical/crypto, confidence=high, verify-votes +2/-0)\n\nFILE: apps/android/frick/src/main/java/dev/frick/client/FrickClient.kt\nLINES: 435-601, 712-719, 990-1003, 1376-1382\n\nWHAT: SQLiteFrickStorage is a plain android.database.sqlite.SQLiteOpenHelper. saveSession() (590-601) JSON-encodes the entire FrickSession — including the bearer sessionToken, userId, tenantId, handle — and stores it as a plaintext TEXT column in the `auth_session` table (schema at 712-719). There is no SQLCipher, no EncryptedSharedPreferences, no AndroidKeyStore-wrapped key anywhere in the module (grep for sqlcipher/zetetic/security-crypto/SupportFactory/MasterKey returns nothing across the whole apps/android tree and gradle files). Yet the code and history assert the opposite: FrickClient.kt:990 says 'restored from (and kept in sync with) the injected encrypted FrickStorage', FrickSessionManager's KDoc (49-61) calls it 'the encrypted SQLite store by default — the Android analogue of the iOS Keychain path … strictly more secure than a SharedPreferences reimplementation', and the FR-151 commit subject is literally 'riding encrypted session persistence'. The demo wires the real plaintext store directly: FoundationViewModel.kt:120 `SQLiteFrickStorage(application)` and FrickSyncWorker.kt:39. The DB file under /data/data/<pkg>/databases/frick.sqlite is readable verbatim on any rooted/compromised device, via a debuggable build, or any local-file disclosure bug — the long-lived sessionToken is a full account-takeover credential.\n\nIMPACT: Account takeover: a long-lived bearer token (plus tenant/user identity) sits in cleartext on disk. Any rooted device, malware with the app's uid, forensic image, or file-disclosure vuln yields a token that authenticates every REST + WebSocket call (sent as `Authorization: Bearer`). The 'encrypted' documentation gives integrators false assurance they need add nothing.\n\nSUGGESTED FIX: Actually encrypt at rest: back the session row (at minimum the auth_session table) with SQLCipher (net.zetetic) using an AndroidKeyStore-derived passphrase, or store the session blob in EncryptedSharedPreferences / a Keystore-wrapped value and keep only non-secret cache in SQLite. Until then, correct every comment/commit that claims the store is encrypted so integrators don't rely on a guarantee that doesn't exist.",
+    "status": "backlog",
+    "priority": "urgent",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "native-android"
+    ]
+  }
+}

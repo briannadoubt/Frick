@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658BRRYS881CZY4HGJBW",
+  "ts": "2026-06-09T02:43:03.563Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658BRRYS881CZY4HGJBV",
+    "number": 181,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[crypto-e2ee-2] Replay-window TOCTOU: seen() pre-screen and check() commit straddle await points, so concurrent ...",
+    "description": "AUDIT FINDING crypto-e2ee-2 (medium/race-condition, confidence=medium, verify-votes +1/-0)\n\nFILE: packages/core/src/e2ee.ts\nLINES: 861-883\n\nWHAT: decrypt() pre-screens replay with the non-mutating window.seen(counter) at line 866, then awaits #deriveFor() and #aead.open() (real async WebCrypto), and only commits with window.check(counter) at line 882. The commit is deliberately deferred past authentication to avoid forged-frame poisoning. But because seen() does not record and check() runs only after two awaits, two decrypt() invocations for the SAME (epoch,sender,counter) that are in flight concurrently both observe seen()==false (neither has committed yet), both authenticate (a genuine replayed frame authenticates fine), and both return plaintext — the replay is accepted twice. The seam makes no serialization guarantee and MemoryFrameTransformInserter.pump just calls transform.decrypt without serializing, so nothing forces inbound frames through one at a time.\n\nIMPACT: Replay protection can be bypassed for duplicated frames delivered concurrently, defeating the ReplayWindow guarantee the design lists as a core property. Blast radius is limited to duplicate frame delivery (the AEAD still authenticates), but it is a real weakening of the documented anti-replay invariant.\n\nSUGGESTED FIX: Make the per-(epoch,sender) decrypt path mutually exclusive across its await span (e.g. a per-window async mutex / promise chain), or reserve the counter optimistically before the await and roll it back only if auth fails, so two concurrent decrypts of the same counter cannot both succeed.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "crypto-e2ee"
+    ]
+  }
+}

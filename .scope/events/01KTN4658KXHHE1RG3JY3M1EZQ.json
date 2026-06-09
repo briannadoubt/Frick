@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658KXHHE1RG3JY3M1EZQ",
+  "ts": "2026-06-09T02:43:03.571Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658KXHHE1RG3JY3M1EZP",
+    "number": 228,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[native-android-5] Observable stores never clear cache on reconnect — server-side deletions made while offline a...",
+    "description": "AUDIT FINDING native-android-5 (low/correctness, confidence=medium, verify-votes +2/-0)\n\nFILE: apps/android/frick/src/main/java/dev/frick/client/FrickObservableStore.kt\nLINES: 82-104, 118-142\n\nWHAT: On a Ready transition after a drop, FrickObservableStore (and FrickProjectionStore.kt:63-85, FrickCallManager.kt:344-364) only re-issues subscribeObject(type)/subscribeProjection(name) and folds the replayed Snapshot via applyDelta as upserts (118-142). The local LinkedHashMap cache is never cleared first. A Snapshot is the authoritative current row set, but rows that were DELETED on the server while the client was disconnected are absent from the snapshot rather than present as removals, so they are never dropped from `cache` — they linger in the observable items/rows StateFlow indefinitely. This can resurrect data the server intended gone (e.g. a revoked-share record still showing). FR-144 removals only cover deletes that arrive as live Delta `removed` entries while connected.\n\nIMPACT: Stale/ghost rows after any reconnect that straddled a server-side deletion — wrong UI and potentially showing records the user should no longer see (mild isolation concern when tied to revoked grants).\n\nSUGGESTED FIX: Treat the first Snapshot after each (re)subscribe as a full reset: clear the cache (or reconcile by replacing the keyset with the snapshot's ids) before applying it, so absent rows are pruned. Mark the subscribe so applyDelta knows the next delta is a snapshot boundary.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "native-android"
+    ]
+  }
+}

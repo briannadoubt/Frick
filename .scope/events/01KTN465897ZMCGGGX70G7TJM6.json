@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN465897ZMCGGGX70G7TJM6",
+  "ts": "2026-06-09T02:43:03.561Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN465897ZMCGGGX70G7TJM5",
+    "number": 162,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[multi-region-1] Federated RegionEnvelopes cross the WAN with zero authentication — a rogue/compromised region (...",
+    "description": "AUDIT FINDING multi-region-1 (critical/authz, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/cluster/region-redis-bus.ts\nLINES: 86-108, 110-124\n\nWHAT: RedisRegionBus.#onMessage decodes a msgpack RegionEnvelope off the shared cross-region pub/sub channel (default `frick:region`) and, after only the `originRegionId === this.regionId` loop guard, hands `envelope` straight to every subscriber. The sole subscriber is FederatingClusterBus (region-bus.ts:223-225), which re-injects `regionEnvelope.envelope` verbatim into the LOCAL cluster bus via `this.#local.publish(...)`. That envelope flows into the gateway's #handleClusterEnvelope (gateway.ts:849-902), which fans it out to local WebSocket subscribers purely on the strength of the envelope's self-asserted `tenantId` — no signature, HMAC, nonce, or per-region credential is ever checked (confirmed: no `hmac|sign|verify|auth|secret|token` anywhere in any region file). The inner ClusterEnvelope union includes streamEvent/objects/objectDeletes/signal/projectionDelta/presenceDelta, so a single forged frame on the WAN channel forges a stream event, deletes objects, or spoofs presence for ANY tenant in EVERY region that subscribes. The intra-region Redis bus has the same property, but that is a single trust domain; FR-105/FR-157 extend the exact same unauthenticated trust across a WAN boundary while the module docs claim federation merely 'carries cluster envelopes ACROSS regions' without ever documenting that this assumes a fully-trusted, mutually-authenticated inter-region transport.\n\nIMPACT: Cross-tenant data forgery and leakage across the entire mesh: any party able to PUBLISH to the cross-region channel (a compromised region node, a misconfigured/shared Redis, a leaked Redis credential, or a malicious peer operator in a federated deployment) can inject object deletes, fake stream events, spoofed presence, and signals for arbitrary tenants in every region. Tenant isolation — the core multi-tenant security guarantee — does not survive federation.\n\nSUGGESTED FIX: Authenticate the cross-region transport at the application layer, not just by trusting the network: add a per-deployment shared secret and attach an HMAC over the encoded RegionEnvelope (and a monotonic/nonce field for replay resistance), verified in #onMessage before any handler dispatch; drop+log frames that fail. At minimum, document in region-redis-bus.ts and docs/multi-region.md that the region channel MUST run over a mutually-authenticated, tenant-trusted transport (mTLS, dedicated private network, per-region ACLs) and that the channel is a cross-tenant trust boundary. Optionally validate that an inbound envelope's tenant is one this region is authorized to host before re-injecting.",
+    "status": "backlog",
+    "priority": "urgent",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "multi-region"
+    ]
+  }
+}

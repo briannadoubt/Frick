@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658FD62SE2HZSN0XH7RH",
+  "ts": "2026-06-09T02:43:03.567Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658FD62SE2HZSN0XH7RG",
+    "number": 212,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[multi-region-6] FederatingClusterBus inbound path re-injects every cross-region envelope into the local bus wit...",
+    "description": "AUDIT FINDING multi-region-6 (low/dos, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/cluster/region-bus.ts\nLINES: 221-225, 249-251\n\nWHAT: FederatingClusterBus.setSubscribedTenants delegates only to `this.#local.setSubscribedTenants` (line 250), which filters INTRA-region inbound. But envelopes arriving FROM peer regions are unconditionally re-published into the local bus (`this.#region.subscribe((re) => this.#local.publish(re.envelope))`, lines 223-225) regardless of whether this region serves the envelope's tenant. Because re-injection goes through local.publish (the publish path, which is never tenant-filtered — the filter lives on the inbound #onMessage path), every cross-region frame for every tenant is published onto this region's intra-region Redis and only dropped per-node at each node's inbound filter. The bandwidth/CPU saving that setSubscribedTenants was designed to deliver is entirely forfeited for federated traffic: a region serving zero subscribers for tenant T still pays full WAN-receive + full intra-region re-publish for T.\n\nIMPACT: Amplification of cross-region traffic: a region with no interest in a tenant still receives and re-fans every federated envelope for it across its internal Redis to all nodes, inflating WAN+intra-region load and undermining the tenant-filter optimization. Not a correctness break, but a real efficiency/DoS-surface regression at scale.\n\nSUGGESTED FIX: Track the subscribed-tenant set in FederatingClusterBus and short-circuit re-injection of inbound region envelopes whose tenantId is not currently served by this region (skipping the synthetic media-placement sentinel tenant). This mirrors the intra-region filter intent on the federation hop.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "multi-region"
+    ]
+  }
+}

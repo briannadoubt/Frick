@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658KXHHE1RG3JY3M1EZV",
+  "ts": "2026-06-09T02:43:03.571Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658KXHHE1RG3JY3M1EZT",
+    "number": 230,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[auth-core-9] Device binding (FR-32) is weak against token theft because deviceId/replicaId are returned in the ...",
+    "description": "AUDIT FINDING auth-core-9 (info/authz, confidence=medium, verify-votes +1/-1)\n\nFILE: apps/server/src/auth/identity-routes.ts\nLINES: 2133-2160\n\nWHAT: FR-32 binds a session to the deviceId/replicaId stored in the auth_sessions row and the gateway rejects a Hello from a different device (gateway.ts #helloMatchesBoundDevice). This correctly derives the bound values server-side (never trusting the Hello frame for the principal). However mintSession accepts client-supplied deviceId/replicaId (L2134-2135) and toFrickSessionShape returns deviceId+replicaId in the sign-in response body (L2150-2159). So an attacker who steals a session token typically also obtains the matching deviceId/replicaId (same response), and can satisfy the binding check. The binding meaningfully defends only the 're-auth when the legitimate client's device changes' case the commit describes, not token exfiltration. This is the documented opt-in design, noted for completeness.\n\nIMPACT: Operators may over-trust FR-32 as anti-theft hardening; it does not stop a thief who captured the full session response.\n\nSUGGESTED FIX: Document that device binding is not a theft countermeasure, or bind to a value the server derives independently (e.g. a server-issued device secret / channel-bound key) rather than a client-chosen, response-echoed deviceId.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "auth-core"
+    ]
+  }
+}

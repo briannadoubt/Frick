@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658JM4FG831C0483CXRC",
+  "ts": "2026-06-09T02:43:03.570Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658JM4FG831C0483CXRB",
+    "number": 220,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[auth-core-8] Issuing a new reset token does not invalidate the user's prior outstanding reset tokens",
+    "description": "AUDIT FINDING auth-core-8 (low/correctness, confidence=medium, verify-votes +2/-0)\n\nFILE: apps/server/src/storage/password-reset-store.ts\nLINES: 34-56\n\nWHAT: issue() always INSERTs a new token row and never marks any previously-issued, still-valid tokens for the same user as consumed/expired. Multiple unconsumed reset tokens for one account can therefore be live simultaneously (up to the 60-minute TTL). If a user requests several resets (or an attacker who briefly observed one link triggers another), an older leaked-but-unused token remains valid alongside the newest one, widening the window for misuse. Best practice is single-outstanding-token-per-user.\n\nIMPACT: Larger window of valid reset tokens per account than necessary; a previously-observed token stays usable even after the user requests a fresh one.\n\nSUGGESTED FIX: In issue(), within a transaction, mark all prior unconsumed tokens for (tenantId, userId) as consumed/expired before inserting the new one (or DELETE them), so only the most recent token verifies.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "auth-core"
+    ]
+  }
+}

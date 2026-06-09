@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658HJH0HCRD296F339SJ",
+  "ts": "2026-06-09T02:43:03.569Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658HJH0HCRD296F339SH",
+    "number": 214,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[auth-saml-3] AudienceRestriction blocks are OR-flattened, defeating multi-restriction AND semantics",
+    "description": "AUDIT FINDING auth-saml-3 (low/correctness, confidence=medium, verify-votes +2/-0)\n\nFILE: apps/server/src/auth/saml.ts\nLINES: 334-347, 569-591\n\nWHAT: collectAudiences() gathers EVERY <Audience> descendant of <Conditions> into one flat list (getElementsByTagNameNS over the whole Conditions subtree), and the check at 336 accepts the assertion if the SP entityID appears anywhere in that union. Per SAML core, multiple <AudienceRestriction> elements are conjunctive (the assertion is valid only if the SP is acceptable to ALL of them), while multiple <Audience> within one restriction are disjunctive. By flattening, an assertion containing AudienceRestriction A = {this SP} AND AudienceRestriction B = {some other SP only} is accepted, even though restriction B should exclude this SP.\n\nIMPACT: An assertion an IdP scoped (via a second, narrower AudienceRestriction) for a different relying party can still be consumed here. Requires the IdP to emit multiple restriction blocks, so blast radius is limited, but it is a genuine deviation from the audience-restriction guarantee.\n\nSUGGESTED FIX: Iterate <AudienceRestriction> blocks individually; for each block collect its own <Audience> children (OR within the block) and require the SP entityID to satisfy EVERY block (AND across blocks). Reject if any restriction block omits the SP.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "auth-saml"
+    ]
+  }
+}

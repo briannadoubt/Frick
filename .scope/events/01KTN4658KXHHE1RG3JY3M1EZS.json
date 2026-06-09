@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658KXHHE1RG3JY3M1EZS",
+  "ts": "2026-06-09T02:43:03.571Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658KXHHE1RG3JY3M1EZR",
+    "number": 229,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[auth-saml-6] Single configured IdP certificate prevents zero-downtime signing-key rotation",
+    "description": "AUDIT FINDING auth-saml-6 (info/crypto, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/auth/saml.ts\nLINES: 92-98, 446-492\n\nWHAT: SamlProviderConfig.idpCertificate is a single string and the verifier pins exactly that cert (publicCert = pem, getCertFromKeyInfo = () => null — correctly never trusting document KeyInfo). There is no way to configure multiple trusted certs, so during an IdP signing-key rollover the SP must trust either the old or the new key but not both, forcing a hard cutover.\n\nIMPACT: Operational: a cert rotation causes an authentication outage for any assertion signed with whichever key the SP isn't currently configured for. No security weakness (pinning itself is correct), just a rotation/availability limitation.\n\nSUGGESTED FIX: Accept idpCertificate as a string OR string[] and verify each signature against the set, treating the signature as valid if it verifies under any configured cert. This permits overlapping old+new keys during rotation.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "auth-saml"
+    ]
+  }
+}

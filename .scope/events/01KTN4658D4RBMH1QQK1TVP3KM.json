@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658D4RBMH1QQK1TVP3KM",
+  "ts": "2026-06-09T02:43:03.565Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658D4RBMH1QQK1TVP3KK",
+    "number": 202,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[blob-gc-3] TOCTOU: re-referencing an aged orphan races the GC and can delete a live blob",
+    "description": "AUDIT FINDING blob-gc-3 (medium/race-condition, confidence=medium, verify-votes +2/-0)\n\nFILE: apps/server/src/blobs/gc-job.ts\nLINES: 178, 181-211\n\nWHAT: The declared-reference set is computed once at the start of a pass (collectDeclaredReferencedBlobIds at line 178) and then the loop deletes blobs against that snapshot. The grace window only protects blobs whose createdAt is recent (lines 184-185). It does NOT protect an OLD blob that becomes newly referenced during the pass. Concrete sequence: blob B was uploaded 30 days ago and is currently unreferenced; the GC pass snapshots the reference set (B absent); a client then writes/updates an object whose declared blob-ref field = B (blob ids are client-supplied path segments — server.ts:2280-2304 — so attaching a pre-existing aged blob to a new object is a normal, supported flow); the GC loop reaches B, finds it outside the grace window and absent from the stale snapshot, the isReferenced hook (if any) returns false, and deleteBlobConsistently removes B's bytes+metadata. The just-written object now references a deleted blob. The window is one GC pass, but the pass iterates every blob in the tenant so it can be long for large tenants, widening the race.\n\nIMPACT: Loss of a live, currently-referenced blob whenever a previously-orphaned aged blob is re-attached concurrently with a sweep. Low probability but it defeats the central 'never delete referenced data' invariant, and the grace window does not cover it.\n\nSUGGESTED FIX: Re-check the reference (declared scan for that blobId, or the isReferenced hook) immediately before deletion, ideally inside the same transaction as the delete, or delete only blobs whose createdAt is also older than the pass start AND re-validate the ref at delete time. Alternatively delete via a conditional 'DELETE ... WHERE not referenced' guarded by a serializable transaction.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "blob-gc"
+    ]
+  }
+}

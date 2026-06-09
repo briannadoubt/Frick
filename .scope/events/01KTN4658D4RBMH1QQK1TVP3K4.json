@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658D4RBMH1QQK1TVP3K4",
+  "ts": "2026-06-09T02:43:03.565Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658C0XRYXSK9KMDK1BDP",
+    "number": 194,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[auth-core-2] Timing-based account enumeration on /auth/email/login despite uniform response shape",
+    "description": "AUDIT FINDING auth-core-2 (medium/security, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/auth/identity-routes.ts\nLINES: 1455-1482\n\nWHAT: When the email is unknown, handleEmailLogin returns 401 immediately after an in-memory findUserBySubject() with NO password hashing (L1461-1465). When the email exists but the password is wrong, it reaches verifyAccountPassword -> account-store.verifyPassword -> Argon2id verify (account-store.ts L121), which is deliberately expensive (tens of ms). The response body is identical ({error:\"invalid_credentials\"}), but the latency difference is a reliable oracle: fast 401 = email not registered, slow 401 = registered + wrong password. The in-code comment at L1462 explicitly claims enumeration protection (\"so we don't leak whether the email is registered\"), which the timing side-channel defeats. Separately, a registered-but-revoked account returns a distinct 403 user_revoked (L1467-1473), leaking both existence and revoked state.\n\nIMPACT: An attacker can enumerate which emails have accounts (and which are revoked) purely from response timing/status, undermining the stated privacy goal and feeding targeted brute-force / phishing.\n\nSUGGESTED FIX: On the unknown-email path, perform a dummy Argon2id verify against a constant fake hash so both branches do equivalent work, and return the same 401 for revoked accounts (or at least keep timing uniform). Combine with the missing throttle (auth-core-1).",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "auth-core"
+    ]
+  }
+}

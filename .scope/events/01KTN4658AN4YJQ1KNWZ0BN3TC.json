@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658AN4YJQ1KNWZ0BN3TC",
+  "ts": "2026-06-09T02:43:03.562Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658AN4YJQ1KNWZ0BN3TB",
+    "number": 173,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[multi-region-2] RegionFailoverCoordinator promotion is not actually deterministic across regions: the candidate...",
+    "description": "AUDIT FINDING multi-region-2 (high/race-condition, confidence=medium, verify-votes +1/-1)\n\nFILE: apps/server/src/cluster/region-failover.ts\nLINES: 103-116, 151-162, 185-209\n\nWHAT: The module docs promise 'from the same {ownership snapshot} × {health map} every region computes the identical promotion with no messages exchanged.' But #promoteAwayFrom calls promotionTargetFor(failedHome, this.#health.keys()) — the candidate pool is exactly the set of regions that THIS coordinator has heard about (from initialHealth + reportHealth calls). The coordinator has no bus, no subscribe, no gossip: there is no mechanism in the codebase that synchronizes #health or #managedKeys between the per-region coordinator instances (confirmed: nothing outside the file/tests calls reportHealth or constructs the coordinator). Two consequences: (1) a region that is genuinely healthy but was never reported into a given coordinator's #health map is NOT in #health.keys(), so it is never an eligible promotion target even though isAvailable() returns true for it (healthOf defaults to 'healthy' at line 120) — promotion is biased toward only the regions each coordinator happens to have observed; (2) because each region's coordinator observes a different subset of regions/health at different times, region B can promote tenant acme to ap-southeast while region C promotes acme to eu-west. With FR-106 routing reading ownership live, that means two regions simultaneously believe they are the authoritative home for the same key — exactly the split-brain / dual-serialization-point FR-106 was built to prevent.\n\nIMPACT: Divergent, non-deterministic home promotion across regions under outage: two (or more) regions can each consider themselves home for the same tenant after a failover, producing concurrent authoritative write serialization points and the conflicting/forked streams the per-region-primary model exists to eliminate. A healthy region absent from a coordinator's health map is silently excluded as a failover target, shrinking availability.\n\nSUGGESTED FIX: Drive promotion candidates from the full known region universe (the union of ownership assignments' values + configured regions), not just #health.keys(); a region absent from #health should be considered with its default health. More fundamentally, the 'coordination-free' determinism only holds if every coordinator observes an identical health map and region set — provide a shared health-propagation channel (or document that operators must feed every coordinator identical health via an external source) and gate promotion on an agreed view, otherwise the determinism claim in the module docstring is false.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "multi-region"
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658EP87B29E4C6VSW2W1",
+  "ts": "2026-06-09T02:43:03.566Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658EP87B29E4C6VSW2W0",
+    "number": 206,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[native-swift-4] Unbounded reserveCapacity from attacker-controlled array/map length header (memory DoS)",
+    "description": "AUDIT FINDING native-swift-4 (medium/dos, confidence=medium, verify-votes +2/-0)\n\nFILE: packages/swift/Sources/FrickSwift/FrickSyncSocket.swift\nLINES: 496-514, 443-446\n\nWHAT: `readArray`/`readMap` call `reserveCapacity(count)` where `count` comes directly from a 16-/32-bit length header (`0xDC..0xDF`) before any element is read or bounds-checked against remaining bytes. A frame declaring a 4-byte array length near UInt32.max (~4.29e9) triggers an immediate multi-gigabyte allocation attempt (`reserveCapacity` for `[FrickMsgPackValue]`) even though the body is truncated — the subsequent `decode` would throw `.truncated`, but the over-reservation happens first. The new call/removal frames widen the set of server-pushed payloads parsed this way.\n\nIMPACT: A single small malicious frame forces a huge allocation, crashing the client with an out-of-memory abort. Remote DoS.\n\nSUGGESTED FIX: Cap `count` against remaining bytes before reserving (each element is ≥1 byte, so `count` cannot exceed `data.count - cursor`); reject lengths that exceed the buffer, and clamp `reserveCapacity` to a sane bound.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "native-swift"
+    ]
+  }
+}

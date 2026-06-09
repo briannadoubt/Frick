@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658BRRYS881CZY4HGJBR",
+  "ts": "2026-06-09T02:43:03.563Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658BRRYS881CZY4HGJBQ",
+    "number": 179,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[native-swift-1] Multiple FrickStore/FrickProjectionStore/FrickCallSession consumers race the same single-consum...",
+    "description": "AUDIT FINDING native-swift-1 (high/correctness, confidence=high, verify-votes +2/-0)\n\nFILE: packages/swift/Sources/FrickSwift/FrickSyncSocket.swift\nLINES: 964\n\nWHAT: `FrickSyncSocket.events` returns the same backing `eventStream` instance on every access (`public var events: AsyncThrowingStream<...> { eventStream }`). An `AsyncThrowingStream` is single-consumer: each yielded element is delivered to exactly ONE awaiting iterator, not broadcast. The new FR-137/FR-144 sync abstractions — `FrickStore.run()`, `FrickProjectionStore.run()`, and `FrickCallSession.run()` — each do `for try await event in await source.events` on the SAME socket. `FrickStoreRegistry` and its docs explicitly promote registering many stores (accountStore, contactStore, …) over one client/socket. When 2+ of these loops iterate the shared stream, the socket's inbound events (`.objectsDelta`, `.objectsRemoved`, `.projectionDelta`, `.status`) are distributed racily/round-robin among the iterators. A delta for `Account` can be consumed by the `ContactStore`'s iterator, which discards it via its `where record.type == Model.objectType` filter (FrickStore.swift:194) — so the AccountStore never sees it and the row is lost until a refetch/reconnect re-snapshot that also happens to land on the right iterator.\n\nIMPACT: In any app with more than one FrickStore (the documented norm) backed by a single socket, object/projection/call deltas are non-deterministically dropped: lists fail to update, deletions don't apply, call participant state goes stale. Data-correctness failure that worsens with more stores.\n\nSUGGESTED FIX: Fan out a single internal consumer of `eventStream` to per-subscriber streams (broadcast), e.g. maintain a set of registered continuations in the actor and yield each event to all of them; have `events` (or a new `subscribeEvents()`) vend a fresh child stream per caller. Alternatively document and enforce one consumer per socket and give each store its own socket.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "native-swift"
+    ]
+  }
+}

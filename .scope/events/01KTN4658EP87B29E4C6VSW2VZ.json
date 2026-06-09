@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658EP87B29E4C6VSW2VZ",
+  "ts": "2026-06-09T02:43:03.566Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658EP87B29E4C6VSW2VY",
+    "number": 205,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[native-swift-3] Malformed inbound frame with a NaN/Inf float crashes the client (Int(Double) trap) — remote DoS",
+    "description": "AUDIT FINDING native-swift-3 (medium/dos, confidence=high, verify-votes +2/-0)\n\nFILE: packages/swift/Sources/FrickSwift/FrickSyncSocket.swift\nLINES: 162-169, 527, 1469-1485\n\nWHAT: `FrickMsgPackValue.intValue` converts a decoded `.double` via `Int(v)` with no finiteness guard (line 166). `Int(Double.nan)`/`Int(.infinity)` is a fatal runtime trap (verified). The decoder produces `.double` for msgpack float32/float64 (0xCA/0xCB, lines 431-436) for ANY bit pattern including NaN/Inf. `decodeFrame` calls `parts[0].intValue` to read the frame kind (line 527), so a single inbound frame encoded as `[<NaN float>, payload]` crashes the receive loop / process. This is pre-existing for `decodeFrame`, but the new FR-144 `decodeObjectRemoval` adds another reachable trap site: `tuple[0].intValue` on a server-controlled `removed` tuple (line 1473).\n\nIMPACT: A malicious or buggy server (or a MITM on a non-TLS local transport) can hard-crash the Swift client with one crafted frame. Denial of service; no recovery since it traps rather than throws.\n\nSUGGESTED FIX: Guard the double→Int conversion: `case .double(let v): return v.isFinite ? Int(exactly: v.rounded()) : nil` (and use `Int(exactly:)` to reject out-of-range). Apply everywhere `intValue` feeds array allocation / required fields.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "native-swift"
+    ]
+  }
+}

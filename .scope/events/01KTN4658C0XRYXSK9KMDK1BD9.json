@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658C0XRYXSK9KMDK1BD9",
+  "ts": "2026-06-09T02:43:03.564Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658C0XRYXSK9KMDK1BD8",
+    "number": 187,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[sfu-media-4] P2P maxParticipants=2 capability is never enforced — control plane lets unlimited users into a P2P...",
+    "description": "AUDIT FINDING sfu-media-4 (medium/correctness, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/calls/call-control-plane.ts\nLINES: 243-303, 343-399\n\nWHAT: P2PWebRTCAdapter.describe() advertises maxParticipants:2 (p2p-media-plane.ts:110-112), and media-plane.ts documents this as the cap the control plane 'branches on'. But CallControlPlane never reads describe()/maxParticipants: createCall accepts any number of invitees and joinCall has no participant-count check against the media-plane capability (rg for maxParticipants in call-control-plane.ts and gateway.ts finds no enforcement). A creator can invite N users and all of them joinCall a P2P-brokered call.\n\nIMPACT: For a P2P-configured deployment, the server issues join grants (TURN creds) to arbitrarily many participants for a topology that physically supports only 2. Clients negotiate a mesh the adapter never promised; control-plane state (participants/events) and TURN credential issuance scale unbounded while the documented invariant is violated. Capacity/abuse assumptions tied to maxParticipants are broken.\n\nSUGGESTED FIX: In createCall/joinCall, consult mediaPlane.describe().maxParticipants and reject invitee lists / joins that would exceed it (e.g. throw a CallStateError before allocating/issuing tokens).",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "sfu-media"
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658EP87B29E4C6VSW2W3",
+  "ts": "2026-06-09T02:43:03.566Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658EP87B29E4C6VSW2W2",
+    "number": 207,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[native-swift-5] FrickStore/FrickCallSession do not drop rows deleted while disconnected — stale rows persist af...",
+    "description": "AUDIT FINDING native-swift-5 (medium/correctness, confidence=medium, verify-votes +2/-0)\n\nFILE: packages/swift/Sources/FrickSwift/FrickStore.swift\nLINES: 160-215\n\nWHAT: On reconnect the socket replays `activeSubscriptions` and the server resends a snapshot, surfaced as `.objectsDelta` (handleSnapshot, FrickSyncSocket.swift:1368-1379). `FrickStore.apply(records:)` only inserts/merges by id and never clears the cache, and `apply(removals:)` only acts on explicit `.objectsRemoved` events. A row deleted server-side WHILE the client was disconnected is simply absent from the reconnect snapshot — no removal event is generated for it — so it lingers in `byId`/`items` indefinitely. `FrickCallSession` (roomsById/participantsById) and the snapshot-as-delta path have the same gap.\n\nIMPACT: After an offline window during which a record was deleted (or access revoked), the deleted row stays visible/usable in the UI until the store is `reset()` or the app restarts. Shows stale (potentially access-revoked) data; can mislead the user and, for shared records, surface content the user should no longer see.\n\nSUGGESTED FIX: Distinguish a fresh snapshot from an incremental delta (the socket already has the snapshot vs delta frame kinds) and have stores reconcile to the snapshot set — drop cached ids not present in the snapshot — rather than pure-merge.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "native-swift"
+    ]
+  }
+}

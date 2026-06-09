@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658BRRYS881CZY4HGJBJ",
+  "ts": "2026-06-09T02:43:03.563Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658BRRYS881CZY4HGJBH",
+    "number": 176,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[tenant-app-isolation-2] Per-app job handler side-effect writes are mis-routed to the _default app (FrickJobCont...",
+    "description": "AUDIT FINDING tenant-app-isolation-2 (high/isolation, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/jobs/worker.ts, apps/server/src/jobs/registry.ts\nLINES: worker.ts:128-151 (runJob ctx build), 103 (claim with no appId); registry.ts:17-25 (FrickJobContext)\n\nWHAT: FR-153 routes handler RESOLUTION per app (`perAppRegistries.for(job.appId).jobs`, worker.ts:134-137), but the FrickJobContext passed to the handler (worker.ts:138-151) contains tenantId but NOT job.appId, and FrickJobContext (registry.ts:17-25) has no appId field. Every store facade write a handler makes — store.upsertObject / store.appendEvent / store.enqueueSignal / store.setPresence / store.jobs.enqueue / store.blobs.* — defaults appId to DEFAULT_APP_ID (see store.ts overloads, e.g. listObjects/readObject/upsertObject all `appId = d ?? DEFAULT_APP_ID`). So a handler registered for app B, running app B's job, writes its output objects/streams into the `_default` storage partition rather than app B's.\n\nIMPACT: A per-app job handler's outputs land in the wrong app partition: app B's own clients (pinned to appId==B) never see the job's results, while `_default`-app clients in the same tenant DO see them — a cross-app correctness + leak bug. Also affects child-job enqueue and presence/signal writes from handlers. Only manifests in genuine multi-app servers with per-app job handlers; single-app `_default` deployments are unaffected.\n\nSUGGESTED FIX: Add `appId: string` to FrickJobContext and set it from `job.appId` in worker.ts runJob. Update handlers/helpers to pass ctx.appId to every store call (mirroring the projection ctx.appId plumbing). Consider making store facade calls inside a job default to the job's appId rather than `_default`.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "tenant-app-isolation"
+    ]
+  }
+}

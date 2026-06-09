@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658D4RBMH1QQK1TVP3KC",
+  "ts": "2026-06-09T02:43:03.565Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658D4RBMH1QQK1TVP3KB",
+    "number": 198,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[tenant-app-isolation-6] Orphaned-blob GC only sweeps the _default app — non-default apps' blobs leak forever",
+    "description": "AUDIT FINDING tenant-app-isolation-6 (medium/resource-leak, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/blobs/gc-job.ts\nLINES: 155-225 (runOrphanedBlobGc), 170 (listAllOldestFirst no appId), 242-256 (deleteBlobConsistently no appId)\n\nWHAT: runOrphanedBlobGc calls `store.blobs.listAllOldestFirst(tenantId)` and `deleteBlobConsistently` → `store.blobDerivatives.deleteForParent` / `store.blobs.deleteContent` / `store.blobs.deleteMetadata`, all WITHOUT an appId argument, so every call defaults to DEFAULT_APP_ID (blob-store.ts methods all `appId = DEFAULT_APP_ID`). The declared-ref scan (collectDeclaredReferencedBlobIds) likewise reads `_default` objects. The job context provides no appId (see finding tenant-app-isolation-2), so even a per-app blob.gc job operates only on `_default`.\n\nIMPACT: In a multi-app deployment, orphaned blobs (and their bytes/derivatives) uploaded under any non-default app are never garbage-collected — unbounded storage growth for those apps. No cross-app deletion occurs (the GC stays within `_default`), so this is a leak/cost issue rather than a data-loss-of-other-apps issue. Single-app servers are unaffected.\n\nSUGGESTED FIX: Thread appId through the blob GC: enqueue/run one GC pass per (tenant, app), pass appId to listAllOldestFirst, collectDeclaredReferencedBlobIds, and deleteBlobConsistently's store calls. Depends on giving the job handler its appId (finding tenant-app-isolation-2).",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "tenant-app-isolation"
+    ]
+  }
+}

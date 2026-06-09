@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658AN4YJQ1KNWZ0BN3T8",
+  "ts": "2026-06-09T02:43:03.562Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658AN4YJQ1KNWZ0BN3T7",
+    "number": 171,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[sfu-media-2] Cross-participant transport/producer hijack: transports are scoped to the call, not the participant",
+    "description": "AUDIT FINDING sfu-media-2 (high/isolation, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/calls/sfu-media-plane.ts\nLINES: 231-260\n\nWHAT: connectTransport/produce/consume take a client-supplied transportId and forward it to the backend, which validates only that the transport exists on the call's router (mediasoup-sfu-backend.ts:307-312 #requireTransport; fake-sfu-backend.ts:139-147). Transports are stored per-router with no owner/participant binding (RouterEntry.transports is keyed only by transport id). CallControlPlane.#requireSfuParticipant (call-control-plane.ts:493-516) checks the actor is *some* active participant of the call but never checks the transport belongs to them. Therefore participant B, who is a legitimate member of the call, can pass participant A's send-transport id to sfuConnectTransport/sfuProduce and complete A's DTLS handshake or inject a producer onto A's transport, or consume onto A's recv transport.\n\nIMPACT: Within a call, any joined participant can manipulate another participant's media transports: complete/alter another participant's DTLS handshake, attach a producer to someone else's send transport, or steer consumers onto another participant's recv transport — media spoofing / session confusion / denial of the victim's media. Breaks per-participant isolation inside a shared call.\n\nSUGGESTED FIX: Record the owning (userId, deviceId) when a transport is created in issueJoinToken, and have connect/produce/consume verify the actor owns the supplied transportId (and that a consumed producerId is permitted). Track transports in a per-participant map, not just the per-call router map.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "sfu-media"
+    ]
+  }
+}

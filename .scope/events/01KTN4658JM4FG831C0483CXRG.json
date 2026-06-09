@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658JM4FG831C0483CXRG",
+  "ts": "2026-06-09T02:43:03.570Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658JM4FG831C0483CXRF",
+    "number": 222,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[server-storage-3] Cross-app presence eviction: presence_leases ON CONFLICT lets app B overwrite/evict app A's l...",
+    "description": "AUDIT FINDING server-storage-3 (low/isolation, confidence=medium, verify-votes +2/-0)\n\nFILE: apps/server/src/storage/presence-store.ts\nLINES: 40-52\n\nWHAT: presence_leases PRIMARY KEY is (tenant_id, presence_type, presence_key) with app_id additive (migrations.ts 0003/0021). set() does `INSERT ... ON CONFLICT(tenant_id, presence_type, presence_key) DO UPDATE SET app_id = excluded.app_id, packed = excluded.packed, expires_at = excluded.expires_at`. read()/clear() filter by app_id. So when App B sets a lease at a (tenant,type,key) already held by App A, B's write overwrites the row and rewrites app_id to B. App A's subsequent read() (filtered app_id=A) then returns undefined — A's presence was silently evicted by B, and B observes its own value. There is no cross-app guard (unlike ObjectStore/BlobStore).\n\nIMPACT: In a multi-app deployment two apps sharing a (tenant, presence_type, presence_key) tuple can evict each other's presence leases. Bounded blast radius (presence is ephemeral/TTL'd and apps usually use distinct keys/schemas); single-app deployments unaffected.\n\nSUGGESTED FIX: Include app_id in the presence_leases primary key (additive migration in both dialect files) and target ON CONFLICT on the app-scoped key, or add a FrickCrossAppAccessError-style guard before the upsert.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "server-storage"
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658C0XRYXSK9KMDK1BD5",
+  "ts": "2026-06-09T02:43:03.564Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658C0XRYXSK9KMDK1BD4",
+    "number": 185,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[calls-isolation-1] Call records and events are not app-id scoped — call commands ignore the connection's appId",
+    "description": "AUDIT FINDING calls-isolation-1 (medium/isolation, confidence=medium, verify-votes +2/-0)\n\nFILE: apps/server/src/sync/gateway.ts\nLINES: 1696-1744\n\nWHAT: Every other write path in the gateway threads #appIdFor(client) into store reads/writes/fan-out for FR-153 app isolation (e.g. append/object/presence at 1390, 1462, 1532). #handleCallCommand builds the CallActor from principal.tenantId/userId/deviceId only (lines 1696-1700) and never passes appId. CallControlPlane then writes all CallRoom/CallInvite/CallParticipant records via this.#store.upsertObject(tenantId, type, id, value) and appendEvent({tenantId,...}) with no appId (call-control-plane.ts 688-721), which lands them in the tenant's default app namespace (store.ts upsertObject tenant form is not app-partitioned). Reads (listInvites/listParticipants/#readRoom) are likewise app-agnostic.\n\nIMPACT: In a multi-app tenant deployment, all calls share one per-tenant namespace regardless of which app the caller is pinned to. A principal authenticated under app A operating on a call created under app B is not isolated at the control-plane store level (membership/state lookups cross app boundaries), and object-delta fan-out of call records does not carry the originating appId, so app-scoped subscribers' visibility of call records is inconsistent with the rest of the system's FR-153 guarantees.\n\nSUGGESTED FIX: Thread appId (#appIdFor(client)) into the CallActor / CallControlPlane and into every store read/write + appendEvent so call records and events are partitioned per app exactly like objects, streams, and presence.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "calls-authz"
+    ]
+  }
+}

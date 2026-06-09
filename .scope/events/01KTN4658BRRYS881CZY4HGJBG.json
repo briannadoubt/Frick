@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658BRRYS881CZY4HGJBG",
+  "ts": "2026-06-09T02:43:03.563Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658BRRYS881CZY4HGJBF",
+    "number": 175,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[auth-core-1] /auth/email/login and /auth/email/signup bypass the auth-attempt rate limiter (online password bru...",
+    "description": "AUDIT FINDING auth-core-1 (high/security, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/auth/identity-routes.ts\nLINES: 1305-1501\n\nWHAT: Every other auth-surface handler in this router calls throttled(...) (apple-verify L602, google-verify L752, oidc L904, saml L1096, forgot-password L1671, reset-password L1781, refresh L1836), and the built-in /auth/login route in server.ts is throttled via authAttemptLimiter (server.ts L1485). But handleEmailLogin (L1433) and handleEmailSignup (L1305) contain NO throttled() call. The identity router is dispatched before the built-in routes (server.ts L1177), and /auth/email/login performs the same password verification (verifyAccountPassword, L1478) as the throttled /auth/login. An attacker can therefore brute-force passwords against /auth/email/login with no per-identifier/IP ceiling, sidestepping the exact FR-29 protection the codebase added for the other route. Signup is similarly unthrottled, enabling cheap account-spam / enumeration probing.\n\nIMPACT: Unlimited online password-guessing against any email account, completely bypassing the FR-29 auth-attempt throttle that protects /auth/login. Argon2id cost slows each guess but does not bound attempt volume.\n\nSUGGESTED FIX: Add throttled({ req, res, route: \"email-login\", identifier: email }) at the top of handleEmailLogin (after email is parsed) and throttled({ req, res, route: \"email-signup\", identifier: email }) in handleEmailSignup, mirroring the forgot-password/reset-password handlers.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "auth-core"
+    ]
+  }
+}

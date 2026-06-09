@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658EP87B29E4C6VSW2W7",
+  "ts": "2026-06-09T02:43:03.566Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658EP87B29E4C6VSW2W6",
+    "number": 209,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[native-android-4] Unbounded msgpack collection pre-sizing and recursion let a malicious/compromised server OOM ...",
+    "description": "AUDIT FINDING native-android-4 (medium/dos, confidence=medium, verify-votes +2/-0)\n\nFILE: apps/android/frick/src/main/java/dev/frick/client/FrickSyncSocket.kt\nLINES: 358-392, 304-314, 1067-1076\n\nWHAT: unpackAny() builds collections sized directly from attacker-controlled wire headers: ARRAY -> `val len = unpacker.unpackArrayHeader(); buildList(len){...}` and MAP -> `unpacker.unpackMapHeader(); buildMap(len){...}` (371-384), and BINARY -> `readPayload(unpacker.unpackBinaryHeader())` (367-370). A frame whose array/map header declares e.g. ~2.1e9 (or a huge binary length) causes the backing array allocation to be attempted BEFORE any element bytes are read, throwing OutOfMemoryError on a tiny payload. unpackAny() is also unbounded-recursive, so a deeply nested array/map frame yields StackOverflowError. The MessagePack unpacker is constructed with newDefaultUnpacker (no size/limit config). onMessage wraps decode in catch(Throwable) (1067-1073) so it technically catches the Error, but an OOM mid-allocation can already have destabilized the process, and either way one cheap frame reliably aborts the active connection/decoder. No frame-size cap exists on the OkHttp WebSocket either.\n\nIMPACT: A malicious server, or an on-path attacker if TLS cert-pinning is absent, can crash or wedge the sync client with a single small frame (remote DoS). Lower likelihood for the trusted-server case but trivial to trigger if the server is compromised.\n\nSUGGESTED FIX: Clamp header lengths before allocating (reject/skip frames whose declared array/map/binary length exceeds a sane cap, or don't pre-size — grow incrementally and bound total element count). Add a recursion-depth limit in unpackAny(). Configure msgpack-core unpacker limits and/or an OkHttp max-frame size.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "native-android"
+    ]
+  }
+}

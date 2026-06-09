@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN465897ZMCGGGX70G7TJMC",
+  "ts": "2026-06-09T02:43:03.561Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN465897ZMCGGGX70G7TJMB",
+    "number": 165,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[crypto-e2ee-1] Transition window measured from epoch creation, not from supersession — window is null for any e...",
+    "description": "AUDIT FINDING crypto-e2ee-1 (high/correctness, confidence=high, verify-votes +2/-0)\n\nFILE: packages/core/src/e2ee.ts\nLINES: 379-384, 336-363\n\nWHAT: #expirePrevious() drops the previous epoch when `this.#now() - this.#previous.createdAt >= this.#windowMs`. `createdAt` is the time the epoch was CREATED (set in rotate() to now(), or carried from the announcer in adopt()), NOT the time it was demoted to 'previous'. Epochs only rotate on membership change, which is typically minutes apart. So when epoch N (created at T) is superseded by N+1 at T+Δ with Δ >> windowMs (5s), epoch N's createdAt is still T, and the very first keyFor()/previous access computes now()-T = Δ >= 5s and immediately discards epoch N. The transition window the design relies on (docs section 'Transition window') is effectively zero for any epoch that was current longer than 5s — i.e. essentially always. Worse, in adopt()-driven flows `createdAt` is the REMOTE announcer's clock value, so #expirePrevious mixes the local clock with a remote clock: positive skew (announcer ahead) makes now()-createdAt negative and the departed-member epoch lingers past the intended window (a forward-secrecy hole); negative skew shortens or zeroes it.\n\nIMPACT: Forward-secrecy glitch-avoidance is broken: in-flight frames under the just-superseded epoch are dropped instantly on every rotation (the visible freeze/audio-gap the window exists to prevent). Under clock skew between participants the previous (possibly departed-member) epoch key can also be retained longer than previousEpochWindowMs, weakening epoch-granularity forward secrecy.\n\nSUGGESTED FIX: Track a separate local-clock 'demotedAt' timestamp set at the moment an epoch becomes #previous (in both rotate() and adopt()), and expire based on now()-demotedAt. Never use the remote-supplied createdAt for local window timing.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "crypto-e2ee"
+    ]
+  }
+}

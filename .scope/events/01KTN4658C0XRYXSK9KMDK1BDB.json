@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658C0XRYXSK9KMDK1BDB",
+  "ts": "2026-06-09T02:43:03.564Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658C0XRYXSK9KMDK1BDA",
+    "number": 188,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[sfu-media-5] mediasoup worker-init promise is poisoned by a transient failure — backend permanently bricked",
+    "description": "AUDIT FINDING sfu-media-5 (medium/stability, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/calls/mediasoup-sfu-backend.ts\nLINES: 269-297\n\nWHAT: #ensureWorker caches the in-flight init promise: `if (!this.#workerInit) this.#workerInit = this.#startWorker();` then `this.#worker = await this.#workerInit`. If #startWorker rejects (mediasoup import fails, or createWorker throws transiently — e.g. ENOMEM, no free ports, EAGAIN spawning the C++ worker), the await throws so #worker stays undefined, but #workerInit retains the *rejected* promise. Every subsequent ensureRouter→#ensureWorker sees #workerInit is truthy and re-awaits the same rejected promise, returning the original failure forever. Nothing resets #workerInit on failure (only close() at line 261 clears it).\n\nIMPACT: A single transient worker-creation failure permanently disables the SFU backend for the process: all future calls get the same stale error even after the underlying condition (memory pressure, port contention) clears. Recovery requires a full close()/restart. Self-inflicted outage from a recoverable hiccup.\n\nSUGGESTED FIX: On failure, clear the cached init: `try { this.#worker = await this.#workerInit; } catch (e) { this.#workerInit = undefined; throw e; }` so the next call retries a fresh worker.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "sfu-media"
+    ]
+  }
+}

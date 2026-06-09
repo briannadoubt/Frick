@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658AN4YJQ1KNWZ0BN3T6",
+  "ts": "2026-06-09T02:43:03.562Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658AN4YJQ1KNWZ0BN3T5",
+    "number": 170,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[sfu-media-1] SFU join-token (HMAC auth nonce) is minted but never verified — token authorization is non-existent",
+    "description": "AUDIT FINDING sfu-media-1 (high/authz, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/calls/sfu-media-plane.ts\nLINES: 196-214, 274-284\n\nWHAT: issueJoinToken() mints a short-lived HMAC nonce (`#mintNonce`, line 279) documented (lines 44-50, 274-278) as the credential 'the client presents on its produce/consume calls' and which 'the server re-derives and checks (and the expiry)'. No such verification exists anywhere. There is no verifyNonce/verifyToken function in the repo (rg for timingSafeEqual / nonce-verify in calls/ returns nothing), and the produce/consume path in CallControlPlane.sfuProduce/sfuConsume/sfuConnectTransport (call-control-plane.ts:454-516) never accepts or checks the token — it only re-reads the participant record from the store. The gateway handlers (gateway.ts:1746-1793) also never pass a token. So the carefully minted, expiry-bound, per-(call,user,device) credential is dead weight: expiry is never enforced on the media path, and the HMAC binding is never used.\n\nIMPACT: The advertised security control (short-lived, expiry-bound, cryptographically-bound join credential) provides zero protection. Token expiry is meaningless on produce/consume; a participant can keep producing/consuming long after token TTL. The only gate is the store participant check, so all real authorization rests on finding #2/#3, not on the token. Defense-in-depth that operators will assume exists does not.\n\nSUGGESTED FIX: Either (a) remove the token from the grant and document that authz is store-backed, or (b) actually verify it: have sfuProduce/sfuConsume/sfuConnectTransport require the token, re-derive `${callId}:${userId}:${deviceId}:${expirySeconds}` HMAC-SHA256 with the secret, compare with crypto.timingSafeEqual, and reject expired/forged nonces before touching the backend.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "sfu-media"
+    ]
+  }
+}

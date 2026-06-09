@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658JM4FG831C0483CXR6",
+  "ts": "2026-06-09T02:43:03.570Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658JM4FG831C0483CXR5",
+    "number": 217,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[auth-core-4] forgot-password throttle keyed by victim email enables targeted reset-lockout DoS",
+    "description": "AUDIT FINDING auth-core-4 (low/dos, confidence=medium, verify-votes +2/-0)\n\nFILE: apps/server/src/auth/identity-routes.ts\nLINES: 1668-1671\n\nWHAT: handleEmailForgotPassword throttles with identifier: email (L1671), and authAttemptKey (server.ts L3038-3041) keys the bucket on route\\0tenant\\0email when an identity is present. An unauthenticated attacker can deliberately hammer POST /auth/email/forgot-password for a chosen victim address to exhaust that email's bucket, after which the genuine user's legitimate reset request is rejected (or, since the route still returns 200, silently dropped before a token is issued) until the window resets. Because the actor falls back to email rather than IP when an email is supplied, the attacker's own IP does not bound this.\n\nIMPACT: Targeted denial of the password-reset capability for any known/guessed email, for the duration of each rate-limit window, with trivial cost to the attacker.\n\nSUGGESTED FIX: Throttle forgot-password on a composite of email AND client IP (or a separate, more generous per-email issuance counter that does not block on a shared brute-force bucket), so one attacker IP cannot drain a victim's reset allowance.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "auth-core"
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658C0XRYXSK9KMDK1BDH",
+  "ts": "2026-06-09T02:43:03.564Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658C0XRYXSK9KMDK1BDG",
+    "number": 191,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[multi-region-4] Malformed-but-decodable cross-region payload bypasses the loop guard and is re-injected as a nu...",
+    "description": "AUDIT FINDING multi-region-4 (medium/stability, confidence=high, verify-votes +1/-1)\n\nFILE: apps/server/src/cluster/region-redis-bus.ts\nLINES: 86-108\n\nWHAT: RedisRegionBus.#onMessage does `envelope = decode(message) as RegionEnvelope` and then only structural check is `if (envelope.originRegionId === this.regionId) return`. Verified with @msgpack/msgpack: a payload encoding `{foo:'bar'}` decodes to an object whose `.originRegionId` is undefined (so the loop guard `undefined === regionId` is false → it passes), and `.envelope` is undefined; a top-level string `'hello'` also passes the guard. The handler (FederatingClusterBus, region-bus.ts:224) then runs `this.#local.publish(regionEnvelope.envelope)` with `undefined`. For RedisClusterBus that is `encode(undefined)` → publishes a msgpack `null` onto the intra-region channel; peer nodes decode `null` and run `switch(null.kind)` in gateway #handleClusterEnvelope (gateway.ts:850) → throws TypeError (caught/logged by per-handler isolation, but still amplified to every node in the region). A non-null garbage object with attacker-chosen `tenantId`/`kind` is forwarded verbatim. Unlike RedisClusterBus, there is no shape validation of the decoded region envelope before it is trusted as a RegionEnvelope.\n\nIMPACT: One malformed frame on the WAN channel is amplified into an intra-region publish to every node (decode-then-throw churn, log spam), and a crafted decodable object is forwarded into the gateway dispatch with attacker-controlled fields — combined with finding multi-region-1 this is the injection vector's lack of input validation. Contained from full crash only by the gateway's per-handler try/catch.\n\nSUGGESTED FIX: Validate the decoded value before trusting it: require it to be a non-null object with a string `originRegionId` and an `envelope` that is a non-null object with a known `kind`; drop+log otherwise (mirror the rigor RedisClusterBus implicitly relies on). Do this validation in RedisRegionBus.#onMessage and also defensively in FederatingClusterBus before re-injecting.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "multi-region"
+    ]
+  }
+}

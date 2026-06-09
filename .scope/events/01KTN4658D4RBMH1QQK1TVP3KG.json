@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658D4RBMH1QQK1TVP3KG",
+  "ts": "2026-06-09T02:43:03.565Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658D4RBMH1QQK1TVP3KF",
+    "number": 200,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[server-storage-2] Cross-app idempotency record clobber breaks dedup guarantee (idempotency_keys PK omits app_id)",
+    "description": "AUDIT FINDING server-storage-2 (medium/correctness, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/storage/stream-store.ts\nLINES: 190-209, 339-359\n\nWHAT: stream_events idempotency rows are stored in idempotency_keys whose PRIMARY KEY is (tenant_id, replica_id, request_id) — app_id is an additive column, NOT part of the key (migrations.ts 0003/0021). append() does `INSERT ... ON CONFLICT(tenant_id, replica_id, request_id) DO UPDATE SET app_id = excluded.app_id, result_event_id = excluded.result_event_id, created_at = excluded.created_at`, while readIdempotentEvent() filters by `app_id = ?`. The in-code comment argues app-scoped lookups make this safe, but the opposite is true: if App A appends (T,R,Q) — row stamped app_id=A,result=eventA — and then App B appends the same (T,R,Q), B's app-scoped lookup misses (row is stamped A) so B proceeds and its INSERT...ON CONFLICT overwrites the row to app_id=B,result=eventB. A subsequent replay of (T,R,Q) by App A now misses (row is stamped B) and App A mints a DUPLICATE event instead of returning the original — its idempotency guarantee is silently violated by App B's traffic. Unlike ObjectStore/BlobStore, there is no FrickCrossAppAccessError guard here.\n\nIMPACT: In a multi-app server, one app reusing another app's (tenant, replica, request) tuple defeats the other app's exactly-once append semantics, producing duplicate stream events. Blast radius is limited to colliding tuples (replica/request ids are usually client-generated and often distinct), and single-app '_default' deployments are unaffected.\n\nSUGGESTED FIX: Make app_id part of the idempotency_keys primary key (or a (app_id, tenant_id, replica_id, request_id) unique index) and target ON CONFLICT on the app-scoped key, mirroring the 0022 fix that rescoped jobs idempotency to include app_id. This must land as a new additive migration in BOTH migrations.ts and pg-framework-migrations.ts.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "server-storage"
+    ]
+  }
+}

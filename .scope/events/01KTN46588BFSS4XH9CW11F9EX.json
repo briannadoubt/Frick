@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTN46588BFSS4XH9CW11F9EX",
+  "ts": "2026-06-09T02:43:03.560Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN46588BFSS4XH9CW11F9EW",
+    "number": 161,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "Security & stability audit remediation (post-v0.1.1)",
+    "description": "Tracking epic for the deep adversarial audit of all changes since v0.1.1 (907 files / 218 commits). 70 findings confirmed after 2-skeptic adversarial verification: 3 critical, 16 high, 29 medium, 19 low, 3 info. Each child bug carries the finding id, file:lines, impact, and suggested fix.",
+    "status": "backlog",
+    "priority": "urgent",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658D4RBMH1QQK1TVP3KA",
+  "ts": "2026-06-09T02:43:03.565Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658D4RBMH1QQK1TVP3K9",
+    "number": 197,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[tenant-app-isolation-5] Cross-app idempotency-key overwrite breaks stream-append dedup across apps sharing (ten...",
+    "description": "AUDIT FINDING tenant-app-isolation-5 (medium/correctness, confidence=medium, verify-votes +2/-0)\n\nFILE: apps/server/src/storage/stream-store.ts\nLINES: 202-209 (idempotency_keys upsert), 339-359 (readIdempotentEvent)\n\nWHAT: The `idempotency_keys` PRIMARY KEY is (tenant_id, replica_id, request_id); app_id is an additive column not in the key. On append, the INSERT ... ON CONFLICT(tenant_id, replica_id, request_id) DO UPDATE SET app_id = excluded.app_id, ... rewrites the row's app_id to the writing app. readIdempotentEvent (line 346) filters `WHERE app_id = ? AND tenant_id = ? AND replica_id = ? AND request_id = ?`. So if app A and app B (same tenant) ever collide on (replicaId, requestId): app B's append overwrites the row to app_id=B; a later in-window replay of app A's same requestId reads with app_id=A, misses the now-B-stamped row, and mints a brand-new event instead of returning the original — an idempotency bypass. The code comment claims apps 'do not collide in practice', which is not enforced.\n\nIMPACT: Duplicate stream events can be produced under cross-app key collision: the at-most-once guarantee the idempotency key exists to provide is silently lost for the colliding requestId. replicaId is principal-derived and requestId is client-chosen, so collision is plausible for clients reusing requestId schemes across apps in the same tenant. Limited blast radius (requires same tenant + same replica + same request id across two apps).\n\nSUGGESTED FIX: Make app_id part of the idempotency_keys primary key / ON CONFLICT target (migration), or scope the dedup so an app never overwrites another app's idempotency row. At minimum, don't rewrite app_id on conflict for a different app.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "tenant-app-isolation"
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658D4RBMH1QQK1TVP3K8",
+  "ts": "2026-06-09T02:43:03.565Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658D4RBMH1QQK1TVP3K7",
+    "number": 196,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[tenant-app-isolation-4] WebSocket app partition is client-selected via advertised schemaId with no per-principa...",
+    "description": "AUDIT FINDING tenant-app-isolation-4 (medium/authz, confidence=medium, verify-votes +2/-0)\n\nFILE: apps/server/src/sync/gateway.ts\nLINES: 1041-1052 (Hello → findBySchemaId → client.appId), 485-491 (#storageAppId)\n\nWHAT: At Hello, the connection's storage appId is derived purely from the client-advertised `clientCapabilities.schema.schemaId` (gateway.ts:1042-1044 `this.#appRegistry?.findBySchemaId(advertisedSchemaId)`), then pinned with `client.appId = this.#storageAppId(targetAppId)`. The schemaId is not a secret (it's returned from `GET <basePath>/schema` and embedded in every app's published schema). There is no check anywhere (grepped authz.ts, authz/rbac.ts, session-store.ts) that the authenticated principal is actually entitled to that app — appId is never part of the session/principal. The HTTP boundary derives appId server-side from the URL path (server.ts:1154-1167) and is not affected.\n\nIMPACT: An authenticated client can advertise any other app's schemaId in its Hello frame to pin its WS connection to that app's storage partition, then read (subscribe/object snapshot/stream page) and write (object upsert/append/presence/signal) that app's data — bounded only by its own tenantId and the existing per-record/policy-hook authz, which are tenant-scoped and app-agnostic. If apps are intended as a trust boundary between distinct products sharing a tenant namespace, this lets a user of app A reach app B's partition. If apps are only a routing/namespacing convenience for the same trust domain, this is by design; the app-id.ts doc comment ('an app can neither read nor write another app's objects') overstates the guarantee.\n\nSUGGESTED FIX: If apps are a security boundary, gate the Hello app selection on a per-principal/app-membership check (e.g. an allowed-apps claim on the session or a grant lookup) and reject a Hello whose principal is not entitled to the matched app; otherwise document explicitly that appId is a namespacing axis, not an authorization boundary.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "tenant-app-isolation"
+    ]
+  }
+}

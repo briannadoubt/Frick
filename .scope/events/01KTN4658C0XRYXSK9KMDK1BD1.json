@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658C0XRYXSK9KMDK1BD1",
+  "ts": "2026-06-09T02:43:03.564Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658C0XRYXSK9KMDK1BD0",
+    "number": 183,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[crypto-e2ee-4] Key-epoch announcements are unauthenticated; any party knowing a recipient's public key (or the ...",
+    "description": "AUDIT FINDING crypto-e2ee-4 (medium/authz, confidence=medium, verify-votes +2/-0)\n\nFILE: packages/core/src/e2ee.ts\nLINES: 1432-1472, 1486-1533, 1077-1135\n\nWHAT: Neither SignalKeyDistributor nor AsymmetricKeyDistributor authenticates the SENDER of a `keyEpoch` signal. `senderDeviceId` is used only to skip self-echoes (lines 1121, 1491); it is never cryptographically bound. For the ECDH path, KEK=HKDF(ECDH(ephemeralPriv, recipientPub)) and the AAD binds only callId:epochId:recipientId — not the sender or ephemeral key. Recipient public keys live in the (public) MemberKeyDirectory, so ANYONE — including the control-plane relay, which docs/e2ee-calls.md 'Threat model' explicitly claims to protect against ('Key epochs are distributed ... wrapped per recipient; the relay carries opaque blobs') — can generate their own ephemeral pair, wrap an attacker-CHOSEN epoch key to the victim with a fresh epochId, and emit a valid signal. #tryUnwrap authenticates (the attacker computed the KEK correctly) and the victim adopts the attacker-known key. For the symmetric path, any holder of the room secret can likewise forge announcements.\n\nIMPACT: A malicious relay or any directory-readable party can make a victim adopt an epoch key the attacker knows (enabling media decryption if it can also observe/inject frames) or push divergent keys to different participants (split-brain / call DoS). This contradicts the documented threat-model claim of protecting against the control-plane server. Overlaps with the documented MLS deferral (ghost-member resistance) but is a concrete injection, not just a missing future feature.\n\nSUGGESTED FIX: Sign each keyEpoch announcement with the sender's long-term key and verify against the directory before adopt; bind the ephemeral public key and senderDeviceId into the wrap AAD. At minimum, document that announcements are unauthenticated and that the relay can inject epochs (the current threat-model text overstates the guarantee).",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "crypto-e2ee"
+    ]
+  }
+}

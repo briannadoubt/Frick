@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658C0XRYXSK9KMDK1BD3",
+  "ts": "2026-06-09T02:43:03.564Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658C0XRYXSK9KMDK1BD2",
+    "number": 184,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[crypto-e2ee-5] Monotonic #highestSeen can be permanently poisoned by a single forged high-epochId announcement,...",
+    "description": "AUDIT FINDING crypto-e2ee-5 (medium/dos, confidence=medium, verify-votes +1/-1)\n\nFILE: packages/core/src/e2ee.ts\nLINES: 1118-1135, 1486-1505, 359-363\n\nWHAT: poll() ignores any announcement with epochId <= #highestSeen (lines 1122, 1492) and there is no upper bound or sanity check on the adopted epochId (header epochId is a uint32; adopt() accepts any number > current). Combined with the lack of sender authentication (crypto-e2ee-4), a single forged `keyEpoch` signal carrying a very large epochId (e.g. 2^31) sets #highestSeen to that value (and, if unwrappable, adopt() sets current to it). Legitimate subsequent announcements — whose epochIds advance by 1 from 0 — are all <= #highestSeen and silently dropped forever.\n\nIMPACT: One forged announcement permanently breaks key-epoch adoption for a victim: it never converges on real epochs again, so it cannot decrypt any future media — a durable denial of service requiring only the ability to place one signal on the relay.\n\nSUGGESTED FIX: Reject epochIds that jump implausibly far beyond the current epoch, gate adoption on an authenticated sender (crypto-e2ee-4), and/or bound epochId growth relative to observed membership churn.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "crypto-e2ee"
+    ]
+  }
+}

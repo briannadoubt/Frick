@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658HJH0HCRD296F339SG",
+  "ts": "2026-06-09T02:43:03.569Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658HJH0HCRD296F339SF",
+    "number": 213,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[multi-region-7] MemoryRegionProxy.onProxiedWrite returns a stale-closure unsubscribe that can detach the CURREN...",
+    "description": "AUDIT FINDING multi-region-7 (low/correctness, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/cluster/region-router.ts\nLINES: 315-322\n\nWHAT: onProxiedWrite detaches any prior handler, attaches the new one, and returns an unsubscribe closure that calls `this.#detach?.()`. The returned closure captures `this`, not the specific detach it installed. If onProxiedWrite is called twice (h1 then h2), calling the FIRST returned unsubscribe later runs `this.#detach?.()` which now points at h2's detach — so unsubscribing h1 (already replaced) actually tears down h2, the live handler. The home region then silently stops receiving proxied writes.\n\nIMPACT: A caller that re-registers the home applier and later disposes the old subscription can accidentally detach the active applier, dropping all proxied (non-home → home) writes for that region with no error. Limited blast radius because the intended usage is a single long-lived home handler, but it is a latent footgun.\n\nSUGGESTED FIX: Capture the specific detach in the returned closure: `const detach = this.#fabric.attach(...); this.#detach = detach; return () => { detach(); if (this.#detach === detach) this.#detach = undefined; };`",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "multi-region"
+    ]
+  }
+}

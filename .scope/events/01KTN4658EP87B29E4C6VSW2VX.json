@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658EP87B29E4C6VSW2VX",
+  "ts": "2026-06-09T02:43:03.566Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658EP87B29E4C6VSW2VW",
+    "number": 204,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[native-swift-2] In-flight callCommand continuation leaks (hangs forever) when the socket drops after the frame ...",
+    "description": "AUDIT FINDING native-swift-2 (medium/resource-leak, confidence=high, verify-votes +2/-0)\n\nFILE: packages/swift/Sources/FrickSwift/FrickSyncSocket.swift\nLINES: 1140-1158, 1635-1667\n\nWHAT: `callCommand` registers a `CheckedContinuation` in `pendingCallResponders[requestId]` and sends the frame via `sendOrQueue(expectResponse:false)`. When the socket is `.connected`, the frame is transmitted and dropped from the outbound buffer. If the WebSocket then drops before the matching `CallCommandResult`/`Nack` arrives, `handleDisconnect` (lines 1635-1667) tears down the task and reconnects but does NOT resume or remove `pendingCallResponders` (nor `pendingResponders`). On reconnect only `activeSubscriptions` and the `pending` outbound buffer are replayed — the already-sent call frame is not, so the server never re-processes it and never replies. The continuation is resumed only in `close()` (lines 985-988). There is no timeout. The same leak affects `upsertObject`'s `pendingResponders`.\n\nIMPACT: `FrickCallSession.join()/accept()/leave()/end()/setMediaState()` (and any `upsertObject`) awaited across a mid-flight reconnect never returns: the call UI spinner/disabled button hangs indefinitely and the awaiting task leaks until the socket is explicitly `close()`d. Common on flaky mobile networks.\n\nSUGGESTED FIX: In `handleDisconnect`, fail (or, for idempotent retriable ops, re-queue) all `pendingCallResponders`/`pendingResponders` with a reconnect/cancellation error, mirroring `close()`. Or add a per-request timeout that resumes-throwing and removes the responder.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "native-swift"
+    ]
+  }
+}

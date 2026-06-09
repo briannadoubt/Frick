@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658KXHHE1RG3JY3M1EZN",
+  "ts": "2026-06-09T02:43:03.571Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658JM4FG831C0483CXRS",
+    "number": 227,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[native-swift-7] flushPending re-decodes every queued frame on the hot path solely for a telemetry label",
+    "description": "AUDIT FINDING native-swift-7 (low/stability, confidence=medium, verify-votes +2/-0)\n\nFILE: packages/swift/Sources/FrickSwift/FrickSyncSocket.swift\nLINES: 1204-1222\n\nWHAT: `flushPending` now calls `FrickMsgPackCodec.decodeFrame(entry.frame)` for each drained frame just to recover `kind` for the telemetry counter. This fully re-parses every buffered frame (including potentially large append payloads) on every reconnect flush. It is also the one decode site here that can hit the `intValue` NaN trap (finding native-swift-3) on locally re-encoded data, though local frames are trusted. Primarily a performance/robustness regression on reconnect with a large pending buffer.\n\nIMPACT: Redundant CPU on reconnect proportional to queued-frame size; minor. No correctness impact for well-formed local frames.\n\nSUGGESTED FIX: Store the `FrickFrameKind` alongside the encoded bytes in `PendingSocketAppend` at enqueue time instead of re-decoding on flush.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "native-swift"
+    ]
+  }
+}

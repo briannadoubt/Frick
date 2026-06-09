@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658AN4YJQ1KNWZ0BN3SY",
+  "ts": "2026-06-09T02:43:03.562Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658AN4YJQ1KNWZ0BN3SX",
+    "number": 166,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[calls-token-1] SFU join-token (HMAC nonce) is minted but NEVER verified on produce/consume/connectTransport",
+    "description": "AUDIT FINDING calls-token-1 (high/authz, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/calls/sfu-media-plane.ts\nLINES: 172-214, 231-260, 279-284\n\nWHAT: issueJoinToken() mints a coturn-REST-style HMAC nonce `${expirySeconds}.${HMAC(secret, callId:userId:deviceId:expirySeconds)}` (#mintNonce, lines 279-284) and returns it in the grant. But SfuMediaPlaneAdapter has NO verify method at all, and connectTransport/produce/consume (lines 231-260) only call #requireSession(callId) — they never receive or check a token. The control plane (call-control-plane.ts sfuConnectTransport/sfuProduce/sfuConsume, lines 454-486) and the gateway dispatch (gateway.ts 1746-1793) likewise never pass or validate the token; authorization is done purely from the gateway principal's participant record. The entire HMAC token path is dead code: signature, expiry, and the callId:userId:deviceId scope binding are never enforced. The documented contract ('The server re-derives and checks it (and the expiry) on produce/consume', lines 277-278) is false.\n\nIMPACT: The token provides zero security. Its intended guarantees — expiry (a joined participant can keep producing/consuming forever, well past the 5-minute TTL) and per-(callId,userId,deviceId) scoping — are not enforced anywhere. Combined with calls-media-1, there is no media-layer credential gating ops.\n\nSUGGESTED FIX: Add a verifyJoinToken(callId, actor, token) on SfuMediaPlaneAdapter that re-derives the HMAC with crypto.timingSafeEqual, rejects on signature mismatch or expiry (now() >= expirySeconds*1000), and binds callId:userId:deviceId. Thread the token from the client through CallCommand → control plane → media plane and call it in #requireSfuParticipant before forwarding to the backend.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "calls-authz"
+    ]
+  }
+}

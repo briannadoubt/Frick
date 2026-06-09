@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658AN4YJQ1KNWZ0BN3T0",
+  "ts": "2026-06-09T02:43:03.562Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658AN4YJQ1KNWZ0BN3SZ",
+    "number": 167,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[calls-media-1] Any joined participant can hijack another participant's transport (produce/consume on a transpor...",
+    "description": "AUDIT FINDING calls-media-1 (high/authz, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/calls/call-control-plane.ts\nLINES: 464-516\n\nWHAT: sfuProduce/sfuConsume/sfuConnectTransport authorize via #requireSfuParticipant (lines 493-516), which only verifies the actor is SOME joined participant of the live call — it never checks that the supplied transportId/producerId belongs to the actor. The SFU backends store transports at router/call granularity with no participant binding: FakeSfuBackend produce()/consume() only check `router.transports.has(input.transportId)` (fake-sfu-backend.ts 149-186) and MediasoupSfuBackend #requireTransport only looks up by callId+transportId (mediasoup-sfu-backend.ts 182-218, 307-313). transportIds are server-assigned but returned to clients in join grants and are also enumerable. So joined participant B can pass participant A's transportId to sfuProduce (inject media that the SFU attributes to A's transport) or sfuConnectTransport (complete/Hijack A's DTLS handshake), and sfuConsume lets any participant consume any producerId on the router.\n\nIMPACT: Cross-participant media spoofing and tampering inside a call: B can produce tracks on A's transport (impersonate A's media), disrupt A's DTLS state, and consume arbitrary producers. Breaks per-participant media integrity even though call-level membership is enforced.\n\nSUGGESTED FIX: Bind each created transport (and producer) to a (userId,deviceId) at createWebRtcTransport/produce time, persist that ownership in the backend, and have connectTransport/produce assert the transport's owner == actor and consume assert the recv transport's owner == actor. The verifyJoinToken from calls-token-1 should carry the same identity to cross-check.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "calls-authz"
+    ]
+  }
+}

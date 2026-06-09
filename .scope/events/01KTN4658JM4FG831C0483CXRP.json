@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658JM4FG831C0483CXRP",
+  "ts": "2026-06-09T02:43:03.570Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658JM4FG831C0483CXRN",
+    "number": 225,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[blob-gc-6] isReferenced hook return value is coerced with truthiness; a non-boolean/undefined return silently d...",
+    "description": "AUDIT FINDING blob-gc-6 (low/data-loss, confidence=medium, verify-votes +2/-0)\n\nFILE: apps/server/src/blobs/gc-job.ts\nLINES: 196-202\n\nWHAT: The app-supplied protection hook is consulted as `if (protectedByHook)` (line 198) where protectedByHook = await args.isReferenced(...). The hook type allows returning boolean | Promise<boolean>, but nothing enforces it at runtime. If an app's hook accidentally returns undefined / null / 0 / '' (e.g. a forgotten return on an early branch, or a thrown-then-caught path that yields undefined), the value is falsy and the blob is deleted even though the app intended to protect it. Given this hook is the ONLY guard for blobs referenced via untyped fields, a subtle hook bug becomes irrecoverable data loss with no signal.\n\nIMPACT: A non-strict-boolean return from the protection hook (an easy app bug) silently deletes a referenced blob. Because untyped-field references are exactly the case this hook exists to cover, the blast radius is real user-data loss.\n\nSUGGESTED FIX: Treat any non-strict-true return conservatively as 'protect' only when explicitly false: e.g. delete only when protectedByHook === false, and log/skip (keep) on any other value, or assert the return is a boolean and keep-on-violation. Fail safe toward keeping the blob.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "blob-gc"
+    ]
+  }
+}

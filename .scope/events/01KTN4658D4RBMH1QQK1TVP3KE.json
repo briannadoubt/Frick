@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658D4RBMH1QQK1TVP3KE",
+  "ts": "2026-06-09T02:43:03.565Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658D4RBMH1QQK1TVP3KD",
+    "number": 199,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[server-storage-1] Admin audit hash-chain forks under concurrent record() — non-atomic read-then-insert",
+    "description": "AUDIT FINDING server-storage-1 (medium/race-condition, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/storage/admin-audit-store.ts\nLINES: 109-162\n\nWHAT: record() reads the latest row's entry_hash with `SELECT entry_hash FROM admin_audit_log ORDER BY id DESC LIMIT 1` and then INSERTs a new row whose previous_hash/entry_hash chain off that value — but the SELECT and INSERT are two separate awaited SqlDriver calls with NO wrapping transaction (verified at all call sites: server.ts:666,1710,3906,3924 and identity-routes.ts:465 call `store.adminAudit.record(...)` bare). Two admin HTTP requests that interleave (parallel requests are normal) can both run their SELECT before either INSERTs, so both new rows read the SAME previousHash and chain off the same predecessor. The chain now forks: two distinct rows share the same previous_hash. verifyChain() walks rows in id order expecting each row's previous_hash to equal the prior row's entry_hash; the second of the two forked rows fails that equality and verifyChain() reports `{valid:false, brokenAt:<id>}`.\n\nIMPACT: The tamper-evidence feature added by migration 0012 produces false positives: a perfectly legitimate concurrent pair of admin actions makes verifyChain() declare the audit log tampered, undermining the security control it exists to provide and potentially triggering incident response on a non-incident.\n\nSUGGESTED FIX: Wrap the read-previous + insert in a single `this.sql.transaction(async (tx) => { ... })`. On SQLite BEGIN IMMEDIATE serializes writers so the SELECT/INSERT pair is atomic; on Postgres take a row/table lock (e.g. `SELECT ... FOR UPDATE` on a sentinel, or `LOCK TABLE admin_audit_log IN SHARE ROW EXCLUSIVE MODE`) so two writers cannot both read the same tail before inserting.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "server-storage"
+    ]
+  }
+}

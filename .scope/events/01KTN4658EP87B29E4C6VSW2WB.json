@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658EP87B29E4C6VSW2WB",
+  "ts": "2026-06-09T02:43:03.566Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658EP87B29E4C6VSW2WA",
+    "number": 211,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[calls-stability-1] #finalizeEnd casts a possibly-undefined room to CallRoomRecord",
+    "description": "AUDIT FINDING calls-stability-1 (low/stability, confidence=medium, verify-votes +1/-1)\n\nFILE: apps/server/src/calls/call-control-plane.ts\nLINES: 607-623\n\nWHAT: #finalizeEnd re-reads the room and spreads `...(room as CallRoomRecord)` (line 614) without a not-found guard. Current callers (endCall line 582, leaveCall line 559) both confirm the room exists before calling, so it is not presently reachable with undefined. But it is a latent NPE/garbage-record hazard: a concurrent end/release that deletes the room between the caller's read and this re-read would spread `undefined` into `{ ...undefined, state: 'ended', endedAt }` and write a malformed room record (only state+endedAt, losing id/createdBy/conversationId).\n\nIMPACT: Low today (no caller reaches it with a missing room), but a future caller or a delete-during-end race would persist a corrupt CallRoom record (missing id/createdBy) and could break subsequent endCall authz (createdBy check) and client sync.\n\nSUGGESTED FIX: Guard #finalizeEnd: if the re-read room is undefined or already 'ended', return early / throw callNotFound instead of casting and spreading undefined.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "calls-authz"
+    ]
+  }
+}

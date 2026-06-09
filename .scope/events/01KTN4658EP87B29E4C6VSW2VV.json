@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658EP87B29E4C6VSW2VV",
+  "ts": "2026-06-09T02:43:03.566Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658EP87B29E4C6VSW2VT",
+    "number": 203,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[blob-gc-4] Unbounded in-memory blob + object scan during GC pass (OOM DoS on large tenants)",
+    "description": "AUDIT FINDING blob-gc-4 (medium/dos, confidence=medium, verify-votes +2/-0)\n\nFILE: apps/server/src/blobs/gc-job.ts\nLINES: 117-146, 170-171\n\nWHAT: A GC pass loads every blob_metadata row for the tenant into a single array via listAllOldestFirst (line 170; blob-store.ts:187-196 has no LIMIT/OFFSET), and collectDeclaredReferencedBlobIds loads ALL objects of every ref-declaring object type via store.objects.list (line 135; object-store.ts:188-200 has no pagination) into memory, while also building a referenced Set of all ref values. For a tenant with millions of blobs/objects these full materializations coexist in heap simultaneously. There is no batching, streaming cursor, or row cap anywhere in the GC path.\n\nIMPACT: On a large tenant, a single scheduled GC pass can exhaust worker memory and OOM-crash the process. Because the sweep is recurring, the crash can recur every interval, and a crash mid-pass (after some deletes) interacts with the recurring re-enqueue.\n\nSUGGESTED FIX: Paginate both scans: stream blob_metadata oldest-first in bounded batches and resolve references per-batch (e.g. a targeted 'is this blobId referenced by any declared ref field' query) instead of materializing the full object set, or cap the number of blobs reclaimed per pass.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "blob-gc"
+    ]
+  }
+}

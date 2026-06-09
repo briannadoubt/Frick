@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658C0XRYXSK9KMDK1BDN",
+  "ts": "2026-06-09T02:43:03.564Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658C0XRYXSK9KMDK1BDM",
+    "number": 193,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[auth-saml-2] Malformed NotBefore/NotOnOrAfter silently skips the validity-window check (Date.parse NaN)",
+    "description": "AUDIT FINDING auth-saml-2 (medium/correctness, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/auth/saml.ts\nLINES: 319-333, 368-379\n\nWHAT: All four time comparisons use Date.parse() raw: `now+skew < Date.parse(nb)` (319), `now-skew >= Date.parse(noa)` (327), `now-skew >= Date.parse(scNotOnOrAfter)` (370), and `Date.parse(scNotOnOrAfter) < Date.parse(notOnOrAfter)` (377). For an unparseable timestamp Date.parse returns NaN, and every relational comparison with NaN is false, so the bound is silently treated as satisfied. Empirically confirmed: an assertion with `NotOnOrAfter=\"not-a-date\"` (NotBefore valid, well past intended expiry) is ACCEPTED, and an assertion with `NotBefore=\"garbage\"` is accepted regardless of how far in the future it claims to start. The garbage string is then returned as verified.notOnOrAfter.\n\nIMPACT: The Conditions validity window — a core freshness control — can be disabled by a malformed timestamp. The value lives inside the signed assertion, so this is primarily an IdP-bug / defense-in-depth exposure (a signed assertion with a malformed expiry never expires on Conditions grounds), and it pollutes the replay store's expires_at (see auth-saml-4). Not a direct unauthenticated attacker bypass, but it removes a guarantee the module advertises as 'non-negotiable'.\n\nSUGGESTED FIX: Parse each timestamp once into a number and reject the assertion (SamlValidationError) when Number.isNaN(parsed) for any present NotBefore/NotOnOrAfter. Treat an unparseable freshness bound as a hard failure rather than an absent constraint.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "auth-saml"
+    ]
+  }
+}

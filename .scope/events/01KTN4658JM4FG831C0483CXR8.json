@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658JM4FG831C0483CXR8",
+  "ts": "2026-06-09T02:43:03.570Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658JM4FG831C0483CXR7",
+    "number": 218,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[auth-core-5] findUserBySubject loads and linearly scans ALL User rows on every auth request",
+    "description": "AUDIT FINDING auth-core-5 (low/dos, confidence=medium, verify-votes +2/-0)\n\nFILE: apps/server/src/auth/identity-routes.ts\nLINES: 2051-2059\n\nWHAT: findUserBySubject calls store.listObjects(SYSTEM_TENANT, userObject.type) (L2057) to fetch EVERY User object into memory, then .find() scans for the matching subject/email. This runs on every email login, signup, forgot-password, and every apple/google/oidc/saml verify (e.g. L642, L788, L953, L1190, L1339, L1455, L1672). For email signup/login it is the first DB op and is unthrottled (see auth-core-1). With a large user table this is O(N) memory+CPU per unauthenticated request and a straightforward amplification/DoS vector; findPrimaryTenantForUser similarly lists all TenantMembership rows (L2068).\n\nIMPACT: Auth endpoints degrade linearly with user count and can be driven to high CPU/memory by unauthenticated request floods; combined with the missing email-login throttle this is an inexpensive resource-exhaustion lever.\n\nSUGGESTED FIX: Index the subject/email lookup in the store (indexed query by field value) instead of listObjects + in-memory find, and gate the unauthenticated paths behind the throttle.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "auth-core"
+    ]
+  }
+}

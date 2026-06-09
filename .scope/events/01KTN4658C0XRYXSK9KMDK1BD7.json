@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658C0XRYXSK9KMDK1BD7",
+  "ts": "2026-06-09T02:43:03.564Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658C0XRYXSK9KMDK1BD6",
+    "number": 186,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[calls-correctness-1] Call creator can never join their own call (excluded from invitees, join requires an invite)",
+    "description": "AUDIT FINDING calls-correctness-1 (medium/correctness, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/calls/call-control-plane.ts\nLINES: 244-250, 313-345, 636-649\n\nWHAT: createCall strips the creator from invitees (`.filter((u) => u !== actor.userId)`, line 244) and writes invites only for invitees. joinCall and acceptInvite both call #requireInvitee(actor.userId) (lines 315, 345), which throws CallAuthzError('notInvitee') when no CallInvite row exists for the actor (lines 636-648). Since the creator has no invite row, the creator cannot acceptInvite or joinCall their own call. There is no creator special-case anywhere except endCall. The room only transitions ringing→active on the first invitee join, so the creator can never become a CallParticipant nor get a media join grant.\n\nIMPACT: Core call flow is broken: the user who starts a call cannot participate in it (no participant record, no media grant). The call can only ever contain invitees, and a 1:1 call the creator started is unusable by the creator. Functional defect on the primary use case.\n\nSUGGESTED FIX: Treat the creator as an implicit participant: either auto-create a self-invite/participant for the creator at createCall time, or special-case #requireInvitee to allow room.createdBy. Then joinCall must issue the creator a media grant like any other participant.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "calls-authz"
+    ]
+  }
+}

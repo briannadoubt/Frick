@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658D4RBMH1QQK1TVP3K6",
+  "ts": "2026-06-09T02:43:03.565Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658D4RBMH1QQK1TVP3K5",
+    "number": 195,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[auth-core-3] Refresh-token rotation has no reuse/family detection — a stolen rotated token does not invalidate ...",
+    "description": "AUDIT FINDING auth-core-3 (medium/authz, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/storage/refresh-token-store.ts\nLINES: 112-158\n\nWHAT: rotate() atomically revokes the presented token and issues a fresh one, so replaying the SAME token a second time returns undefined -> 401 (handleRefresh L1861). However there is no token-family/lineage tracking: when an already-revoked refresh token is replayed, the store simply returns undefined and does nothing else. Standard refresh-token reuse detection requires that presenting an already-consumed token revoke the entire descendant chain (the assumption being the token was stolen). Here, if an attacker exfiltrates a refresh token and uses it before the victim, the attacker obtains a fresh valid chain and the victim's next refresh fails with a generic 401 — the attacker's stolen-derived chain keeps working indefinitely. The module docstring (L14-18) overstates this as 'a stolen-then-used refresh token is detectable ... cannot be replayed indefinitely', which is misleading: replay of one token is blocked, but theft of the live token is not contained.\n\nIMPACT: Refresh-token theft is not contained: the attacker can maintain a long-lived valid session chain, and the legitimate user's lockout is indistinguishable from an expired token. No automatic revocation triggers on the reuse signal.\n\nSUGGESTED FIX: Add a family/lineage id (or parent_token_hash) column; on rotate, carry the family forward. When rotate() encounters a token whose revoked_at is non-null (i.e. an already-consumed token is replayed), revoke the entire family (revokeForFamily) and refuse, forcing a full re-login. At minimum, soften the docstring claim.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "auth-core"
+    ]
+  }
+}

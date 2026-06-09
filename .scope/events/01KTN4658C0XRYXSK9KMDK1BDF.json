@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658C0XRYXSK9KMDK1BDF",
+  "ts": "2026-06-09T02:43:03.564Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658C0XRYXSK9KMDK1BDE",
+    "number": 190,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[sfu-media-7] No empty/weak shared-secret guard in P2P TURN and SFU nonce minting — empty secret yields forgeabl...",
+    "description": "AUDIT FINDING sfu-media-7 (medium/crypto, confidence=medium, verify-votes +2/-0)\n\nFILE: apps/server/src/calls/p2p-media-plane.ts\nLINES: 188-200\n\nWHAT: P2PWebRTCAdapter.#buildIceServers computes credential = HMAC-SHA1(this.#turn.sharedSecret, username) with no validation that sharedSecret is non-empty/sufficiently strong (constructor at lines 103-108 stores it verbatim). Same for SfuMediaPlaneAdapter.#mintNonce using tokenSecret (sfu-media-plane.ts:126, 279-283) — no guard. If an operator wires turn:{sharedSecret:''} (or undefined coerced upstream), HMAC with an empty key produces a deterministic, attacker-reproducible MAC: anyone can forge valid coturn-REST TURN credentials (and the SFU nonce, were it ever verified). There is also no minimum-length check.\n\nIMPACT: A misconfigured/empty TURN shared secret makes ephemeral TURN credentials trivially forgeable, letting an attacker mint long-lived relay credentials and abuse the TURN server (bandwidth amplification / open relay) and impersonate participants. Fails closed nowhere — it silently issues weak creds.\n\nSUGGESTED FIX: Validate sharedSecret/tokenSecret in the constructors: reject empty and enforce a sane minimum length (e.g. >= 16-32 bytes), throwing MediaPlaneError at construction so misconfiguration fails fast instead of issuing forgeable creds.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "sfu-media"
+    ]
+  }
+}

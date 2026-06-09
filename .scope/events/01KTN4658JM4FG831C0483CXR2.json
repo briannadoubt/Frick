@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658JM4FG831C0483CXR2",
+  "ts": "2026-06-09T02:43:03.570Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658HJH0HCRD296F339SK",
+    "number": 215,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[auth-saml-4] Replay row TTL has no skew pad while freshness check allows skew — opens a replay window if purgeE...",
+    "description": "AUDIT FINDING auth-saml-4 (low/race-condition, confidence=medium, verify-votes +1/-1)\n\nFILE: apps/server/src/storage/saml-assertion-store.ts\nLINES: 34-72\n\nWHAT: The ACS handler stores expires_at = verified.notOnOrAfter (identity-routes.ts:1167-1171) with NO skew pad, while saml.ts accepts an assertion on freshness grounds until NotOnOrAfter + clockToleranceSec (saml.ts:327/370 use `now - skewMs >= NotOnOrAfter`). purgeExpired() deletes rows where expires_at < now (string compare). So between NotOnOrAfter and NotOnOrAfter+skew an assertion is still freshness-valid but its replay row may already be purged, allowing one replay. Additionally, purgeExpired() is defined but is NOT called anywhere in the codebase (grep: no scheduler/cron invokes samlAssertions.purgeExpired), so today rows accumulate unbounded (storage growth proportional to all successful SAML logins, never reclaimed). The purge also compares ISO strings lexicographically, which is wrong for the malformed/garbage expires_at values that auth-saml-2 can produce (e.g. 'not-a-date').\n\nIMPACT: Two coupled issues: (1) latent replay window — the skew gap becomes exploitable the moment anyone wires purgeExpired on a schedule; (2) unbounded growth of auth_saml_seen_assertions since GC is never run. Low today because GC is dormant, but it is a foot-gun and a slow resource leak.\n\nSUGGESTED FIX: Pass expiresAt = notOnOrAfter + clockToleranceSec (matching the acceptance window) so a purged row can never predate an still-acceptable assertion; validate/normalize the timestamp to a real Date before storing; and schedule purgeExpired() (e.g., alongside the other store GCs) so the table is bounded. Prefer a numeric/epoch expires_at column to avoid lexicographic-compare hazards.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "auth-saml"
+    ]
+  }
+}

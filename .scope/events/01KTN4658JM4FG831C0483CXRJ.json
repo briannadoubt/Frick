@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658JM4FG831C0483CXRJ",
+  "ts": "2026-06-09T02:43:03.570Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658JM4FG831C0483CXRH",
+    "number": 223,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[server-storage-4] SignalStore.drain read-then-delete is not atomic — duplicate signal delivery under concurrency",
+    "description": "AUDIT FINDING server-storage-4 (low/race-condition, confidence=medium, verify-votes +2/-0)\n\nFILE: apps/server/src/storage/signal-store.ts\nLINES: 46-69\n\nWHAT: drain() does `SELECT id, packed FROM signal_outbox WHERE ... AND expires_at > ?` then, in a separate awaited call, `DELETE FROM signal_outbox WHERE id IN (...)` using the ids it read. The SELECT and DELETE are not wrapped in a transaction. Two concurrent drain() calls for the same (app, tenant, type, key) can both run the SELECT before either DELETE, both read the same rows, and both return the same payloads to their callers (each row is then deleted once). On Postgres this is a clear interleaving; on SQLite the two async sequences can still interleave at the await boundaries.\n\nIMPACT: At-least-once instead of at-most-once signal delivery: a signal can be delivered twice if two drains race. No data corruption (each row deleted once), but consumers that assume single delivery may double-process.\n\nSUGGESTED FIX: Wrap the SELECT+DELETE in this.sql.transaction(), or use a single atomic statement — e.g. `DELETE FROM signal_outbox WHERE ... AND expires_at > ? RETURNING id, packed` (supported by both SQLite RETURNING and Postgres) so the read and delete are one statement.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "server-storage"
+    ]
+  }
+}

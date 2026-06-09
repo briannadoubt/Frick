@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658JM4FG831C0483CXRR",
+  "ts": "2026-06-09T02:43:03.570Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658JM4FG831C0483CXRQ",
+    "number": 226,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[native-swift-6] join() media-plane token (CallMediaGrant.token) is broadcast to every events-stream observer, n...",
+    "description": "AUDIT FINDING native-swift-6 (low/isolation, confidence=medium, verify-votes +1/-1)\n\nFILE: packages/swift/Sources/FrickSwift/FrickSyncSocket.swift\nLINES: 1569-1578\n\nWHAT: `handleCallCommandResult` resumes the awaiting `callCommand` caller AND additionally yields the full `FrickCallCommandResult` (including `mediaGrant.token`, a short-lived participant-scoped media credential) onto the shared `events` stream for all observers. Combined with finding native-swift-1, any code iterating the socket's events (other stores, logging/telemetry sinks, app observers) receives the join media token even though only the caller needs it. It is same-process and short-lived, but it is a credential placed on a broadcast surface where it can be inadvertently logged.\n\nIMPACT: Increased exposure of a media-session bearer token within the process (e.g. if an events observer logs unrecognized events). Not a cross-tenant leak.\n\nSUGGESTED FIX: Either omit `mediaGrant` from the broadcast `.callCommandResult` event (deliver it only via the awaited return value) or document that observers must treat it as sensitive and never log it.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "native-swift"
+    ]
+  }
+}

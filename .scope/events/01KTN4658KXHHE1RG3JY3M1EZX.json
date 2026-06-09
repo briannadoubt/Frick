@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658KXHHE1RG3JY3M1EZX",
+  "ts": "2026-06-09T02:43:03.571Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658KXHHE1RG3JY3M1EZW",
+    "number": 231,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[server-storage-7] StreamStore.pruneRetention deletes by stream_type across ALL tenants/apps (by design, but uns...",
+    "description": "AUDIT FINDING server-storage-7 (info/data-loss, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/storage/stream-store.ts\nLINES: 404-439\n\nWHAT: pruneRetention()'s maxAgeMs branch runs `DELETE FROM stream_events WHERE stream_type = ? AND created_at < ?` with no tenant_id/app_id scope, so an operator retention policy keyed on a stream type prunes that type's events for every tenant and every app uniformly. The maxEvents branch is correctly per-(tenant,stream,streamId) via its correlated subquery. This is the documented FR-145 design (operator-configured, server-wide per-stream-type retention, invoked from store.ts:695 with a single global policy map), not a request-reachable path, so it is not a cross-tenant leak — but the global blast radius of the age-based DELETE is worth flagging: a misconfigured maxAgeMs deletes history for all tenants of that stream type at once.\n\nIMPACT: Operationally: one over-aggressive retention policy value silently affects every tenant's data for that stream type. Not externally triggerable; purely an operator-footgun / blast-radius note.\n\nSUGGESTED FIX: If per-tenant retention is ever desired, thread tenant_id/app_id into pruneRetention and the DELETE. Otherwise document loudly that retention is server-wide per stream type and validate policy values before applying.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "server-storage"
+    ]
+  }
+}

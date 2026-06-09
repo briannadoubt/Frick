@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658JM4FG831C0483CXRE",
+  "ts": "2026-06-09T02:43:03.570Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658JM4FG831C0483CXRD",
+    "number": 221,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[tenant-app-isolation-7] listProjectionObjects helper ignores ctx.appId and always reads the _default partition",
+    "description": "AUDIT FINDING tenant-app-isolation-7 (low/isolation, confidence=medium, verify-votes +2/-0)\n\nFILE: apps/server/src/projections/helpers.ts\nLINES: 20-25\n\nWHAT: listProjectionObjects(ctx, type) calls `ctx.store.listObjects(ctx.tenantId, type)` — the 2-arg tenant overload — which defaults appId to DEFAULT_APP_ID (store.ts:1109-1116). FrickProjectionContext does carry `appId` (registry.ts:57-63, set from the originating write in store.ts:1238-1243), but this ergonomics helper drops it, so a per-app projection that uses the helper reads `_default`-app objects regardless of which app's write triggered it.\n\nIMPACT: A per-app projection handler using listProjectionObjects observes the wrong app's object set (the `_default` partition) — cross-app read for projection logic. Limited to projections that use this helper in a genuine multi-app server with per-app projections; single-app `_default` is unaffected.\n\nSUGGESTED FIX: Pass ctx.appId through: `ctx.store.listObjects(ctx.tenantId, type, ctx.appId)`. Audit other ctx.store calls in projection helpers/handlers for the same omission.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "tenant-app-isolation"
+    ]
+  }
+}

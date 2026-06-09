@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658AN4YJQ1KNWZ0BN3T2",
+  "ts": "2026-06-09T02:43:03.562Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658AN4YJQ1KNWZ0BN3T1",
+    "number": 168,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[calls-authz-1] createCall performs no conversation-membership check — any user can ring anyone and bind a call ...",
+    "description": "AUDIT FINDING calls-authz-1 (high/authz, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/calls/call-control-plane.ts\nLINES: 243-303\n\nWHAT: createCall accepts an arbitrary `conversationId` and arbitrary `inviteeUserIds` with no check that the creator is a member of that conversation, that invitees are conversation members, or any policy-hook gate. The gateway's #handleCallCommand (gateway.ts 1676-1714) only requires an authenticated, active principal (#activePrincipalForFrame) before forwarding to plane.createCall — there is no assertCan*/membership call for any call op, unlike signal/object paths. The control plane stores conversationId on the room/events (lines 265, 277) but never validates it.\n\nIMPACT: Any authenticated tenant user can: (1) create a call against any conversationId they are not part of, and (2) send ringing CallInvites to any userId in the tenant — unsolicited-call/ring spam and harassment, plus a path to attach call activity/events to conversations the actor cannot otherwise access. The invitee then has a legitimate path to join (calls-authz is invite-based), so this also widens who can pull others into a media session.\n\nSUGGESTED FIX: In #handleCallCommand's create branch (or inside createCall via an injected membership reader), assert the creator is a member of conversationId and that each invitee is a co-member, using the same tenantMembershipReader/policy-hook machinery the signal/object paths use. Reject with auth.forbidden otherwise.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "calls-authz"
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658C0XRYXSK9KMDK1BDK",
+  "ts": "2026-06-09T02:43:03.564Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658C0XRYXSK9KMDK1BDJ",
+    "number": 192,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[auth-saml-1] No signature-algorithm whitelist: weak RSA-SHA1 / SHA1-digest assertions are accepted",
+    "description": "AUDIT FINDING auth-saml-1 (medium/crypto, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/auth/saml.ts\nLINES: 446-492\n\nWHAT: createXmlCryptoSignatureVerifier() constructs `new SignedXml()` with no signatureAlgorithm/digest constraint and never inspects the SignatureMethod/DigestMethod that the document declares. xml-crypto 6.1.2 registers rsa-sha1 + sha1-digest in its default SignatureAlgorithms/HashAlgorithms maps (node_modules/.pnpm/xml-crypto@6.1.2/.../signed-xml.js lines 76-91), so an assertion signed with rsa-sha1/sha1 verifies and is accepted. Empirically confirmed: an assertion signed with `http://www.w3.org/2000/09/xmldsig#rsa-sha1` + sha1 digest is accepted by runtime.verify(). The signing party (algorithm) is entirely document-controlled. (HMAC is NOT a concern here — xml-crypto leaves hmac-sha1 disabled by default and enableHMAC() is never called, so there is no HMAC/RSA key-confusion.)\n\nIMPACT: SHA1 is collision-broken; accepting SHA1 XML-DSIG signatures lowers the cryptographic bar of the federation trust boundary and contradicts the module's 'no SHA1 if avoidable' intent. An IdP misconfigured to (or downgraded to) SHA1, or a future SHA1 chosen-prefix attack on the canonicalized SignedInfo, weakens assertion authenticity. Defense-in-depth/crypto-hygiene rather than an immediate full break.\n\nSUGGESTED FIX: After loadSignature(), read the declared SignatureMethod/Algorithm and each Reference's DigestMethod and reject anything outside an allowlist (rsa-sha256/rsa-sha512, ecdsa-sha256/384/512; sha256/sha512 digests). xml-crypto exposes sig.signatureAlgorithm after loadSignature and ref.digestAlgorithm per reference — enforce the allowlist before trusting signedElementIds, and surface a SamlSignatureInvalid error for disallowed algorithms.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "auth-saml"
+    ]
+  }
+}

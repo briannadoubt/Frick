@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658JM4FG831C0483CXRA",
+  "ts": "2026-06-09T02:43:03.570Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658JM4FG831C0483CXR9",
+    "number": 219,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[auth-core-6] Signup returns distinct 409 for already-registered email (account enumeration)",
+    "description": "AUDIT FINDING auth-core-6 (low/security, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/auth/identity-routes.ts\nLINES: 1339-1348\n\nWHAT: handleEmailSignup returns 409 email_already_registered (L1346) when the email already has a User row, versus a 200 success otherwise. This is a definitive existence oracle for any email, and the route is also unthrottled (auth-core-1), so it can be probed at scale. Together with the login timing oracle (auth-core-2) it gives a clean, cheap enumeration surface.\n\nIMPACT: Reliable enumeration of which email addresses already have accounts.\n\nSUGGESTED FIX: Either accept the standard signup-enumeration tradeoff explicitly, or move to a verify-by-email flow that returns a uniform 200 and only sends a 'you already have an account' email out-of-band; at minimum throttle the endpoint.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "auth-core"
+    ]
+  }
+}

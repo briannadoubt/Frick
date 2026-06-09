@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658BRRYS881CZY4HGJBP",
+  "ts": "2026-06-09T02:43:03.563Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658BRRYS881CZY4HGJBN",
+    "number": 178,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[blob-gc-1] Async derivative persistence is fire-and-forget: silent data loss + unhandled-rejection worker crash",
+    "description": "AUDIT FINDING blob-gc-1 (high/data-loss, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/blobs/processor-job.ts\nLINES: 74-94, 152-161\n\nWHAT: In this release BlobDerivativeStore.record() was changed from synchronous (returns DerivativeRow) to async (returns Promise<DerivativeRow>) — see the diff of apps/server/src/storage/blob-derivative-store.ts (base had `record(input): DerivativeRow` at line 75). The caller persistDerivative() in processor-job.ts was NOT updated: it is still declared `: void` (line 80) and invokes `derivatives.record({...})` at line 82 WITHOUT await. The handler loop (lines 153-161) calls persistDerivative synchronously, then immediately returns `{ status: 'completed', result: { derivatives: derivatives.length } }` (lines 168-171). The DB write is therefore a floating promise that escapes the surrounding try/catch (the catch only covers the synchronous call, not the detached promise). Two concrete failures: (1) the blob.process job is marked COMPLETED before the derivative bytes are durably written, and because completed jobs never retry, a write that is still pending when the process restarts is permanently lost — the thumbnail/transcode/moderation sidecar silently never exists; (2) if record() rejects (DB constraint, disk full, Postgres connection drop), it becomes an unhandled promise rejection with no .catch and no global process.on('unhandledRejection') handler anywhere in server.ts/worker.ts/index.ts, which under modern Node terminates the worker process.\n\nIMPACT: Derivative data (thumbnails, transcoded variants, and — via moderationProcessor — content-moderation verdict sidecars used to gate access) can be silently dropped without the job ever retrying. A single transient DB error on a derivative write can crash the entire job-worker process. Moderation-decision loss is a security-relevant side effect (access gating on a missing verdict).\n\nSUGGESTED FIX: Make persistDerivative async (return Promise<void>) and await derivatives.record(...); then `await persistDerivative(...)` inside the handler loop (or Promise.all the batch). Any rejection then surfaces in the handler's try/catch and the job correctly reports failed+retryable instead of completed.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "blob-gc"
+    ]
+  }
+}

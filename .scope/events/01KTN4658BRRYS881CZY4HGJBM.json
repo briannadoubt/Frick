@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658BRRYS881CZY4HGJBM",
+  "ts": "2026-06-09T02:43:03.563Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658BRRYS881CZY4HGJBK",
+    "number": 177,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[tenant-app-isolation-3] Gateway projection subscribe is broken for per-app projections: validation rejects them...",
+    "description": "AUDIT FINDING tenant-app-isolation-3 (high/correctness, confidence=medium, verify-votes +2/-0)\n\nFILE: apps/server/src/sync/gateway.ts, apps/server/src/server.ts\nLINES: gateway.ts:180-186, 1205-1221 (#projections.get), 1248 (#projections.snapshot); server.ts:537-583, 831-837 (gateway gets store.projections only)\n\nWHAT: The gateway holds a single `#projections` registry, wired from `store.projections` (the SHARED registry) at server.ts:837. In per-app mode, app-declared projections are registered ONLY into `perAppRegistries.for(app.id).projections`, and ALL projection writes are dispatched through the per-app registries (#notifyProjections in store.ts:1247-1250). The shared `store.projections` registry therefore never receives a notify and never materializes snapshot rows. On Subscribe (gateway.ts:1206) the gateway looks up the projection in the shared registry: a client subscribing to a per-app projection name gets `auth.forbidden / projectionNotFound`. Even when a name does exist in the shared registry, snapshot() (gateway.ts:1248) reads the shared registry's row state, which is empty in per-app mode.\n\nIMPACT: Per-app projections are effectively unusable over the sync gateway in a multi-app deployment: subscriptions to app-specific projections are rejected, and any projection subscription delivers an empty initial snapshot (live deltas still arrive via the per-app delta listener, so clients silently start from an empty view and never reconcile prior rows). Functional break + confusing state divergence; not a cross-app data leak by itself.\n\nSUGGESTED FIX: Make the gateway projection-aware of the per-app registries: resolve get()/snapshot() against `perAppRegistries.for(this.#appIdFor(client)).projections` instead of the single shared registry, falling back to the shared registry only in single-app mode.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "tenant-app-isolation"
+    ]
+  }
+}

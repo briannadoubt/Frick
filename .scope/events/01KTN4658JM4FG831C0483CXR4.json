@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658JM4FG831C0483CXR4",
+  "ts": "2026-06-09T02:43:03.570Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658JM4FG831C0483CXR3",
+    "number": 216,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[auth-saml-5] InResponseTo binding is driven by an attacker-supplied request-body field, not server-issued Authn...",
+    "description": "AUDIT FINDING auth-saml-5 (low/authz, confidence=medium, verify-votes +2/-0)\n\nFILE: apps/server/src/auth/identity-routes.ts\nLINES: 1098-1148\n\nWHAT: The only InResponseTo enforcement comes from options.expectedInResponseTo, which in the JSON path is read directly from the POST body (body.expectedInResponseTo, line 1128-1129) and in the form-POST path (the real IdP HTTP-POST binding) is never set at all (line 1132-1136). There is no server-side AuthnRequest issuance or stored request-id (grep confirms no authn-request store/route). Thus the party submitting the assertion also supplies the value it is checked against, so the check can always be satisfied or omitted by the submitter. InResponseTo provides no CSRF/login-binding guarantee here.\n\nIMPACT: Bearer assertions are accepted without a server-verifiable link to a login the SP initiated, so the flow is effectively IdP-initiated/unsolicited even when a caller claims to be SP-initiated. This is standard for IdP-initiated SSO and the module documents the caveat, but the design cannot deliver the SP-initiated replay/CSRF protection the comments at saml.ts:36 and 132-138 imply.\n\nSUGGESTED FIX: Add a server-side AuthnRequest seam: when initiating SP-flow, generate and persist a request id (short TTL, single-use) and only treat InResponseTo as satisfied when it matches a stored, unconsumed server-issued id — never a value echoed by the client. Document clearly that the form-POST ACS path is unsolicited/IdP-initiated.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "auth-saml"
+    ]
+  }
+}

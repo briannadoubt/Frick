@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658AN4YJQ1KNWZ0BN3TA",
+  "ts": "2026-06-09T02:43:03.562Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658AN4YJQ1KNWZ0BN3T9",
+    "number": 172,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[sfu-media-3] SFU transports leaked on leave and on every re-join — unbounded growth / DoS",
+    "description": "AUDIT FINDING sfu-media-3 (high/resource-leak, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/calls/call-control-plane.ts\nLINES: 343-399, 526-562\n\nWHAT: Each joinCall() calls issueJoinToken(), which unconditionally createWebRtcTransport twice (send+recv) on the call's router (sfu-media-plane.ts:185-194). leaveCall() (lines 526-562) marks the participant 'left' and emits an event but never closes those transports — the only teardown is releaseSession→closeRouter at full call end (sfu-media-plane.ts:216-221). joinCall has no already-joined guard, so a participant can repeatedly join (or rejoin after leaving) and each call mints a fresh send+recv transport pair that is never reclaimed until the whole call ends. The backend tracks transports unbounded in RouterEntry.transports (mediasoup-sfu-backend.ts:108-113). The fake test even asserts transportCount grows to 2 per issue with no per-participant dedup (sfu-media-plane.test.ts:106-107).\n\nIMPACT: A single authenticated participant can drive unbounded server-side WebRTC transport allocation on a long-lived call by repeatedly join/leave, exhausting the mediasoup worker's RTC port range (rtcMin..rtcMax, default 40000-49999 → ~10k ports) and memory — a per-call resource-exhaustion DoS that degrades or kills the SFU for everyone on that node. Even normal churn (reconnects) steadily leaks ports for the call's lifetime.\n\nSUGGESTED FIX: On leaveCall, close the participant's send+recv transports (closeTransport) and their producers/consumers. Make issueJoinToken idempotent per (callId,userId,deviceId): reuse/replace existing transports for a rejoining participant rather than minting new ones. Add per-call and per-participant transport caps.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "sfu-media"
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658C0XRYXSK9KMDK1BDD",
+  "ts": "2026-06-09T02:43:03.564Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658C0XRYXSK9KMDK1BDC",
+    "number": 189,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[sfu-media-6] No mediasoup worker 'died' handler — a crashed worker leaves all routers silently dead",
+    "description": "AUDIT FINDING sfu-media-6 (medium/stability, confidence=medium, verify-votes +2/-0)\n\nFILE: apps/server/src/calls/mediasoup-sfu-backend.ts\nLINES: 280-297, 117-150\n\nWHAT: #startWorker creates the worker but never subscribes to its 'died' event (rg for .on(/died/observer in the file is empty). mediasoup workers are separate C++ processes that can crash; the canonical guidance is to listen for worker.on('died') and rebuild. Here, after a crash #worker still references the dead handle, ensureRouter returns it, and all subsequent createRouter/createWebRtcTransport calls fail (or hang) while #routers still holds entries pointing at a dead worker. The backend never self-heals and never surfaces the death.\n\nIMPACT: On worker crash the SFU silently stops forwarding media for every call on the node with no recovery path and no signal — a node-wide media outage masquerading as healthy until each operation fails. Routers/transports tracked in #routers become orphaned references.\n\nSUGGESTED FIX: Attach worker.on('died', ...) in #startWorker: log (without PII), drop #worker/#workerInit and the now-dead #routers entries, and surface/raise so callers re-allocate. Consider rebuilding routers for live calls.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "sfu-media"
+    ]
+  }
+}

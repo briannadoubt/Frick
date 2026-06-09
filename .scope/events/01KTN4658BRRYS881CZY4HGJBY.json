@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658BRRYS881CZY4HGJBY",
+  "ts": "2026-06-09T02:43:03.563Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658BRRYS881CZY4HGJBX",
+    "number": 182,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[crypto-e2ee-3] Unbounded per-(epoch,sender) ReplayWindow allocation keyed on attacker-controlled, pre-authentic...",
+    "description": "AUDIT FINDING crypto-e2ee-3 (medium/dos, confidence=medium, verify-votes +2/-0)\n\nFILE: packages/core/src/e2ee.ts\nLINES: 865-894, 886-894\n\nWHAT: decrypt() calls #replayWindowFor(header.epochId, header.senderId) at line 865 — BEFORE the AEAD open at line 874 — which allocates and permanently stores a new ReplayWindow in #replay keyed by `${epochId}:${senderId}`. senderId is a fully attacker-controlled uint32 read straight from the frame header (4 billion possible values), and epochId only has to match a currently-resolvable epoch. The SFU is explicitly in the threat model and forwards frames, so an attacker who injects frames with novel senderId values (each authentication will later fail, but the window is already allocated) grows #replay without bound. The window's #bitmap is a bigint up to replayWindowSize bits (default 1024) per entry. #derived (per epochId) and #counters (per epochId) are likewise never pruned across rotations.\n\nIMPACT: An on-path/SFU attacker can drive unbounded memory growth in every receiving client by varying senderId on injected frames under a valid epoch, with no authentication required to trigger the allocation — a denial-of-service against call participants. Long-lived calls also leak memory via #derived/#counters/#replay never being cleaned on epoch expiry.\n\nSUGGESTED FIX: Allocate/look up the ReplayWindow only AFTER successful AEAD authentication, and bound the number of tracked senders per epoch (evict least-recently-used, or reject unknown senderIds against the epoch's member set). Prune #replay/#derived/#counters entries for epochs that have aged out of the manager.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "crypto-e2ee"
+    ]
+  }
+}

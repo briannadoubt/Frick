@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658EP87B29E4C6VSW2W9",
+  "ts": "2026-06-09T02:43:03.566Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658EP87B29E4C6VSW2W8",
+    "number": 210,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[crypto-e2ee-7] senderId silently truncated to 32 bits (>>> 0) — two distinct logical senders can collide on a 3...",
+    "description": "AUDIT FINDING crypto-e2ee-7 (low/crypto, confidence=medium, verify-votes +0/-1)\n\nFILE: packages/core/src/e2ee.ts\nLINES: 822, 923-932, 670-678\n\nWHAT: The constructor stores `options.senderId >>> 0` (line 822) and deriveNonce uses `senderId >>> 0` (line 926); the v2 header field is uint32. Nonce uniqueness across senders sharing one epoch key depends entirely on senderId being globally unique per call. The seam itself never enforces that — it is a caller-supplied ordinal — and any value >= 2^32 (or two values congruent mod 2^32) collapses to the same 32-bit senderId. Two senders with the same effective senderId derive identical nonces for equal counters under the shared epoch key, which is catastrophic (key+nonce reuse) for AES-GCM.\n\nIMPACT: If a future caller (FR-155 wiring) assigns senderId from anything not guaranteed unique in [0, 2^32), nonce reuse across senders breaks AES-GCM confidentiality and integrity for the whole epoch. The truncation hides the misassignment instead of surfacing it.\n\nSUGGESTED FIX: Reject senderId outside [0, 2^32) at construction instead of truncating, and document/assert that the caller must assign a collision-free per-call ordinal (e.g. derived from the sorted member index). Consider binding the full memberKey into the nonce derivation/AAD rather than a caller ordinal.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "crypto-e2ee"
+    ]
+  }
+}

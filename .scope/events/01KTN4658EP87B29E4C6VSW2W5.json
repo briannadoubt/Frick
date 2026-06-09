@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658EP87B29E4C6VSW2W5",
+  "ts": "2026-06-09T02:43:03.566Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658EP87B29E4C6VSW2W4",
+    "number": 208,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[native-android-3] Sign-out clears session but leaves cached objects/streams in plaintext SQLite — data remanenc...",
+    "description": "AUDIT FINDING native-android-3 (medium/isolation, confidence=high, verify-votes +2/-0)\n\nFILE: apps/android/frick/src/main/java/dev/frick/client/FrickClient.kt\nLINES: 1000-1003, 665-673\n\nWHAT: FrickClient.signOut() (1000-1003) calls storage.clearPendingAppends() + storage.clearSession() but NOT storage.clearCache(). clearCache() (665-673) is the only thing that wipes local_objects / local_stream_events / frick_cache_metadata, and it is invoked solely from resetCache() (918-920), which neither signOut() nor the demo logout() (FoundationViewModel.kt:395-413) call. Consequently every synced record and stream event the signed-out user pulled — including records shared with them by other users (FrickSharingService) — survives sign-out as plaintext rows on disk. On a shared device where user B signs in next, verifyCacheCompatibility() only throws SESSION_SCOPE_MISMATCH if cache metadata carried a userId (FrickCacheCompatibility.reason, 371-377), but the stale rows physically remain on disk until that check fires, and combined with finding native-android-1 they are unencrypted the whole time.\n\nIMPACT: Personal/shared data from a prior account persists in cleartext after logout, recoverable by the next device user or by anyone with file access — a privacy and tenant-isolation gap, especially on shared/kiosk devices.\n\nSUGGESTED FIX: Have signOut() also call storage.clearCache() (or expose a wipeAll() that clears session + pending + cache + metadata), and call it from the demo logout(). At minimum document that callers must invoke resetCache() on sign-out.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "native-android"
+    ]
+  }
+}

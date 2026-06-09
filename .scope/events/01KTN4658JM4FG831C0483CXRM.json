@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658JM4FG831C0483CXRM",
+  "ts": "2026-06-09T02:43:03.570Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658JM4FG831C0483CXRK",
+    "number": 224,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[blob-gc-5] Image/blob processors never bound decoded image dimensions; no decompression-bomb guard for app gene...",
+    "description": "AUDIT FINDING blob-gc-5 (low/dos, confidence=medium, verify-votes +2/-0)\n\nFILE: apps/server/src/blobs/image-processor.ts\nLINES: 35-63, 144-215\n\nWHAT: imageBlobProcessor validates only encoded byte length (maxBytes, default 10 MiB) and sniffs magic bytes (sniffImageFormat) — it never parses image headers, so it imposes no pixel-dimension / decoded-size limit. The framework default copyDerivativeGenerator (lines 132-133) just copies bytes, so the stock path is safe, but the documented intended use is to swap in a real resizer ('a sharp wrapper'); the process() hook (lines 179-211) reads the full source into a Buffer and, per variant, calls the app generator with no width/height ceiling. A maliciously crafted but small (<10 MiB) PNG/WebP with enormous declared dimensions (a classic decompression bomb) would be handed straight to the app's decoder with no framework guard, and the validate hook has no hook to inspect dimensions. The ImageDerivativeVariant.maxEdge is explicitly 'Advisory — passed to the generator' (line 105) and unenforced.\n\nIMPACT: Apps that follow the documented pattern of plugging a real image library into derivativeGenerator inherit a decompression-bomb DoS surface (huge memory/CPU during decode) because the framework gate only checks encoded byte size, not decoded dimensions.\n\nSUGGESTED FIX: Parse and expose image dimensions in the validate context (or add an optional maxPixels/maxEdge enforcement in the framework before invoking the app generator), and document the decompression-bomb risk so app authors enforce decoded-size limits in their generator.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "blob-gc"
+    ]
+  }
+}

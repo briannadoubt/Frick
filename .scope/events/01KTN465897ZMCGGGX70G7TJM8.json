@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN465897ZMCGGGX70G7TJM8",
+  "ts": "2026-06-09T02:43:03.561Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN465897ZMCGGGX70G7TJM7",
+    "number": 163,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[tenant-app-isolation-1] ClusterEnvelope carries no appId — cross-node/cross-region fan-out leaks between apps a...",
+    "description": "AUDIT FINDING tenant-app-isolation-1 (critical/isolation, confidence=high, verify-votes +2/-0)\n\nFILE: apps/server/src/cluster/bus.ts, apps/server/src/sync/gateway.ts\nLINES: bus.ts:34-106; gateway.ts:652-666 (publishStreamEvent), 668-697 (publishObjects/Deletes), 904-931 (publishSignal), 1544-1553/1579-1588 (presenceDelta publish), 849-901 (#handleClusterEnvelope)\n\nWHAT: Every variant of the ClusterEnvelope union (streamEvent, objects, objectDeletes, signal, projectionDelta, presenceDelta) lacks an `appId` field. The gateway's local fan-out paths were correctly app-scoped in FR-153 (#fanOutStreamEvent/#fanOutObjects/#fanOutObjectDeletes/#fanOutPresenceDelta/#fanOutProjectionDelta/routeSignal all filter `this.#appIdFor(subscriber) !== appId`), but the publish* methods that forward to `this.#clusterBus.publish(...)` never include the originating appId. On the receiving node, #handleClusterEnvelope (lines 851-900) calls those same fan-out helpers WITHOUT an appId argument, so they default to DEFAULT_APP_ID. The Redis bus (redis-bus.ts) and region bus (region-bus.ts wraps the identical ClusterEnvelope) encode/decode the envelope verbatim, so appId is structurally absent end to end.\n\nIMPACT: In any multi-app deployment running more than one node (the entire point of the cluster bus) app isolation breaks across nodes in BOTH directions: (a) leak — a stream event / object upsert / object delete / signal / projection or presence delta produced by app B on node A is fanned out on node B as a DEFAULT_APP (`_default`) delta, so a `_default`-app subscriber (or any app whose connection resolved to `_default`) on node B receives app B's data within the same tenant; (b) loss — app B's own subscribers on node B never receive these deltas because they require appId==B, which the envelope can never satisfy. This is a cross-app data leak and a silent correctness break for every non-default app under horizontal scale / multi-region.\n\nSUGGESTED FIX: Add `appId: string` to every sync-carrying ClusterEnvelope variant. Have publishStreamEvent/publishObjects/publishObjectDeletes/publishSignal and the presenceDelta publishers include the originating appId (already available: event.appId, the appId param, or this.#appIdFor(client)). In #handleClusterEnvelope, thread envelope.appId into each #fanOut* / routeSignal call. Default to DEFAULT_APP_ID only when the field is genuinely absent (back-compat with older peers).",
+    "status": "backlog",
+    "priority": "urgent",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "tenant-app-isolation"
+    ]
+  }
+}

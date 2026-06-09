@@ -1,0 +1,25 @@
+{
+  "v": 1,
+  "id": "01KTN4658AN4YJQ1KNWZ0BN3TE",
+  "ts": "2026-06-09T02:43:03.562Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTN4658AN4YJQ1KNWZ0BN3TD",
+    "number": 174,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[multi-region-3] Claim-based ownership TTL self-heal opens a split-brain window where two regions simultaneously...",
+    "description": "AUDIT FINDING multi-region-3 (high/race-condition, confidence=medium, verify-votes +1/-1)\n\nFILE: apps/server/src/cluster/region-router.ts\nLINES: 471-561, 522-530, 487-494\n\nWHAT: ClaimRegionOwnership.#liveEntry expires an entry once `this.#now() - entry.at >= this.#ttlMs` using each region's LOCAL clock and the per-region time the claim was learned (at = #now() when the claim message was received, set independently in #onPeerClaim line 547/552). When the home region (say the lowest-id us-east) crashes, peers do not learn of the crash — they just let the entry age out. Because each peer learned the claim at a different local instant and runs its own clock, the entries expire at different wall-clock times. The first peer whose entry expires (say eu-west) calls homeRegionFor → #liveEntry returns undefined → it CLAIMS the key for itself and announces (lines 491-493), becoming an authoritative home. A second peer (ap-southeast) whose entry has not yet expired still routes writes to the (dead) us-east, OR expires shortly after and claims ITSELF. During this window eu-west and ap-southeast (and any node still trusting the stale us-east entry) disagree on the home. The lowest-id tie-break in #onPeerClaim eventually converges them, but only AFTER both have already accepted writes as 'the' authoritative serialization point — violating FR-106's single-home invariant during the heal. There is no fencing token or lease epoch to invalidate writes accepted by the loser.\n\nIMPACT: Transient dual-home / split-brain on every home-region crash: for the duration of the TTL-skew + claim-propagation window, multiple regions serialize writes to the same key independently, producing exactly the conflicting cross-region write ordering FR-106 promises to prevent. Writes accepted by the eventual tie-break loser are not rolled back or fenced.\n\nSUGGESTED FIX: Don't treat TTL expiry as authority to unilaterally re-home and accept writes; gate it behind a real lease/fencing mechanism (monotonic epoch per key, writes carry the epoch, stale-epoch writes rejected at the new home) or a consensus/quorum store for ownership. At minimum document that claim-based ownership provides best-effort convergence, NOT mutual exclusion, and that a crashed-home heal has a dual-home window proportional to TTL skew — so it must not be relied on for the conflict guarantee FR-106 advertises.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTN46588BFSS4XH9CW11F9EW",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": [
+      "audit",
+      "multi-region"
+    ]
+  }
+}
