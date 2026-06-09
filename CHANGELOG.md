@@ -6,6 +6,10 @@ Each package version is independent — a release header documents which package
 
 ## Unreleased
 
+## 0.2.0 — 2026-06-08
+
+All public TypeScript packages (`@fricken/protocol`, `@fricken/core`, `@fricken/react`, `@fricken/design`, `@fricken/design-web`, `@fricken/devtools`, `@fricken/agent-kit`, `@fricken/mcp`, `@fricken/server`) and the Android `:frick` SDK move `0.1.1 → 0.2.0`; the Swift SDK is tagged `swift-v0.2.0`. This release lands the native client observation tiers (Swift + Android), realtime calls (P2P + self-hosted SFU + E2EE), multi-region bus federation, the WorkspaceShell, multi-app/tenant isolation — and a deep security audit of the entire delta with all 70 findings fixed.
+
 ### Security
 
 - **`@fricken/server` — multi-region federation audit hardening (`apps/server/src/cluster/region-redis-bus.ts`, `region-bus.ts`, `region-router.ts`, `region-failover.ts`; findings multi-region-1, multi-region-2, multi-region-3, multi-region-4, multi-region-6, multi-region-7):** Fixed 6 confirmed audit findings in the cross-region transport, each with a regression test.
