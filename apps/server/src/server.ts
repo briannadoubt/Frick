@@ -835,6 +835,10 @@ export function createFrickServer(options: ServerOptions = {}) {
     metrics,
     telemetry,
     projections: store.projections,
+    // Per-app projection registries (FR-153 / tenant-app-isolation-3): when
+    // active, the gateway resolves projection Subscribe + snapshot against the
+    // connection's app registry instead of the shared one.
+    ...(perAppRegistries ? { perAppRegistries } : {}),
     appRegistry,
     ...(callControlPlane ? { callControlPlane } : {}),
     ...(options.clusterBus ? { clusterBus: options.clusterBus } : {}),

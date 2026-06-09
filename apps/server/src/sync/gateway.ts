@@ -69,6 +69,7 @@ import { resolveTenantLimits } from "../tenant-config.js";
 import type { FrickMetrics, Gauge } from "../metrics.js";
 import { emitDevToolsEvent } from "../devtools/emit.js";
 import type { FrickAppRegistry } from "../apps/registry.js";
+import type { FrickPerAppRegistries } from "../apps/per-app-registries.js";
 import { DEFAULT_APP_ID } from "../app-id.js";
 import type { ClusterEnvelope, FrickClusterBus } from "../cluster/bus.js";
 import type {
@@ -133,6 +134,17 @@ export class SyncGateway {
   #activeConnections = 0;
 
   readonly #projections: FrickProjectionRegistry | undefined;
+  /**
+   * Per-app projection/job registry container (FR-153 / tenant-app-isolation-3).
+   * When set (a multi-app server with per-app projections), projection
+   * Subscribe validation + initial snapshot resolve against the originating
+   * connection's app registry (`perAppRegistries.for(appId).projections`)
+   * instead of the single shared `#projections` registry — that shared registry
+   * never receives a notify in per-app mode, so it would reject the subscribe
+   * and serve an empty snapshot. Undefined for single-app servers, which fall
+   * back to `#projections`.
+   */
+  readonly #perAppRegistries: FrickPerAppRegistries | undefined;
   readonly #appRegistry: FrickAppRegistry | undefined;
   /** FR-15 — call control plane; undefined when calls are disabled. */
   readonly #callControlPlane: CallControlPlane | undefined;
@@ -154,6 +166,12 @@ export class SyncGateway {
       metrics?: FrickMetrics;
       telemetry?: Pick<FrickTelemetryRuntime, "startWebSocketConnection" | "recordWebSocketFrame">;
       projections?: FrickProjectionRegistry;
+      /**
+       * Per-app projection/job registries (FR-153). Supplied alongside
+       * `projections` when the server runs per-app registries so the gateway
+       * resolves projection Subscribe + snapshot against the connection's app.
+       */
+      perAppRegistries?: FrickPerAppRegistries;
       appRegistry?: FrickAppRegistry;
       /**
        * FR-15 — call control plane. When set, the gateway accepts
@@ -180,6 +198,7 @@ export class SyncGateway {
     this.#connectionsGauge = this.#metrics?.gauge("frick.ws.connections.current");
     this.#telemetry = options.telemetry;
     this.#projections = options.projections;
+    this.#perAppRegistries = options.perAppRegistries;
     this.#appRegistry = options.appRegistry;
     this.#callControlPlane = options.callControlPlane;
     this.#clusterBus = options.clusterBus;
@@ -475,6 +494,24 @@ export class SyncGateway {
    */
   #appIdFor(client: SyncClient): string {
     return client.appId ?? DEFAULT_APP_ID;
+  }
+
+  /**
+   * Resolve the projection registry a connection's Subscribe/snapshot should
+   * read (tenant-app-isolation-3). In per-app mode app-declared projections are
+   * registered ONLY into `perAppRegistries.for(appId).projections`, and every
+   * projection write is dispatched through the per-app registries — the shared
+   * `#projections` registry never receives a notify there, so resolving against
+   * it rejects per-app projection subscriptions and serves an empty snapshot.
+   * Resolve against the connection's app registry when per-app registries are
+   * active; fall back to the shared registry in single-app mode (the only one
+   * that exists there), keeping single-app behaviour unchanged.
+   */
+  #projectionsFor(client: SyncClient): FrickProjectionRegistry | undefined {
+    if (this.#perAppRegistries) {
+      return this.#perAppRegistries.for(this.#appIdFor(client)).projections;
+    }
+    return this.#projections;
   }
 
   /**
@@ -1253,7 +1290,9 @@ export class SyncGateway {
       return;
     }
     if (payload.kind === "projection") {
-      const projection = this.#projections?.get(payload.name);
+      // Resolve against the connection's app registry (tenant-app-isolation-3),
+      // not the shared registry, so a per-app projection subscription validates.
+      const projection = this.#projectionsFor(client)?.get(payload.name);
       if (!projection) {
         const envelope = createFrickErrorEnvelope({
           code: "auth.forbidden",
@@ -1296,7 +1335,9 @@ export class SyncGateway {
       // Cross-tenant rows are never included because `snapshot()` is
       // tenant-keyed; we still run the per-principal change filter to mirror
       // the live fan-out path.
-      const rows = this.#projections?.snapshot(payload.name, principal.tenantId) ?? [];
+      // Snapshot from the connection's app registry (tenant-app-isolation-3) so
+      // a per-app projection delivers its materialized rows, not an empty set.
+      const rows = this.#projectionsFor(client)?.snapshot(payload.name, principal.tenantId) ?? [];
       const changes = filterProjectionChangesForPrincipal(payload.name, rows, principal);
       this.#sendFrame(client, [
         FrameKind.ProjectionDelta,

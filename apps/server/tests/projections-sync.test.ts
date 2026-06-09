@@ -3,9 +3,11 @@ import { WebSocket } from "ws";
 import {
   FrameKind,
   decodeFrame,
+  defaultClientCapabilities,
   encodeFrame,
   productTestSchema,
   type FrickFrame,
+  type FrickSchema,
   type ProjectionDeltaPayload,
 } from "@fricken/protocol";
 import { createFrickServer } from "../src/server.js";
@@ -217,6 +219,136 @@ describe("projection deltas over the sync gateway", () => {
     socket.close();
   });
 });
+
+// tenant-app-isolation-3 — projection Subscribe + snapshot for PER-APP
+// projections. In multi-app mode an app-declared projection lives only in
+// `perAppRegistries.for(appId).projections`; the shared registry never sees a
+// notify. Before the fix the gateway resolved Subscribe/snapshot against the
+// shared registry, so the subscription was nacked (projectionNotFound) and any
+// snapshot was empty. The gateway now resolves against the connection's app.
+const chatProjSchema: FrickSchema = {
+  ...productTestSchema,
+  schemaId: "frick.chat.proj",
+  hash: "chat-proj-hash",
+};
+const docsProjSchema: FrickSchema = {
+  ...productTestSchema,
+  schemaId: "frick.docs.proj",
+  hash: "docs-proj-hash",
+};
+
+function createChatInboxProjection(): FrickProjection {
+  return {
+    name: "chat-inbox",
+    sources: [{ kind: "stream", type: "MessageStream" }],
+    handler: {
+      apply(event) {
+        if (event.kind !== "streamEvent" || event.streamEvent.event !== "MessageSent") {
+          return undefined;
+        }
+        const senderId =
+          typeof event.streamEvent.payload.senderId === "string"
+            ? event.streamEvent.payload.senderId
+            : "unknown";
+        return { changes: [{ key: senderId, value: { userId: senderId, seen: true } }] };
+      },
+    },
+  };
+}
+
+describe("per-app projection subscribe over the sync gateway (tenant-app-isolation-3)", () => {
+  it("accepts a subscribe to a per-app projection and delivers its materialized snapshot", async () => {
+    const server = createFrickServer({
+      port: 0,
+      dbPath: ":memory:",
+      schema: productTestSchema,
+      apps: [
+        {
+          id: "chat",
+          schema: chatProjSchema,
+          basePath: "/chat",
+          projections: [createChatInboxProjection()],
+        },
+        // A second app so the registry is genuinely multi-app — that is what
+        // flips storage + the gateway into per-app partition mode.
+        { id: "docs", schema: docsProjSchema, basePath: "/docs" },
+      ],
+    });
+    await server.listen();
+    const address = server.server.address();
+    if (!address || typeof address === "string") throw new Error("No address");
+    const url = `ws://127.0.0.1:${address.port}/_frick/sync`;
+    const httpUrl = `http://127.0.0.1:${address.port}`;
+    app = { url, httpUrl, store: server.store, close: server.close };
+
+    const ada = await devLogin(httpUrl, { userId: "user-ada" });
+
+    // Drive a write under the chat app FIRST so the projection materializes a
+    // row in the chat app's registry before anyone subscribes.
+    const append = await postJson(
+      `${httpUrl}/chat/append`,
+      {
+        requestId: "chat-seed",
+        stream: "MessageStream",
+        key: "conversation-general",
+        event: "MessageSent",
+        payload: {
+          messageId: "m1",
+          senderId: "user-ada",
+          body: "hi",
+          createdAt: "2026-05-09T00:00:00.000Z",
+        },
+      },
+      ada.sessionToken,
+    );
+    expect(append.status).toBe(200);
+
+    // Hello onto the chat app (advertise its schemaId), then subscribe.
+    const socket = await connectAndHelloApp(url, ada.sessionToken, chatProjSchema);
+    const deltas = collectFrames(socket, FrameKind.ProjectionDelta);
+    socket.send(
+      encodeFrame([
+        FrameKind.Subscribe,
+        { subscriptionId: "sub-chat-inbox", kind: "projection", name: "chat-inbox" },
+      ]),
+    );
+
+    // The initial snapshot must NOT be a nack and must carry the prior row.
+    const snapshot = await deltas.next();
+    expect(snapshot.projection).toBe("chat-inbox");
+    expect(snapshot.changes.map((c) => c.key)).toEqual(["user-ada"]);
+    expect(snapshot.changes[0]?.value).toMatchObject({ userId: "user-ada", seen: true });
+    socket.close();
+  });
+});
+
+async function connectAndHelloApp(
+  url: string,
+  sessionToken: string,
+  schema: FrickSchema,
+): Promise<WebSocket> {
+  const socket = new WebSocket(url, { headers: { authorization: `Bearer ${sessionToken}` } });
+  await new Promise<void>((resolve) => socket.once("open", resolve));
+  const hello = waitForFrames(socket, 2);
+  socket.send(
+    encodeFrame([
+      FrameKind.Hello,
+      {
+        replicaId: `replica-${schema.hash}`,
+        deviceId: `device-${schema.hash}`,
+        schemaHash: schema.hash,
+        knownCursors: {},
+        clientCapabilities: defaultClientCapabilities({
+          platform: "web",
+          sdkVersion: "0.0.0-test",
+          schema,
+        }),
+      },
+    ]),
+  );
+  await hello;
+  return socket;
+}
 
 async function startServer() {
   const server = createFrickServer({
