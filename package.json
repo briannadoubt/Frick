@@ -23,6 +23,7 @@
     "release:dry-run": "tsx scripts/release-dry-run.ts",
     "changelog": "tsx scripts/changelog.ts",
     "bump": "tsx scripts/bump-version.ts",
+    "release:bump": "tsx scripts/release-bump.ts",
     "design:check": "pnpm --filter @fricken/design check",
     "design:generate": "pnpm --filter @fricken/design generate",
     "server": "pnpm build:packages && pnpm --filter @fricken/server dev",

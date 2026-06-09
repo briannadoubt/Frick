@@ -81,12 +81,28 @@ describe("release hardening", () => {
     const ci = read(".github/workflows/ci.yml");
     const publishAndroid = read(".github/workflows/publish-android.yml");
     const publishNpm = read(".github/workflows/publish-npm.yml");
-    const workflows = `${ci}\n${publishAndroid}\n${publishNpm}`;
+    const publishSwift = read(".github/workflows/publish-swift.yml");
+    const releaseAutotag = read(".github/workflows/release-autotag.yml");
+    const workflows = `${ci}\n${publishAndroid}\n${publishNpm}\n${publishSwift}\n${releaseAutotag}`;
 
     expect(workflowActionUses(workflows).filter((use) => !/@[0-9a-f]{40}$/.test(use))).toEqual([]);
     expect(publishAndroid).not.toContain("workflow_dispatch");
-    expect(publishAndroid).toContain("if: ${{ startsWith(github.ref, 'refs/tags/android-v') }}");
-    expect(publishAndroid).toContain("android-v${frickVersion}");
+    // Unified release: one bare semver tag triggers every publish workflow.
+    expect(publishAndroid).toContain("if: ${{ startsWith(github.ref, 'refs/tags/') }}");
+    expect(publishAndroid).toContain("'[0-9]+.[0-9]+.[0-9]+'");
+    // The Android coordinate must equal the bare release tag.
+    expect(publishAndroid).toContain('"${GITHUB_REF_NAME}" != "${frickVersion}"');
+  });
+
+  test("Swift mirror publishes on the bare tag via an SSH deploy key (no PAT)", () => {
+    const publishSwift = read(".github/workflows/publish-swift.yml");
+    expect(publishSwift).toContain("if: ${{ startsWith(github.ref, 'refs/tags/') }}");
+    expect(publishSwift).toContain("'[0-9]+.[0-9]+.[0-9]+'");
+    expect(publishSwift).toContain("SWIFT_MIRROR_DEPLOY_KEY");
+    expect(publishSwift).toContain("git@github.com:briannadoubt/FrickSwift.git");
+    // The PAT-based mirror auth is gone.
+    expect(publishSwift).not.toContain("SWIFT_MIRROR_TOKEN");
+    expect(publishSwift).not.toContain("x-access-token");
   });
 
   test("npm publishing uses trusted provenance on framework version tags", () => {
@@ -94,12 +110,13 @@ describe("release hardening", () => {
 
     expect(publishNpm).not.toContain("workflow_dispatch");
     expect(publishNpm).toContain("tags:");
-    expect(publishNpm).toContain("'framework-v*'");
+    expect(publishNpm).toContain("'[0-9]+.[0-9]+.[0-9]+'");
     expect(publishNpm).toContain("id-token: write");
     expect(publishNpm).toContain("contents: read");
     expect(publishNpm).not.toContain("NPM_TOKEN");
     expect(publishNpm).not.toContain("NODE_AUTH_TOKEN");
-    expect(publishNpm).toContain("version: 10.0.0");
+    // pnpm version comes from packageManager (package.json), not an explicit input.
+    expect(publishNpm).not.toContain("version: 10.0.0");
     expect(publishNpm).toContain("pnpm install --frozen-lockfile --ignore-scripts");
     expect(publishNpm).toContain("semverPattern");
     expect(publishNpm).toContain("pnpm --dir \"${package_dir}\" pack");
