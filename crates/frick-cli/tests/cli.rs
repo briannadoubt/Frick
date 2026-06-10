@@ -800,23 +800,57 @@ async fn init_creates_file_tree() {
     let body = parse_last_json(&result.stdout);
     assert_eq!(body["ok"], true);
     assert_eq!(body["install"]["skipped"], true);
-    for rel in [
+    let files = [
         "package.json",
         "tsconfig.json",
         "frick.config.json",
+        "README.md",
         "src/schema.ts",
         "src/server.ts",
         "tests/smoke.test.ts",
-    ] {
+    ];
+    for rel in files {
         assert!(app_dir.join(rel).exists(), "missing {rel}");
     }
+    let created: Vec<&str> = body["created"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    for rel in files {
+        assert!(
+            created.iter().any(|p| p.replace('\\', "/").ends_with(rel)),
+            "created list missing {rel}"
+        );
+    }
+
+    // Post-cutover server.ts is data only: no embedded TS server.
     let server = std::fs::read_to_string(app_dir.join("src/server.ts")).unwrap();
-    assert!(server.contains("await app.listen();"));
-    assert!(!server.contains("app.start"));
+    assert!(!server.contains("createFrickServer"));
+    assert!(!server.contains("@fricken/server"));
+    assert!(!server.contains("app.listen"));
+    assert!(server.contains("// frick:projections:imports"));
+    assert!(server.contains("// frick:projections:register"));
+    assert!(server.contains("export const app = {"));
+    assert!(server.contains("schema,"));
+
+    // smoke.test.ts validates the schema instead of booting a server.
     let smoke = std::fs::read_to_string(app_dir.join("tests/smoke.test.ts")).unwrap();
-    assert!(smoke.contains("app.httpUrl"));
-    assert!(smoke.contains("/health"));
-    assert!(smoke.contains("await app.close();"));
+    assert!(smoke.contains("validateSchema"));
+    assert!(smoke.contains("@fricken/protocol"));
+    assert!(smoke.contains("schema.schemaId"));
+    assert!(!smoke.contains("createFrickServer"));
+    assert!(!smoke.contains("/health"));
+
+    // No scaffolded file may reference the deleted @fricken/server package.
+    for rel in files {
+        let body = std::fs::read_to_string(app_dir.join(rel)).unwrap();
+        assert!(
+            !body.contains("@fricken/server"),
+            "{rel} still references @fricken/server"
+        );
+    }
 }
 
 #[tokio::test]

@@ -7,6 +7,13 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+# The standalone server entry point. The crate is still embeddable as a
+# library (`lib.rs`); this binary is the turnkey launcher consumed by
+# `frick deploy image` / `ops/deploy/server.Dockerfile`.
+[[bin]]
+name = "frick-server"
+path = "src/main.rs"
+
 [dependencies]
 axum = { workspace = true }
 base64 = { workspace = true }
@@ -46,6 +53,7 @@ redis-live = []
 
 [dev-dependencies]
 anyhow = { workspace = true }
+tempfile = { workspace = true }
 tower = { workspace = true }
 # Real WebSocket client for the gateway round-trip tests. Pinned to the
 # version axum 0.7 already resolves (transitively in the lockfile), so this

@@ -1,8 +1,13 @@
 //! `frick init <directory>` (ported from `apps/cli/src/commands/init.ts`).
 //!
-//! Scaffolds the TS-template project (`package.json`, `tsconfig.json`,
-//! `frick.config.json`, `src/schema.ts`, `src/server.ts`,
+//! Scaffolds the project (`package.json`, `tsconfig.json`,
+//! `frick.config.json`, `README.md`, `src/schema.ts`, `src/server.ts`,
 //! `tests/smoke.test.ts`). Refuses (exit 3) to overwrite any existing file.
+//!
+//! Post-cutover (FR-255) the scaffold no longer depends on the deleted
+//! `@fricken/server` package: `src/server.ts` exports the app definition as
+//! data and the backend runs as the standalone Rust `frick-server` binary
+//! (see the generated `README.md`).
 //!
 //! DEVIATIONS:
 //!  - `pnpm install` is never spawned (the Rust CLI has no pnpm dependency); we
@@ -11,8 +16,6 @@
 //!  - `--agents` agent-kit installation is unported (no Rust `@fricken/agent-kit`
 //!    counterpart) — passing `--agents` yields a `cli.unsupported` failure. See
 //!    openIssues.
-//!  - Rust-app scaffolding is a follow-up; the TS template is ported verbatim
-//!    for parity.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -26,8 +29,8 @@ use crate::errors::{CliError, EXIT_FAILURE, EXIT_OK};
 use crate::mcp_config::{McpClientOptions, create_mcp_client_config};
 use crate::output::Output;
 use crate::templates::{
-    TemplateVariables, render_frick_config_json, render_package_json, render_schema_ts,
-    render_server_ts, render_smoke_test_ts, render_tsconfig_json,
+    TemplateVariables, render_frick_config_json, render_package_json, render_readme_md,
+    render_schema_ts, render_server_ts, render_smoke_test_ts, render_tsconfig_json,
 };
 
 #[allow(clippy::struct_excessive_bools)]
@@ -197,6 +200,11 @@ pub fn init_command(parsed: &ParsedArgs, out: &mut Output) -> Result<i32, CliErr
     write_file_fresh(
         &dir.join("frick.config.json"),
         &render_frick_config_json(&vars),
+        &mut created,
+    )?;
+    write_file_fresh(
+        &dir.join("README.md"),
+        &render_readme_md(&vars),
         &mut created,
     )?;
     write_file_fresh(

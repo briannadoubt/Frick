@@ -25,9 +25,11 @@ Run from the repo root; the toolchain is pinned by `rust-toolchain.toml`.
   `tenants list`, `reset`, `init`, `scaffold`, `dashboard`). The dashboard
   serves Fricken Dashboard at `http://127.0.0.1:4299`.
 - MCP stdio bridge: `cargo run -p frick-mcp` (or `cargo run -p frick-cli -- mcp`).
-- The sync server (`frick-server`) is an embeddable library with no standalone
-  binary; tests and the conformance harness boot it via `create_frick_server(...)`
-  + `.listen()`.
+- The sync server (`frick-server`) is an embeddable library that also ships a
+  standalone `frick-server` binary (`cargo run -p frick-server`, or the
+  `ops/deploy/server.Dockerfile` image; it serves `FRICK_SCHEMA_PATH` or the
+  foundation schema). Tests and the conformance harness boot it via
+  `create_frick_server(...)` + `.listen()`.
 
 ### Web client + artifacts (TypeScript)
 
@@ -59,8 +61,10 @@ FR-255). The Cargo workspace lives at the repo root with crates under
   the Rust schema pipeline. Not yet wired as the canonical artifact generator —
   `pnpm schema:generate` is still the source of truth for regenerated DTOs.
 - `crates/frick-store` — store port traits + SQLite/Postgres backends.
-- `crates/frick-server` — tokio/axum sync server runtime (embeddable library,
-  no standalone binary).
+- `crates/frick-server` — tokio/axum sync server runtime (embeddable library
+  plus a standalone `frick-server` binary; `cargo run -p frick-server` or the
+  `ops/deploy/server.Dockerfile` image serves `FRICK_SCHEMA_PATH` or the
+  foundation schema).
 - `crates/frick-cli` — the `frick` binary (schema/lint/migrate/doctor/inspect/
   tenants/init/scaffold/dev/deploy/dashboard/mcp). `verify`/`backup`/`restore`
   are listed for parity but currently return `cli.unsupported`.

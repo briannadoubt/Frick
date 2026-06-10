@@ -39,13 +39,11 @@ pub fn render_package_json(vars: &TemplateVariables) -> String {
         "private": true,
         "type": "module",
         "scripts": {
-            "dev": "tsx src/server.ts",
             "build": "tsc",
             "test": "vitest run"
         },
         "dependencies": {
-            "@fricken/protocol": "workspace:*",
-            "@fricken/server": "workspace:*"
+            "@fricken/protocol": "workspace:*"
         },
         "devDependencies": {
             "@types/node": "^24.10.0",
@@ -126,51 +124,99 @@ export const schema: FrickSchema = {{\n\
 }
 
 /// `src/server.ts` (`templates/server.ts.ts`). Contains the
-/// `// frick:projections:imports` / `// frick:projections:register` markers.
+/// `// frick:projections:imports` / `// frick:projections:register` markers
+/// consumed by `frick scaffold projection`.
+///
+/// Post-cutover this module is *data only*: the backend runs as the standalone
+/// Rust `frick-server` binary (see README.md), so the file exports the app's
+/// schema + projection registry rather than booting an embedded TS server.
 #[must_use]
-pub fn render_server_ts(vars: &TemplateVariables) -> String {
-    format!(
-        "import {{ createFrickServer }} from \"@fricken/server\";\n\
-import {{ schema }} from \"./schema.js\";\n\
+pub fn render_server_ts(_vars: &TemplateVariables) -> String {
+    "/**\n\
+ * App definition consumed by the standalone `frick-server` binary (see\n\
+ * README.md). The backend is the Rust `frick-server`, NOT an embedded TS\n\
+ * server — this module is the app schema plus its projection registry.\n\
+ */\n\
+import { schema } from \"./schema.js\";\n\
 \n\
 // frick:projections:imports\n\
 \n\
-const port = Number(process.env.PORT ?? {port});\n\
+export const app = {\n\
+  schema,\n\
+  projections: [\n\
+    // frick:projections:register\n\
+  ] as const,\n\
+};\n"
+        .to_string()
+}
+
+/// `tests/smoke.test.ts` (`templates/smoke.test.ts.ts`). Post-cutover this
+/// validates the scaffold schema rather than booting a server (the embedded TS
+/// server was removed — the backend is the standalone `frick-server` binary).
+#[must_use]
+pub fn render_smoke_test_ts(vars: &TemplateVariables) -> String {
+    let app_name = json_string(&vars.app_name);
+    format!(
+        "import {{ describe, expect, it }} from \"vitest\";\n\
+import {{ validateSchema }} from \"@fricken/protocol\";\n\
+import {{ schema }} from \"../src/schema.js\";\n\
 \n\
-const app = createFrickServer({{ schema, port }});\n\
+describe(\"smoke\", () => {{\n\
+  it(\"has a valid scaffold schema\", () => {{\n\
+    expect(() => validateSchema(schema)).not.toThrow();\n\
+  }});\n\
 \n\
-// frick:projections:register\n\
-\n\
-await app.listen();\n",
-        port = vars.port
+  it(\"uses the app name as its schemaId\", () => {{\n\
+    expect(schema.schemaId).toBe({app_name});\n\
+  }});\n\
+}});\n"
     )
 }
 
-/// `tests/smoke.test.ts` (`templates/smoke.test.ts.ts`).
+/// `README.md` (`templates/README.md.ts`). Explains the project shape and how
+/// to run the standalone Rust `frick-server` backend.
 #[must_use]
-pub fn render_smoke_test_ts(_vars: &TemplateVariables) -> String {
-    "import { describe, expect, it } from \"vitest\";\n\
-import { createFrickServer } from \"@fricken/server\";\n\
-import { schema } from \"../src/schema.js\";\n\
+pub fn render_readme_md(vars: &TemplateVariables) -> String {
+    let app_name = &vars.app_name;
+    let port = vars.port;
+    format!(
+        "# {app_name}\n\
 \n\
-describe(\"smoke\", () => {\n\
-  it(\"boots the server and answers /health\", async () => {\n\
-    const app = createFrickServer({\n\
-      schema,\n\
-      port: 0,\n\
-      dbPath: \":memory:\",\n\
-      config: { env: \"test\" },\n\
-      jobs: { workerEnabled: false },\n\
-    });\n\
-    await app.listen();\n\
-    try {\n\
-      const response = await fetch(`${app.httpUrl}/health`);\n\
-      expect(response.status).toBe(200);\n\
-      expect(app.store.schema.schemaId).toBe(schema.schemaId);\n\
-    } finally {\n\
-      await app.close();\n\
-    }\n\
-  });\n\
-});\n"
-        .to_string()
+A [Frick](https://github.com/briannadoubt/Frick) schema + client project.\n\
+\n\
+- `src/schema.ts` — the app schema (objects, streams, events, …). Edit it by\n\
+  hand or with `frick scaffold object|stream <Name>`.\n\
+- `src/server.ts` — the **app definition** (`export const app = {{ schema,\n\
+  projections }}`) that the backend consumes. It does NOT boot a server; the\n\
+  backend is the standalone Rust `frick-server` binary. Add projections with\n\
+  `frick scaffold projection <name>`.\n\
+- `tests/smoke.test.ts` — validates the schema with `vitest run`.\n\
+\n\
+## Running the backend\n\
+\n\
+The backend is the Rust `frick-server` binary — there is no embedded TS server.\n\
+\n\
+### Docker\n\
+\n\
+Build/run the server image (see `ops/deploy/server.Dockerfile` and the deploy\n\
+compose files), pointing `FRICK_SCHEMA_PATH` at this app's exported schema JSON:\n\
+\n\
+```sh\n\
+FRICK_SCHEMA_PATH=./schema.json FRICK_PORT={port} \\\n\
+  docker run --rm -p {port}:{port} \\\n\
+  -e FRICK_SCHEMA_PATH -e FRICK_PORT frick-server:latest\n\
+```\n\
+\n\
+### From source\n\
+\n\
+```sh\n\
+FRICK_SCHEMA_PATH=./schema.json FRICK_PORT={port} cargo run -p frick-server\n\
+```\n\
+\n\
+## Exporting the schema\n\
+\n\
+The standalone server reads the schema as JSON (`FRICK_SCHEMA_PATH`). Exporting\n\
+`src/schema.ts` → `schema.json` is a follow-up: `frick` will gain a\n\
+schema-export command. Until then, serialize the exported `schema` yourself.\n"
+    )
 }

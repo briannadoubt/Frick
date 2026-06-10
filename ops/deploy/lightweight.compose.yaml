@@ -18,11 +18,7 @@ services:
     volumes:
       - frick-data:/var/lib/frick
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "node -e \"fetch('http://127.0.0.1:4099/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"",
-        ]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:4099/ready"]
       interval: 10s
       timeout: 5s
       retries: 12

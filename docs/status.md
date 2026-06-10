@@ -65,9 +65,8 @@ contract stays byte/wire-compatible with the TypeScript client runtime under
   the image-build plan. The compose profile wires Redpanda/Kafka platform
   events and the OTel collector around a prebuilt `FRICK_SERVER_IMAGE`; the
   lightweight profile keeps the same server shape with SQLite platform events.
-  The canonical monorepo server Dockerfile from the prior TypeScript server no
-  longer ships, so `frick deploy image` needs a `--dockerfile <path>`; a
-  turnkey Rust-server Dockerfile is follow-up work.
+  The canonical monorepo `ops/deploy/server.Dockerfile` builds the standalone
+  Rust `frick-server` binary and is the default image for `frick deploy image`.
 - TypeScript client OpenTelemetry API bridge for analytics requests and sync
   WebSocket transport metrics/spans. The bridge is active by default but is a
   no-op until the app installs an OTel provider. Swift and Android expose
@@ -81,14 +80,17 @@ contract stays byte/wire-compatible with the TypeScript client runtime under
   runs it with `cargo run -p frick-cli -- <command>`; packaging a standalone
   distributable binary remains release work. `verify`/`backup`/`restore` are
   listed for surface parity but return `cli.unsupported`.
-- The `frick init` scaffold produces a TypeScript app project (it does not yet
-  scaffold a Rust app). A reference Dockerfile recipe for a scaffolded app lives
-  under `docker/scaffolded-app/` with a build/run guide in
-  `docs/docker-recipes.md`.
-- `frick-server` is an embeddable library crate (no standalone server binary);
-  a host wires it in with `create_frick_server(...)` and calls `.listen()`. Its
-  route/storage internals are not public API unless documented in
-  `docs/framework-boundaries.md` or re-exported from the crate's `lib.rs`.
+- The `frick init` scaffold produces a TypeScript schema + client project (no
+  embedded server — the backend is the Rust `frick-server` binary). The
+  canonical server image lives at `ops/deploy/server.Dockerfile` with a
+  build/run guide in `docs/docker-recipes.md`.
+- `frick-server` is an embeddable library crate that also ships a standalone
+  `frick-server` binary (`cargo run -p frick-server`, or the
+  `ops/deploy/server.Dockerfile` image; it serves `FRICK_SCHEMA_PATH` or the
+  foundation schema). A host can still wire the library in directly with
+  `create_frick_server(...)` and call `.listen()`. Its route/storage internals
+  are not public API unless documented in `docs/framework-boundaries.md` or
+  re-exported from the crate's `lib.rs`.
 - `frick-codegen` is the Rust DTO generator, but `pnpm schema:generate` is still
   the canonical artifact generator wired into `verify:generated`; making
   `frick-codegen` the byte-identical canonical generator is a follow-up.

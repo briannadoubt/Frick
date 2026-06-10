@@ -14,9 +14,11 @@ The framework ships a `frick` CLI (`crates/frick-cli`) for ops (`frick doctor`,
 `cargo run -p frick-cli -- <command>`. The CLI reads the same environment
 variables documented below.
 
-> **Server packaging note.** `frick-server` is currently an embeddable Rust
-> library with no standalone server binary; a host process wires it in with
-> `create_frick_server(...)` and calls `.listen()`. The config, env vars,
+> **Server packaging note.** `frick-server` is an embeddable Rust library that
+> also ships a standalone `frick-server` binary (`cargo run -p frick-server`, or
+> the `ops/deploy/server.Dockerfile` image; it serves `FRICK_SCHEMA_PATH` or the
+> foundation schema). A host process can still wire the library in directly with
+> `create_frick_server(...)` and call `.listen()`. The config, env vars,
 > routes, limits, and shutdown contract below all describe that runtime. The
 > TypeScript-flavored construction snippets (`createFrickServer({ … })`) in this
 > document are retained from the prior implementation and describe the
@@ -241,10 +243,11 @@ the profiles. Pass `--tag <image>` to set the image tag, `--dockerfile <path>`
 and `--context <path>` to point at your app/runtime-specific build inputs, and
 `--push` to request publishing the tag after a successful build.
 
-> The canonical monorepo `ops/deploy/server.Dockerfile` from the prior
-> TypeScript server no longer ships, so the default Dockerfile path is not
-> present in the tree — supply `--dockerfile <path>` for the image you actually
-> build. Providing a turnkey Dockerfile for the Rust server is follow-up work.
+> The canonical monorepo `ops/deploy/server.Dockerfile` builds the standalone
+> Rust `frick-server` binary (multi-stage `rust:1.95-slim` → `debian:bookworm-slim`)
+> and is the default `--dockerfile` for `frick deploy image`. The resulting
+> image serves the foundation schema unless an app sets `FRICK_SCHEMA_PATH`.
+> Pass `--dockerfile <path>` only when building a custom app/runtime image.
 
 `--profile compose` uses `ops/deploy/compose.yaml` and is the
 production-shaped self-hosted profile: `frick-server` serves the app and the
@@ -267,13 +270,13 @@ stdout so automation can always parse the JSON record.
 
 ### Standalone image recipes (outside the monorepo)
 
-If you scaffold an app with `frick init` (which produces a TypeScript app that
-embeds the Frick client/server contract), the reference Dockerfile recipe under
-[`docker/scaffolded-app/`](../docker/scaffolded-app) builds that app into an
-image: it runs as a non-root user, declares a `/var/lib/frick` data volume, and
-`HEALTHCHECK`s against `/ready`. See [`docker-recipes.md`](docker-recipes.md)
-for the build/run walkthrough and the SQLite-volume vs `FRICK_DATABASE_URL`
-storage guidance.
+The canonical server image is built from
+[`ops/deploy/server.Dockerfile`](../ops/deploy/server.Dockerfile) (the Rust
+`frick-server` binary): it runs from a slim Debian runtime, declares a
+`/var/lib/frick` data volume, and `HEALTHCHECK`s against `/ready`. An app serves
+its own schema by mounting it and setting `FRICK_SCHEMA_PATH`. See
+[`docker-recipes.md`](docker-recipes.md) for the build/run walkthrough and the
+SQLite-volume vs `FRICK_DATABASE_URL` storage guidance.
 
 ## Runtime limits
 

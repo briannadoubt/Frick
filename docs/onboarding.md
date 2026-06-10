@@ -65,13 +65,20 @@ The dashboard reads `/health`, `/ready`, and the authenticated
 `/_frick/inspect/*` routes from a Frick server you point it at with
 `--endpoint <url>`.
 
-The sync server runtime (`frick-server`) is currently an **embeddable library**
-with no standalone binary — a host process wires it in with
-`create_frick_server(...)` and calls `.listen()`. The conformance harness
-(`crates/frick-conformance`) and the server's own tests boot it this way; a
-turnkey standalone server launcher is follow-up work. Until that lands, the
-backend is exercised through `cargo test --workspace` and the in-process
-harness rather than a long-lived `pnpm server` process.
+The sync server runtime (`frick-server`) is both an **embeddable library** and a
+**standalone binary**. A host process can wire it in with
+`create_frick_server(...)` and call `.listen()`; or you can run the turnkey
+`frick-server` binary, which builds its config from the environment and serves
+`FRICK_SCHEMA_PATH` (an app's own schema) or the foundation schema:
+
+```bash
+cargo run -p frick-server         # serves the foundation schema on FRICK_HOST/FRICK_PORT
+```
+
+The same binary is what `ops/deploy/server.Dockerfile` packages as
+`frick-server:latest`. The conformance harness (`crates/frick-conformance`) and
+the server's own tests boot it through the library path, so the backend is also
+exercised through `cargo test --workspace` and the in-process harness.
 
 To preview the Kafka-compatible Redpanda local profile (env + Docker Compose
 plan), run:

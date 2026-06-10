@@ -301,8 +301,8 @@ fn projection_file(name: &str) -> String {
     let pascal = to_pascal_case(name);
     format!(
         "/**\n\
- * Projection scaffold for \"{name}\". Wire this into your server via the\n\
- * registry returned from createFrickServer.\n\
+ * Projection scaffold for \"{name}\". Register it in src/server.ts — it is\n\
+ * added to the app's `projections` array via the marker comments.\n\
  */\n\
 export function create{pascal}Projection() {{\n\
   return {{\n\
