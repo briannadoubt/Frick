@@ -26,6 +26,23 @@ tower = { workspace = true }
 tower-http = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+# Push subsystem (map 06 §3). Pure-Rust crypto, no `ring`/native deps, no
+# network client (the live APNs/FCM send sits behind a documented trait seam):
+# - AES-256-GCM credential envelope (push/credentials.rs, §3.6).
+# - APNs / VAPID ES256 JWTs in IEEE-P1363 r||s form (push/apns_adapter.rs, §3.7).
+# - FCM service-account RS256 JWTs (push/fcm_adapter.rs, §3.8).
+# - HKDF-SHA256 (reserved for Web Push aes128gcm, §3.9).
+aes-gcm = "0.10"
+hkdf = "0.12"
+p256 = { version = "0.13", features = ["ecdsa", "pem"] }
+rsa = { version = "0.9", features = ["sha2"] }
+
+[features]
+# Live Redis cluster-bus smoke test (FR-27). Off by default: CI has no Redis
+# broker, so the transport-agnostic `fake_redis` tests cover the adapter's
+# encode/decode/guard logic. A concrete Redis client is the integrator's choice
+# and is intentionally not a dependency of this crate.
+redis-live = []
 
 [dev-dependencies]
 anyhow = { workspace = true }

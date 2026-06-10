@@ -13,6 +13,7 @@
 //! take `now_ms`/id parameters.
 
 pub mod admin;
+pub mod admin_push;
 pub mod blobs;
 pub mod inspect;
 pub mod objects;

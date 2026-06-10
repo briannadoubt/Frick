@@ -266,6 +266,139 @@ fn store_write_listener_skips_other_tenant() {
     });
 }
 
+#[test]
+fn cluster_bus_fans_a_write_on_hub_a_to_a_subscriber_on_hub_b() {
+    // Two hubs sharing one MemoryClusterChannel: an object upsert that reaches
+    // hub A's store-write funnel publishes an `objects` envelope on the shared
+    // channel; hub B's inbound subscriber runs the SAME local fan-out, so a
+    // subscriber connected to hub B receives the Delta — without hub A having
+    // any local subscriber for it (cross-node fan-out, map 06 §1.4).
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        use crate::cluster::{MemoryClusterBus, MemoryClusterBusOptions, MemoryClusterChannel};
+
+        let channel = MemoryClusterChannel::new();
+        let hub_a = test_hub().await;
+        let hub_b = test_hub().await;
+        hub_a.set_cluster_bus(MemoryClusterBus::with_options(MemoryClusterBusOptions {
+            node_id: Some("node-a".into()),
+            channel: Some(channel.clone()),
+        }));
+        hub_b.set_cluster_bus(MemoryClusterBus::with_options(MemoryClusterBusOptions {
+            node_id: Some("node-b".into()),
+            channel: Some(channel),
+        }));
+
+        // A subscriber lives on hub B only.
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<super::Outbound>();
+        let principal = Principal {
+            user_id: "user-ada".into(),
+            device_id: "d".into(),
+            replica_id: "r".into(),
+            tenant_id: DEFAULT_TENANT_ID.to_string(),
+            scope: crate::principal::PrincipalScope::Tenant,
+            service_scopes: vec![],
+        };
+        hub_b.register(super::Connection {
+            principal: Some(principal),
+            session_token: None,
+            app_id: DEFAULT_APP_ID.to_string(),
+            handshake_complete: true,
+            subscriptions: [super::SubKey {
+                subscription_id: "sub-notes".into(),
+                kind: SubscriptionKind::Object,
+                name: "Note".into(),
+                key: None,
+            }]
+            .into_iter()
+            .collect(),
+            pending_writes: 0,
+            outbound: tx,
+        });
+
+        // A write lands on hub A (no local subscriber there).
+        hub_a.handle_store_write(&FrickStoreWriteEvent::ObjectUpsert {
+            tenant_id: DEFAULT_TENANT_ID.to_string(),
+            app_id: DEFAULT_APP_ID.to_string(),
+            object_type: "Note".into(),
+            object_id: "n1".into(),
+            object: note_value("n1", "cross-node"),
+        });
+
+        // The Delta arrives at hub B's subscriber over the cluster bus.
+        let super::Outbound::Frame(bytes) = rx.try_recv().expect("a delta on hub B") else {
+            panic!("expected a frame");
+        };
+        let FrickFrame::Delta(delta) = decode_frame(&bytes).unwrap() else {
+            panic!("expected delta");
+        };
+        assert_eq!(delta.objects.len(), 1);
+        assert_eq!(delta.objects[0].1, "n1");
+    });
+}
+
+#[test]
+fn cluster_bus_loop_guard_skips_origin_node_own_subscribers() {
+    // The hub that originates a write must NOT receive its own envelope back
+    // (the bus loop guard). Hub A has a local subscriber AND publishes; the
+    // subscriber should see the local fan-out exactly once (from the store
+    // write), never a duplicate from the inbound handler.
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        use crate::cluster::{MemoryClusterBus, MemoryClusterBusOptions, MemoryClusterChannel};
+
+        let channel = MemoryClusterChannel::new();
+        let hub_a = test_hub().await;
+        hub_a.set_cluster_bus(MemoryClusterBus::with_options(MemoryClusterBusOptions {
+            node_id: Some("node-a".into()),
+            channel: Some(channel),
+        }));
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<super::Outbound>();
+        hub_a.register(super::Connection {
+            principal: Some(Principal {
+                user_id: "u".into(),
+                device_id: "d".into(),
+                replica_id: "r".into(),
+                tenant_id: DEFAULT_TENANT_ID.to_string(),
+                scope: crate::principal::PrincipalScope::Tenant,
+                service_scopes: vec![],
+            }),
+            session_token: None,
+            app_id: DEFAULT_APP_ID.to_string(),
+            handshake_complete: true,
+            subscriptions: [super::SubKey {
+                subscription_id: "sub-notes".into(),
+                kind: SubscriptionKind::Object,
+                name: "Note".into(),
+                key: None,
+            }]
+            .into_iter()
+            .collect(),
+            pending_writes: 0,
+            outbound: tx,
+        });
+
+        hub_a.handle_store_write(&FrickStoreWriteEvent::ObjectUpsert {
+            tenant_id: DEFAULT_TENANT_ID.to_string(),
+            app_id: DEFAULT_APP_ID.to_string(),
+            object_type: "Note".into(),
+            object_id: "n1".into(),
+            object: note_value("n1", "local"),
+        });
+
+        // Exactly one Delta (the local fan-out); no echo from the bus.
+        assert!(
+            matches!(rx.try_recv(), Ok(super::Outbound::Frame(_))),
+            "the local delta"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "no duplicate from the loop-guarded inbound path"
+        );
+    });
+}
+
 // ---- WebSocket round-trip ---------------------------------------------------
 
 /// Boot a server, open a real ws client, dev-login, Hello → HelloAck+Schema,

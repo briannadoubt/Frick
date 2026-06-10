@@ -55,6 +55,7 @@ use futures_util::stream::StreamExt;
 use tokio::sync::mpsc;
 
 use crate::authz::{Action, Decision, DenyReason, ResourceContext, decide_baseline};
+use crate::cluster::{ClusterEnvelope, FrickClusterBus, PresenceRecord, ProjectionChange};
 use crate::config::FrickLimits;
 use crate::error::ServerError;
 use crate::http::AppState;
@@ -120,6 +121,11 @@ pub struct GatewayHub {
     inner: Mutex<HubInner>,
     /// Monotonic connection id allocator.
     next_id: AtomicU64,
+    /// Optional cluster bus (map 06 §1). `None` = single-node (every publish
+    /// site fans out locally only). Set once at boot via
+    /// [`GatewayHub::set_cluster_bus`]; the hub does NOT close it (the
+    /// integrator owns its lifecycle).
+    cluster_bus: Mutex<Option<Arc<dyn FrickClusterBus>>>,
 }
 
 /// The locked interior of the hub.
@@ -130,6 +136,12 @@ struct HubInner {
     /// Active connection count per principal connection-key (NUL-separated
     /// `tenantId\0userId`). Enforces `maxConnectionsPerPrincipal`.
     per_principal: HashMap<String, u32>,
+    /// Connected-client count per tenant (`#tenantSubscriberCounts`). Drives
+    /// the cluster bus's inbound tenant filter: when a tenant transitions
+    /// between absent and present, the full key set is pushed down via
+    /// `set_subscribed_tenants` so peer nodes can drop envelopes for tenants
+    /// this node has no subscribers for (map 06 §1.4).
+    tenant_subscriber_counts: HashMap<String, u32>,
 }
 
 impl GatewayHub {
@@ -142,7 +154,66 @@ impl GatewayHub {
             state,
             inner: Mutex::new(HubInner::default()),
             next_id: AtomicU64::new(1),
+            cluster_bus: Mutex::new(None),
         })
+    }
+
+    /// Attach a [`FrickClusterBus`] for multi-node fan-out (map 06 §1.4).
+    ///
+    /// The integrator calls this once at boot (default = no bus = single node):
+    ///
+    /// ```ignore
+    /// let hub = GatewayHub::new(state);
+    /// let bus = MemoryClusterBus::new();          // or RedisClusterBus
+    /// hub.set_cluster_bus(bus);                    // wires publish + inbound dispatch
+    /// store.set_write_listener(hub.write_listener());
+    /// ```
+    ///
+    /// Wiring performed:
+    /// - every local publish site (object upsert/delete, stream append, signal,
+    ///   projection delta, presence delta) additionally publishes the matching
+    ///   [`ClusterEnvelope`] (tagged with the bus `originNodeId` and the
+    ///   originating `appId ?? _default`);
+    /// - a subscriber is registered that runs [`Self::handle_cluster_envelope`]
+    ///   for inbound peer envelopes — the SAME local fan-out, WITHOUT
+    ///   re-publishing (the origin node already did);
+    /// - the current tenant key set is pushed down immediately so a bus joined
+    ///   after clients connected starts filtering correctly.
+    ///
+    /// Calling this more than once replaces the bus (the previous subscription
+    /// is dropped); intended to be called exactly once.
+    pub fn set_cluster_bus(self: &Arc<Self>, bus: Arc<dyn FrickClusterBus>) {
+        // Subscribe the inbound handler. A `Weak` back-reference keeps the bus
+        // from pinning the hub alive; a delivery after the hub drops is a no-op.
+        let weak = Arc::downgrade(self);
+        let unsubscribe = bus.subscribe(Box::new(move |envelope: &ClusterEnvelope| {
+            if let Some(hub) = weak.upgrade() {
+                hub.handle_cluster_envelope(envelope);
+            }
+        }));
+        // We keep the bus for the hub's lifetime; the subscription likewise lives
+        // for the hub's lifetime, so we deliberately leak the unsubscribe handle
+        // (detaching happens when the bus itself is closed/dropped by the
+        // integrator). Mirrors the TS gateway, which never unsubscribes.
+        std::mem::forget(unsubscribe);
+
+        // Push the current tenant key set so a late-attached bus filters from the
+        // start (parity with the gateway recomputing on every sub change).
+        let tenants: HashSet<String> = self
+            .inner
+            .lock()
+            .map(|inner| inner.tenant_subscriber_counts.keys().cloned().collect())
+            .unwrap_or_default();
+        bus.set_subscribed_tenants(Some(&tenants));
+
+        if let Ok(mut slot) = self.cluster_bus.lock() {
+            *slot = Some(bus);
+        }
+    }
+
+    /// The attached cluster bus, if any.
+    fn cluster_bus(&self) -> Option<Arc<dyn FrickClusterBus>> {
+        self.cluster_bus.lock().ok().and_then(|slot| slot.clone())
     }
 
     /// The axum router exposing `GET /_frick/sync`. Merge this onto the boot
@@ -183,27 +254,96 @@ impl GatewayHub {
     /// already passed the global + per-principal caps.
     fn register(&self, connection: Connection) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let mut transitioned_tenant = None;
         if let Ok(mut inner) = self.inner.lock() {
             if let Some(principal) = &connection.principal {
                 *inner
                     .per_principal
                     .entry(principal.connection_key())
                     .or_insert(0) += 1;
+                // Tenant refcount: +1 on attach (map 06 §1.4, gateway.ts:271).
+                let tenant_id = principal.tenant_id.clone();
+                if bump_tenant_count(&mut inner.tenant_subscriber_counts, &tenant_id, 1) {
+                    transitioned_tenant = Some(());
+                }
             }
             inner.connections.insert(id, connection);
+        }
+        if transitioned_tenant.is_some() {
+            self.push_subscribed_tenants();
         }
         id
     }
 
     /// Unregister a connection, releasing its per-principal slot.
     fn unregister(&self, id: u64) {
+        let mut transitioned_tenant = false;
         if let Ok(mut inner) = self.inner.lock()
             && let Some(connection) = inner.connections.remove(&id)
             && let Some(principal) = &connection.principal
         {
             release_principal_slot(&mut inner.per_principal, &principal.connection_key());
+            // Tenant refcount: −1 on disconnect (gateway.ts:318).
+            let tenant_id = principal.tenant_id.clone();
+            transitioned_tenant =
+                bump_tenant_count(&mut inner.tenant_subscriber_counts, &tenant_id, -1);
+        }
+        if transitioned_tenant {
+            self.push_subscribed_tenants();
         }
     }
+
+    /// Push the current tenant key set to the cluster bus (`setSubscribedTenants`).
+    /// Called only on absent↔present transitions so the bus snapshots a fresh
+    /// set; adapters without the filter ignore it.
+    fn push_subscribed_tenants(&self) {
+        let Some(bus) = self.cluster_bus() else {
+            return;
+        };
+        let tenants: HashSet<String> = self
+            .inner
+            .lock()
+            .map(|inner| inner.tenant_subscriber_counts.keys().cloned().collect())
+            .unwrap_or_default();
+        bus.set_subscribed_tenants(Some(&tenants));
+    }
+}
+
+/// Apply a batch of tenant-count deltas (each `(tenantId, ±1)`) under one lock,
+/// then push the subscribed-tenant set to the bus once if any of them
+/// transitioned a tenant between absent and present.
+fn apply_tenant_transitions(hub: &Arc<GatewayHub>, transitions: Vec<(String, i32)>) {
+    if transitions.is_empty() {
+        return;
+    }
+    let mut transitioned = false;
+    if let Ok(mut inner) = hub.inner.lock() {
+        for (tenant_id, delta) in transitions {
+            transitioned |=
+                bump_tenant_count(&mut inner.tenant_subscriber_counts, &tenant_id, delta);
+        }
+    }
+    if transitioned {
+        hub.push_subscribed_tenants();
+    }
+}
+
+/// Adjust a per-tenant refcount; returns `true` when the tenant transitioned
+/// between absent (0) and present (>0) — i.e. the caller should re-push the
+/// subscribed-tenant set (`#bumpTenantCount`, gateway.ts:469-480).
+fn bump_tenant_count(counts: &mut HashMap<String, u32>, tenant_id: &str, delta: i32) -> bool {
+    let current = counts.get(tenant_id).copied().unwrap_or(0);
+    let next = i64::from(current) + i64::from(delta);
+    let transitioned = (current == 0) != (next <= 0);
+    if next <= 0 {
+        counts.remove(tenant_id);
+    } else {
+        counts.insert(
+            tenant_id.to_string(),
+            u32::try_from(next).unwrap_or(u32::MAX),
+        );
+    }
+    transitioned
 }
 
 /// Decrement (and prune) a per-principal connection count.
@@ -624,15 +764,33 @@ async fn handle_hello(hub: &Arc<GatewayHub>, id: u64, payload: HelloPayload) -> 
 
     // 5. Success: persist the authenticated principal, mark handshake complete,
     //    then send [HelloAck, ...] followed by [Schema, ...].
+    //
+    //    Tenant refcount (map 06 §1.4, gateway.ts:2220): a Hello that attaches a
+    //    principal not present at connect time (anonymous upgrade → authed)
+    //    bumps the new tenant +1. `reserve_hello_principal` already moved the
+    //    per-principal slot; the tenant counter is independent.
+    let mut tenant_transitions: Vec<(String, i32)> = Vec::new();
     if let Ok(mut inner) = hub.inner.lock()
         && let Some(connection) = inner.connections.get_mut(&id)
     {
         if let Some(principal) = authed {
+            let previous_tenant = connection.principal.as_ref().map(|p| p.tenant_id.clone());
+            let new_tenant = principal.tenant_id.clone();
             connection.principal = Some(principal);
             connection.session_token = payload.session_token;
+            // Only adjust counts when the effective tenant actually changed
+            // (re-Hello with the same principal is a no-op; same-key was
+            // already filtered by `reserve_hello_principal`).
+            if previous_tenant.as_deref() != Some(new_tenant.as_str()) {
+                if let Some(previous) = previous_tenant {
+                    tenant_transitions.push((previous, -1));
+                }
+                tenant_transitions.push((new_tenant, 1));
+            }
         }
         connection.handshake_complete = true;
     }
+    apply_tenant_transitions(hub, tenant_transitions);
 
     let hello_ack = FrickFrame::HelloAck(Box::new(HelloAckPayload {
         schema_hash: target.hash.clone(),
@@ -1107,6 +1265,21 @@ async fn handle_presence_set(hub: &Arc<GatewayHub>, id: u64, payload: PresenceSe
         Some(&payload.value),
         false,
     );
+    // Cluster forwarding (map 06 §1.4): peers fan a `presenceDelta` to their
+    // own subscribers. `records = [{key, value}]`, `cleared = []` for a set.
+    if let Some(bus) = hub.cluster_bus() {
+        bus.publish(&ClusterEnvelope::PresenceDelta {
+            origin_node_id: bus.node_id().to_string(),
+            tenant_id: principal.tenant_id.clone(),
+            app_id: Some(app_id.clone()),
+            name: payload.name.clone(),
+            records: vec![PresenceRecord {
+                key: payload.key.clone(),
+                value: payload.value.clone(),
+            }],
+            cleared: vec![],
+        });
+    }
     send_frame(hub, id, &ack(payload.request_id));
     false
 }
@@ -1150,6 +1323,17 @@ async fn handle_presence_clear(
         None,
         true,
     );
+    // Cluster forwarding: a clear carries `records = []`, `cleared = [key]`.
+    if let Some(bus) = hub.cluster_bus() {
+        bus.publish(&ClusterEnvelope::PresenceDelta {
+            origin_node_id: bus.node_id().to_string(),
+            tenant_id: principal.tenant_id.clone(),
+            app_id: Some(app_id.clone()),
+            name: payload.name.clone(),
+            records: vec![],
+            cleared: vec![payload.key.clone()],
+        });
+    }
     send_frame(hub, id, &ack(payload.request_id));
     false
 }
@@ -1200,6 +1384,12 @@ impl GatewayHub {
     /// The single store-write fan-out funnel (`#handleStoreWrite`). The store
     /// write listener calls this on every successful object upsert / delete and
     /// stream append.
+    ///
+    /// This is the **origin** path (a local write): it fans out locally AND
+    /// forwards the matching [`ClusterEnvelope`] to the cluster bus so peer
+    /// nodes fan it to their own subscribers (FR-114, map 06 §1.4). The inbound
+    /// path ([`Self::handle_cluster_envelope`]) reuses the same `fan_out_*`
+    /// helpers but never re-publishes.
     fn handle_store_write(&self, event: &FrickStoreWriteEvent) {
         match event {
             FrickStoreWriteEvent::ObjectUpsert {
@@ -1208,15 +1398,50 @@ impl GatewayHub {
                 object_type,
                 object_id,
                 object,
-            } => self.fan_out_object_upsert(tenant_id, app_id, object_type, object_id, object),
+            } => {
+                self.fan_out_object_upsert(tenant_id, app_id, object_type, object_id, object);
+                if let Some(bus) = self.cluster_bus() {
+                    bus.publish(&ClusterEnvelope::Objects {
+                        origin_node_id: bus.node_id().to_string(),
+                        tenant_id: tenant_id.clone(),
+                        app_id: Some(app_id.clone()),
+                        object_type: object_type.clone(),
+                        objects: vec![object.clone()],
+                    });
+                }
+            }
             FrickStoreWriteEvent::ObjectDelete {
                 tenant_id,
                 app_id,
                 object_type,
                 object_id,
-            } => self.fan_out_object_delete(tenant_id, app_id, object_type, object_id),
+            } => {
+                self.fan_out_object_delete(tenant_id, app_id, object_type, object_id);
+                if let Some(bus) = self.cluster_bus() {
+                    bus.publish(&ClusterEnvelope::ObjectDeletes {
+                        origin_node_id: bus.node_id().to_string(),
+                        tenant_id: tenant_id.clone(),
+                        app_id: Some(app_id.clone()),
+                        object_type: object_type.clone(),
+                        ids: vec![object_id.clone()],
+                    });
+                }
+            }
             FrickStoreWriteEvent::StreamAppend { tenant_id, event } => {
                 self.fan_out_stream_append(tenant_id, event);
+                if let Some(bus) = self.cluster_bus()
+                    && let Ok(packed) = pack_stream_event(&self.schema(), &event.event)
+                {
+                    bus.publish(&ClusterEnvelope::StreamEvent {
+                        origin_node_id: bus.node_id().to_string(),
+                        tenant_id: tenant_id.clone(),
+                        app_id: Some(event.app_id.clone()),
+                        stream: event.event.stream.clone(),
+                        stream_id: event.event.stream_id.clone(),
+                        sequence: event.event.sequence,
+                        packed,
+                    });
+                }
             }
         }
     }
@@ -1314,14 +1539,31 @@ impl GatewayHub {
         self.state.schema.clone()
     }
 
-    /// Send pre-encoded `bytes` to every connection subscribed to
-    /// `(kind, name, key?)` whose active principal is in `tenant_id` and whose
-    /// pinned app matches `app_id`.
     /// Fan a projection delta out to the projection's subscribers
-    /// (`publishProjectionDelta` / `#fanOutProjectionDelta`, map 05 §1.6).
-    /// Tenant + app filtered; the projection registry's delta listener calls
-    /// this (wired in `boot`).
+    /// (`publishProjectionDelta`, map 05 §1.6) AND forward it over the cluster
+    /// bus (map 06 §1.4). The projection registry's delta listener calls this
+    /// (wired in `boot`); it is the **origin** path. The inbound path uses
+    /// [`Self::fan_out_projection_delta`] directly (no re-publish).
     pub fn publish_projection_delta(&self, notice: &crate::projections::ProjectionDeltaNotice) {
+        self.fan_out_projection_delta(notice);
+        if let Some(bus) = self.cluster_bus() {
+            bus.publish(&ClusterEnvelope::ProjectionDelta {
+                origin_node_id: bus.node_id().to_string(),
+                tenant_id: notice.tenant_id.clone(),
+                app_id: Some(notice.app_id.clone()),
+                projection: notice.projection.clone(),
+                changes: notice
+                    .changes
+                    .iter()
+                    .map(projection_change_to_envelope)
+                    .collect(),
+            });
+        }
+    }
+
+    /// Local-only projection-delta fan-out, reused by the cluster handler
+    /// (`#fanOutProjectionDelta`).
+    fn fan_out_projection_delta(&self, notice: &crate::projections::ProjectionDeltaNotice) {
         let frame = FrickFrame::ProjectionDelta(crate::projections::notice_to_payload(notice));
         let Ok(bytes) = encode_frame(&frame) else {
             return;
@@ -1332,6 +1574,194 @@ impl GatewayHub {
             None,
             &notice.tenant_id,
             &notice.app_id,
+            &bytes,
+        );
+    }
+
+    /// Publish a signal to local subscribers AND forward it over the cluster
+    /// bus (`publishSignal`, gateway.ts:990-1018). The integrator's HTTP signal
+    /// route calls this; client WS signals route through the in-connection
+    /// handler (which, matching the TS gateway, fans out locally only and does
+    /// not forward over the bus). `request_id` defaults to `"http"` for
+    /// HTTP-originated signals.
+    pub fn publish_signal(
+        &self,
+        name: &str,
+        key: &str,
+        value: &Value,
+        tenant_id: &str,
+        app_id: &str,
+        request_id: &str,
+    ) {
+        let payload = SignalPayload {
+            request_id: request_id.to_string(),
+            name: name.to_string(),
+            key: key.to_string(),
+            value: value.clone(),
+        };
+        // `fan_out_signal` is a free fn taking `&Arc<Self>`; build one cheaply
+        // via the schema-only path it needs. Inline the broadcast instead to
+        // avoid an Arc; reuse the same matcher.
+        self.fan_out_signal_local(tenant_id, app_id, &payload);
+        if let Some(bus) = self.cluster_bus() {
+            bus.publish(&ClusterEnvelope::Signal {
+                origin_node_id: bus.node_id().to_string(),
+                tenant_id: tenant_id.to_string(),
+                app_id: Some(app_id.to_string()),
+                name: name.to_string(),
+                key: key.to_string(),
+                value: value.clone(),
+                request_id: request_id.to_string(),
+            });
+        }
+    }
+
+    /// Apply a [`ClusterEnvelope`] received from a peer node
+    /// (`#handleClusterEnvelope`, gateway.ts:916-989). Runs the same local
+    /// fan-out the originating node's `publish*` methods do, but does NOT
+    /// forward back to the bus — the origin already published it. Self-published
+    /// envelopes are filtered upstream by the bus's loop guard, so this only
+    /// sees genuine peer traffic.
+    ///
+    /// The two media-placement kinds fall through and are ignored (the gateway
+    /// has no `default` arm; only a media-placement subscriber handles them).
+    /// Envelopes from older peers with `app_id == None` default to
+    /// [`DEFAULT_APP_ID`].
+    pub fn handle_cluster_envelope(&self, envelope: &ClusterEnvelope) {
+        match envelope {
+            ClusterEnvelope::StreamEvent {
+                tenant_id,
+                app_id,
+                packed,
+                ..
+            } => {
+                self.fan_out_packed_stream_event(
+                    tenant_id,
+                    app_id_or_default(app_id.as_deref()),
+                    packed,
+                );
+            }
+            ClusterEnvelope::Objects {
+                tenant_id,
+                app_id,
+                object_type,
+                objects,
+                ..
+            } => {
+                let app_id = app_id_or_default(app_id.as_deref());
+                for object in objects {
+                    let object_id = object_id_of(object);
+                    self.fan_out_object_upsert(tenant_id, app_id, object_type, &object_id, object);
+                }
+            }
+            ClusterEnvelope::ObjectDeletes {
+                tenant_id,
+                app_id,
+                object_type,
+                ids,
+                ..
+            } => {
+                let app_id = app_id_or_default(app_id.as_deref());
+                for object_id in ids {
+                    self.fan_out_object_delete(tenant_id, app_id, object_type, object_id);
+                }
+            }
+            ClusterEnvelope::Signal {
+                tenant_id,
+                app_id,
+                name,
+                key,
+                value,
+                request_id,
+                ..
+            } => {
+                let payload = SignalPayload {
+                    request_id: request_id.clone(),
+                    name: name.clone(),
+                    key: key.clone(),
+                    value: value.clone(),
+                };
+                self.fan_out_signal_local(
+                    tenant_id,
+                    app_id_or_default(app_id.as_deref()),
+                    &payload,
+                );
+            }
+            ClusterEnvelope::ProjectionDelta {
+                tenant_id,
+                app_id,
+                projection,
+                changes,
+                ..
+            } => {
+                self.fan_out_projection_delta(&crate::projections::ProjectionDeltaNotice {
+                    projection: projection.clone(),
+                    tenant_id: tenant_id.clone(),
+                    app_id: app_id_or_default(app_id.as_deref()).to_string(),
+                    changes: changes.iter().map(envelope_change_to_projection).collect(),
+                });
+            }
+            ClusterEnvelope::PresenceDelta {
+                tenant_id,
+                app_id,
+                name,
+                records,
+                cleared,
+                ..
+            } => {
+                // Pick the "primary" key for the local-subscriber lookup; if both
+                // records and cleared are empty, the envelope is silently
+                // ignored (gateway.ts:972-988).
+                let Some(key) = records
+                    .first()
+                    .map(|record| record.key.clone())
+                    .or_else(|| cleared.first().cloned())
+                else {
+                    return;
+                };
+                self.fan_out_presence_delta(
+                    tenant_id,
+                    app_id_or_default(app_id.as_deref()),
+                    name,
+                    &key,
+                    records,
+                    cleared,
+                );
+            }
+            // Media-placement kinds: ignored by the gateway (no `default` arm in
+            // the TS switch — only a ClusterMediaPlacement subscriber handles
+            // them).
+            ClusterEnvelope::MediaPlacementClaim { .. }
+            | ClusterEnvelope::MediaPlacementRelease { .. } => {}
+        }
+    }
+
+    /// Broadcast a pre-packed stream event to local Stream subscribers (the
+    /// inbound counterpart of [`Self::fan_out_stream_append`], which packs from
+    /// a [`StoredEvent`]).
+    fn fan_out_packed_stream_event(
+        &self,
+        tenant_id: &str,
+        app_id: &str,
+        packed: &frick_protocol::codec::PackedStreamEvent,
+    ) {
+        let stream = stream_name_of(&self.schema(), packed);
+        let stream_id = packed.1.clone();
+        let frame = FrickFrame::Delta(DeltaPayload {
+            objects: vec![],
+            events: vec![packed.clone()],
+            cursor: packed.2,
+            removed: None,
+        });
+        let Ok(bytes) = encode_frame(&frame) else {
+            return;
+        };
+        self.broadcast_to_subscribers(
+            SubscriptionKind::Stream,
+            &stream,
+            Some(&stream_id),
+            tenant_id,
+            app_id,
             &bytes,
         );
     }
@@ -1373,6 +1803,10 @@ impl GatewayHub {
 
 // ---- presence/signal local fan-out ------------------------------------------
 
+/// Local presence-delta fan-out for the connection handlers. A `set` passes
+/// `value = Some(v)`, `cleared = false`; a `clear` passes `value = None`,
+/// `cleared = true`. Delegates to [`GatewayHub::fan_out_presence_delta`], the
+/// path the cluster handler also uses.
 fn fan_out_presence(
     hub: &Arc<GatewayHub>,
     tenant_id: &str,
@@ -1383,9 +1817,10 @@ fn fan_out_presence(
     cleared: bool,
 ) {
     let records = match value {
-        Some(value) => pack_presence_record(&hub.state.schema, name, key, value)
-            .map(|record| vec![record])
-            .unwrap_or_default(),
+        Some(value) => vec![PresenceRecord {
+            key: key.to_string(),
+            value: value.clone(),
+        }],
         None => vec![],
     };
     let cleared_keys = if cleared {
@@ -1393,69 +1828,103 @@ fn fan_out_presence(
     } else {
         vec![]
     };
+    hub.fan_out_presence_delta(tenant_id, app_id, name, key, &records, &cleared_keys);
+}
 
-    let Ok(inner) = hub.inner.lock() else { return };
-    for connection in inner.connections.values() {
-        let Some(principal) = &connection.principal else {
-            continue;
-        };
-        if !principal.is_active_cheap() || principal.tenant_id != tenant_id {
-            continue;
-        }
-        if connection.app_id != app_id {
-            continue;
-        }
-        for sub in &connection.subscriptions {
-            if sub.kind == SubscriptionKind::Presence
-                && sub.name == name
-                && sub.key.as_deref() == Some(key)
-            {
-                let frame = FrickFrame::PresenceDelta(PresenceDeltaPayload {
-                    subscription_id: sub.subscription_id.clone(),
-                    records: records.clone(),
-                    cleared: cleared_keys.clone(),
-                });
-                if let Ok(bytes) = encode_frame(&frame) {
-                    let _ = connection.outbound.send(Outbound::Frame(bytes));
+impl GatewayHub {
+    /// Fan a presence delta out to the local subscribers of `(name, key)`
+    /// (`#fanOutPresenceDelta`, gateway.ts:1727-1762). Records whose value is
+    /// [`Value::Nil`] are dropped before packing (the wire `null` removal
+    /// marker); `cleared` carries the cleared keys verbatim. Tenant + app
+    /// filtered. Reused by the cluster inbound handler.
+    fn fan_out_presence_delta(
+        &self,
+        tenant_id: &str,
+        app_id: &str,
+        name: &str,
+        key: &str,
+        records: &[PresenceRecord],
+        cleared: &[String],
+    ) {
+        let packed: Vec<_> = records
+            .iter()
+            .filter(|record| !matches!(record.value, Value::Nil))
+            .filter_map(|record| {
+                pack_presence_record(&self.state.schema, name, &record.key, &record.value).ok()
+            })
+            .collect();
+        let Ok(inner) = self.inner.lock() else { return };
+        for connection in inner.connections.values() {
+            let Some(principal) = &connection.principal else {
+                continue;
+            };
+            if !principal.is_active_cheap() || principal.tenant_id != tenant_id {
+                continue;
+            }
+            if connection.app_id != app_id {
+                continue;
+            }
+            for sub in &connection.subscriptions {
+                if sub.kind == SubscriptionKind::Presence
+                    && sub.name == name
+                    && sub.key.as_deref() == Some(key)
+                {
+                    let frame = FrickFrame::PresenceDelta(PresenceDeltaPayload {
+                        subscription_id: sub.subscription_id.clone(),
+                        records: packed.clone(),
+                        cleared: cleared.to_vec(),
+                    });
+                    if let Ok(bytes) = encode_frame(&frame) {
+                        let _ = connection.outbound.send(Outbound::Frame(bytes));
+                    }
                 }
+            }
+        }
+    }
+
+    /// Fan a signal out to the local subscribers of `(name, key)` (`routeSignal`
+    /// local-delivery path). Tenant + app filtered. Reused by the cluster
+    /// inbound handler and [`Self::publish_signal`].
+    fn fan_out_signal_local(&self, tenant_id: &str, app_id: &str, payload: &SignalPayload) {
+        let Ok(envelope) = pack_signal_envelope(
+            &self.state.schema,
+            &payload.name,
+            &payload.key,
+            &payload.value,
+        ) else {
+            return;
+        };
+        let frame = FrickFrame::SignalDeliver(SignalDeliverPayload { envelope });
+        let Ok(bytes) = encode_frame(&frame) else {
+            return;
+        };
+        let Ok(inner) = self.inner.lock() else { return };
+        for connection in inner.connections.values() {
+            let Some(principal) = &connection.principal else {
+                continue;
+            };
+            if !principal.is_active_cheap() || principal.tenant_id != tenant_id {
+                continue;
+            }
+            if connection.app_id != app_id {
+                continue;
+            }
+            let matches = connection.subscriptions.iter().any(|sub| {
+                sub.kind == SubscriptionKind::Signal
+                    && sub.name == payload.name
+                    && sub.key.as_deref() == Some(payload.key.as_str())
+            });
+            if matches {
+                let _ = connection.outbound.send(Outbound::Frame(bytes.clone()));
             }
         }
     }
 }
 
+/// Local signal fan-out for the connection handler. Delegates to
+/// [`GatewayHub::fan_out_signal_local`].
 fn fan_out_signal(hub: &Arc<GatewayHub>, tenant_id: &str, app_id: &str, payload: &SignalPayload) {
-    let Ok(envelope) = pack_signal_envelope(
-        &hub.state.schema,
-        &payload.name,
-        &payload.key,
-        &payload.value,
-    ) else {
-        return;
-    };
-    let frame = FrickFrame::SignalDeliver(SignalDeliverPayload { envelope });
-    let Ok(bytes) = encode_frame(&frame) else {
-        return;
-    };
-    let Ok(inner) = hub.inner.lock() else { return };
-    for connection in inner.connections.values() {
-        let Some(principal) = &connection.principal else {
-            continue;
-        };
-        if !principal.is_active_cheap() || principal.tenant_id != tenant_id {
-            continue;
-        }
-        if connection.app_id != app_id {
-            continue;
-        }
-        let matches = connection.subscriptions.iter().any(|sub| {
-            sub.kind == SubscriptionKind::Signal
-                && sub.name == payload.name
-                && sub.key.as_deref() == Some(payload.key.as_str())
-        });
-        if matches {
-            let _ = connection.outbound.send(Outbound::Frame(bytes.clone()));
-        }
-    }
+    hub.fan_out_signal_local(tenant_id, app_id, payload);
 }
 
 // ---- per-frame session re-validation (§6.5) ---------------------------------
@@ -1810,6 +2279,67 @@ fn send_hello_auth_nack(
     send_frame(hub, id, &nack);
     send_close(hub, id, close::POLICY_VIOLATION, message);
     true
+}
+
+// ---- cluster helpers --------------------------------------------------------
+
+/// An envelope `appId` (`Option<&str>`) resolved to a `&str`, defaulting an
+/// absent value (an older peer's envelope) to [`DEFAULT_APP_ID`] (FR-153).
+fn app_id_or_default(app_id: Option<&str>) -> &str {
+    app_id.unwrap_or(DEFAULT_APP_ID)
+}
+
+/// Extract the `id` field of an object [`Value`] map (used to address the
+/// inbound object upsert; the value carries its own id).
+fn object_id_of(object: &Value) -> String {
+    object
+        .as_map()
+        .and_then(|entries| {
+            entries
+                .iter()
+                .find(|(key, _)| key.as_str() == Some("id"))
+                .and_then(|(_, value)| value.as_str())
+        })
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Resolve the stream's schema name from a packed stream event's `streamTypeId`
+/// (`packed[0]`). Falls back to an empty name (no subscriber matches) when the
+/// id is unknown.
+fn stream_name_of(
+    schema: &FrickSchema,
+    packed: &frick_protocol::codec::PackedStreamEvent,
+) -> String {
+    frick_protocol::schema::stream_by_id(schema, packed.0)
+        .map(|stream| stream.name.clone())
+        .unwrap_or_default()
+}
+
+/// Project a registry [`ProjectionChange`](crate::projections::ProjectionChange)
+/// onto a cluster-envelope [`ProjectionChange`]. The registry change's
+/// `value: Option<Value>` (`None` = removal) maps to [`Value::Nil`].
+fn projection_change_to_envelope(
+    change: &crate::projections::ProjectionChange,
+) -> ProjectionChange {
+    ProjectionChange {
+        key: change.key.clone(),
+        value: change.value.clone().unwrap_or(Value::Nil),
+    }
+}
+
+/// Inverse of [`projection_change_to_envelope`]: a cluster-envelope change's
+/// [`Value::Nil`] value maps back to a registry change's `None` (removal).
+fn envelope_change_to_projection(
+    change: &ProjectionChange,
+) -> crate::projections::ProjectionChange {
+    crate::projections::ProjectionChange {
+        key: change.key.clone(),
+        value: match &change.value {
+            Value::Nil => None,
+            value => Some(value.clone()),
+        },
+    }
 }
 
 // ---- pure helpers -----------------------------------------------------------
