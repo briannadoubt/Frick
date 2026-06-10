@@ -9,6 +9,7 @@ pub mod authz;
 pub mod boot;
 pub mod cluster;
 pub mod config;
+pub mod cors;
 pub mod error;
 pub mod extract;
 pub mod gateway;

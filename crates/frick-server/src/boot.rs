@@ -116,7 +116,11 @@ impl FrickServer {
             .merge(crate::routes::inspect::inspect_router(Arc::clone(
                 &self.state,
             )))
-            .merge(self.gateway.router());
+            .merge(self.gateway.router())
+            // CORS mirrors the TS `setCors`/preflight contract so browser
+            // clients on a separate origin get the allowlist-driven
+            // `Access-Control-*` headers (FR-255 review).
+            .layer(crate::cors::cors_layer(&self.config.allowed_origins));
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         self.shutdown = Some(shutdown_tx);
 

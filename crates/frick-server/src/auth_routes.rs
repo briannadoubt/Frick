@@ -8,6 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Json;
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use base64::Engine as _;
@@ -19,6 +20,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::error::{LimitKind, ServerError};
+use crate::extract::session_token_from_headers;
 use crate::http::{AppState, no_store_headers, respond_error};
 use crate::principal::DEFAULT_TENANT_ID;
 use crate::session::ensure_tenant_allowed;
@@ -338,9 +340,19 @@ async fn dev_login(State(state): State<AppState>, Json(body): Json<DevLoginBody>
     }
 }
 
-async fn logout(State(state): State<AppState>, Json(body): Json<LogoutBody>) -> Response {
+async fn logout(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Option<Json<LogoutBody>>,
+) -> Response {
     let request_id = new_request_id();
-    let Some(token) = body.session_token else {
+    // Prefer the standard auth headers (`Authorization: Bearer` /
+    // `x-frick-session-token`, the TS `sessionTokenFromRequest` contract),
+    // falling back to the JSON body for older callers. The body is optional so
+    // a header-only logout still reaches the handler.
+    let token = session_token_from_headers(&headers)
+        .or_else(|| body.and_then(|Json(body)| body.session_token));
+    let Some(token) = token else {
         return respond_error(
             &ServerError::Authentication {
                 message: "session token required".into(),
