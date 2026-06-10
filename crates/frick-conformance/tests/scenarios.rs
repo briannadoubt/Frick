@@ -273,52 +273,69 @@ async fn stream_append_read_and_idempotency() {
 
 // ---- signals ----------------------------------------------------------------
 
+/// Signal POST authorization + (where accepted) the drain round-trip.
+///
+/// KNOWN CROSS-IMPL DIVERGENCE (FR-15 calls deferred in Rust):
+/// `productTestSchema`'s only signal is `WebRTCSignal`, which the TS server
+/// gates on call membership — a non-participant POST is rejected
+/// `403 auth.forbidden` reason `notMember`. The Rust server defers calls, so
+/// it has no call gate and accepts the signal (`200 {ok:true}`). This scenario
+/// asserts the COMMON contract (auth required; an accepted POST drains
+/// at-most-once) and tolerates both gate outcomes until calls land in Rust.
 #[tokio::test]
-async fn signal_post_then_drain_round_trip() {
+async fn signal_post_authorizes_and_drains_when_accepted() {
     let server = ServerHandle::target().await;
     let http = server.http();
     let token = http
         .dev_login_token(&format!("user-conf-signal-{}", nonce()))
         .await;
     let key = format!("call-{}", nonce());
-
-    // POST a WebRTCSignal to /signals/<name>/<key>.
+    let path = format!("/signals/WebRTCSignal/{key}");
     let signal = json!({
         "senderDeviceId": "device-a",
         "kind": "offer",
         "payload": "c2RwLW9mZmVy",
     });
-    let posted = http
-        .post(
-            &format!("/signals/WebRTCSignal/{key}"),
-            &signal,
-            Some(&token),
-        )
-        .await;
-    assert_eq!(posted.status, 200, "signal post body: {}", posted.json);
-    assert_eq!(
-        posted.json.get("ok").and_then(serde_json::Value::as_bool),
-        Some(true)
-    );
 
-    // GET drains it (at-most-once) → {schemaHash, name, key, data}.
-    let drained = http
-        .get(&format!("/signals/WebRTCSignal/{key}"), Some(&token))
-        .await;
-    assert_eq!(drained.status, 200, "signal drain body: {}", drained.json);
-    assert_eq!(drained.str_field("schemaHash"), server.schema().hash);
-    assert_eq!(drained.str_field("name"), "WebRTCSignal");
-    assert_eq!(drained.str_field("key"), key);
-    let data = drained
-        .json
-        .get("data")
-        .and_then(serde_json::Value::as_array);
-    assert_eq!(
-        data.map(Vec::len),
-        Some(1),
-        "expected one drained signal: {}",
-        drained.json
-    );
+    // Common: an unauthenticated signal POST is rejected.
+    let anon = http.post(&path, &signal, None).await;
+    assert_eq!(anon.status, 401, "anon signal body: {}", anon.json);
+
+    let posted = http.post(&path, &signal, Some(&token)).await;
+    match posted.status {
+        200 => {
+            // Calls deferred (Rust): the signal is accepted and drains once.
+            assert_eq!(
+                posted.json.get("ok").and_then(serde_json::Value::as_bool),
+                Some(true)
+            );
+            let drained = http.get(&path, Some(&token)).await;
+            assert_eq!(drained.status, 200, "signal drain body: {}", drained.json);
+            assert_eq!(drained.str_field("schemaHash"), server.schema().hash);
+            assert_eq!(drained.str_field("name"), "WebRTCSignal");
+            assert_eq!(drained.str_field("key"), key);
+            let data = drained
+                .json
+                .get("data")
+                .and_then(serde_json::Value::as_array);
+            assert_eq!(
+                data.map(Vec::len),
+                Some(1),
+                "expected one drained signal: {}",
+                drained.json
+            );
+        }
+        403 => {
+            // Calls enabled (TS): WebRTCSignal is call-membership-gated.
+            assert_eq!(
+                posted.json.get("code").and_then(serde_json::Value::as_str),
+                Some("auth.forbidden"),
+                "signal post body: {}",
+                posted.json
+            );
+        }
+        other => panic!("unexpected signal POST status {other}: {}", posted.json),
+    }
 
     server.shutdown().await;
 }
