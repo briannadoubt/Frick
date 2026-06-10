@@ -1,0 +1,21 @@
+[package]
+name = "frick-cli"
+description = "The frick CLI: init/scaffold/dev/dashboard/schema tooling"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "frick"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+frick-protocol = { workspace = true }
+frick-schema = { workspace = true }
+
+[lints]
+workspace = true

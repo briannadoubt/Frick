@@ -1,0 +1,170 @@
+[
+  {
+    "id": "0001_initial_foundation_tables",
+    "schemaRevision": 1,
+    "description": "Create initial foundation tables (objects, streams, blobs, sessions, accounts).",
+    "sql": "\n      CREATE TABLE IF NOT EXISTS schema_versions (\n        schema_hash TEXT PRIMARY KEY,\n        manifest BLOB NOT NULL,\n        created_at TEXT NOT NULL\n      );\n\n      CREATE TABLE IF NOT EXISTS objects (\n        object_type TEXT NOT NULL,\n        object_id TEXT NOT NULL,\n        version INTEGER NOT NULL,\n        packed BLOB NOT NULL,\n        updated_at TEXT NOT NULL,\n        PRIMARY KEY (object_type, object_id)\n      );\n\n      CREATE TABLE IF NOT EXISTS stream_events (\n        stream_type TEXT NOT NULL,\n        stream_id TEXT NOT NULL,\n        sequence INTEGER NOT NULL,\n        event_id TEXT NOT NULL UNIQUE,\n        event_type TEXT NOT NULL,\n        packed BLOB NOT NULL,\n        replica_id TEXT,\n        request_id TEXT,\n        created_at TEXT NOT NULL,\n        PRIMARY KEY (stream_type, stream_id, sequence)\n      );\n\n      CREATE TABLE IF NOT EXISTS idempotency_keys (\n        replica_id TEXT NOT NULL,\n        request_id TEXT NOT NULL,\n        result_event_id TEXT NOT NULL,\n        created_at TEXT NOT NULL,\n        PRIMARY KEY (replica_id, request_id)\n      );\n\n      CREATE TABLE IF NOT EXISTS presence_leases (\n        presence_type TEXT NOT NULL,\n        presence_key TEXT NOT NULL,\n        packed BLOB NOT NULL,\n        expires_at INTEGER NOT NULL,\n        PRIMARY KEY (presence_type, presence_key)\n      );\n\n      CREATE TABLE IF NOT EXISTS signal_outbox (\n        id INTEGER PRIMARY KEY AUTOINCREMENT,\n        signal_type TEXT NOT NULL,\n        signal_key TEXT NOT NULL,\n        packed BLOB NOT NULL,\n        expires_at INTEGER NOT NULL\n      );\n\n      CREATE TABLE IF NOT EXISTS blob_metadata (\n        blob_id TEXT PRIMARY KEY,\n        owner_id TEXT NOT NULL,\n        content_hash TEXT NOT NULL,\n        byte_length INTEGER NOT NULL,\n        mime_type TEXT NOT NULL,\n        storage_key TEXT,\n        created_at TEXT NOT NULL\n      );\n\n      CREATE TABLE IF NOT EXISTS blob_content (\n        blob_id TEXT PRIMARY KEY,\n        content BLOB NOT NULL,\n        updated_at TEXT NOT NULL,\n        FOREIGN KEY (blob_id) REFERENCES blob_metadata(blob_id) ON DELETE CASCADE\n      );\n\n      CREATE TABLE IF NOT EXISTS jobs (\n        id INTEGER PRIMARY KEY AUTOINCREMENT,\n        job_type TEXT NOT NULL,\n        packed BLOB NOT NULL,\n        status TEXT NOT NULL,\n        created_at TEXT NOT NULL\n      );\n\n      CREATE TABLE IF NOT EXISTS auth_sessions (\n        session_token TEXT PRIMARY KEY,\n        user_id TEXT NOT NULL,\n        device_id TEXT NOT NULL,\n        replica_id TEXT NOT NULL,\n        expires_at TEXT NOT NULL,\n        created_at TEXT NOT NULL,\n        last_seen_at TEXT NOT NULL\n      );\n\n      CREATE INDEX IF NOT EXISTS auth_sessions_by_user\n        ON auth_sessions (user_id, expires_at DESC);\n\n      CREATE TABLE IF NOT EXISTS auth_accounts (\n        user_id TEXT PRIMARY KEY,\n        handle TEXT NOT NULL UNIQUE COLLATE NOCASE,\n        display_name TEXT NOT NULL,\n        password_salt TEXT NOT NULL,\n        password_hash TEXT NOT NULL,\n        created_at TEXT NOT NULL\n      );\n    ",
+    "checksum": "sha256-10ddfc53e16906dcfbcd8189a907f6c6cf05b0eecded42e3ec4583aa37a40fae"
+  },
+  {
+    "id": "0002_idempotency_keys_created_at",
+    "schemaRevision": 1,
+    "description": "Index idempotency_keys.created_at for retention pruning",
+    "sql": "\n      CREATE INDEX IF NOT EXISTS idx_idempotency_keys_created_at\n        ON idempotency_keys (created_at);\n    ",
+    "checksum": "sha256-83dea73aba2c0376703297fd5463aab8049e40505e649581c501ad6ae16f4d14"
+  },
+  {
+    "id": "0003_tenant_boundary",
+    "schemaRevision": 1,
+    "description": "Add tenant_id columns to framework tables, rescope handle uniqueness, and rescope idempotency keys per-tenant",
+    "sql": "\n      -- objects: rebuild so the primary key includes tenant_id. Two tenants\n      -- writing the same (object_type, object_id) must not collide.\n      CREATE TABLE objects_new (\n        tenant_id TEXT NOT NULL DEFAULT '_default',\n        object_type TEXT NOT NULL,\n        object_id TEXT NOT NULL,\n        version INTEGER NOT NULL,\n        packed BLOB NOT NULL,\n        updated_at TEXT NOT NULL,\n        PRIMARY KEY (tenant_id, object_type, object_id)\n      );\n      INSERT INTO objects_new\n        (tenant_id, object_type, object_id, version, packed, updated_at)\n        SELECT '_default', object_type, object_id, version, packed, updated_at FROM objects;\n      DROP TABLE objects;\n      ALTER TABLE objects_new RENAME TO objects;\n\n      -- stream_events: rebuild so the primary key and event_id uniqueness\n      -- are tenant-scoped.\n      CREATE TABLE stream_events_new (\n        tenant_id TEXT NOT NULL DEFAULT '_default',\n        stream_type TEXT NOT NULL,\n        stream_id TEXT NOT NULL,\n        sequence INTEGER NOT NULL,\n        event_id TEXT NOT NULL,\n        event_type TEXT NOT NULL,\n        packed BLOB NOT NULL,\n        replica_id TEXT,\n        request_id TEXT,\n        created_at TEXT NOT NULL,\n        PRIMARY KEY (tenant_id, stream_type, stream_id, sequence)\n      );\n      INSERT INTO stream_events_new\n        (tenant_id, stream_type, stream_id, sequence, event_id, event_type, packed, replica_id, request_id, created_at)\n        SELECT '_default', stream_type, stream_id, sequence, event_id, event_type, packed, replica_id, request_id, created_at FROM stream_events;\n      DROP TABLE stream_events;\n      ALTER TABLE stream_events_new RENAME TO stream_events;\n      CREATE UNIQUE INDEX idx_stream_events_tenant_event_id\n        ON stream_events (tenant_id, event_id);\n\n      -- presence_leases: rebuild so the primary key includes tenant_id.\n      CREATE TABLE presence_leases_new (\n        tenant_id TEXT NOT NULL DEFAULT '_default',\n        presence_type TEXT NOT NULL,\n        presence_key TEXT NOT NULL,\n        packed BLOB NOT NULL,\n        expires_at INTEGER NOT NULL,\n        PRIMARY KEY (tenant_id, presence_type, presence_key)\n      );\n      INSERT INTO presence_leases_new\n        (tenant_id, presence_type, presence_key, packed, expires_at)\n        SELECT '_default', presence_type, presence_key, packed, expires_at FROM presence_leases;\n      DROP TABLE presence_leases;\n      ALTER TABLE presence_leases_new RENAME TO presence_leases;\n\n      ALTER TABLE signal_outbox ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '_default';\n      CREATE INDEX IF NOT EXISTS idx_signal_outbox_tenant\n        ON signal_outbox (tenant_id, signal_type, signal_key, expires_at);\n\n      ALTER TABLE blob_metadata ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '_default';\n      CREATE INDEX IF NOT EXISTS idx_blob_metadata_tenant\n        ON blob_metadata (tenant_id, blob_id);\n      CREATE INDEX IF NOT EXISTS idx_blob_metadata_tenant_owner\n        ON blob_metadata (tenant_id, owner_id, created_at DESC);\n\n      ALTER TABLE blob_content ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '_default';\n      CREATE INDEX IF NOT EXISTS idx_blob_content_tenant\n        ON blob_content (tenant_id, blob_id);\n\n      ALTER TABLE jobs ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '_default';\n      CREATE INDEX IF NOT EXISTS idx_jobs_tenant\n        ON jobs (tenant_id, job_type, status, id);\n\n      ALTER TABLE auth_sessions ADD COLUMN tenant_id TEXT NOT NULL DEFAULT '_default';\n      CREATE INDEX IF NOT EXISTS idx_auth_sessions_tenant_user\n        ON auth_sessions (tenant_id, user_id, expires_at DESC);\n\n      -- auth_accounts: rebuild to rescope handle uniqueness per tenant. The\n      -- user_id PK stays global so two tenants must still pick distinct\n      -- user ids (server.ts derives user-id from handle, which is tenant-\n      -- scoped, so this only collides if an app deliberately reuses ids\n      -- across tenants).\n      CREATE TABLE auth_accounts_new (\n        user_id TEXT PRIMARY KEY,\n        handle TEXT NOT NULL COLLATE NOCASE,\n        display_name TEXT NOT NULL,\n        password_salt TEXT NOT NULL,\n        password_hash TEXT NOT NULL,\n        created_at TEXT NOT NULL,\n        tenant_id TEXT NOT NULL DEFAULT '_default'\n      );\n      INSERT INTO auth_accounts_new\n        (user_id, handle, display_name, password_salt, password_hash, created_at, tenant_id)\n        SELECT user_id, handle, display_name, password_salt, password_hash, created_at, '_default'\n          FROM auth_accounts;\n      DROP TABLE auth_accounts;\n      ALTER TABLE auth_accounts_new RENAME TO auth_accounts;\n      CREATE UNIQUE INDEX idx_auth_accounts_tenant_handle\n        ON auth_accounts (tenant_id, handle COLLATE NOCASE);\n\n      -- idempotency_keys: rebuild so the primary key includes tenant_id.\n      CREATE TABLE idempotency_keys_new (\n        tenant_id TEXT NOT NULL DEFAULT '_default',\n        replica_id TEXT NOT NULL,\n        request_id TEXT NOT NULL,\n        result_event_id TEXT NOT NULL,\n        created_at TEXT NOT NULL,\n        PRIMARY KEY (tenant_id, replica_id, request_id)\n      );\n      INSERT INTO idempotency_keys_new\n        (tenant_id, replica_id, request_id, result_event_id, created_at)\n        SELECT '_default', replica_id, request_id, result_event_id, created_at\n          FROM idempotency_keys;\n      DROP TABLE idempotency_keys;\n      ALTER TABLE idempotency_keys_new RENAME TO idempotency_keys;\n      CREATE INDEX idx_idempotency_keys_created_at\n        ON idempotency_keys (created_at);\n    ",
+    "checksum": "sha256-14a6849af12b6cc89e4e206d1f5fc08aab70d42689aebc566c13126d15fe5596"
+  },
+  {
+    "id": "0004_tenants_ledger",
+    "schemaRevision": 1,
+    "description": "Create explicit tenants ledger and backfill the default tenant.",
+    "sql": "\n      CREATE TABLE IF NOT EXISTS tenants (\n        tenant_id TEXT PRIMARY KEY NOT NULL,\n        display_name TEXT,\n        created_at TEXT NOT NULL,\n        archived_at TEXT\n      );\n\n      INSERT OR IGNORE INTO tenants (tenant_id, display_name, created_at)\n      VALUES ('_default', 'Default Tenant', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));\n    ",
+    "checksum": "sha256-388bf9d5c21577a375694da1908e2d8384f049b6b912a1814d52773b452611c6"
+  },
+  {
+    "id": "0005_admin_audit_log",
+    "schemaRevision": 1,
+    "description": "Create admin_audit_log for admin-scope mutation auditing.",
+    "sql": "\n      CREATE TABLE IF NOT EXISTS admin_audit_log (\n        id INTEGER PRIMARY KEY AUTOINCREMENT,\n        occurred_at TEXT NOT NULL,\n        admin_token_fingerprint TEXT NOT NULL,\n        action TEXT NOT NULL,\n        target TEXT,\n        outcome TEXT NOT NULL,\n        detail TEXT\n      );\n      CREATE INDEX IF NOT EXISTS idx_admin_audit_log_occurred_at\n        ON admin_audit_log (occurred_at DESC);\n      CREATE INDEX IF NOT EXISTS idx_admin_audit_log_action\n        ON admin_audit_log (action, occurred_at DESC);\n    ",
+    "checksum": "sha256-f735ae3060cab3cae7e39d7681a4be050865f127689e9e3c0daf3e2850a0634c"
+  },
+  {
+    "id": "0006_jobs_lifecycle",
+    "schemaRevision": 1,
+    "description": "Extend jobs table with claim/retry/dead-letter lifecycle columns and supporting indexes.",
+    "sql": "\n      ALTER TABLE jobs ADD COLUMN available_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z';\n      ALTER TABLE jobs ADD COLUMN max_attempts INTEGER NOT NULL DEFAULT 5;\n      ALTER TABLE jobs ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0;\n      ALTER TABLE jobs ADD COLUMN claimed_at TEXT;\n      ALTER TABLE jobs ADD COLUMN claimed_by TEXT;\n      ALTER TABLE jobs ADD COLUMN completed_at TEXT;\n      ALTER TABLE jobs ADD COLUMN failed_at TEXT;\n      ALTER TABLE jobs ADD COLUMN dead_lettered_at TEXT;\n      ALTER TABLE jobs ADD COLUMN idempotency_key TEXT;\n      ALTER TABLE jobs ADD COLUMN last_error_code TEXT;\n      ALTER TABLE jobs ADD COLUMN last_error_message TEXT;\n\n      -- Backfill the available_at default to the row's created_at so legacy\n      -- rows become immediately claimable rather than sitting at the epoch.\n      UPDATE jobs SET available_at = created_at WHERE available_at = '1970-01-01T00:00:00.000Z';\n\n      -- Rewind legacy 'queued'/'running' rows into the new 'ready' state.\n      UPDATE jobs SET status = 'ready' WHERE status = 'queued';\n      UPDATE jobs SET status = 'ready', attempt_count = attempt_count + 1 WHERE status = 'running';\n\n      CREATE INDEX IF NOT EXISTS idx_jobs_status_available_at\n        ON jobs (tenant_id, status, available_at);\n      CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency_key\n        ON jobs (tenant_id, job_type, idempotency_key)\n        WHERE idempotency_key IS NOT NULL;\n    ",
+    "checksum": "sha256-5b416ab4e48264f57821a624dce6fa3e1c2d5a41e58417156ad923e93bcde073"
+  },
+  {
+    "id": "0007_push_registrations",
+    "schemaRevision": 1,
+    "description": "Create push_device_registrations for the notification framework.",
+    "sql": "\n      CREATE TABLE IF NOT EXISTS push_device_registrations (\n        registration_id TEXT PRIMARY KEY NOT NULL,\n        tenant_id TEXT NOT NULL DEFAULT '_default',\n        user_id TEXT NOT NULL,\n        device_id TEXT NOT NULL,\n        platform TEXT NOT NULL,\n        token TEXT NOT NULL,\n        environment TEXT NOT NULL DEFAULT 'production',\n        created_at TEXT NOT NULL,\n        last_seen_at TEXT NOT NULL,\n        revoked_at TEXT\n      );\n      CREATE UNIQUE INDEX IF NOT EXISTS idx_push_device_registrations_tenant_user_device_platform\n        ON push_device_registrations (tenant_id, user_id, device_id, platform) WHERE revoked_at IS NULL;\n      CREATE INDEX IF NOT EXISTS idx_push_device_registrations_tenant_user\n        ON push_device_registrations (tenant_id, user_id) WHERE revoked_at IS NULL;\n    ",
+    "checksum": "sha256-7db021328c34b670237dae05c70b3822535f439c54299d8999935e8ff53af324"
+  },
+  {
+    "id": "0008_blob_derivatives",
+    "schemaRevision": 1,
+    "description": "Create blob_derivatives table for blob processor pipeline outputs.",
+    "sql": "\n      CREATE TABLE IF NOT EXISTS blob_derivatives (\n        parent_blob_id TEXT NOT NULL,\n        derivative_id TEXT NOT NULL,\n        tenant_id TEXT NOT NULL DEFAULT '_default',\n        processor_id TEXT NOT NULL,\n        mime_type TEXT NOT NULL,\n        byte_length INTEGER NOT NULL,\n        content_hash TEXT NOT NULL,\n        storage_key TEXT NOT NULL,\n        content BLOB,\n        metadata TEXT,\n        created_at TEXT NOT NULL,\n        PRIMARY KEY (tenant_id, parent_blob_id, derivative_id)\n      );\n      CREATE INDEX idx_blob_derivatives_processor\n        ON blob_derivatives (tenant_id, processor_id, created_at DESC);\n    ",
+    "checksum": "sha256-c437a233e2d737f9f3f9a4128f4063aa5d155b7285af5833103920188ffbbcf2"
+  },
+  {
+    "id": "0009_search_indexes",
+    "schemaRevision": 1,
+    "description": "Create search_indexes + search_index_fts for the SQLite FTS5 adapter.",
+    "sql": "\n      CREATE TABLE IF NOT EXISTS search_indexes (\n        index_name TEXT NOT NULL,\n        tenant_id TEXT NOT NULL DEFAULT '_default',\n        doc_id TEXT NOT NULL,\n        text TEXT NOT NULL,\n        fields TEXT NOT NULL,\n        PRIMARY KEY (tenant_id, index_name, doc_id)\n      );\n\n      CREATE VIRTUAL TABLE IF NOT EXISTS search_index_fts USING fts5(\n        text,\n        content='search_indexes',\n        content_rowid='rowid',\n        tokenize='unicode61'\n      );\n\n      CREATE TRIGGER IF NOT EXISTS search_indexes_ai AFTER INSERT ON search_indexes BEGIN\n        INSERT INTO search_index_fts (rowid, text) VALUES (new.rowid, new.text);\n      END;\n      CREATE TRIGGER IF NOT EXISTS search_indexes_ad AFTER DELETE ON search_indexes BEGIN\n        INSERT INTO search_index_fts (search_index_fts, rowid, text) VALUES ('delete', old.rowid, old.text);\n      END;\n      CREATE TRIGGER IF NOT EXISTS search_indexes_au AFTER UPDATE ON search_indexes BEGIN\n        INSERT INTO search_index_fts (search_index_fts, rowid, text) VALUES ('delete', old.rowid, old.text);\n        INSERT INTO search_index_fts (rowid, text) VALUES (new.rowid, new.text);\n      END;\n    ",
+    "checksum": "sha256-44531e13e924cfb8a45bf2939a3d6d103ec60ed7243af65ccf1d32d3e0a3a7d8"
+  },
+  {
+    "id": "0010_tenant_settings",
+    "schemaRevision": 1,
+    "description": "Create tenant_settings table for per-tenant runtime config knobs.",
+    "sql": "\n      CREATE TABLE IF NOT EXISTS tenant_settings (\n        tenant_id TEXT NOT NULL,\n        setting_key TEXT NOT NULL,\n        setting_value TEXT NOT NULL,\n        updated_at TEXT NOT NULL,\n        PRIMARY KEY (tenant_id, setting_key)\n      );\n    ",
+    "checksum": "sha256-70bb479adbad3b8820430d79856a58493732bbe741058591a026e0817abd0f77"
+  },
+  {
+    "id": "0011_devtools_event_log",
+    "schemaRevision": 1,
+    "description": "Create devtools_events table for the developer-console event feed.",
+    "sql": "\n      CREATE TABLE IF NOT EXISTS devtools_events (\n        id INTEGER PRIMARY KEY AUTOINCREMENT,\n        occurred_at TEXT NOT NULL,\n        kind TEXT NOT NULL,\n        tenant_id TEXT,\n        fields TEXT NOT NULL\n      );\n      CREATE INDEX idx_devtools_events_kind_at ON devtools_events (kind, occurred_at DESC);\n      CREATE INDEX idx_devtools_events_tenant_at ON devtools_events (tenant_id, occurred_at DESC);\n    ",
+    "checksum": "sha256-bf2578841bc70a0111ef6dda2a8c2a70f20a513dbcf992affd163ef54dd64203"
+  },
+  {
+    "id": "0012_audit_chain",
+    "schemaRevision": 1,
+    "description": "Add hash-chain columns to admin_audit_log so tampering with audit rows is detectable.",
+    "sql": "\n      ALTER TABLE admin_audit_log ADD COLUMN previous_hash TEXT;\n      ALTER TABLE admin_audit_log ADD COLUMN entry_hash TEXT;\n      CREATE INDEX idx_admin_audit_log_chain ON admin_audit_log (id, entry_hash);\n    ",
+    "checksum": "sha256-78a1f9544fac74fb2bb905bc59185def51899ade3ad76cdd9e2e3d23d3b95dfc"
+  },
+  {
+    "id": "0013_auth_session_token_digests",
+    "schemaRevision": 1,
+    "description": "Replace raw auth session bearer tokens with SHA-256 token digests.",
+    "sql": "\n      CREATE TABLE auth_sessions_new (\n        session_token_digest TEXT PRIMARY KEY,\n        tenant_id TEXT NOT NULL DEFAULT '_default',\n        user_id TEXT NOT NULL,\n        device_id TEXT NOT NULL,\n        replica_id TEXT NOT NULL,\n        expires_at TEXT NOT NULL,\n        created_at TEXT NOT NULL,\n        last_seen_at TEXT NOT NULL\n      );\n\n      DROP TABLE auth_sessions;\n      ALTER TABLE auth_sessions_new RENAME TO auth_sessions;\n\n      CREATE INDEX idx_auth_sessions_tenant_user\n        ON auth_sessions (tenant_id, user_id, expires_at DESC);\n    ",
+    "checksum": "sha256-8cd6a25e69cafb373ead62f4c86f4ec959742656ecb9572a27b9d8428cce33ab"
+  },
+  {
+    "id": "0014_platform_events",
+    "schemaRevision": 1,
+    "description": "Create platform event pipeline tables.",
+    "sql": "\n      CREATE TABLE IF NOT EXISTS platform_events (\n        id INTEGER PRIMARY KEY AUTOINCREMENT,\n        event_id TEXT NOT NULL UNIQUE,\n        schema_version INTEGER NOT NULL,\n        accepted_at TEXT NOT NULL,\n        occurred_at TEXT NOT NULL,\n        family TEXT NOT NULL,\n        name TEXT NOT NULL,\n        source TEXT NOT NULL,\n        tenant_id TEXT,\n        account_id TEXT,\n        subject_id TEXT,\n        trace_id TEXT,\n        idempotency_key TEXT,\n        payload TEXT NOT NULL,\n        attributes TEXT NOT NULL\n      );\n      CREATE UNIQUE INDEX idx_platform_events_tenant_idempotency\n        ON platform_events (ifnull(tenant_id, ''), idempotency_key)\n        WHERE idempotency_key IS NOT NULL;\n      CREATE INDEX idx_platform_events_family_at ON platform_events (family, occurred_at DESC);\n      CREATE INDEX idx_platform_events_tenant_at ON platform_events (tenant_id, occurred_at DESC);\n\n      CREATE TABLE IF NOT EXISTS platform_event_deliveries (\n        consumer TEXT NOT NULL,\n        event_id TEXT NOT NULL,\n        status TEXT NOT NULL,\n        attempt_count INTEGER NOT NULL DEFAULT 0,\n        available_at TEXT NOT NULL,\n        claimed_at TEXT,\n        acked_at TEXT,\n        dead_lettered_at TEXT,\n        last_error TEXT,\n        PRIMARY KEY (consumer, event_id)\n      );\n      CREATE INDEX idx_platform_event_deliveries_status_available\n        ON platform_event_deliveries (consumer, status, available_at);\n      CREATE INDEX idx_platform_event_deliveries_event\n        ON platform_event_deliveries (event_id);\n    ",
+    "checksum": "sha256-b84a9f76cee5dcb27c90eae11405adf0ca16cfb871ccbc4d3593741a45bb64d3"
+  },
+  {
+    "id": "0015_analytics_aggregates",
+    "schemaRevision": 1,
+    "description": "Create product analytics aggregate tables.",
+    "sql": "\n      CREATE TABLE IF NOT EXISTS analytics_aggregate_buckets (\n        bucket_start TEXT NOT NULL,\n        bucket_ms INTEGER NOT NULL,\n        tenant_id TEXT NOT NULL,\n        metric_kind TEXT NOT NULL,\n        metric_key TEXT NOT NULL,\n        count INTEGER NOT NULL,\n        PRIMARY KEY (bucket_start, bucket_ms, tenant_id, metric_kind, metric_key)\n      );\n      CREATE INDEX idx_analytics_buckets_lookup\n        ON analytics_aggregate_buckets (tenant_id, metric_kind, bucket_start DESC, count DESC);\n\n      CREATE TABLE IF NOT EXISTS analytics_recent_events (\n        event_id TEXT PRIMARY KEY,\n        occurred_at TEXT NOT NULL,\n        accepted_at TEXT NOT NULL,\n        processed_at TEXT NOT NULL,\n        tenant_id TEXT,\n        account_id TEXT,\n        subject_id TEXT,\n        trace_id TEXT,\n        name TEXT NOT NULL,\n        properties TEXT NOT NULL,\n        context TEXT NOT NULL\n      );\n      CREATE INDEX idx_analytics_recent_tenant_at\n        ON analytics_recent_events (tenant_id, occurred_at DESC);\n      CREATE INDEX idx_analytics_recent_name_at\n        ON analytics_recent_events (name, occurred_at DESC);\n    ",
+    "checksum": "sha256-9aaefe0865e0bac18efec55e09252a1c625b1f45e110703f16d5d1945ff4f9af"
+  },
+  {
+    "id": "0016_password_reset_tokens",
+    "schemaRevision": 1,
+    "description": "Single-use email password-reset tokens (hashed) with expiry.",
+    "sql": "\n      CREATE TABLE IF NOT EXISTS auth_password_reset_tokens (\n        token_hash TEXT PRIMARY KEY,\n        tenant_id TEXT NOT NULL,\n        user_id TEXT NOT NULL,\n        created_at TEXT NOT NULL,\n        expires_at TEXT NOT NULL,\n        consumed_at TEXT\n      );\n      CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_by_user\n        ON auth_password_reset_tokens (tenant_id, user_id, expires_at DESC);\n    ",
+    "checksum": "sha256-b1f3051d891296ed85922fc3f2e1819b9e09eed0bfc2acaeca524a29717a3f03"
+  },
+  {
+    "id": "0017_sharing",
+    "schemaRevision": 1,
+    "description": "Create invitations and grants tables for cross-user sharing.",
+    "sql": "\n      CREATE TABLE IF NOT EXISTS invitations (\n        id TEXT PRIMARY KEY NOT NULL,\n        tenant_id TEXT NOT NULL,\n        owner_user_id TEXT NOT NULL,\n        record_type TEXT NOT NULL,\n        record_id TEXT NOT NULL,\n        permission TEXT NOT NULL,\n        token TEXT NOT NULL,\n        created_at TEXT NOT NULL,\n        expires_at TEXT NOT NULL,\n        redeemed_at TEXT,\n        redeemed_by_user_id TEXT\n      );\n      CREATE UNIQUE INDEX idx_invitations_token ON invitations (token);\n      CREATE INDEX idx_invitations_owner\n        ON invitations (tenant_id, owner_user_id, created_at DESC);\n      CREATE INDEX idx_invitations_record\n        ON invitations (tenant_id, record_type, record_id);\n\n      CREATE TABLE IF NOT EXISTS grants (\n        id TEXT PRIMARY KEY NOT NULL,\n        tenant_id TEXT NOT NULL,\n        owner_user_id TEXT NOT NULL,\n        record_type TEXT NOT NULL,\n        record_id TEXT NOT NULL,\n        grantee_user_id TEXT NOT NULL,\n        permission TEXT NOT NULL,\n        created_at TEXT NOT NULL,\n        revoked_at TEXT\n      );\n      CREATE INDEX idx_grants_owner\n        ON grants (tenant_id, owner_user_id, created_at DESC);\n      CREATE INDEX idx_grants_grantee\n        ON grants (tenant_id, grantee_user_id, created_at DESC);\n      CREATE INDEX idx_grants_record\n        ON grants (tenant_id, record_type, record_id, grantee_user_id);\n    ",
+    "checksum": "sha256-d137cf0035e478fa263ab43ea40beb38107e506087cee3a5482af763a5c80fd0"
+  },
+  {
+    "id": "0018_refresh_tokens",
+    "schemaRevision": 1,
+    "description": "Opt-in refresh tokens (hashed) for the refresh/access-token split (FR-33).",
+    "sql": "\n      CREATE TABLE IF NOT EXISTS auth_refresh_tokens (\n        token_hash TEXT PRIMARY KEY,\n        tenant_id TEXT NOT NULL,\n        user_id TEXT NOT NULL,\n        device_id TEXT NOT NULL,\n        replica_id TEXT NOT NULL,\n        created_at TEXT NOT NULL,\n        expires_at TEXT NOT NULL,\n        revoked_at TEXT\n      );\n      CREATE INDEX IF NOT EXISTS idx_refresh_tokens_by_user\n        ON auth_refresh_tokens (tenant_id, user_id, expires_at DESC);\n    ",
+    "checksum": "sha256-1cc6f0368164b8a5b21ad94eff8ecb7354fa96a748d4282b16792d7ebd147fd2"
+  },
+  {
+    "id": "0019_service_principals",
+    "schemaRevision": 1,
+    "description": "Create service_principals table for machine identities (FR-46).",
+    "sql": "\n      CREATE TABLE IF NOT EXISTS service_principals (\n        id TEXT PRIMARY KEY NOT NULL,\n        key_id TEXT NOT NULL UNIQUE,\n        key_hash TEXT NOT NULL,\n        tenant_id TEXT NOT NULL DEFAULT '_default',\n        name TEXT NOT NULL,\n        scopes TEXT NOT NULL DEFAULT '[]',\n        created_at TEXT NOT NULL,\n        revoked_at TEXT\n      );\n      CREATE INDEX IF NOT EXISTS idx_service_principals_tenant\n        ON service_principals (tenant_id, created_at DESC);\n    ",
+    "checksum": "sha256-e6ff1f17e32d7b0e12c89c194bf7d411a9df4bfbcb8364500f2098a62178de7f"
+  },
+  {
+    "id": "0020_saml_seen_assertions",
+    "schemaRevision": 1,
+    "description": "SAML SP assertion-replay guard: record consumed assertion IDs (FR-31).",
+    "sql": "\n      CREATE TABLE IF NOT EXISTS auth_saml_seen_assertions (\n        provider_id TEXT NOT NULL,\n        assertion_id TEXT NOT NULL,\n        seen_at TEXT NOT NULL,\n        expires_at TEXT NOT NULL,\n        PRIMARY KEY (provider_id, assertion_id)\n      );\n      CREATE INDEX IF NOT EXISTS idx_saml_seen_assertions_expiry\n        ON auth_saml_seen_assertions (expires_at);\n    ",
+    "checksum": "sha256-4ac820d46f69440a1c57c32c286c1f550a4752dca8a5bf4ce9af0ffb4e37fc44"
+  },
+  {
+    "id": "0021_app_boundary",
+    "schemaRevision": 1,
+    "description": "Add app_id columns to framework tables with compound (app_id, tenant_id, …) indexes mirroring the tenant boundary (FR-36).",
+    "sql": "\n      ALTER TABLE objects ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';\n      CREATE INDEX IF NOT EXISTS idx_objects_app_tenant\n        ON objects (app_id, tenant_id, object_type, object_id);\n\n      ALTER TABLE stream_events ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';\n      CREATE INDEX IF NOT EXISTS idx_stream_events_app_tenant\n        ON stream_events (app_id, tenant_id, stream_type, stream_id, sequence);\n      CREATE INDEX IF NOT EXISTS idx_stream_events_app_tenant_event_id\n        ON stream_events (app_id, tenant_id, event_id);\n\n      ALTER TABLE presence_leases ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';\n      CREATE INDEX IF NOT EXISTS idx_presence_leases_app_tenant\n        ON presence_leases (app_id, tenant_id, presence_type, presence_key);\n\n      ALTER TABLE signal_outbox ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';\n      CREATE INDEX IF NOT EXISTS idx_signal_outbox_app_tenant\n        ON signal_outbox (app_id, tenant_id, signal_type, signal_key, expires_at);\n\n      ALTER TABLE blob_metadata ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';\n      CREATE INDEX IF NOT EXISTS idx_blob_metadata_app_tenant\n        ON blob_metadata (app_id, tenant_id, blob_id);\n      CREATE INDEX IF NOT EXISTS idx_blob_metadata_app_tenant_owner\n        ON blob_metadata (app_id, tenant_id, owner_id, created_at DESC);\n\n      ALTER TABLE blob_content ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';\n      CREATE INDEX IF NOT EXISTS idx_blob_content_app_tenant\n        ON blob_content (app_id, tenant_id, blob_id);\n\n      ALTER TABLE jobs ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';\n      CREATE INDEX IF NOT EXISTS idx_jobs_app_tenant\n        ON jobs (app_id, tenant_id, job_type, status, id);\n      CREATE INDEX IF NOT EXISTS idx_jobs_app_tenant_status_available_at\n        ON jobs (app_id, tenant_id, status, available_at);\n\n      ALTER TABLE auth_sessions ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';\n      CREATE INDEX IF NOT EXISTS idx_auth_sessions_app_tenant_user\n        ON auth_sessions (app_id, tenant_id, user_id, expires_at DESC);\n\n      ALTER TABLE auth_accounts ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';\n      CREATE INDEX IF NOT EXISTS idx_auth_accounts_app_tenant_handle\n        ON auth_accounts (app_id, tenant_id, handle COLLATE NOCASE);\n\n      ALTER TABLE idempotency_keys ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';\n      CREATE INDEX IF NOT EXISTS idx_idempotency_keys_app_tenant\n        ON idempotency_keys (app_id, tenant_id, replica_id, request_id);\n    ",
+    "checksum": "sha256-4c9dbb77face9c64434e0ae6bdae60d68ce083759267c4f8a50a5f15a1dc58f7"
+  },
+  {
+    "id": "0022_jobs_idempotency_app_scope",
+    "schemaRevision": 1,
+    "description": "Rescope the jobs idempotency unique index to include app_id so two apps' identical idempotency keys never collide (FR-153).",
+    "sql": "\n      DROP INDEX IF EXISTS idx_jobs_idempotency_key;\n      CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency_key\n        ON jobs (app_id, tenant_id, job_type, idempotency_key)\n        WHERE idempotency_key IS NOT NULL;\n    ",
+    "checksum": "sha256-97540f41489707f864c191b554bba8598be6cd4fdce2c77e917f2c6924647b56"
+  },
+  {
+    "id": "0023_app_scoped_idempotency_presence_keys",
+    "schemaRevision": 1,
+    "description": "Rescope idempotency_keys and presence_leases primary keys to include app_id so two apps never clobber each other's idempotency record / presence lease (server-storage-2, server-storage-3, tenant-app-isolation-5).",
+    "sql": "\n      -- idempotency_keys: rebuild so the primary key includes app_id.\n      CREATE TABLE idempotency_keys_new (\n        app_id TEXT NOT NULL DEFAULT '_default',\n        tenant_id TEXT NOT NULL DEFAULT '_default',\n        replica_id TEXT NOT NULL,\n        request_id TEXT NOT NULL,\n        result_event_id TEXT NOT NULL,\n        created_at TEXT NOT NULL,\n        PRIMARY KEY (app_id, tenant_id, replica_id, request_id)\n      );\n      INSERT INTO idempotency_keys_new\n        (app_id, tenant_id, replica_id, request_id, result_event_id, created_at)\n        SELECT app_id, tenant_id, replica_id, request_id, result_event_id, created_at\n          FROM idempotency_keys;\n      DROP TABLE idempotency_keys;\n      ALTER TABLE idempotency_keys_new RENAME TO idempotency_keys;\n      CREATE INDEX idx_idempotency_keys_created_at\n        ON idempotency_keys (created_at);\n      CREATE INDEX idx_idempotency_keys_app_tenant\n        ON idempotency_keys (app_id, tenant_id, replica_id, request_id);\n\n      -- presence_leases: rebuild so the primary key includes app_id.\n      CREATE TABLE presence_leases_new (\n        app_id TEXT NOT NULL DEFAULT '_default',\n        tenant_id TEXT NOT NULL DEFAULT '_default',\n        presence_type TEXT NOT NULL,\n        presence_key TEXT NOT NULL,\n        packed BLOB NOT NULL,\n        expires_at INTEGER NOT NULL,\n        PRIMARY KEY (app_id, tenant_id, presence_type, presence_key)\n      );\n      INSERT INTO presence_leases_new\n        (app_id, tenant_id, presence_type, presence_key, packed, expires_at)\n        SELECT app_id, tenant_id, presence_type, presence_key, packed, expires_at\n          FROM presence_leases;\n      DROP TABLE presence_leases;\n      ALTER TABLE presence_leases_new RENAME TO presence_leases;\n      CREATE INDEX idx_presence_leases_app_tenant\n        ON presence_leases (app_id, tenant_id, presence_type, presence_key);\n    ",
+    "checksum": "sha256-8ee078f068d613ba78215e309fd49eb4977963636ae6f4cc3811c8e6919979a2"
+  },
+  {
+    "id": "0024_refresh_token_family",
+    "schemaRevision": 1,
+    "description": "Add family_id to auth_refresh_tokens for refresh-token reuse/family detection (auth-core-3).",
+    "sql": "\n      ALTER TABLE auth_refresh_tokens ADD COLUMN family_id TEXT;\n      CREATE INDEX IF NOT EXISTS idx_refresh_tokens_by_family\n        ON auth_refresh_tokens (family_id);\n    ",
+    "checksum": "sha256-a8a1cc22a26cde1b6389a516f088ef30200a510b8cc4c40258a7f60db9f39a4f"
+  }
+]

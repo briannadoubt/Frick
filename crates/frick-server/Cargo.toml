@@ -1,0 +1,33 @@
+[package]
+name = "frick-server"
+description = "Frick sync server: tokio + axum runtime speaking the Frick frame protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+axum = { workspace = true }
+base64 = { workspace = true }
+frick-protocol = { workspace = true }
+frick-schema = { workspace = true }
+frick-store = { workspace = true }
+futures-util = { workspace = true }
+rmpv = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+tower = { workspace = true }
+
+[lints]
+workspace = true

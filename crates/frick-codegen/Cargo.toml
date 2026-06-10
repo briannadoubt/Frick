@@ -1,0 +1,21 @@
+[package]
+name = "frick-codegen"
+description = "Frick schema codegen: Swift, Kotlin, and TypeScript DTO generators"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+frick-protocol = { workspace = true }
+frick-schema = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+
+[lints]
+workspace = true

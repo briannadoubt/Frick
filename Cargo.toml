@@ -1,0 +1,63 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/frick-protocol",
+  "crates/frick-schema",
+  "crates/frick-codegen",
+  "crates/frick-store",
+  "crates/frick-server",
+  "crates/frick-cli",
+]
+
+[workspace.package]
+version = "0.4.0-dev"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/briannadoubt/Frick"
+rust-version = "1.95"
+
+[workspace.dependencies]
+frick-protocol = { path = "crates/frick-protocol" }
+frick-schema = { path = "crates/frick-schema" }
+frick-store = { path = "crates/frick-store" }
+
+hex = "0.4"
+tempfile = "3"
+
+anyhow = "1"
+argon2 = "0.5"
+axum = { version = "0.7", features = ["ws"] }
+base64 = "0.22"
+bytes = "1"
+clap = { version = "4", features = ["derive"] }
+futures-util = "0.3"
+indexmap = { version = "2", features = ["serde"] }
+rand = "0.8"
+rmp = "0.8"
+rmp-serde = "1"
+rmpv = { version = "1", features = ["with-serde"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+scrypt = "0.11"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v4"] }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Pedantic exceptions that fight readability more than they help.
+# doc_markdown flags domain proper nouns (MessagePack, SQLite, schemaHash).
+doc_markdown = "allow"
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+must_use_candidate = "allow"

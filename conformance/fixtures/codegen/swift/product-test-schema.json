@@ -1,0 +1,825 @@
+{
+  "blobs": [
+    {
+      "id": 1,
+      "metadataFields": [
+        {
+          "id": 1,
+          "kind": "string",
+          "name": "contentHash",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "int",
+          "name": "byteLength",
+          "required": true
+        },
+        {
+          "id": 3,
+          "kind": "string",
+          "name": "mimeType",
+          "required": true
+        }
+      ],
+      "name": "AttachmentBlob"
+    }
+  ],
+  "compatibility": "greenfield-cutover",
+  "events": [
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "id",
+          "name": "messageId",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "ref",
+          "name": "senderId",
+          "ref": "User",
+          "required": true
+        },
+        {
+          "id": 3,
+          "kind": "string",
+          "name": "body",
+          "required": true
+        },
+        {
+          "id": 4,
+          "kind": "timestamp",
+          "name": "createdAt",
+          "required": true
+        },
+        {
+          "id": 5,
+          "kind": "json",
+          "name": "attachmentBlobIds",
+          "required": false
+        }
+      ],
+      "id": 1,
+      "name": "MessageSent"
+    },
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "id",
+          "name": "messageId",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "string",
+          "name": "body",
+          "required": true
+        },
+        {
+          "id": 3,
+          "kind": "timestamp",
+          "name": "editedAt",
+          "required": true
+        }
+      ],
+      "id": 2,
+      "name": "MessageEdited"
+    },
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "id",
+          "name": "messageId",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "timestamp",
+          "name": "redactedAt",
+          "required": true
+        }
+      ],
+      "id": 3,
+      "name": "MessageRedacted"
+    },
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "id",
+          "name": "messageId",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "ref",
+          "name": "userId",
+          "ref": "User",
+          "required": true
+        },
+        {
+          "id": 3,
+          "kind": "string",
+          "name": "emoji",
+          "required": true
+        }
+      ],
+      "id": 4,
+      "name": "ReactionAdded"
+    },
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "ref",
+          "name": "userId",
+          "ref": "User",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "int",
+          "name": "sequence",
+          "required": true
+        }
+      ],
+      "id": 5,
+      "name": "ReceiptAdvanced"
+    },
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "ref",
+          "name": "callId",
+          "ref": "CallRoom",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "ref",
+          "name": "createdBy",
+          "ref": "User",
+          "required": true
+        }
+      ],
+      "id": 6,
+      "name": "CallCreated"
+    },
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "ref",
+          "name": "userId",
+          "ref": "User",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "string",
+          "name": "deviceId",
+          "required": true
+        }
+      ],
+      "id": 7,
+      "name": "CallParticipantJoined"
+    },
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "ref",
+          "name": "userId",
+          "ref": "User",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "string",
+          "name": "deviceId",
+          "required": true
+        }
+      ],
+      "id": 8,
+      "name": "CallParticipantLeft"
+    },
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "timestamp",
+          "name": "endedAt",
+          "required": true
+        }
+      ],
+      "id": 9,
+      "name": "CallEnded"
+    }
+  ],
+  "hash": "frick-product-test-0.2.0",
+  "jobs": [
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "ref",
+          "name": "recipientUserId",
+          "ref": "User",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "string",
+          "name": "kind",
+          "required": true
+        },
+        {
+          "id": 3,
+          "kind": "json",
+          "name": "payload",
+          "required": true
+        }
+      ],
+      "id": 1,
+      "name": "PushNotificationJob"
+    }
+  ],
+  "minimumClientRevision": 1,
+  "minimumServerRevision": 1,
+  "name": "frick-product-test",
+  "objects": [
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "string",
+          "name": "displayName",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "ref",
+          "name": "avatarBlobId",
+          "ref": "AttachmentBlob",
+          "required": false
+        }
+      ],
+      "id": 1,
+      "indexes": [
+        {
+          "fields": [
+            "displayName"
+          ],
+          "id": 1,
+          "name": "all"
+        }
+      ],
+      "name": "User"
+    },
+    {
+      "fields": [
+        {
+          "enumValues": [
+            "dm",
+            "group",
+            "channel"
+          ],
+          "id": 1,
+          "kind": "enum",
+          "name": "kind",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "string",
+          "name": "title",
+          "required": false
+        },
+        {
+          "id": 3,
+          "kind": "ref",
+          "name": "createdBy",
+          "ref": "User",
+          "required": true
+        },
+        {
+          "id": 4,
+          "kind": "string",
+          "name": "lastMessageEventId",
+          "required": false
+        }
+      ],
+      "id": 2,
+      "indexes": [
+        {
+          "fields": [
+            "kind"
+          ],
+          "id": 1,
+          "name": "all"
+        }
+      ],
+      "name": "Conversation"
+    },
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "ref",
+          "name": "conversationId",
+          "ref": "Conversation",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "ref",
+          "name": "userId",
+          "ref": "User",
+          "required": true
+        },
+        {
+          "enumValues": [
+            "owner",
+            "member"
+          ],
+          "id": 3,
+          "kind": "enum",
+          "name": "role",
+          "required": true
+        }
+      ],
+      "id": 3,
+      "indexes": [
+        {
+          "fields": [
+            "conversationId"
+          ],
+          "id": 1,
+          "name": "byConversation"
+        }
+      ],
+      "name": "RoomMember"
+    },
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "ref",
+          "name": "conversationId",
+          "ref": "Conversation",
+          "required": true
+        },
+        {
+          "enumValues": [
+            "ringing",
+            "active",
+            "ended"
+          ],
+          "id": 2,
+          "kind": "enum",
+          "name": "state",
+          "required": true
+        },
+        {
+          "id": 3,
+          "kind": "ref",
+          "name": "createdBy",
+          "ref": "User",
+          "required": true
+        }
+      ],
+      "id": 4,
+      "indexes": [
+        {
+          "fields": [
+            "conversationId",
+            "state"
+          ],
+          "id": 1,
+          "name": "byConversation"
+        }
+      ],
+      "name": "CallRoom"
+    },
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "ref",
+          "name": "userId",
+          "ref": "User",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "string",
+          "name": "label",
+          "required": false
+        },
+        {
+          "enumValues": [
+            "web",
+            "ios",
+            "android",
+            "server"
+          ],
+          "id": 3,
+          "kind": "enum",
+          "name": "platform",
+          "required": true
+        },
+        {
+          "id": 4,
+          "kind": "timestamp",
+          "name": "lastSeenAt",
+          "required": false
+        }
+      ],
+      "id": 5,
+      "indexes": [
+        {
+          "fields": [
+            "userId"
+          ],
+          "id": 1,
+          "name": "byUser"
+        }
+      ],
+      "name": "UserDevice"
+    },
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "ref",
+          "name": "userId",
+          "ref": "User",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "string",
+          "name": "deviceId",
+          "required": true
+        },
+        {
+          "id": 3,
+          "kind": "string",
+          "name": "replicaId",
+          "required": true
+        },
+        {
+          "id": 4,
+          "kind": "timestamp",
+          "name": "expiresAt",
+          "required": true
+        }
+      ],
+      "id": 6,
+      "indexes": [
+        {
+          "fields": [
+            "userId"
+          ],
+          "id": 1,
+          "name": "byUser"
+        }
+      ],
+      "name": "UserSession"
+    },
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "ref",
+          "name": "userId",
+          "ref": "User",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "ref",
+          "name": "conversationId",
+          "ref": "Conversation",
+          "required": true
+        },
+        {
+          "id": 3,
+          "kind": "string",
+          "name": "body",
+          "required": true
+        },
+        {
+          "id": 4,
+          "kind": "timestamp",
+          "name": "updatedAt",
+          "required": true
+        }
+      ],
+      "id": 7,
+      "indexes": [
+        {
+          "fields": [
+            "userId",
+            "conversationId"
+          ],
+          "id": 1,
+          "name": "byOwner"
+        }
+      ],
+      "mergePolicy": "versionPrecondition",
+      "name": "MessageDraft"
+    },
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "ref",
+          "name": "userId",
+          "ref": "User",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "ref",
+          "name": "conversationId",
+          "ref": "Conversation",
+          "required": true
+        },
+        {
+          "id": 3,
+          "kind": "string",
+          "name": "body",
+          "required": true
+        },
+        {
+          "id": 4,
+          "kind": "timestamp",
+          "name": "scheduledFor",
+          "required": true
+        },
+        {
+          "id": 5,
+          "kind": "json",
+          "name": "attachmentBlobIds",
+          "required": false
+        },
+        {
+          "enumValues": [
+            "pending",
+            "delivered",
+            "cancelled"
+          ],
+          "id": 6,
+          "kind": "enum",
+          "name": "status",
+          "required": true
+        }
+      ],
+      "id": 8,
+      "indexes": [
+        {
+          "fields": [
+            "status",
+            "scheduledFor"
+          ],
+          "id": 1,
+          "name": "byDueDate"
+        }
+      ],
+      "mergePolicy": "versionPrecondition",
+      "name": "ScheduledMessage"
+    }
+  ],
+  "presences": [
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "bool",
+          "name": "isTyping",
+          "required": true
+        }
+      ],
+      "id": 1,
+      "keyFields": [
+        {
+          "id": 1,
+          "kind": "ref",
+          "name": "conversationId",
+          "ref": "Conversation",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "ref",
+          "name": "userId",
+          "ref": "User",
+          "required": true
+        },
+        {
+          "id": 3,
+          "kind": "string",
+          "name": "deviceId",
+          "required": true
+        }
+      ],
+      "name": "TypingState",
+      "ttlMs": 5000
+    }
+  ],
+  "projections": [
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "ref",
+          "name": "conversationId",
+          "ref": "Conversation",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "ref",
+          "name": "userId",
+          "ref": "User",
+          "required": true
+        },
+        {
+          "id": 3,
+          "kind": "string",
+          "name": "title",
+          "required": false
+        },
+        {
+          "id": 4,
+          "kind": "string",
+          "name": "kind",
+          "required": true
+        },
+        {
+          "id": 5,
+          "kind": "int",
+          "name": "lastSequence",
+          "required": true
+        },
+        {
+          "id": 6,
+          "kind": "string",
+          "name": "lastMessageBody",
+          "required": false
+        },
+        {
+          "id": 7,
+          "kind": "timestamp",
+          "name": "lastMessageAt",
+          "required": false
+        },
+        {
+          "id": 8,
+          "kind": "ref",
+          "name": "lastMessageSenderId",
+          "ref": "User",
+          "required": false
+        },
+        {
+          "id": 9,
+          "kind": "int",
+          "name": "readSequence",
+          "required": true
+        },
+        {
+          "id": 10,
+          "kind": "int",
+          "name": "unreadCount",
+          "required": true
+        },
+        {
+          "id": 11,
+          "kind": "timestamp",
+          "name": "updatedAt",
+          "required": true
+        }
+      ],
+      "id": 1,
+      "indexes": [
+        {
+          "fields": [
+            "conversationId"
+          ],
+          "id": 1,
+          "name": "byConversation"
+        },
+        {
+          "fields": [
+            "userId"
+          ],
+          "id": 2,
+          "name": "byUser"
+        }
+      ],
+      "name": "ConversationInbox",
+      "source": "MessageStream"
+    }
+  ],
+  "protocol": "frick.realtime",
+  "protocolVersion": 1,
+  "schemaId": "frick-product-test",
+  "schemaRevision": 1,
+  "schemaVersion": "0.1.0",
+  "signals": [
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "string",
+          "name": "senderDeviceId",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "string",
+          "name": "recipientDeviceId",
+          "required": false
+        },
+        {
+          "enumValues": [
+            "offer",
+            "answer",
+            "ice",
+            "renegotiate",
+            "sfuToken"
+          ],
+          "id": 3,
+          "kind": "enum",
+          "name": "kind",
+          "required": true
+        },
+        {
+          "id": 4,
+          "kind": "bytes",
+          "name": "payload",
+          "required": true
+        }
+      ],
+      "id": 1,
+      "keyFields": [
+        {
+          "id": 1,
+          "kind": "ref",
+          "name": "callId",
+          "ref": "CallRoom",
+          "required": true
+        }
+      ],
+      "name": "WebRTCSignal",
+      "ttlMs": 30000
+    }
+  ],
+  "streams": [
+    {
+      "events": [
+        "MessageSent",
+        "MessageEdited",
+        "MessageRedacted",
+        "ReactionAdded",
+        "ReceiptAdvanced"
+      ],
+      "id": 1,
+      "keyFields": [
+        {
+          "id": 1,
+          "kind": "ref",
+          "name": "conversationId",
+          "ref": "Conversation",
+          "required": true
+        }
+      ],
+      "name": "MessageStream"
+    },
+    {
+      "events": [
+        "CallCreated",
+        "CallParticipantJoined",
+        "CallParticipantLeft",
+        "CallEnded"
+      ],
+      "id": 2,
+      "keyFields": [
+        {
+          "id": 1,
+          "kind": "ref",
+          "name": "callId",
+          "ref": "CallRoom",
+          "required": true
+        }
+      ],
+      "name": "CallEventStream"
+    }
+  ]
+}

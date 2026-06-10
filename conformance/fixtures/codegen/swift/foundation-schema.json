@@ -1,0 +1,20 @@
+{
+  "blobs": [],
+  "compatibility": "greenfield-cutover",
+  "events": [],
+  "hash": "frick-foundation-empty-0.1.0",
+  "jobs": [],
+  "minimumClientRevision": 1,
+  "minimumServerRevision": 1,
+  "name": "frick-foundation",
+  "objects": [],
+  "presences": [],
+  "projections": [],
+  "protocol": "frick.realtime",
+  "protocolVersion": 1,
+  "schemaId": "frick-foundation",
+  "schemaRevision": 1,
+  "schemaVersion": "0.1.0",
+  "signals": [],
+  "streams": []
+}
