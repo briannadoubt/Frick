@@ -2,8 +2,9 @@
 //! `schema.ts` by hand.
 //!
 //! TypeScript has no builder: an app schema is a plain object literal typed
-//! as `FrickSchema` (see `apps/rangercrm-server/src/schema.ts` and the CLI
-//! scaffold template `apps/cli/src/templates/schema.ts.ts`). This module is
+//! as `FrickSchema` (see the CLI scaffold template
+//! `apps/cli/src/templates/schema.ts.ts`, or the `productTestSchema` fixture
+//! in `packages/protocol`). This module is
 //! the public authoring contract for Rust apps. It keeps every decision the
 //! TS literal makes explicit — most importantly the numeric ids, which are
 //! the wire contract and are **never auto-assigned** — while letting the
