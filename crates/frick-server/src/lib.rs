@@ -9,13 +9,17 @@ pub mod authz;
 pub mod boot;
 pub mod config;
 pub mod error;
+pub mod extract;
+pub mod gateway;
 pub mod http;
 pub mod principal;
+pub mod routes;
 pub mod session;
 
 pub use authz::{Action, Decision, DenyReason, ResourceContext, decide_baseline};
 pub use boot::{BootError, FrickServer, create_frick_server};
 pub use config::{FrickConfig, FrickConfigError, FrickLimits, load_frick_config};
 pub use error::{LimitKind, ServerError};
+pub use gateway::GatewayHub;
 pub use http::{AppState, AppStateInner, respond_error};
 pub use principal::{DEFAULT_APP_ID, DEFAULT_TENANT_ID, Principal, PrincipalScope};

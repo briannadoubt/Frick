@@ -29,6 +29,10 @@ uuid = { workspace = true }
 [dev-dependencies]
 anyhow = { workspace = true }
 tower = { workspace = true }
+# Real WebSocket client for the gateway round-trip tests. Pinned to the
+# version axum 0.7 already resolves (transitively in the lockfile), so this
+# adds no new transitive tree. Dev-only.
+tokio-tungstenite = "0.24"
 
 [lints]
 workspace = true

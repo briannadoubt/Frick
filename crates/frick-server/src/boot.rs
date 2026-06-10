@@ -10,12 +10,16 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use crate::config::{DbDriver, FrickConfig};
+use crate::gateway::GatewayHub;
 use crate::http::{AppState, AppStateInner, public_router};
 
 /// A running (or constructed-but-not-yet-listening) server.
 pub struct FrickServer {
     pub state: AppState,
     pub config: FrickConfig,
+    /// The live WebSocket hub. Held here so it (and the store write-listener
+    /// funnel it owns) outlive the server.
+    pub gateway: Arc<GatewayHub>,
     shutdown: Option<oneshot::Sender<()>>,
     join: Option<tokio::task::JoinHandle<()>>,
     bound_port: u16,
@@ -61,9 +65,16 @@ pub async fn create_frick_server(
         auth_limiter: std::sync::Mutex::new(crate::http::AuthLimiter::default()),
     });
 
+    // The gateway hub owns the live connections and the fan-out funnel. Wire
+    // it as the store's write-notification listener so every facade write
+    // broadcasts to matching subscribers (FR-114 single-funnel).
+    let gateway = GatewayHub::new(Arc::clone(&state));
+    state.store.set_write_listener(gateway.write_listener());
+
     Ok(FrickServer {
         state,
         config,
+        gateway,
         shutdown: None,
         join: None,
         bound_port: 0,
@@ -80,7 +91,9 @@ impl FrickServer {
         self.bound_port = bound_port;
 
         let router = public_router(Arc::clone(&self.state))
-            .merge(crate::auth_routes::auth_router(Arc::clone(&self.state)));
+            .merge(crate::auth_routes::auth_router(Arc::clone(&self.state)))
+            .merge(crate::routes::dataplane_router(Arc::clone(&self.state)))
+            .merge(self.gateway.router());
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         self.shutdown = Some(shutdown_tx);
 
@@ -128,6 +141,9 @@ impl FrickServer {
         if let Some(join) = self.join.take() {
             let _ = join.await;
         }
+        // Detach the write-listener funnel so the store no longer holds the
+        // gateway's closure.
+        self.state.store.clear_write_listener();
         tracing::info!(target: "frick.server", "frick.server.closed");
     }
 }
