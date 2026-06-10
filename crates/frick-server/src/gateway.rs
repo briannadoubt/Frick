@@ -1454,7 +1454,12 @@ impl GatewayHub {
         object_id: &str,
         object: &Value,
     ) {
-        let Ok(packed) = pack_object_record(&self.schema(), object_type, object_id, object) else {
+        // The record id rides the packed tuple's id slot, so the packed
+        // *fields* must not include `id` — schema object types do not declare
+        // an `id` field, and `pack_object_record` errors on an unknown field.
+        // Strip it first, matching the TS `withoutRecordId` before packing.
+        let value = without_record_id(object);
+        let Ok(packed) = pack_object_record(&self.schema(), object_type, object_id, &value) else {
             return;
         };
         let frame = FrickFrame::Delta(DeltaPayload {
@@ -2439,11 +2444,30 @@ fn pack_object_rows(schema: &FrickSchema, object_type: &str, rows: &[Value]) -> 
             })
             .unwrap_or_default()
             .to_string();
-        if let Ok(record) = pack_object_record(schema, object_type, &id, value) {
+        // Strip the record id before packing — it rides the tuple's id slot,
+        // not the field list (see `fan_out_object_upsert`).
+        let fields = without_record_id(value);
+        if let Ok(record) = pack_object_record(schema, object_type, &id, &fields) {
             packed.push(record);
         }
     }
     packed
+}
+
+/// Drop the `id` key from an object value before packing — the record id is
+/// carried in the packed tuple's id slot, and schema object types never
+/// declare an `id` field. Mirrors the TS `withoutRecordId`.
+fn without_record_id(value: &Value) -> Value {
+    match value {
+        Value::Map(entries) => Value::Map(
+            entries
+                .iter()
+                .filter(|(key, _)| key.as_str() != Some("id"))
+                .cloned()
+                .collect(),
+        ),
+        other => other.clone(),
+    }
 }
 
 /// The msgpack-encoded byte length of a value (for the append payload cap).

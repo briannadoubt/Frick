@@ -1,0 +1,28 @@
+[package]
+name = "frick-conformance"
+description = "Black-box conformance scenario runner — exercises an arbitrary Frick server (TS or Rust) over HTTP + WebSocket"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+frick-protocol = { workspace = true }
+# The in-process target ([`ServerHandle`] boots a Rust server) lives in the
+# harness library, so `frick-server` must be a regular dependency rather than a
+# dev-only one — `src/lib.rs` is consumed by the integration tests as an
+# ordinary crate, which cannot see dev-dependencies.
+frick-server = { workspace = true }
+futures-util = { workspace = true }
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tokio-tungstenite = "0.24"
+
+[dev-dependencies]
+anyhow = { workspace = true }
+
+[lints]
+workspace = true

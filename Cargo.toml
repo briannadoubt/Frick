@@ -8,6 +8,7 @@ members = [
   "crates/frick-server",
   "crates/frick-mcp",
   "crates/frick-cli",
+  "crates/frick-conformance",
 ]
 
 [workspace.package]
