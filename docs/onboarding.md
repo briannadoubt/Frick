@@ -4,13 +4,19 @@ Welcome. This guide is for someone seeing Frick for the first time. It explains 
 
 ## What is Frick?
 
-Frick is a realtime sync framework. You write a single TypeScript **schema** that defines every piece of data your app exchanges — typed objects, append-only event streams, presence rooms, signal channels, and projections — and the framework turns that schema into:
+Frick is a realtime sync framework. You write a single **schema** that defines every piece of data your app exchanges — typed objects, append-only event streams, presence rooms, signal channels, and projections — and the framework turns that schema into:
 
 - a compact wire protocol (MessagePack frames over a single WebSocket),
-- a Node sync server backed by SQLite that durably stores objects and events,
+- a sync server backed by durable framework stores,
 - a TypeScript client runtime with a local SQLite-or-IndexedDB cache and React hooks,
 - generated DTOs and a matching runtime for Swift and Kotlin clients,
 - a `frick` CLI for scaffolding, linting, migrations, and operations.
+
+The backend — sync server, CLI, MCP bridge, schema/codegen pipeline, and
+storage — is a set of Rust crates under `crates/` (Rust 1.95, pinned by
+`rust-toolchain.toml`). The web client runtime and React bindings stay
+TypeScript under `packages/`, and the Swift and Kotlin SDKs live under
+`packages/swift` and `apps/android`.
 
 The primitives the schema defines are:
 
@@ -26,62 +32,64 @@ Two properties tie it together. First, protocol artifacts (server tables, client
 
 ## 15-minute tutorial
 
-Prerequisites: Node 24+, pnpm 10+, git. No Xcode or Android SDK needed for this walkthrough.
+Prerequisites: the Rust toolchain (1.95, pinned by `rust-toolchain.toml` —
+`rustup` picks it up automatically), plus Node 24+, pnpm 10+, and git for the
+web client and artifact tooling. No Xcode or Android SDK needed for this
+walkthrough.
 
 ```bash
 git clone <this-repo> frick && cd frick
+cargo build --workspace
+cargo test --workspace          # the backend quality gate
 pnpm install
-pnpm schema:generate
-pnpm test                       # builds package entrypoints, then runs tests
+pnpm schema:generate            # regenerate native DTOs from the foundation schema
 ```
 
-Open three terminals. In the first, start the server:
+Drive the backend with the `frick` CLI from the `frick-cli` crate. Output is
+JSON Lines, one record per command:
 
 ```bash
-pnpm server                     # listens on http://127.0.0.1:4099
+cargo run -p frick-cli -- schema check      # validate the foundation schema, print its identity
+cargo run -p frick-cli -- doctor            # environment / config diagnostics
+cargo run -p frick-cli -- inspect server    # read server-shaped info from the local store
 ```
 
-In the second, start the web demo:
+Open Fricken Dashboard, the local Firebase-style console for health, schema,
+metrics, jobs, and DevTools events:
+
+```bash
+cargo run -p frick-cli -- dashboard         # http://127.0.0.1:4299
+```
+
+The dashboard reads `/health`, `/ready`, and the authenticated
+`/_frick/inspect/*` routes from a Frick server you point it at with
+`--endpoint <url>`.
+
+The sync server runtime (`frick-server`) is currently an **embeddable library**
+with no standalone binary — a host process wires it in with
+`create_frick_server(...)` and calls `.listen()`. The conformance harness
+(`crates/frick-conformance`) and the server's own tests boot it this way; a
+turnkey standalone server launcher is follow-up work. Until that lands, the
+backend is exercised through `cargo test --workspace` and the in-process
+harness rather than a long-lived `pnpm server` process.
+
+To preview the Kafka-compatible Redpanda local profile (env + Docker Compose
+plan), run:
+
+```bash
+cargo run -p frick-cli -- dev --profile redpanda --dry-run
+```
+
+The web client is a Vite app and runs independently:
 
 ```bash
 pnpm web                        # http://127.0.0.1:5173
 ```
 
-In the third, open Fricken Dashboard, the local Firebase-style console for
-health, schema, metrics, jobs, and DevTools events:
-
-```bash
-pnpm cli dashboard              # http://127.0.0.1:4299
-```
-
-Use the Auth page's Dev Login action to create a local session token, then
-refresh the Overview page to unlock the inspection-backed panels.
-
-For the default SQLite platform-event pipeline, the three commands above are
-enough. To test the Kafka-compatible Redpanda profile locally, run
-`pnpm cli dev --profile redpanda --dry-run` to inspect the env and Docker
-Compose plan, or drop `--dry-run` to start the checked-in Redpanda service and
-local OpenTelemetry Collector.
-
-You can also watch the sync log directly:
-
-```bash
-TOKEN="$(curl -s -X POST http://127.0.0.1:4099/auth/dev-login \
-  -H 'content-type: application/json' \
-  -d '{"userId":"user-ada"}' | jq -r .sessionToken)"
-curl -s http://127.0.0.1:4099/_frick/inspect/server \
-  -H "Authorization: Bearer $TOKEN" | jq
-```
-
-Now open `http://127.0.0.1:5173` in **two browser tabs**. The web app is a product demo layered on top of the generic framework primitives. Frick itself ships an empty foundation schema; real apps define their own objects, streams, projections, and policy hooks before building product-specific flows.
-
-To prove the round-trip durability, kill the server (`Ctrl-C` in terminal 1), restart it (`pnpm server`), and reload both tabs. The history is still there, replayed from `apps/server/data/frick.sqlite`.
-
-When you want a clean slate:
-
-```bash
-rm -f apps/server/data/frick.sqlite
-```
+The web app is a product demo layered on top of the generic framework
+primitives. Frick itself ships an empty foundation schema; real apps define
+their own objects, streams, projections, and policy hooks before building
+product-specific flows.
 
 ## Common workflows
 
@@ -89,9 +97,9 @@ Most day-to-day work is one of these. Each links to the canonical reference.
 
 - **Add a new object type.** Edit `packages/protocol/src/foundation.ts` (or your app's `src/schema.ts`), add the `objects[]` entry with a stable id and stable field ids, run `pnpm schema:generate`, then add server handlers if you need custom mutation logic. See [Schema author tutorial](./schema-author-tutorial.md).
 - **Add a new stream event.** Add an entry to `events[]` and reference it from the relevant `streams[].events` array. Events are immutable — once shipped, never change a field id or type.
-- **Add a projection.** Run `pnpm cli scaffold projection <name>` inside a scaffolded app, using a kebab-case projection name. It creates `src/projections/<name>.ts` and wires it into `src/server.ts` via the marker comments. See [`docs/authoring.md`](./authoring.md).
+- **Add a projection.** Run `cargo run -p frick-cli -- scaffold projection <name>` inside a scaffolded app, using a kebab-case projection name. It creates the projection source and wires it into the app's server entrypoint via the marker comments. See [`docs/authoring.md`](./authoring.md).
 - **Add a search index.** Declare an `indexes[]` entry on the object. Indexes are framework-managed; you don't write the migration. Custom app-source search indexes require a `search.query` policy hook allow before tenant users can query them.
-- **Register a push adapter.** Push transports plug into the server's extension registry. See `apps/server/src/extensions/` and [`docs/operations.md`](./operations.md) for the registration contract.
+- **Register a push adapter.** Push transports plug into the server's push registry. See `crates/frick-server/src/push/` and [`docs/operations.md`](./operations.md) for the registration contract.
 - **Write a custom job.** Add a `jobs[]` entry to the schema. The server framework gives you a typed handler signature and durable retry semantics.
 
 ## Troubleshooting
@@ -99,7 +107,7 @@ Most day-to-day work is one of these. Each links to the canonical reference.
 - **"Schema hash mismatch" on client connect.** The client and server are using different schema artifacts. Regenerate with `pnpm schema:generate` in development and make sure app clients pass their product schema or schema hash into the SDK constructor.
 - **`sessionScopeMismatch` from the local cache.** Cached framework rows belong to a different tenant/user than the active session. TypeScript and Swift clear framework cache state on user swaps; Android apps should call `resetCache()` or use a separate cache partition before reconnecting.
 - **`pnpm verify:generated` fails.** Generated artifacts have drifted. Run `pnpm schema:generate && pnpm fixtures:generate && pnpm design:generate` and commit the regenerated tracked files.
-- **`frick migrate status` shows pending migrations after a pull.** Run `pnpm cli migrate up`. In production this requires `--confirm-prod`; see [`docs/operations.md`](./operations.md).
+- **`frick migrate status` shows pending migrations after a pull.** Run `cargo run -p frick-cli -- migrate up`. In production this requires `--confirm-prod`; see [`docs/operations.md`](./operations.md).
 - **"Why can't I see this row I just wrote?"** Tenant boundary. The server scopes objects and streams by tenant id; a subscription with a different tenant context will never see the write. Check the connection's tenant header and verify the row's `tenantId` column.
 - **401 on `/_frick/inspect/*`.** Inspection routes require auth. In development, pass a normal session bearer from `/auth/dev-login`; in production, enable inspection deliberately and pass `FRICK_ADMIN_TOKEN` via `Authorization: Bearer …`.
 - **CLI says `init refused: target directory not empty`.** `frick init` is for fresh scaffolds only. Choose a new directory or remove the conflicting files; the CLI will list which ones it found.
@@ -108,29 +116,33 @@ Most day-to-day work is one of these. Each links to the canonical reference.
 
 ```
 .
+├── crates/          # Rust backend workspace
+│   ├── frick-protocol/    # wire frames, schema identity, error envelope
+│   ├── frick-schema/      # schema DSL, canonical AST, identity hashing, lint
+│   ├── frick-codegen/     # Swift / Kotlin / TypeScript DTO generators
+│   ├── frick-store/       # store port traits + SQLite/Postgres backends
+│   ├── frick-server/      # tokio/axum sync server runtime (embeddable library)
+│   ├── frick-cli/         # the `frick` binary (scaffold, lint, migrate, inspect, …)
+│   ├── frick-mcp/         # the `frick-mcp` stdio JSON-RPC bridge
+│   └── frick-conformance/ # black-box scenario harness over the in-process server
 ├── apps/
-│   ├── cli/         # the `frick` operational + scaffolding CLI
-│   ├── server/      # Node sync server (HTTP + WebSocket, SQLite-backed)
 │   ├── dev-dashboard/  # static local console for health, inspection, metrics, jobs, and events
-│   ├── web/         # browser demo app — conformance harness, not a chat product
+│   ├── web/         # browser demo app + conformance harness, not a chat product
 │   ├── ios/         # SwiftUI demo app (FrickDemo.xcodeproj)
-│   ├── android/     # Android demo app, SDK, Compose helpers, and generated design module
-│   └── rangercrm-server/ # private product-schema harness used by downstream integration work
+│   └── android/     # Android demo app, SDK, Compose helpers, and generated design module
+├── conformance/     # golden wire, lint, and migration fixtures shared across implementations
 ├── packages/
-│   ├── protocol/    # canonical schema AST, codec, frame format, lint, fixtures, native DTO generation
+│   ├── protocol/    # TypeScript client protocol library (codec, frame format, native DTO generation)
 │   ├── core/        # UI-agnostic TypeScript client runtime (cache, sync, commands)
 │   ├── react/       # React provider + hooks built on @fricken/core
 │   ├── devtools/    # embeddable React DevTools panel for client runtime state
 │   ├── swift/       # reusable Swift package (generated DTOs + runtime)
-│   ├── mcp/         # read-only MCP server for inspecting scaffolded Frick apps
-│   ├── agent-kit/   # portable Codex / Claude Code / Cursor guidance pack
 │   ├── design/      # design tokens (shared)
 │   ├── design-web/  # web binding for design tokens
 │   └── design-swift/# Swift binding for design tokens
 ├── docs/            # public guides and runbooks
 ├── internal/        # specs, delivery plans, and maintainer-only notes
-├── scripts/         # repo-wide tooling (artifact verification, emulator launchers)
-└── Tiltfile         # one-command local dev (install, schema:generate, server, web)
+└── scripts/         # repo-wide tooling (artifact verification, emulator launchers)
 ```
 
 The demo apps under `apps/web`, `apps/ios/FrickDemo`, and `apps/android/app` are the canonical end-to-end examples for now — there is no separate `examples/` directory. They intentionally stay thin so they document the contract rather than becoming products.

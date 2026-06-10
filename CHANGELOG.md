@@ -2,9 +2,20 @@
 
 All notable changes to Frick framework packages are recorded here. The format is loosely based on [Keep a Changelog](https://keepachangelog.com/) and the versioning policy lives in [`docs/versioning.md`](docs/versioning.md).
 
-Each package version is independent — a release header documents which packages moved and by how much.
+Frick now ships the published framework stack as one version. A release header
+documents the stack version and the user-visible changes in that cut.
 
 ## Unreleased
+
+### Changed
+
+- **Backend rewritten in Rust (FR-236).** The sync server, CLI, MCP bridge, and the schema/codegen/storage pipeline are now Rust crates under `crates/` (`frick-protocol`, `frick-schema`, `frick-codegen`, `frick-store`, `frick-server`, `frick-cli`, `frick-mcp`, `frick-conformance`). The wire protocol, schema identity, error envelope, and HTTP/WebSocket surface are unchanged, so the existing web, Swift, and Kotlin clients connect without modification. Storage runs on SQLite and Postgres. Parity is pinned by the golden wire/lint/codegen/migration fixtures under `conformance/` and the black-box `frick-conformance` scenario suite (which passed against both the Rust and the prior TypeScript server before cutover).
+- **Removed the TypeScript backend (FR-255).** `apps/server` (→ `frick-server`), `apps/cli` (→ the `frick` binary in `frick-cli`), `@fricken/mcp` (→ `frick-mcp`), `@fricken/agent-kit`, and the server benchmarks/orchestration are deleted. The `@fricken/server`, `@fricken/cli`, `@fricken/mcp`, and `@fricken/agent-kit` npm packages are no longer published. The web client's shared protocol library (`@fricken/protocol`), the runtime (`@fricken/core`/`@fricken/react`), DevTools, the design-token packages, and the Swift/Kotlin SDKs are unchanged.
+
+### Known gaps (follow-ups)
+
+- Calls/WebRTC (FR-15), multi-app routing, the search adapter, the web-push adapter, and outbound email are not yet ported to the Rust server.
+- `frick-server` is currently an embeddable library (no standalone server binary yet); `frick init` still scaffolds a TypeScript app and `frick`'s `verify`/`backup`/`restore` return `cli.unsupported`. `frick-codegen` is byte-identical to the TS generators but `pnpm schema:generate` is still the canonical artifact generator.
 
 ## 0.3.0 — 2026-06-09
 

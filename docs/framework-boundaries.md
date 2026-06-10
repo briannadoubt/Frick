@@ -33,6 +33,22 @@ Status: Contract baseline audit.
   route helper modules under `apps/server/src/dashboard/*` remain private
   implementation unless exported from `apps/server/src/index.ts`.
 
+## Rust Rewrite Workspace
+
+- `crates/frick-protocol`: Rust wire protocol, schema identity, structured
+  error envelope, and fixture-pinned codecs that must match `@fricken/protocol`.
+- `crates/frick-schema`: Rust schema authoring DSL and breaking-change lint.
+- `crates/frick-codegen`: Rust code generation for Swift, Kotlin, and
+  TypeScript DTO outputs.
+- `crates/frick-store`: Rust SQL driver seam, migrations, and durable/cache
+  store facade.
+- `crates/frick-server`: Rust tokio/axum server runtime.
+- `crates/frick-cli`: future Rust `frick` binary.
+
+These crates are active FR-236 rewrite work, not the production framework
+surface yet. Public package compatibility remains defined by the TypeScript,
+Swift, and Android surfaces until the v0.4.0 cutover.
+
 ## Internal Framework Modules
 
 - Server storage implementations under `apps/server/src/storage/*`.
@@ -53,9 +69,8 @@ Internal modules may change while public package entry points stay stable.
 - `apps/web`
 - `apps/ios/FrickDemo`
 - `apps/android/app`
-- `apps/rangercrm-server`
 
-Demo apps and product-schema harnesses prove framework behavior. They must not contain protocol, auth/session, schema compatibility, storage, or generated artifact behavior that real apps would need to copy. `apps/rangercrm-server` is a private downstream integration harness for RangerCRM schema/server work, not a public example app.
+Demo apps prove framework behavior. They must not contain protocol, auth/session, schema compatibility, storage, or generated artifact behavior that real apps would need to copy. Downstream product apps (e.g. RangerCRM) live in their own repositories and consume Frick as a dependency — they are not part of this repo.
 
 ## Local Tooling
 

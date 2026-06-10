@@ -2,16 +2,25 @@
 
 > **New to Frick?** Start with the [onboarding guide](./onboarding.md) — it walks through the mental model and gets a local server, web demo, and WebSocket sync running in about fifteen minutes. Come back here once you need to operate a server in production.
 
-This document describes what `apps/server` looks like to an operator today:
-the runtime modes it supports, the environment variables it reads, the HTTP
-endpoints exposed for orchestrators, the inspection routes, and the
-shutdown contract. Anything aspirational lives under `internal/specs/`
-and `internal/plans/` — this file only describes what is in main right now.
+This document describes what the Frick sync server (`crates/frick-server`)
+looks like to an operator today: the runtime modes it supports, the
+environment variables it reads, the HTTP endpoints exposed for orchestrators,
+the inspection routes, and the shutdown contract. Anything aspirational lives
+under `internal/specs/` and `internal/plans/` — this file only describes what
+is in main right now.
 
-The framework ships a `frick` CLI for ops (`frick doctor`, `frick migrate
-status`, `frick reset --dev`, `frick tenants list`, …). See
-`apps/cli/README.md` for the full command list. The CLI reads the same
-environment variables documented below.
+The framework ships a `frick` CLI (`crates/frick-cli`) for ops (`frick doctor`,
+`frick migrate status`, `frick reset`, `frick tenants list`, …); run it with
+`cargo run -p frick-cli -- <command>`. The CLI reads the same environment
+variables documented below.
+
+> **Server packaging note.** `frick-server` is currently an embeddable Rust
+> library with no standalone server binary; a host process wires it in with
+> `create_frick_server(...)` and calls `.listen()`. The config, env vars,
+> routes, limits, and shutdown contract below all describe that runtime. The
+> TypeScript-flavored construction snippets (`createFrickServer({ … })`) in this
+> document are retained from the prior implementation and describe the
+> equivalent option surface; the Rust option/wiring names may differ.
 
 Building a new app rather than operating an existing one? Start from the
 [Getting Started](./authoring.md#getting-started) section of the app
@@ -227,18 +236,15 @@ frick deploy --profile compose --dry-run
 frick deploy --profile lightweight --dry-run
 ```
 
-`frick deploy image` builds the server image consumed by the profiles. By
-default it runs:
+`frick deploy image` prints the plan for building the server image consumed by
+the profiles. Pass `--tag <image>` to set the image tag, `--dockerfile <path>`
+and `--context <path>` to point at your app/runtime-specific build inputs, and
+`--push` to request publishing the tag after a successful build.
 
-```bash
-docker build -f ops/deploy/server.Dockerfile -t frick-server:latest .
-```
-
-Pass `--tag <image>` to set the image tag, `--dockerfile <path>` and
-`--context <path>` to point at app/runtime-specific build inputs, and `--push`
-to publish the tag after a successful build. The default Dockerfile builds the
-monorepo Frick server package with Node 24, includes the mounted dashboard
-assets, creates `/var/lib/frick`, and runs as the non-root `node` user.
+> The canonical monorepo `ops/deploy/server.Dockerfile` from the prior
+> TypeScript server no longer ships, so the default Dockerfile path is not
+> present in the tree — supply `--dockerfile <path>` for the image you actually
+> build. Providing a turnkey Dockerfile for the Rust server is follow-up work.
 
 `--profile compose` uses `ops/deploy/compose.yaml` and is the
 production-shaped self-hosted profile: `frick-server` serves the app and the
@@ -261,14 +267,13 @@ stdout so automation can always parse the JSON record.
 
 ### Standalone image recipes (outside the monorepo)
 
-The profiles above build the canonical monorepo server image
-(`ops/deploy/server.Dockerfile`). If you instead depend on the published
-`@fricken/server` package or scaffold an app with `frick init`, use the
-reference Dockerfile recipes under [`docker/`](../docker): one for a
-published-package server and one for a scaffolded app. Both run as a non-root
-user, declare a `/var/lib/frick` data volume, and `HEALTHCHECK` against
-`/ready`. See [`docker-recipes.md`](docker-recipes.md) for the build/run
-walkthrough and the SQLite-volume vs `FRICK_DATABASE_URL` storage guidance.
+If you scaffold an app with `frick init` (which produces a TypeScript app that
+embeds the Frick client/server contract), the reference Dockerfile recipe under
+[`docker/scaffolded-app/`](../docker/scaffolded-app) builds that app into an
+image: it runs as a non-root user, declares a `/var/lib/frick` data volume, and
+`HEALTHCHECK`s against `/ready`. See [`docker-recipes.md`](docker-recipes.md)
+for the build/run walkthrough and the SQLite-volume vs `FRICK_DATABASE_URL`
+storage guidance.
 
 ## Runtime limits
 
@@ -652,6 +657,10 @@ Plan and execute any data move explicitly, out of band, after the identity move.
 
 ## Outbound email
 
+> **Not yet ported.** The outbound-email surface below describes the prior
+> TypeScript server and is not yet implemented in the Rust `frick-server`. It is
+> retained here as the target contract; treat it as follow-up work.
+
 Frick ships a pluggable outbound email surface that mirrors the push-adapter
 convention: the framework defines the `FrickEmailAdapter` interface, apps
 register an implementation, and the framework's identity flows dispatch through
@@ -803,7 +812,7 @@ retention slice).
 
 For local development, `frick dashboard` serves Fricken Dashboard at
 `http://127.0.0.1:4299` by default. In the monorepo, run
-`pnpm cli dashboard`; once published, run `pnpm exec frick dashboard`. It is a
+`cargo run -p frick-cli -- dashboard`. It is a
 static console that reads `/health`, `/ready`, and the authenticated
 `/_frick/inspect/*` endpoints from the configured Frick HTTP server. Use
 `--endpoint <url>` to point it at another server, and use its Dev Login flow or
@@ -976,58 +985,35 @@ production, callers must send the configured admin bearer token. The
 
 ## Graceful shutdown
 
-`createFrickServer` returns a `close()` function that:
+The running server exposes a `close()` (graceful shutdown) that:
 
-1. Tells the WebSocket gateway to close its sockets and the SSE registry
-   to flush.
-2. Stops accepting new HTTP connections.
-3. Lets `node:http`'s connection tracker drain in-flight requests.
-4. After `shutdownTimeoutMs` (default `5000`), forcibly closes any
-   lingering keep-alive sockets with `server.closeAllConnections()`.
-5. Closes the SQLite database.
-6. Logs `frick.server.closed` and resolves the promise.
+1. Signals axum's graceful-shutdown future, which stops accepting new
+   connections and lets in-flight requests and the WebSocket gateway drain.
+2. Awaits the serve loop to finish.
+3. Detaches the store's write-listener funnel so the store no longer holds the
+   gateway's broadcast closure.
+4. Logs `frick.server.closed`.
 
-`close()` is idempotent — concurrent or repeated calls share the same
-underlying promise.
+`close()` is idempotent — after the first call the shutdown channel and serve
+handle are taken, so repeated calls are no-ops.
 
-A typical signal-handling pattern in a deployment wrapper:
-
-```ts
-const server = createFrickServer();
-await server.listen();
-
-for (const signal of ["SIGINT", "SIGTERM"] as const) {
-  process.once(signal, () => {
-    void server.close().finally(() => process.exit(0));
-  });
-}
-```
+A typical signal-handling pattern in a host wrapper awaits a `SIGINT`/`SIGTERM`
+signal (e.g. via `tokio::signal`) and then calls `server.close().await` before
+exiting.
 
 ## Startup log line
 
 When `listen()` resolves, the server emits a single structured log
-record:
+record on the `frick.server` target with the event name
+`frick.server.listen` and the structured fields:
 
 ```
-{
-  "level": "info",
-  "msg": "frick.server.listen",
-  "event": "frick.server.listen",
-  "schemaId": "...",
-  "schemaRevision": 1,
-  "schemaHash": "sha256-...",
-  "env": "development",
-  "host": "127.0.0.1",
-  "port": 4099,
-  "publicUrl": null,
-  "demoAuthEnabled": true,
-  "dbPath": "./frick.sqlite",
-  "inspectionEnabled": true
-}
+schema_id = "..."
+schema_revision = 1
+host = "127.0.0.1"
+port = 4099
+env = "development"
 ```
-
-The logger redacts `sessionToken`, `password`, and `passwordHash` field
-values by name as a defense-in-depth check.
 
 ## Per-request log line
 
@@ -1242,10 +1228,13 @@ self-identify via the schemaId they advertise in the Hello frame; the
 gateway routes the connection to the matching app's schema for
 compatibility checking and HelloAck. `/_frick/inspect/apps` lists every
 registered app and is gated by `inspectionEnabled`. Duplicate `basePath`
-throws `FrickConfigError` at construction. **V1 scopes app boundaries to
-URL routing and Hello handshake only — storage is server-shared.**
-Partitioning the SQLite layer per app (an `app_id` column on relevant
-tables and corresponding read/write scoping) is a follow-up slice.
+throws `FrickConfigError` at construction. App routing is a request/protocol
+boundary plus a storage partition: framework tables for objects, streams,
+presence, signals, blobs, jobs, sessions, accounts, and tenant settings carry
+`app_id`, and per-app projection/job registries are active when app configs are
+supplied. Keep mutually-untrusted apps separated operationally until your
+deployment has reviewed the remaining admin/inspection and product-governance
+surfaces for shared-process hosting.
 
 ## Schema lint
 
@@ -1354,20 +1343,19 @@ Content-Type: application/json
   CORS by browser convention. Allowlist entries support `*` (allow all),
   exact origins, and single subdomain wildcards (`<scheme>://*.<host>`);
   regex, path/port patterns, and multi-segment wildcards are not supported.
-- The CLI exists in the monorepo as `pnpm cli <command>` and can be built as
-  the standalone `frick` bin from `@fricken/cli`. The npm publish workflow still
-  excludes `apps/cli`, so publishing the CLI remains a release-surface
-  follow-up.
+- The CLI is the `frick-cli` crate; run it in the monorepo with
+  `cargo run -p frick-cli -- <command>`. Packaging and distributing a
+  standalone `frick` binary is a release-surface follow-up. The CLI's
+  `verify`/`backup`/`restore` commands are listed for parity but currently
+  return `cli.unsupported`.
 - Blob bytes default to SQLite (`FRICK_BLOB_DRIVER=sqlite`, the `blob_content`
   table). Set `FRICK_BLOB_DRIVER=filesystem` with a writable
-  `FRICK_BLOB_STORAGE_PATH` to store blob bytes on the local filesystem instead;
-  bytes are written to tenant-isolated, id-keyed files so one tenant can never
-  read another's. Blob metadata stays in SQLite under either driver. The
-  filesystem driver fails fast at startup if the storage path is missing or not
-  writable. Filesystem blob byte files are not yet included in NDJSON backup /
-  restore or account export payloads, so operators must back up
-  `FRICK_BLOB_STORAGE_PATH` separately. Object-storage (S3), byte export, and
-  derivative offloading are separate follow-ups (FR-54, FR-55).
+  `FRICK_BLOB_STORAGE_PATH` to store bytes on the local filesystem, or
+  `FRICK_BLOB_DRIVER=s3` with `FRICK_BLOB_S3_BUCKET` to store bytes in an
+  S3-compatible object store. Blob metadata stays in SQLite under every driver.
+  External blob byte stores are not yet included in NDJSON backup/restore or
+  account export payloads, so operators must back up the filesystem path or
+  bucket separately. Byte export and derivative offloading are follow-ups.
 - Outbound email ships the Resend reference adapter and an in-memory test
   adapter only (see "Outbound email"). Other providers (SES, Postmark, SMTP)
   are implemented out-of-tree against the exported `FrickEmailAdapter`

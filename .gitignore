@@ -1,6 +1,8 @@
 node_modules/
 dist/
 dist-types/
+# Rust workspace build output (crates/).
+target/
 .turbo/
 .DS_Store
 *.log
