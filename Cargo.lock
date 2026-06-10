@@ -438,6 +438,7 @@ dependencies = [
  "frick-schema",
  "frick-store",
  "futures-util",
+ "indexmap",
  "rand",
  "rmpv",
  "serde",

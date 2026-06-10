@@ -63,13 +63,33 @@ pub async fn create_frick_server(
         schema,
         started_at: now_iso(),
         auth_limiter: std::sync::Mutex::new(crate::http::AuthLimiter::default()),
+        projections: crate::projections::ProjectionRegistry::new(),
     });
 
-    // The gateway hub owns the live connections and the fan-out funnel. Wire
-    // it as the store's write-notification listener so every facade write
-    // broadcasts to matching subscribers (FR-114 single-funnel).
+    // The gateway hub owns the live connections and the fan-out funnel. The
+    // store's single write listener (FR-114) drives BOTH the gateway's
+    // object/stream fan-out AND the projection engine (objectUpsert +
+    // streamAppend; deletes never reach projections — map 05 §1.4).
     let gateway = GatewayHub::new(Arc::clone(&state));
-    state.store.set_write_listener(gateway.write_listener());
+    {
+        let gateway_listener = gateway.write_listener();
+        let projections = state.projections.clone();
+        state.store.set_write_listener(Box::new(move |event| {
+            gateway_listener(event);
+            crate::projections::drive_projection_write(&projections, event);
+        }));
+    }
+    // Projection deltas fan out over the gateway to projection subscribers.
+    {
+        let weak = Arc::downgrade(&gateway);
+        state
+            .projections
+            .set_delta_listener(Some(Box::new(move |notice| {
+                if let Some(hub) = weak.upgrade() {
+                    hub.publish_projection_delta(notice);
+                }
+            })));
+    }
 
     Ok(FrickServer {
         state,

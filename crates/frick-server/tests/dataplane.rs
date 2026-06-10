@@ -589,10 +589,17 @@ async fn projections_empty_and_not_found() {
         list.body
     );
 
+    // An unknown projection is a TS-faithful sync.protocolError 404 carrying
+    // details.reason = "projectionNotFound" (not storage.notFound).
     let missing = server.get("/projections/anything", &token).await;
     assert_eq!(missing.status, 404, "body: {}", missing.body);
     assert!(
-        missing.body.contains("storage.notFound"),
+        missing.body.contains("sync.protocolError"),
+        "body: {}",
+        missing.body
+    );
+    assert!(
+        missing.body.contains("projectionNotFound"),
         "body: {}",
         missing.body
     );

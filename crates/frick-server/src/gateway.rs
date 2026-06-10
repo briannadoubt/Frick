@@ -676,10 +676,11 @@ async fn handle_subscribe(hub: &Arc<GatewayHub>, id: u64, payload: SubscribePayl
         return false;
     }
 
-    // Projection subscriptions: the projection must exist in the (per-app)
-    // registry. Projections are FR-244 (not wired here) so any projection name
-    // is treated as unknown → auth.forbidden reason projectionNotFound.
-    if payload.kind == SubscriptionKind::Projection {
+    // Projection subscriptions: the projection must exist in the registry
+    // (map 05 §1.6) — an unknown name → auth.forbidden reason projectionNotFound.
+    if payload.kind == SubscriptionKind::Projection
+        && !hub.state.projections.contains(&payload.name)
+    {
         let nack = simple_nack(
             FrickErrorCode::AuthForbidden,
             &format!("Unknown projection {}", payload.name),
@@ -797,9 +798,26 @@ async fn handle_subscribe(hub: &Arc<GatewayHub>, id: u64, payload: SubscribePayl
                 }),
             );
         }
+        // Projection subscribe delivers the registry's materialized rows for
+        // the principal's tenant as one initial ProjectionDelta snapshot frame
+        // (empty `changes` when there are none yet) — map 05 §1.6.
+        SubscriptionKind::Projection => {
+            let rows = hub
+                .state
+                .projections
+                .snapshot(&payload.name, &principal.tenant_id);
+            send_frame(
+                hub,
+                id,
+                &FrickFrame::ProjectionDelta(frick_protocol::frame::ProjectionDeltaPayload {
+                    projection: payload.name,
+                    changes: crate::projections::changes_to_frame(&rows),
+                }),
+            );
+        }
         // Presence/signal subscriptions register the matcher; the initial
         // delivery is the live fan-out (no snapshot frame), matching TS.
-        SubscriptionKind::Presence | SubscriptionKind::Signal | SubscriptionKind::Projection => {}
+        SubscriptionKind::Presence | SubscriptionKind::Signal => {}
     }
     false
 }
@@ -1299,6 +1317,25 @@ impl GatewayHub {
     /// Send pre-encoded `bytes` to every connection subscribed to
     /// `(kind, name, key?)` whose active principal is in `tenant_id` and whose
     /// pinned app matches `app_id`.
+    /// Fan a projection delta out to the projection's subscribers
+    /// (`publishProjectionDelta` / `#fanOutProjectionDelta`, map 05 §1.6).
+    /// Tenant + app filtered; the projection registry's delta listener calls
+    /// this (wired in `boot`).
+    pub fn publish_projection_delta(&self, notice: &crate::projections::ProjectionDeltaNotice) {
+        let frame = FrickFrame::ProjectionDelta(crate::projections::notice_to_payload(notice));
+        let Ok(bytes) = encode_frame(&frame) else {
+            return;
+        };
+        self.broadcast_to_subscribers(
+            SubscriptionKind::Projection,
+            &notice.projection,
+            None,
+            &notice.tenant_id,
+            &notice.app_id,
+            &bytes,
+        );
+    }
+
     fn broadcast_to_subscribers(
         &self,
         kind: SubscriptionKind,

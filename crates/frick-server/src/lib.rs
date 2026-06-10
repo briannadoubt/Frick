@@ -12,7 +12,9 @@ pub mod error;
 pub mod extract;
 pub mod gateway;
 pub mod http;
+pub mod jobs;
 pub mod principal;
+pub mod projections;
 pub mod routes;
 pub mod session;
 

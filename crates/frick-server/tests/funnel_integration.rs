@@ -93,6 +93,114 @@ async fn http_object_upsert_fans_out_to_ws_subscriber() {
     server.close().await;
 }
 
+/// A registered projection driven by an HTTP object upsert fans a
+/// `ProjectionDelta` to a WS projection subscriber through the boot wiring
+/// (FR-245): store write → projection driver → registry.notify → delta
+/// listener → gateway → subscriber.
+#[tokio::test]
+async fn http_upsert_drives_projection_delta_to_ws_subscriber() {
+    use frick_protocol::frame::SubscriptionKind;
+    use frick_server::projections::{
+        FrickProjection, FrickProjectionContext, FrickProjectionHandler, FrickProjectionSource,
+        FrickProjectionWriteEvent, ProjectionApplyResult,
+    };
+
+    // A projection that mirrors each Note upsert into a row keyed by object id.
+    struct NoteMirror;
+    impl FrickProjectionHandler for NoteMirror {
+        fn apply(
+            &self,
+            event: &FrickProjectionWriteEvent,
+            _ctx: &FrickProjectionContext,
+        ) -> ProjectionApplyResult {
+            match event {
+                FrickProjectionWriteEvent::ObjectUpsert {
+                    object_id, object, ..
+                } => ProjectionApplyResult::single(object_id.clone(), Some(object.clone())),
+                _ => ProjectionApplyResult::none(),
+            }
+        }
+    }
+
+    let schema = note_schema();
+    let mut server = create_frick_server(test_config(), schema.clone())
+        .await
+        .unwrap();
+    server
+        .state
+        .projections
+        .register(FrickProjection::new(
+            "note-mirror",
+            vec![FrickProjectionSource::object("Note")],
+            Box::new(NoteMirror),
+        ))
+        .unwrap();
+    let port = server.listen().await.unwrap();
+    let token = dev_login_token(port, "user-ada").await;
+
+    let url = format!("ws://127.0.0.1:{port}/_frick/sync");
+    let (mut socket, _response) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    let hello = FrickFrame::Hello(Box::new(HelloPayload {
+        replica_id: "replica-1".into(),
+        device_id: "device-1".into(),
+        schema_hash: schema.hash.clone(),
+        known_cursors: std::iter::empty::<(String, i64)>().collect(),
+        session_token: Some(token.clone()),
+        client_capabilities: None,
+    }));
+    socket
+        .send(TungMessage::Binary(encode_frame(&hello).unwrap()))
+        .await
+        .unwrap();
+    assert!(matches!(
+        next_frame(&mut socket).await,
+        FrickFrame::HelloAck(_)
+    ));
+    assert!(matches!(
+        next_frame(&mut socket).await,
+        FrickFrame::Schema(_)
+    ));
+
+    // Subscribe to the projection → initial (empty) ProjectionDelta snapshot.
+    let subscribe = FrickFrame::Subscribe(SubscribePayload {
+        subscription_id: "sub-proj".into(),
+        kind: SubscriptionKind::Projection,
+        name: "note-mirror".into(),
+        key: None,
+        cursor: None,
+    });
+    socket
+        .send(TungMessage::Binary(encode_frame(&subscribe).unwrap()))
+        .await
+        .unwrap();
+    let FrickFrame::ProjectionDelta(snapshot) = next_frame(&mut socket).await else {
+        panic!("expected initial projection snapshot");
+    };
+    assert_eq!(snapshot.projection, "note-mirror");
+    assert!(snapshot.changes.is_empty());
+
+    // HTTP upsert drives the projection; a live ProjectionDelta must arrive.
+    let status = http_put_object(port, &token, "Note", "n1", r#"{"body":"hi"}"#).await;
+    assert!(status.starts_with('2'), "upsert HTTP status was {status}");
+
+    let mut saw = false;
+    for _ in 0..4 {
+        if let FrickFrame::ProjectionDelta(delta) = next_frame(&mut socket).await {
+            assert_eq!(delta.projection, "note-mirror");
+            assert_eq!(delta.changes.len(), 1);
+            assert_eq!(delta.changes[0].key, "n1");
+            // A non-nil value means upsert (nil would be a row delete).
+            assert!(!delta.changes[0].value.is_nil());
+            saw = true;
+            break;
+        }
+    }
+    assert!(saw, "expected a live ProjectionDelta from the HTTP upsert");
+
+    socket.close(None).await.ok();
+    server.close().await;
+}
+
 // -- helpers ----------------------------------------------------------------
 
 fn test_config() -> frick_server::FrickConfig {

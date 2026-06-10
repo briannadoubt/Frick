@@ -456,6 +456,7 @@ async fn test_hub() -> std::sync::Arc<GatewayHub> {
         schema: note_schema(),
         started_at: "1970-01-01T00:00:00.000Z".into(),
         auth_limiter: std::sync::Mutex::new(crate::http::AuthLimiter::default()),
+        projections: crate::projections::ProjectionRegistry::new(),
     });
     GatewayHub::new(state)
 }

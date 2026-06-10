@@ -20,6 +20,7 @@ use serde_json::json;
 
 use crate::config::FrickConfig;
 use crate::error::ServerError;
+use crate::projections::ProjectionRegistry;
 
 /// Shared application state handed to every handler.
 pub struct AppStateInner {
@@ -30,6 +31,9 @@ pub struct AppStateInner {
     pub started_at: String,
     /// Fixed-window auth-attempt limiter (`src/server.ts:3030-3072`).
     pub auth_limiter: Mutex<AuthLimiter>,
+    /// The shared projection registry (FR-245). Empty until an app registers
+    /// projections; the gateway reads snapshots and the routes list/read it.
+    pub projections: ProjectionRegistry,
 }
 
 /// Fixed-window auth-attempt counter, keyed `route\0tenantId\0identity`
