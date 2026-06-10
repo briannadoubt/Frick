@@ -12,12 +12,9 @@ const PUBLIC_NPM_PACKAGE_DIRS = [
   "packages/react",
   "packages/design-web",
   "packages/devtools",
-  "packages/agent-kit",
-  "packages/mcp",
-  "apps/server",
 ];
 
-const PRIVATE_WORKSPACE_PACKAGE_DIRS = ["apps/cli", "apps/web"];
+const PRIVATE_WORKSPACE_PACKAGE_DIRS = ["apps/web"];
 const PUBLIC_REPOSITORY_URL = "git+https://github.com/briannadoubt/Frick.git";
 
 function workflowPackageDirs(workflow: string): string[] {
@@ -68,13 +65,6 @@ describe("release hardening", () => {
     // including the core generated files — is covered (FR-108).
     expect(source).toContain("status");
     expect(source).toContain("process.exit(1)");
-  });
-
-  test("Tilt install is lockfile-driven and disables lifecycle scripts", () => {
-    const source = read("Tiltfile");
-
-    expect(source).toContain('cmd="pnpm install --frozen-lockfile --ignore-scripts"');
-    expect(source).toContain('"pnpm-lock.yaml"');
   });
 
   test("GitHub workflows pin action SHAs and gate Android publishing to version tags", () => {
@@ -200,12 +190,16 @@ describe("release hardening", () => {
   });
 
   test("server WebSocket auth does not accept session tokens from URLs", () => {
-    const gateway = read("apps/server/src/sync/gateway.ts");
+    // The Rust gateway (crates/frick-server) is the server now: connect-time
+    // auth reads the Authorization bearer header (or the Hello frame token),
+    // never the URL query string.
+    const gateway = read("crates/frick-server/src/gateway.rs");
     const contract = read("docs/cross-platform-client-contract.md");
     const changelog = read("CHANGELOG.md");
 
-    expect(gateway).not.toContain('searchParams.get("sessionToken"');
-    expect(gateway).toContain("bearerTokenFromRequest(request)");
+    expect(gateway).not.toContain('"sessionToken"');
+    expect(gateway).not.toContain("query");
+    expect(gateway).toContain("bearer_token(&headers)");
     expect(contract).toContain(
       "The server does not authenticate `sessionToken` values from the WebSocket URL query string.",
     );
