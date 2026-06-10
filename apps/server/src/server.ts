@@ -15,6 +15,7 @@ import {
   type FrickErrorCode,
   type FrickSchema,
   type FrickSharingPermission,
+  type PlainObject,
 } from "@fricken/protocol";
 import {
   AuthenticationError,
@@ -28,7 +29,7 @@ import {
   assertCanSignal,
   assertCanSubscribe,
   assertCanWriteObject,
-  canSubscriberReadObjectRecord,
+  canPrincipalReadObjectRow,
   tenantMembershipReader,
   type FrickCascadeGrantLookup,
   type FrickGrantLookup,
@@ -95,7 +96,11 @@ import {
 import type { StoredAccount } from "./storage/account-store.js";
 import type { StoredSession } from "./storage/session-store.js";
 import { TenantAlreadyExistsError } from "./storage/tenant-store.js";
-import { DEFAULT_IDEMPOTENCY_KEY_RETENTION_MS, FrickStore } from "./store.js";
+import {
+  DEFAULT_IDEMPOTENCY_KEY_RETENTION_MS,
+  FrickStore,
+  type FrickObjectVisibilityOptions,
+} from "./store.js";
 import { exportDataSubject } from "./compliance/data-subject-export.js";
 import { eraseDataSubject } from "./compliance/data-subject-erase.js";
 import {
@@ -241,6 +246,17 @@ export interface ServerOptions {
    * outcome. See {@link FrickPolicyHook}.
    */
   policyHooks?: readonly FrickPolicyHook[];
+  /**
+   * Object read-visibility configuration (FR-235). The framework owner-scopes
+   * reads by default: rows of any type that declares an owner field (via the
+   * schema's `ObjectDef.ownerField` or the convention of a string field named
+   * `ownerUserId`) are visible only to their owner, plus admins, sharing
+   * grantees, and whatever app policy hooks decide. Pass `{ mode: "tenantWide" }`
+   * to restore the pre-0.2.1 allow-all behavior for a genuinely shared-tenant
+   * app, or `{ ownerFields: { Type: "field" | null } }` to override per type.
+   * See {@link FrickObjectVisibilityOptions}.
+   */
+  objectVisibility?: FrickObjectVisibilityOptions;
   /**
    * App augmentation hook for `GET /account/export`. The framework default
    * returns every object record the calling principal owns (grouped by object
@@ -606,6 +622,7 @@ export function createFrickServer(options: ServerOptions = {}) {
     blobStoragePath: config.blobStoragePath,
     ...(options.blobBytesDriver ? { blobS3Driver: options.blobBytesDriver } : {}),
     passwordHasher: config.passwordHasher,
+    ...(options.objectVisibility ? { objectVisibility: options.objectVisibility } : {}),
   });
   const platformEvents =
     options.platformEvents ??
@@ -848,6 +865,22 @@ export function createFrickServer(options: ServerOptions = {}) {
   // on each app's projection registry (above) can fan deltas out to the right
   // app's subscribers (FR-153). No-op when per-app registries are inactive.
   gatewayRef = gateway;
+
+  // Re-fan a single object record to all of its subscribers (FR-235). Used
+  // when a sharing grant is accepted: re-running the fan-out re-evaluates the
+  // read pipeline per subscriber, so the new grantee's subscription receives
+  // the row via grant relaxation while non-grantees' views are unchanged.
+  async function republishObjectToSubscribers(
+    tenantId: string,
+    type: string,
+    id: string,
+    appId: string,
+  ): Promise<void> {
+    const object = await store.readObject(tenantId, type, id, appId);
+    if (object !== undefined) {
+      gatewayRef?.publishObjects(type, [object], tenantId, appId);
+    }
+  }
 
   // The shared job-handler registry. When per-app registries are active the
   // worker dispatches through `perAppRegistries.for(job.appId).jobs` instead,
@@ -1750,10 +1783,43 @@ export function createFrickServer(options: ServerOptions = {}) {
         });
         return;
       }
+      // Read scoping (FR-235/FR-116): list the tenant's rows, then keep only
+      // those this principal may read under the unified pipeline — ownership
+      // baseline -> app policy hooks -> sharing-grant relaxation — exactly as
+      // the WS snapshot/fan-out do. Listing the full tenant set (rather than
+      // the owner-only listObjectsForUser) is what lets grant relaxation
+      // surface shared rows here.
+      const tenantRows = await store.listObjects(principal.tenantId, type, activeAppId);
+      const perRecordActive =
+        policyHooks.length > 0 || !(await store.grants.isEmptyAsync());
+      const memberships = tenantMembershipReader(store, principal.tenantId);
+      const data: PlainObject[] = [];
+      for (const object of tenantRows) {
+        const baselineVisible = store.isObjectVisibleToUser(
+          principal.tenantId,
+          type,
+          object,
+          principal.userId,
+        );
+        if (
+          await canPrincipalReadObjectRow(
+            principal,
+            type,
+            object,
+            baselineVisible,
+            perRecordActive,
+            memberships,
+            policyHooks,
+            grantLookup,
+          )
+        ) {
+          data.push(object);
+        }
+      }
       sendJson(response, 200, {
         schemaHash: store.schema.hash,
         type,
-        data: await store.listObjectsForUser(principal.tenantId, type, principal.userId, activeAppId),
+        data,
       });
       return;
     }
@@ -1811,6 +1877,7 @@ export function createFrickServer(options: ServerOptions = {}) {
           type: objectWriteRoute.type,
           id: objectWriteRoute.id,
           value,
+          writerUserId: principal.userId,
           ...(expectedVersion !== undefined ? { expectedVersion } : {}),
         });
         const written = { id: objectWriteRoute.id, ...withoutEnvelopeId(value) };
@@ -2031,6 +2098,16 @@ export function createFrickServer(options: ServerOptions = {}) {
           permission: invitation.permission,
           createdAt: now,
         });
+        // Live grant: push the now-readable record to subscribers who gained
+        // access (FR-235). Re-publishing the row re-runs the read pipeline per
+        // subscriber, so the grantee's subscription receives it via grant
+        // relaxation while everyone else's view is unchanged.
+        await republishObjectToSubscribers(
+          invitation.tenantId,
+          invitation.recordType,
+          invitation.recordId,
+          activeAppId,
+        );
         sendJson(response, 201, { grant });
       } catch (error) {
         sendErrorWithMetrics(response, error, "share_accept_rejected");
@@ -2079,6 +2156,15 @@ export function createFrickServer(options: ServerOptions = {}) {
           id: grantId,
           now,
         });
+        // Live revoke (FR-235): push a removal Delta to subscribers who lost
+        // read access. Re-evaluates the read pipeline per subscriber, so the
+        // (now ex-)grantee's view drops the row while the owner keeps it.
+        gatewayRef?.publishObjectVisibilityRevoked(
+          existing.recordType,
+          existing.recordId,
+          principal.tenantId,
+          activeAppId,
+        );
         sendJson(response, 200, { grant });
       } catch (error) {
         sendErrorWithMetrics(response, error, "share_grant_revoke_rejected");
@@ -2117,6 +2203,14 @@ export function createFrickServer(options: ServerOptions = {}) {
           id: grantId,
           now,
         });
+        // Live leave (FR-235): same removal-Delta push as owner revoke — the
+        // leaving grantee's subscription drops the row immediately.
+        gatewayRef?.publishObjectVisibilityRevoked(
+          existing.recordType,
+          existing.recordId,
+          principal.tenantId,
+          activeAppId,
+        );
         sendJson(response, 200, { grant });
       } catch (error) {
         sendErrorWithMetrics(response, error, "share_grant_leave_rejected");
@@ -5254,19 +5348,26 @@ async function isSearchObjectHitVisible(
   if (object === undefined) {
     return false;
   }
-  // Tenant-wide store visibility is the first cut (allow-all today). FR-71 then
-  // applies the same per-record read pipeline the object subscription/HTTP read
-  // paths use (FR-116): app policy hooks may tighten the allow to a deny, and a
-  // sharing grant on this record relaxes a remaining deny back to allow for its
-  // grantee — so a shared record surfaces through search exactly as it does
+  // Run the same unified read pipeline the object subscription/HTTP list paths
+  // use (FR-235/FR-116): ownership baseline (owner sees own rows; unowned
+  // types stay tenant-visible) -> app policy hooks may tighten -> a sharing
+  // grant on this record relaxes a remaining ownerMismatch deny for its
+  // grantee. So a shared record surfaces through search exactly as it does
   // through a direct read, and a revoked/left grant immediately hides it again.
-  if (!store.isObjectVisibleToUser(principal.tenantId, type, object, principal.userId)) {
-    return false;
-  }
-  return canSubscriberReadObjectRecord(
+  // `perRecordAuthzActive: true` so the grant pipeline always runs for a
+  // non-owner hit (search is not the hot path; correctness over the probe).
+  const baselineVisible = store.isObjectVisibleToUser(
+    principal.tenantId,
+    type,
+    object,
+    principal.userId,
+  );
+  return canPrincipalReadObjectRow(
     principal,
     type,
-    objectId,
+    { id: objectId },
+    baselineVisible,
+    true,
     tenantMembershipReader(store, principal.tenantId),
     policyHooks,
     grantLookup,

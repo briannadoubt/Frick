@@ -43,7 +43,7 @@ import {
   assertCanSubscribe,
   assertCanWriteObject,
   assertCanWritePresence,
-  canSubscriberReadObjectRecord,
+  canPrincipalReadObjectRow,
   AuthenticationError,
   AuthorizationError,
   SessionExpiredError,
@@ -676,7 +676,13 @@ export class SyncGateway {
    */
   #handleStoreWrite(event: FrickStoreWriteEvent): void {
     if (event.kind === "objectUpsert") {
-      this.publishObjects(event.objectType, [event.object], event.tenantId, event.appId);
+      this.publishObjects(
+        event.objectType,
+        [event.object],
+        event.tenantId,
+        event.appId,
+        event.writerUserId,
+      );
       return;
     }
     if (event.kind === "objectDelete") {
@@ -730,8 +736,14 @@ export class SyncGateway {
     }
   }
 
-  publishObjects(type: string, objects: PlainObject[], tenantId?: string, appId?: string): void {
-    void this.#fanOutObjects(type, objects, tenantId, appId);
+  publishObjects(
+    type: string,
+    objects: PlainObject[],
+    tenantId?: string,
+    appId?: string,
+    writerUserId?: string,
+  ): void {
+    void this.#fanOutObjects(type, objects, tenantId, appId, writerUserId);
     if (this.#clusterBus && tenantId !== undefined) {
       this.#clusterBus.publish({
         kind: "objects",
@@ -740,6 +752,9 @@ export class SyncGateway {
         appId: appId ?? DEFAULT_APP_ID,
         type,
         objects: [...objects],
+        // Writer echo guarantee (FR-234) holds across nodes too: the same
+        // user's other devices may be connected to a peer.
+        ...(writerUserId !== undefined ? { writerUserId } : {}),
       });
     }
   }
@@ -802,6 +817,66 @@ export class SyncGateway {
     }
   }
 
+  /**
+   * Broadcast that a record's read visibility was REVOKED for some principals
+   * (a sharing grant was revoked or left, FR-235). For each subscriber of
+   * `type` in the tenant/app partition, the row's read pipeline is
+   * re-evaluated against current grant state: subscribers who can no longer
+   * read it receive a removal Delta (the same tombstone + `removed` shape the
+   * delete fan-out uses) so the row disappears live; subscribers who still
+   * can (the owner, other grantees) receive nothing. Forwarded over the
+   * cluster bus so peer nodes drop it for their subscribers too.
+   */
+  publishObjectVisibilityRevoked(type: string, id: string, tenantId: string, appId?: string): void {
+    void this.#fanOutVisibilityRevoked(type, id, tenantId, appId ?? DEFAULT_APP_ID);
+    if (this.#clusterBus) {
+      this.#clusterBus.publish({
+        kind: "objectVisibilityRevoked",
+        originNodeId: this.#clusterBus.nodeId,
+        tenantId,
+        appId: appId ?? DEFAULT_APP_ID,
+        type,
+        id,
+      });
+    }
+  }
+
+  /** Local-only visibility-revocation fan-out, also reused by the cluster handler. */
+  async #fanOutVisibilityRevoked(type: string, id: string, tenantId: string, appId: string): Promise<void> {
+    const object = await this.store.readObject(tenantId, type, id, appId);
+    if (object === undefined) {
+      // Row is gone — the delete fan-out already (or will) handle dropping it.
+      return;
+    }
+    const cursor = Date.now();
+    const tombstones = packObjects(this.store, type, [{ id }]);
+    const removed = [{ type, id }];
+    const perRecordActive = await this.#perRecordReadAuthzActive();
+    for (const { client: subscriber } of this.#subscriptions.objectSubscribers(type)) {
+      const principal = subscriber.principal;
+      if (!principal || !this.#isPrincipalActive(principal)) {
+        continue;
+      }
+      if (principal.tenantId !== tenantId) {
+        continue;
+      }
+      if (this.#appIdFor(subscriber) !== appId) {
+        continue;
+      }
+      if (await this.#subscriberCanReadObject(principal, type, object, perRecordActive)) {
+        // Still readable (owner / other grantees / unowned type): keep it.
+        continue;
+      }
+      // A removal for a row this subscriber never saw is harmless — clients
+      // drop ids they don't hold — so no per-subscriber "did they see it"
+      // bookkeeping is needed.
+      this.#sendFrame(subscriber, [
+        FrameKind.Delta,
+        { objects: tombstones, events: [], removed, cursor },
+      ]);
+    }
+  }
+
   /** Local-only stream-event fan-out, also reused by the cluster handler. */
   #fanOutStreamEvent(event: { tenantId: string; appId?: string; stream: string; streamId: string; sequence: number }, packed: ReturnType<typeof packStreamEvent>): void {
     const appId = event.appId ?? DEFAULT_APP_ID;
@@ -820,13 +895,19 @@ export class SyncGateway {
   }
 
   /** Local-only object fan-out, also reused by the cluster handler. */
-  async #fanOutObjects(type: string, objects: PlainObject[], tenantId?: string, appId?: string): Promise<void> {
+  async #fanOutObjects(
+    type: string,
+    objects: PlainObject[],
+    tenantId?: string,
+    appId?: string,
+    writerUserId?: string,
+  ): Promise<void> {
     const cursor = Date.now();
     const scopedAppId = appId ?? DEFAULT_APP_ID;
-    // Short-circuit: per-record read authz only changes the row set when an
-    // app registered a policy hook OR a grant has ever been issued. With
-    // neither, the baseline decision allows every in-tenant row, so existing
-    // deployments pay no per-row decide() cost (FR-116).
+    // Computed once per fan-out batch: per-record hook/grant authz only
+    // changes the row set when an app registered a policy hook OR a grant has
+    // ever been issued (FR-116). The ownership baseline below is NOT gated on
+    // this — owner scoping applies from the very first row (FR-235).
     const perRecordActive = await this.#perRecordReadAuthzActive();
     for (const { client: subscriber } of this.#subscriptions.objectSubscribers(type)) {
       const principal = subscriber.principal;
@@ -841,25 +922,16 @@ export class SyncGateway {
       if (this.#appIdFor(subscriber) !== scopedAppId) {
         continue;
       }
-      // Tenant scoping is already applied above. The store-level visibility
-      // hook (currently allow-all) is the first cut; FR-116 then adds the
-      // per-record layer per subscriber: the same decide() + policy-hook +
-      // grant pipeline the HTTP object read path uses for `object.read`, so a
-      // denied row is never fanned out and a grant on a record makes it
-      // visible to its grantee.
-      const tenantVisible = objects.filter((object) =>
-        this.store.isObjectVisibleToUser(principal.tenantId, type, object, principal.userId),
-      );
-      let visibleObjects: PlainObject[];
-      if (perRecordActive) {
-        visibleObjects = [];
-        for (const object of tenantVisible) {
-          if (await this.#canSubscriberReadObject(principal, type, object)) {
-            visibleObjects.push(object);
-          }
+      // Tenant scoping is already applied above. Per subscriber, each row then
+      // runs the unified read pipeline (FR-235/FR-116): ownership baseline
+      // (the store's owner-field check, with the WRITER's own subscriptions
+      // always passing the baseline so a write's echo is never suppressed,
+      // FR-234) -> app policy hooks -> sharing-grant relaxation.
+      const visibleObjects: PlainObject[] = [];
+      for (const object of objects) {
+        if (await this.#subscriberCanReadObject(principal, type, object, perRecordActive, writerUserId)) {
+          visibleObjects.push(object);
         }
-      } else {
-        visibleObjects = tenantVisible;
       }
       if (visibleObjects.length === 0) {
         continue;
@@ -872,12 +944,12 @@ export class SyncGateway {
   }
 
   /**
-   * `true` when per-record read authorization can change the row set a
-   * subscriber sees — i.e. an app registered a policy hook, or a sharing grant
-   * has ever been issued. When `false`, the framework's baseline `object.read`
-   * decision allows every in-tenant row, so the snapshot/fan-out paths skip
-   * per-row `decide()` entirely and keep the original allow-all behavior with
-   * zero per-row cost (FR-116). Cheap: a length read plus a single EXISTS probe.
+   * `true` when hook/grant per-record read authorization can change the row
+   * set a subscriber sees — i.e. an app registered a policy hook, or a
+   * sharing grant has ever been issued. When `false`, the snapshot/fan-out
+   * paths skip per-row hook/grant evaluation and the ownership baseline
+   * (FR-235, a synchronous field compare) is final, with zero per-row SQL
+   * cost (FR-116). Cheap: a length read plus a single EXISTS probe.
    */
   async #perRecordReadAuthzActive(): Promise<boolean> {
     return this.#policyHooks.length > 0 || !(await this.store.grants.isEmptyAsync());
@@ -885,21 +957,32 @@ export class SyncGateway {
 
   /**
    * Per-record read visibility for one subscriber, using the exact authz the
-   * HTTP object read path uses: `object.read` baseline + app policy hooks +
-   * grant relaxation. Tenant scoping is already enforced by the caller, so the
-   * resource tenant matches the principal's tenant here. Objects missing a
-   * string `id` are treated as readable — they cannot be keyed for a grant or
-   * policy decision and the original fan-out delivered them.
+   * HTTP object list/read path uses (FR-235/FR-116): the store's ownership
+   * baseline -> app policy hooks -> sharing-grant relaxation. Tenant scoping
+   * is already enforced by the caller, so the resource tenant matches the
+   * principal's tenant here.
+   *
+   * `writerUserId` is the principal that performed the write being fanned
+   * out, when known: the writer's own subscriptions always pass the ownership
+   * baseline (hooks may still tighten), so a write's echo is never suppressed
+   * by owner-field state — including rows that predate owner scoping (FR-234).
    */
-  async #canSubscriberReadObject(principal: Principal, type: string, object: PlainObject): Promise<boolean> {
-    const id = object.id;
-    if (typeof id !== "string") {
-      return true;
-    }
-    return canSubscriberReadObjectRecord(
+  async #subscriberCanReadObject(
+    principal: Principal,
+    type: string,
+    object: PlainObject,
+    perRecordActive: boolean,
+    writerUserId?: string,
+  ): Promise<boolean> {
+    const baselineVisible =
+      (writerUserId !== undefined && principal.userId === writerUserId) ||
+      this.store.isObjectVisibleToUser(principal.tenantId, type, object, principal.userId);
+    return canPrincipalReadObjectRow(
       principal,
       type,
-      id,
+      object,
+      baselineVisible,
+      perRecordActive,
       tenantMembershipReader(this.store, principal.tenantId),
       this.#policyHooks,
       this.#grantLookup,
@@ -938,6 +1021,7 @@ export class SyncGateway {
           envelope.objects as PlainObject[],
           envelope.tenantId,
           envelope.appId ?? DEFAULT_APP_ID,
+          envelope.writerUserId,
         );
         return;
       case "objectDeletes":
@@ -967,6 +1051,14 @@ export class SyncGateway {
           projection: envelope.projection,
           changes: envelope.changes as ProjectionDeltaNotice["changes"],
         });
+        return;
+      case "objectVisibilityRevoked":
+        void this.#fanOutVisibilityRevoked(
+          envelope.type,
+          envelope.id,
+          envelope.tenantId,
+          envelope.appId ?? DEFAULT_APP_ID,
+        );
         return;
       case "presenceDelta":
         // Pick the "primary" key for the local-subscriber lookup. The
@@ -1407,29 +1499,25 @@ export class SyncGateway {
     }
 
     if (payload.kind === "object") {
-      // The initial snapshot is tenant-scoped at the store layer
-      // (listObjectsForUser), then filtered per-record for THIS subscriber with
-      // the same decide() + policy-hook + grant pipeline the live delta fan-out
-      // and the HTTP object read path use (FR-116). Rows the subscriber is not
-      // authorized to read are omitted; a grant on a record makes it visible to
-      // the grantee. Skipped entirely (allow-all) when no policy hook or grant
-      // is configured — see #perRecordReadAuthzActive / #fanOutObjects.
-      const tenantRows = await this.store.listObjectsForUser(
+      // The initial snapshot is tenant-scoped at the store layer, then
+      // filtered per-record for THIS subscriber with the same ownership
+      // baseline + policy-hook + grant pipeline the live delta fan-out and
+      // the HTTP object list route use (FR-235/FR-116): the subscriber sees
+      // their own rows, rows of unowned types, and rows they hold a grant on;
+      // app policy hooks may tighten further. Listing the full tenant set
+      // here (rather than the owner-filtered listObjectsForUser) is what lets
+      // grant relaxation surface shared rows in the snapshot.
+      const tenantRows = await this.store.listObjects(
         principal.tenantId,
         payload.name,
-        principal.userId,
         this.#appIdFor(client),
       );
-      let visibleRows: PlainObject[];
-      if (await this.#perRecordReadAuthzActive()) {
-        visibleRows = [];
-        for (const object of tenantRows) {
-          if (await this.#canSubscriberReadObject(principal, payload.name, object)) {
-            visibleRows.push(object);
-          }
+      const perRecordActive = await this.#perRecordReadAuthzActive();
+      const visibleRows: PlainObject[] = [];
+      for (const object of tenantRows) {
+        if (await this.#subscriberCanReadObject(principal, payload.name, object, perRecordActive)) {
+          visibleRows.push(object);
         }
-      } else {
-        visibleRows = tenantRows;
       }
       const objects = packObjects(this.store, payload.name, visibleRows);
       this.#sendFrame(client, [FrameKind.Snapshot, { subscriptionId: payload.subscriptionId, objects, cursor: 0 }]);
@@ -1596,6 +1684,7 @@ export class SyncGateway {
           type: payload.objectType,
           id: payload.objectId,
           value: payload.value,
+          writerUserId: principal.userId,
           ...(payload.expectedVersion !== undefined ? { expectedVersion: payload.expectedVersion } : {}),
         });
         this.#sendFrame(client, [

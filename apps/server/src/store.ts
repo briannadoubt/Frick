@@ -5,6 +5,7 @@ import {
   validateSchema,
   type FrickObjectMergePolicy,
   type FrickSchema,
+  type ObjectDef,
   type PlainObject,
 } from "@fricken/protocol";
 import { AccountStore, type StoredAccount } from "./storage/account-store.js";
@@ -310,6 +311,47 @@ export interface StoreOptions {
    * disable the timer (prune still runs once at construction).
    */
   expiredSessionPruneIntervalMs?: number;
+  /**
+   * Object read-visibility configuration (FR-235). By default the framework
+   * owner-scopes reads of any object type that declares an owner field (see
+   * {@link FrickObjectVisibilityOptions}); pass `{ mode: "tenantWide" }` to
+   * explicitly restore the pre-0.2.1 allow-all behavior for genuinely
+   * shared-tenant apps.
+   */
+  objectVisibility?: FrickObjectVisibilityOptions;
+}
+
+/**
+ * How {@link FrickStore.isObjectVisibleToUser} scopes object reads (FR-235).
+ *
+ * Until 0.2.1 the framework's baseline visibility was tenant-wide allow-all
+ * unless an app policy hook tightened it — which silently served every
+ * tenant user's rows to every other user in single-tenant, per-user-data
+ * deployments. The default is now `"ownerScoped"`: a type whose schema
+ * declares an owner field (explicitly via `ObjectDef.ownerField`, or by the
+ * convention of a string field named `ownerUserId`) is visible only to the
+ * user its row names as owner. Admins, sharing grantees, and policy hooks are
+ * layered on top by the read pipeline (gateway snapshot/fan-out, HTTP list,
+ * search) — this store-level check is the ownership baseline only.
+ *
+ * Rows that predate owner scoping and carry no owner value at all remain
+ * visible (fail-open) so a migrated pre-0.2.0 database keeps working — see
+ * FR-234.
+ */
+export interface FrickObjectVisibilityOptions {
+  /**
+   * `"ownerScoped"` (default): owner-field-bearing types are scoped to their
+   * owner. `"tenantWide"`: every in-tenant row is visible to every tenant
+   * user — the explicit opt-in to the pre-0.2.1 behavior.
+   */
+  mode?: "ownerScoped" | "tenantWide";
+  /**
+   * Per-type owner-field overrides, taking precedence over the schema's
+   * `ownerField` and the `ownerUserId` convention. Map a type name to the
+   * field carrying its owner's userId, or to `null` to opt that type out of
+   * owner scoping entirely.
+   */
+  ownerFields?: Record<string, string | null>;
 }
 
 /**
@@ -338,6 +380,15 @@ export type FrickStoreWriteEvent =
       objectId: string;
       /** Stored (post-merge) object state, including its `id` field. */
       object: PlainObject;
+      /**
+       * The userId of the principal whose request performed the write, when
+       * the write path knows it (WS ObjectUpsert, HTTP object PUT/POST).
+       * The sync gateway uses it to guarantee the writer always receives
+       * their own delta echo regardless of owner-field state (FR-234).
+       * Undefined for server-originated writes (jobs, app routes calling the
+       * store directly).
+       */
+      writerUserId?: string;
     }
   | {
       kind: "objectDelete";
@@ -401,6 +452,15 @@ export class FrickStore {
 
   readonly #sqlDriver: SqlDriver;
   #schemaReady = false;
+  /** `"ownerScoped"` unless the deployment explicitly opted into allow-all. */
+  readonly #objectVisibilityMode: "ownerScoped" | "tenantWide";
+  /**
+   * Resolved owner field per object type (FR-235). Absent entry = the type
+   * has no owner field and stays tenant-visible. Resolution order: server
+   * `objectVisibility.ownerFields` override → schema `ObjectDef.ownerField` →
+   * convention (a declared string field named `ownerUserId`).
+   */
+  readonly #ownerFieldByType = new Map<string, string>();
 
   /**
    * Narrow accessor for the underlying SQLite handle. Exposed for the
@@ -451,6 +511,15 @@ export class FrickStore {
 
   constructor(options: StoreOptions) {
     this.schema = validateSchema(options.schema ?? foundationSchema);
+
+    this.#objectVisibilityMode = options.objectVisibility?.mode ?? "ownerScoped";
+    const ownerFieldOverrides = options.objectVisibility?.ownerFields ?? {};
+    for (const objectDef of this.schema.objects) {
+      const resolved = resolveOwnerField(objectDef, ownerFieldOverrides[objectDef.name]);
+      if (resolved !== undefined) {
+        this.#ownerFieldByType.set(objectDef.name, resolved);
+      }
+    }
 
     // Build the async storage driver. The factory creates a SQLite handle or a
     // Postgres pool (the pool connects lazily, so construction stays sync).
@@ -1049,6 +1118,12 @@ export class FrickStore {
     id: string;
     value: PlainObject;
     expectedVersion?: number;
+    /**
+     * userId of the principal performing the write, when known. Carried on
+     * the emitted write event so the sync gateway always echoes the delta
+     * back to the writer's own subscriptions (FR-234).
+     */
+    writerUserId?: string;
   }): Promise<ObjectUpsertResult> {
     const tenantId = args.tenantId ?? DEFAULT_TENANT_ID;
     const appId = args.appId ?? DEFAULT_APP_ID;
@@ -1088,6 +1163,7 @@ export class FrickStore {
       objectType: args.type,
       objectId: args.id,
       object: stored,
+      ...(args.writerUserId !== undefined ? { writerUserId: args.writerUserId } : {}),
     });
     return result;
   }
@@ -1175,10 +1251,38 @@ export class FrickStore {
     const object = d !== undefined ? (c as PlainObject) : (b as PlainObject);
     const userId = d !== undefined ? d : (c as string);
     void tenantId;
-    void type;
-    void object;
-    void userId;
-    return true;
+    // Ownership baseline (FR-235). This is deliberately the *baseline* only:
+    // the read pipeline layers admin bypass, app policy hooks, and sharing-
+    // grant relaxation on top (see canSubscriberReadObjectRecord), so a
+    // `false` here is not final for a grantee. Tenant scoping is enforced by
+    // the callers' tenant-scoped storage lookups.
+    if (this.#objectVisibilityMode === "tenantWide") {
+      return true;
+    }
+    const ownerField = this.#ownerFieldByType.get(type);
+    if (ownerField === undefined) {
+      // No owner concept declared for this type — tenant-visible.
+      return true;
+    }
+    const owner = object[ownerField];
+    if (typeof owner !== "string" || owner.length === 0) {
+      // Fail-open for rows that predate owner scoping (or were written
+      // without an owner value): a migrated pre-0.2.0 database must keep
+      // serving — and fanning out — its existing rows (FR-234).
+      return true;
+    }
+    return owner === userId;
+  }
+
+  /**
+   * The resolved owner field for an object type (FR-235), or `undefined`
+   * when the type has no owner concept and is tenant-visible.
+   */
+  objectOwnerField(type: string): string | undefined {
+    if (this.#objectVisibilityMode === "tenantWide") {
+      return undefined;
+    }
+    return this.#ownerFieldByType.get(type);
   }
 
   async appendEvent(input: Omit<AppendInput, "tenantId"> & { tenantId?: string }): Promise<AppendResult> {
@@ -1618,4 +1722,29 @@ export class FrickStore {
       [this.schema.hash, Buffer.from(encode(this.schema)), new Date().toISOString()],
     );
   }
+}
+
+/** Conventional owner-field name used when the schema declares no explicit one. */
+const CONVENTIONAL_OWNER_FIELD = "ownerUserId";
+
+/**
+ * Resolve the owner field for one object type (FR-235). `undefined` means
+ * the type has no owner concept (tenant-visible). Resolution order: server
+ * override → schema `ObjectDef.ownerField` → `ownerUserId` convention; a
+ * `null` at either configurable layer is an explicit opt-out.
+ */
+function resolveOwnerField(
+  objectDef: ObjectDef,
+  override: string | null | undefined,
+): string | undefined {
+  if (override !== undefined) {
+    return override ?? undefined;
+  }
+  if (objectDef.ownerField !== undefined) {
+    return objectDef.ownerField ?? undefined;
+  }
+  const conventional = objectDef.fields.find(
+    (field) => field.name === CONVENTIONAL_OWNER_FIELD && field.kind === "string",
+  );
+  return conventional ? CONVENTIONAL_OWNER_FIELD : undefined;
 }
