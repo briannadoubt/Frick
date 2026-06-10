@@ -6,6 +6,7 @@ members = [
   "crates/frick-codegen",
   "crates/frick-store",
   "crates/frick-server",
+  "crates/frick-mcp",
   "crates/frick-cli",
 ]
 
@@ -19,13 +20,18 @@ rust-version = "1.95"
 [workspace.dependencies]
 frick-protocol = { path = "crates/frick-protocol" }
 frick-schema = { path = "crates/frick-schema" }
+frick-codegen = { path = "crates/frick-codegen" }
 frick-store = { path = "crates/frick-store" }
+frick-server = { path = "crates/frick-server" }
+frick-mcp = { path = "crates/frick-mcp" }
 
 hex = "0.4"
 tempfile = "3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 anyhow = "1"
 argon2 = "0.5"
+async-trait = "0.1"
 axum = { version = "0.7", features = ["ws"] }
 base64 = "0.22"
 bytes = "1"
