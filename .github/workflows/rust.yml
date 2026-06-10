@@ -36,3 +36,36 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+
+  rust-postgres:
+    name: Rust (Postgres integration, FR-242)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: frick_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # actions/checkout@v6.0.3
+
+      - name: Install pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      # The frick-store Postgres backend tests (driver + migration runner)
+      # only run when FRICK_DATABASE_URL points at a live database; they skip
+      # cleanly otherwise. This job provides the postgres:16 service so they
+      # exercise the real Postgres arm.
+      - name: Postgres integration tests
+        env:
+          FRICK_DATABASE_URL: postgres://postgres:postgres@localhost:5432/frick_test
+        run: cargo test -p frick-store --test postgres_live

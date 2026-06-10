@@ -1,14 +1,16 @@
 //! The async storage seam (`apps/server/src/storage/sql-driver.ts`).
 //!
 //! Every store speaks this interface with `?` positional placeholders; the
-//! SQLite arm passes them through (the future Postgres arm rewrites `?`→`$n`,
-//! FR-242). Parameter normalization mirrors TS `bindParams`: booleans bind as
-//! `1`/`0` (flag columns are INTEGER), absent values as NULL.
+//! SQLite arm passes them through, the Postgres arm rewrites `?`→`$n`
+//! (FR-242, `apps/server/src/storage/pg-sql-driver.ts`). Parameter
+//! normalization mirrors TS `bindParams`: booleans bind as `1`/`0` (flag
+//! columns are INTEGER), absent values as NULL.
 //!
-//! Transactions are `BEGIN IMMEDIATE` … `COMMIT` with rollback on error
-//! (rollback failures swallowed, original error rethrown), and nested
-//! `transaction()` calls on a tx-scoped executor reuse the outer transaction
-//! — no savepoints, exactly like the TS `#txDepth` counter.
+//! Transactions are `BEGIN IMMEDIATE` … `COMMIT` (Postgres: `BEGIN` …
+//! `COMMIT`) with rollback on error (rollback failures swallowed, original
+//! error rethrown), and nested `transaction()` calls on a tx-scoped executor
+//! reuse the outer transaction — no savepoints, exactly like the TS
+//! `#txDepth` counter.
 
 use std::future::Future;
 use std::path::Path;
@@ -20,10 +22,14 @@ use rusqlite::Connection;
 
 use crate::error::StoreError;
 
+mod pg;
+
+pub use pg::rewrite_placeholders;
+use pg::{PostgresDriver, PostgresExec};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SqlDialect {
     Sqlite,
-    /// Reserved for FR-242.
     Postgres,
 }
 
@@ -139,6 +145,13 @@ pub struct SqlRow {
 }
 
 impl SqlRow {
+    /// Construct a row from `(column, value)` pairs. Used by the dialect arms
+    /// when decoding driver-native rows.
+    #[must_use]
+    pub(crate) fn from_columns(columns: Vec<(String, SqlValue)>) -> Self {
+        Self { columns }
+    }
+
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&SqlValue> {
         self.columns
@@ -180,16 +193,17 @@ pub struct RunResult {
 type TxFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, StoreError>> + Send + 'a>>;
 
 /// The storage driver. An enum rather than a trait so transactional methods
-/// stay generic; FR-242 adds the Postgres arm behind the same surface.
+/// stay generic; the Postgres arm (FR-242) sits behind the same surface.
 pub enum SqlDriver {
     Sqlite(SqliteDriver),
+    Postgres(PostgresDriver),
 }
 
-// The query methods are `async` even though the SQLite arm runs
-// synchronously: `async` is the seam contract. The FR-242 Postgres arm
-// genuinely awaits, and every caller already `.await`s, so keeping the
-// signatures async now avoids a churning API change at cutover.
-#[allow(clippy::unused_async)]
+// The SQLite arm runs synchronously inside the `async` shells: `async` is the
+// seam contract (the Postgres arm genuinely awaits, and every caller already
+// `.await`s). `#[allow(clippy::unused_async)]` on the SQLite-only inherent
+// methods would be wrong now that the Postgres arm awaits, so the methods that
+// dispatch on the enum are genuinely async.
 impl SqlDriver {
     /// Open (or create) a SQLite database. Mirrors `createSqlDriver`:
     /// parent directories are created unless the path is `:memory:`.
@@ -225,10 +239,23 @@ impl SqlDriver {
         }))
     }
 
+    /// Build a Postgres driver from a connection string. Mirrors the TS
+    /// `createPgSqlDriver` pool setup: the deadpool pool connects lazily, so
+    /// construction does not touch the database. Migrations are run separately
+    /// via [`crate::migrations::run_framework_migrations_postgres`] /
+    /// [`crate::migrations::initialize_schema`], matching the TS path where the
+    /// server awaits `initialize()` before serving.
+    ///
+    /// CI is localhost, so the pool uses `NoTls` (no TLS support is wired).
+    pub fn open_postgres(database_url: &str) -> Result<Self, StoreError> {
+        Ok(Self::Postgres(PostgresDriver::connect(database_url)?))
+    }
+
     #[must_use]
     pub fn dialect(&self) -> SqlDialect {
         match self {
             Self::Sqlite(_) => SqlDialect::Sqlite,
+            Self::Postgres(_) => SqlDialect::Postgres,
         }
     }
 
@@ -236,6 +263,7 @@ impl SqlDriver {
     pub async fn get(&self, sql: &str, params: &[SqlValue]) -> Result<Option<SqlRow>, StoreError> {
         match self {
             Self::Sqlite(driver) => sqlite_get(&driver.connection, sql, params),
+            Self::Postgres(driver) => driver.get(sql, params).await,
         }
     }
 
@@ -243,6 +271,7 @@ impl SqlDriver {
     pub async fn all(&self, sql: &str, params: &[SqlValue]) -> Result<Vec<SqlRow>, StoreError> {
         match self {
             Self::Sqlite(driver) => sqlite_all(&driver.connection, sql, params),
+            Self::Postgres(driver) => driver.all(sql, params).await,
         }
     }
 
@@ -250,6 +279,7 @@ impl SqlDriver {
     pub async fn run(&self, sql: &str, params: &[SqlValue]) -> Result<RunResult, StoreError> {
         match self {
             Self::Sqlite(driver) => sqlite_run(&driver.connection, sql, params),
+            Self::Postgres(driver) => driver.run(sql, params).await,
         }
     }
 
@@ -257,12 +287,13 @@ impl SqlDriver {
     pub async fn exec(&self, sql: &str) -> Result<(), StoreError> {
         match self {
             Self::Sqlite(driver) => sqlite_exec(&driver.connection, sql),
+            Self::Postgres(driver) => driver.exec(sql).await,
         }
     }
 
-    /// `BEGIN IMMEDIATE` … callback … `COMMIT`, rolling back on error
-    /// (rollback failures swallowed; the callback's error is rethrown).
-    /// The callback receives a tx-scoped [`SqlExec`]; nested
+    /// `BEGIN IMMEDIATE` … callback … `COMMIT` (Postgres: `BEGIN`), rolling
+    /// back on error (rollback failures swallowed; the callback's error is
+    /// rethrown). The callback receives a tx-scoped [`SqlExec`]; nested
     /// [`SqlExec::transaction`] calls reuse the outer transaction.
     pub async fn transaction<T, F>(&self, callback: F) -> Result<T, StoreError>
     where
@@ -272,9 +303,9 @@ impl SqlDriver {
         match self {
             Self::Sqlite(driver) => {
                 sqlite_exec(&driver.connection, "BEGIN IMMEDIATE")?;
-                let executor = SqlExec {
+                let executor = SqlExec::Sqlite(SqliteExec {
                     connection: &driver.connection,
-                };
+                });
                 match callback(&executor).await {
                     Ok(value) => {
                         sqlite_exec(&driver.connection, "COMMIT")?;
@@ -286,42 +317,74 @@ impl SqlDriver {
                     }
                 }
             }
+            Self::Postgres(driver) => {
+                let client = driver.checkout().await?;
+                pg::client_batch(&client, "BEGIN").await?;
+                let executor = SqlExec::Postgres(PostgresExec::new(&client));
+                match callback(&executor).await {
+                    Ok(value) => {
+                        pg::client_batch(&client, "COMMIT").await?;
+                        Ok(value)
+                    }
+                    Err(err) => {
+                        // Surface the original cause, not a rollback failure.
+                        let _ = pg::client_batch(&client, "ROLLBACK").await;
+                        Err(err)
+                    }
+                }
+            }
         }
     }
 
-    /// Tx-free executor view, so helpers can be written once against
-    /// [`SqlExec`]-like surfaces. Locks per call.
+    /// Close the driver. SQLite closes on drop; the Postgres pool is dropped
+    /// (closing its idle connections) — mirror the TS `close()` contract,
+    /// which is part of the async seam surface even though dropping is sync.
+    #[allow(clippy::unused_async)]
     pub async fn close(self) {
-        // rusqlite closes on drop; mirror the TS close() contract explicitly.
         drop(self);
     }
 }
 
-/// A transaction-scoped executor: same query surface, already inside the
-/// open transaction. The connection lock is NOT held across the callback —
-/// mirroring TS, where other tasks' statements can interleave into an open
-/// transaction at await points (single shared connection on both sides).
-pub struct SqlExec<'a> {
-    connection: &'a Mutex<Connection>,
+/// A transaction-scoped executor: same query surface, already inside the open
+/// transaction.
+///
+/// On SQLite the connection lock is NOT held across the callback — mirroring
+/// TS, where other tasks' statements can interleave into an open transaction
+/// at await points (single shared connection on both sides). On Postgres the
+/// executor is bound to the single checked-out client for the duration of the
+/// transaction, exactly like the TS `txClient`.
+pub enum SqlExec<'a> {
+    Sqlite(SqliteExec<'a>),
+    Postgres(PostgresExec<'a>),
 }
 
-// Same async-seam rationale as the `SqlDriver` impl above.
-#[allow(clippy::unused_async)]
 impl SqlExec<'_> {
     pub async fn get(&self, sql: &str, params: &[SqlValue]) -> Result<Option<SqlRow>, StoreError> {
-        sqlite_get(self.connection, sql, params)
+        match self {
+            Self::Sqlite(exec) => sqlite_get(exec.connection, sql, params),
+            Self::Postgres(exec) => exec.get(sql, params).await,
+        }
     }
 
     pub async fn all(&self, sql: &str, params: &[SqlValue]) -> Result<Vec<SqlRow>, StoreError> {
-        sqlite_all(self.connection, sql, params)
+        match self {
+            Self::Sqlite(exec) => sqlite_all(exec.connection, sql, params),
+            Self::Postgres(exec) => exec.all(sql, params).await,
+        }
     }
 
     pub async fn run(&self, sql: &str, params: &[SqlValue]) -> Result<RunResult, StoreError> {
-        sqlite_run(self.connection, sql, params)
+        match self {
+            Self::Sqlite(exec) => sqlite_run(exec.connection, sql, params),
+            Self::Postgres(exec) => exec.run(sql, params).await,
+        }
     }
 
     pub async fn exec(&self, sql: &str) -> Result<(), StoreError> {
-        sqlite_exec(self.connection, sql)
+        match self {
+            Self::Sqlite(exec) => sqlite_exec(exec.connection, sql),
+            Self::Postgres(exec) => exec.exec(sql).await,
+        }
     }
 
     /// Nested transactions reuse the outer one (TS `#txDepth`): the callback
@@ -331,8 +394,11 @@ impl SqlExec<'_> {
         T: Send,
         F: for<'b> FnOnce(&'b SqlExec<'b>) -> TxFuture<'b, T> + Send,
     {
-        let nested = SqlExec {
-            connection: self.connection,
+        let nested = match self {
+            Self::Sqlite(exec) => SqlExec::Sqlite(SqliteExec {
+                connection: exec.connection,
+            }),
+            Self::Postgres(exec) => SqlExec::Postgres(exec.reborrow()),
         };
         callback(&nested).await
     }
@@ -343,6 +409,12 @@ impl SqlExec<'_> {
 /// `node:sqlite` under the TS driver. The lock is never held across awaits.
 pub struct SqliteDriver {
     connection: Mutex<Connection>,
+}
+
+/// The SQLite transaction-scoped executor view (borrows the shared
+/// connection). Byte-for-byte the same behavior as before the enum split.
+pub struct SqliteExec<'a> {
+    connection: &'a Mutex<Connection>,
 }
 
 fn sqlite_exec(connection: &Mutex<Connection>, sql: &str) -> Result<(), StoreError> {
@@ -404,7 +476,7 @@ fn sqlite_all(
             };
             columns.push((name.clone(), value));
         }
-        result.push(SqlRow { columns });
+        result.push(SqlRow::from_columns(columns));
     }
     Ok(result)
 }

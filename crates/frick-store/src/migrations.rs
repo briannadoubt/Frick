@@ -19,12 +19,19 @@ use std::time::Instant;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use crate::driver::{SqlDriver, SqlValue};
+use crate::driver::{SqlDialect, SqlDriver, SqlValue};
 use crate::error::StoreError;
 
 /// The embedded SQLite migration fixture (see module docs).
 const SQLITE_MIGRATIONS_JSON: &str =
     include_str!("../../../conformance/fixtures/migrations/sqlite.json");
+
+/// The embedded Postgres migration fixture. Same shape as the SQLite fixture
+/// (`scripts/extract-migrations.ts`), dialect-translated SQL (FR-242). Ids and
+/// `schemaRevision` are identical to the SQLite siblings — the ledger id is the
+/// cross-dialect identity — but the checksums differ because the SQL differs.
+const POSTGRES_MIGRATIONS_JSON: &str =
+    include_str!("../../../conformance/fixtures/migrations/postgres.json");
 
 /// A single framework migration. Mirrors the TS `FrameworkMigration`
 /// interface: migrations are append-only code-defined data — never edit an
@@ -97,6 +104,14 @@ fn parse_migration_fixture(json: &str) -> Result<Vec<FrameworkMigration>, String
 pub static FRAMEWORK_MIGRATIONS: LazyLock<Vec<FrameworkMigration>> = LazyLock::new(|| {
     parse_migration_fixture(SQLITE_MIGRATIONS_JSON)
         .expect("conformance/fixtures/migrations/sqlite.json is valid and checksum-consistent")
+});
+
+/// The Postgres-dialect framework migrations, byte-identical to the TS
+/// `FRAMEWORK_MIGRATIONS_PG` list (embedded from the conformance fixture and
+/// checksum-verified at first use). Same ids/order as [`FRAMEWORK_MIGRATIONS`].
+pub static FRAMEWORK_MIGRATIONS_PG: LazyLock<Vec<FrameworkMigration>> = LazyLock::new(|| {
+    parse_migration_fixture(POSTGRES_MIGRATIONS_JSON)
+        .expect("conformance/fixtures/migrations/postgres.json is valid and checksum-consistent")
 });
 
 /// Compute the canonical checksum for a migration — the exact TS algorithm:
@@ -213,27 +228,42 @@ pub async fn run_framework_migrations(
     })
 }
 
-/// Initialize the SQLite database. Mirrors `storage/schema.ts`
-/// `initializeStorage` (which backs `SqliteSqlDriver.initializeSchema`):
-/// apply pragmas, then delegate table creation to the migration runner.
+/// Initialize the database, dispatching on dialect.
+///
+/// - SQLite (`storage/schema.ts` `initializeStorage`): apply WAL/synchronous
+///   pragmas, then delegate table creation to the migration runner.
+/// - Postgres (`storage/pg-schema.ts` `initializeStoragePg`): no pragma
+///   equivalents, just run the PG migration runner.
 pub async fn initialize_schema(
     driver: &SqlDriver,
     supported_schema_revision: i64,
 ) -> Result<(), StoreError> {
-    driver
-        .exec(
-            "
+    match driver.dialect() {
+        SqlDialect::Sqlite => {
+            driver
+                .exec(
+                    "
     PRAGMA journal_mode = WAL;
     PRAGMA synchronous = NORMAL;
   ",
-        )
-        .await?;
-    run_framework_migrations(
-        driver,
-        supported_schema_revision,
-        MigrationRunnerOptions::default(),
-    )
-    .await?;
+                )
+                .await?;
+            run_framework_migrations(
+                driver,
+                supported_schema_revision,
+                MigrationRunnerOptions::default(),
+            )
+            .await?;
+        }
+        SqlDialect::Postgres => {
+            run_framework_migrations_postgres(
+                driver,
+                supported_schema_revision,
+                MigrationRunnerOptions::default(),
+            )
+            .await?;
+        }
+    }
     Ok(())
 }
 
@@ -244,6 +274,88 @@ pub async fn list_applied_migrations(
 ) -> Result<Vec<AppliedMigrationRow>, StoreError> {
     ensure_migrations_table(driver).await?;
     load_applied_migrations(driver).await
+}
+
+/// Run framework migrations against a Postgres driver. The Postgres mirror of
+/// [`run_framework_migrations`] (`storage/pg-migrations.ts`
+/// `runFrameworkMigrationsPostgres`): identical ledger/checksum/revision
+/// semantics and the same exact error strings, only the SQL dialect differs
+/// (`BEGIN` not `BEGIN IMMEDIATE`; TIMESTAMPTZ `applied_at` ledger column).
+///
+/// Defaults the migration list to [`FRAMEWORK_MIGRATIONS_PG`].
+pub async fn run_framework_migrations_postgres(
+    driver: &SqlDriver,
+    supported_schema_revision: i64,
+    options: MigrationRunnerOptions<'_>,
+) -> Result<MigrationRunResult, StoreError> {
+    let migrations: &[FrameworkMigration] = options
+        .migrations
+        .unwrap_or_else(|| &FRAMEWORK_MIGRATIONS_PG);
+    let now_ms: &(dyn Fn() -> i64 + Send + Sync) = options.now_ms.unwrap_or(&system_now_ms);
+
+    ensure_migrations_table_pg(driver).await?;
+
+    let applied_rows = load_applied_migrations_pg(driver).await?;
+    let applied_by_id: HashMap<&str, &AppliedMigrationRow> = applied_rows
+        .iter()
+        .map(|row| (row.id.as_str(), row))
+        .collect();
+
+    for migration in migrations {
+        let Some(recorded) = applied_by_id.get(migration.id.as_str()) else {
+            continue;
+        };
+        let current_checksum = compute_migration_checksum(migration);
+        if recorded.checksum != current_checksum {
+            return Err(checksum_error(
+                &migration.id,
+                &recorded.checksum,
+                &current_checksum,
+            ));
+        }
+    }
+
+    let max_applied_revision = applied_rows
+        .iter()
+        .fold(0_i64, |max, row| max.max(row.schema_revision));
+    if max_applied_revision > supported_schema_revision {
+        return Err(revision_error(
+            max_applied_revision,
+            supported_schema_revision,
+        ));
+    }
+
+    let mut already_applied = Vec::new();
+    let mut newly_applied = Vec::new();
+
+    for migration in migrations {
+        if let Some(recorded) = applied_by_id.get(migration.id.as_str()) {
+            already_applied.push((*recorded).clone());
+            continue;
+        }
+        if migration.schema_revision > supported_schema_revision {
+            return Err(revision_error(
+                migration.schema_revision,
+                supported_schema_revision,
+            ));
+        }
+        let applied = apply_migration_pg(driver, migration, now_ms).await?;
+        newly_applied.push(applied);
+    }
+
+    Ok(MigrationRunResult {
+        applied: newly_applied,
+        already_applied,
+    })
+}
+
+/// Read the applied migration ledger from Postgres (TS
+/// `listAppliedMigrationsPostgres`). Exposed for tests and operations tooling.
+pub async fn list_applied_migrations_postgres(
+    driver: &SqlDriver,
+) -> Result<Vec<AppliedMigrationRow>, StoreError> {
+    ensure_migrations_table_pg(driver).await?;
+    load_applied_migrations_pg(driver).await
 }
 
 /// `FrickMigrationChecksumError` — exact TS message (migrations.ts:54-58).
@@ -376,6 +488,118 @@ async fn apply_migration(
     }
 }
 
+/// Postgres ledger DDL (TS `ensureMigrationsTablePg`): same shape as the SQLite
+/// ledger, but `applied_at` is `TIMESTAMPTZ`.
+async fn ensure_migrations_table_pg(driver: &SqlDriver) -> Result<(), StoreError> {
+    driver
+        .exec(
+            "
+    CREATE TABLE IF NOT EXISTS frick_migrations (
+      id TEXT PRIMARY KEY,
+      schema_revision INTEGER NOT NULL,
+      applied_at TIMESTAMPTZ NOT NULL,
+      checksum TEXT NOT NULL,
+      duration_ms INTEGER NOT NULL
+    );
+  ",
+        )
+        .await
+}
+
+/// Load the Postgres ledger. `applied_at` is rendered back to the JS
+/// `Date#toISOString` string shape via `to_char(... AT TIME ZONE 'UTC', …)` so
+/// the [`AppliedMigrationRow::applied_at`] field matches the SQLite arm and the
+/// TS `appliedAt: row.applied_at.toISOString()`.
+async fn load_applied_migrations_pg(
+    driver: &SqlDriver,
+) -> Result<Vec<AppliedMigrationRow>, StoreError> {
+    let rows = driver
+        .all(
+            "SELECT id, schema_revision,
+                to_char(applied_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') AS applied_at,
+                checksum, duration_ms
+        FROM frick_migrations
+        ORDER BY schema_revision ASC, id ASC",
+            &[],
+        )
+        .await?;
+    rows.iter()
+        .map(|row| {
+            Ok(AppliedMigrationRow {
+                id: required_text(row.text("id"), "frick_migrations.id")?,
+                schema_revision: required_i64(
+                    row.i64("schema_revision"),
+                    "frick_migrations.schema_revision",
+                )?,
+                applied_at: required_text(row.text("applied_at"), "frick_migrations.applied_at")?,
+                checksum: required_text(row.text("checksum"), "frick_migrations.checksum")?,
+                duration_ms: required_i64(row.i64("duration_ms"), "frick_migrations.duration_ms")?,
+            })
+        })
+        .collect()
+}
+
+/// Apply one migration on Postgres: `BEGIN` → exec the migration SQL → INSERT
+/// the ledger row → `COMMIT`, the Postgres mirror of [`apply_migration`].
+///
+/// Unlike the SQLite path (single shared connection), Postgres pools its
+/// connections, so this drives the whole unit through the seam's
+/// [`SqlDriver::transaction`] helper — which checks out a single pooled client
+/// and binds every statement to it — rather than issuing bare `BEGIN`/`COMMIT`
+/// (each of which would otherwise land on a different pooled connection).
+/// Rollback-on-failure and the exact `FrickMigrationError` wrap are preserved.
+async fn apply_migration_pg(
+    driver: &SqlDriver,
+    migration: &FrameworkMigration,
+    now_ms: &(dyn Fn() -> i64 + Send + Sync),
+) -> Result<AppliedMigrationRow, StoreError> {
+    let checksum = compute_migration_checksum(migration);
+    let start = Instant::now();
+    let applied_at = epoch_ms_to_iso8601(now_ms());
+
+    let sql = migration.sql.clone();
+    let ledger_id = migration.id.clone();
+    let ledger_revision = migration.schema_revision;
+    let ledger_applied_at = applied_at.clone();
+    let ledger_checksum = checksum.clone();
+
+    let outcome = driver
+        .transaction(move |tx| {
+            Box::pin(async move {
+                tx.exec(&sql).await?;
+                let duration_ms = elapsed_ms(start);
+                tx.run(
+                    "INSERT INTO frick_migrations (id, schema_revision, applied_at, checksum, duration_ms)
+        VALUES (?, ?, ?, ?, ?)",
+                    &[
+                        SqlValue::from(ledger_id),
+                        SqlValue::from(ledger_revision),
+                        SqlValue::from(ledger_applied_at),
+                        SqlValue::from(ledger_checksum),
+                        SqlValue::from(duration_ms),
+                    ],
+                )
+                .await?;
+                Ok(duration_ms)
+            })
+        })
+        .await;
+
+    match outcome {
+        Ok(duration_ms) => Ok(AppliedMigrationRow {
+            id: migration.id.clone(),
+            schema_revision: migration.schema_revision,
+            applied_at,
+            checksum,
+            duration_ms,
+        }),
+        Err(error) => Err(StoreError::Migration(format!(
+            "Failed to apply migration {} ({}): {error}",
+            migration.id, migration.description
+        ))),
+    }
+}
+
 fn system_now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -431,12 +655,6 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The Postgres fixture parses with the same shape and checksum
-    /// verification; it is not embedded in the runtime binary (the Rust
-    /// Postgres arm is FR-242) but both dialects' fixtures must stay valid.
-    const POSTGRES_MIGRATIONS_JSON: &str =
-        include_str!("../../../conformance/fixtures/migrations/postgres.json");
 
     const EXPECTED_MIGRATION_IDS: [&str; 24] = [
         "0001_initial_foundation_tables",
@@ -551,6 +769,38 @@ mod tests {
                 entry.id
             );
         }
+
+        // The embedded PG list re-verifies on load (same algorithm) and keeps
+        // the cross-dialect id identity.
+        let pg_ids: Vec<&str> = FRAMEWORK_MIGRATIONS_PG
+            .iter()
+            .map(|m| m.id.as_str())
+            .collect();
+        assert_eq!(pg_ids, EXPECTED_MIGRATION_IDS);
+        for migration in FRAMEWORK_MIGRATIONS_PG.iter() {
+            let computed = compute_migration_checksum(migration);
+            assert!(computed.starts_with("sha256-"));
+            assert_eq!(computed.len(), "sha256-".len() + 64);
+        }
+
+        // Ids align by position with the SQLite list (cross-dialect identity),
+        // but some migrations carry dialect-translated SQL (BYTEA/IDENTITY/…),
+        // so at least one checksum must differ — proving these are real PG
+        // definitions, not the SQLite list reused.
+        let mut any_translated = false;
+        for (pg, sqlite) in FRAMEWORK_MIGRATIONS_PG
+            .iter()
+            .zip(FRAMEWORK_MIGRATIONS.iter())
+        {
+            assert_eq!(pg.id, sqlite.id, "ids align by position");
+            if compute_migration_checksum(pg) != compute_migration_checksum(sqlite) {
+                any_translated = true;
+            }
+        }
+        assert!(
+            any_translated,
+            "PG migrations must include dialect-translated SQL"
+        );
     }
 
     #[test]

@@ -109,6 +109,9 @@ pub struct FrickStoreOptions {
     pub path: String,
     /// Storage driver. Defaults to [`StoreDriverKind::Sqlite`].
     pub db_driver: StoreDriverKind,
+    /// Postgres connection string (`FRICK_DATABASE_URL`). Required when
+    /// `db_driver == Postgres`; ignored otherwise (FR-242).
+    pub database_url: Option<String>,
     /// Blob *bytes* driver selector (`FRICK_BLOB_DRIVER`, map 05 §3.3).
     /// Defaults to [`FrickBlobDriver::Sqlite`] (bytes in `blob_content`).
     pub blob_driver: FrickBlobDriver,
@@ -153,6 +156,7 @@ impl Default for FrickStoreOptions {
         Self {
             path: ":memory:".to_string(),
             db_driver: StoreDriverKind::Sqlite,
+            database_url: None,
             blob_driver: FrickBlobDriver::Sqlite,
             blob_storage_path: None,
             schema: None,
@@ -310,23 +314,38 @@ impl FrickStore {
         let schema = options.schema.unwrap_or_else(foundation_schema);
         validate_schema(&schema).map_err(|err| StoreError::store(err.message()))?;
 
-        // 2. Open the driver. The Postgres arm is FR-242.
-        if options.db_driver == StoreDriverKind::Postgres {
-            return Err(StoreError::store(
-                "FrickStore Postgres driver is not implemented (FR-242)".to_string(),
-            ));
-        }
-        let driver = Arc::new(SqlDriver::open_sqlite(&options.path)?);
-
-        // 3. Initialize storage. `open_sqlite` already set the pragmas
-        // (WAL + synchronous=NORMAL + foreign_keys=OFF); run the framework
-        // migrations to create the tables, matching TS `initializeStorage`.
-        migrations::run_framework_migrations(
-            &driver,
-            schema.schema_revision,
-            migrations::MigrationRunnerOptions::default(),
-        )
-        .await?;
+        // 2. Open the driver and 3. run the framework migrations. The SQLite
+        // arm sets pragmas at open time then runs the SQLite migration list;
+        // the Postgres arm (FR-242) connects a pool then runs the dialect-
+        // translated PG migration list. Both share the ledger/checksum
+        // semantics in `migrations`.
+        let driver = match options.db_driver {
+            StoreDriverKind::Sqlite => {
+                let driver = Arc::new(SqlDriver::open_sqlite(&options.path)?);
+                migrations::run_framework_migrations(
+                    &driver,
+                    schema.schema_revision,
+                    migrations::MigrationRunnerOptions::default(),
+                )
+                .await?;
+                driver
+            }
+            StoreDriverKind::Postgres => {
+                let url = options.database_url.as_deref().ok_or_else(|| {
+                    StoreError::store(
+                        "FRICK_DB_DRIVER=postgres requires FRICK_DATABASE_URL (the Postgres connection string).".to_string(),
+                    )
+                })?;
+                let driver = Arc::new(SqlDriver::open_postgres(url)?);
+                migrations::run_framework_migrations_postgres(
+                    &driver,
+                    schema.schema_revision,
+                    migrations::MigrationRunnerOptions::default(),
+                )
+                .await?;
+                driver
+            }
+        };
 
         // `options.seed` is accepted and ignored (TS `void options.seed`).
         let _ = options.seed;

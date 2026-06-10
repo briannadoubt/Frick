@@ -431,15 +431,19 @@ async fn for_app_injects_app_id() {
 }
 
 #[tokio::test]
-async fn rejects_postgres_driver() {
+async fn postgres_driver_requires_a_database_url() {
+    // The Postgres arm is wired (FR-242); construction without a connection
+    // string is the one fast, deterministic failure (no DB needed). Live PG
+    // behavior is covered by the FRICK_DATABASE_URL-gated `postgres_live` tests.
     let options = FrickStoreOptions {
         db_driver: super::StoreDriverKind::Postgres,
+        database_url: None,
         ..FrickStoreOptions::memory()
     };
     let Err(err) = FrickStore::open(options).await else {
-        panic!("expected the Postgres driver to be rejected");
+        panic!("expected the Postgres driver to require a database url");
     };
-    assert!(err.to_string().contains("FR-242"));
+    assert!(err.to_string().contains("FRICK_DATABASE_URL"));
 }
 
 // ── blob bytes (write_content / read_content, map 05 §3.5/§3.6) ──────────────

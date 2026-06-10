@@ -42,14 +42,13 @@ pub async fn create_frick_server(
     config: FrickConfig,
     schema: FrickSchema,
 ) -> Result<FrickServer, BootError> {
-    if config.db_driver == DbDriver::Postgres {
-        return Err(BootError::Store(StoreError::store(
-            "the Postgres driver is not yet ported (FR-242)",
-        )));
-    }
-
     let options = FrickStoreOptions {
         path: config.db_path.clone(),
+        db_driver: match config.db_driver {
+            DbDriver::Sqlite => frick_store::StoreDriverKind::Sqlite,
+            DbDriver::Postgres => frick_store::StoreDriverKind::Postgres,
+        },
+        database_url: config.database_url.clone(),
         schema: Some(schema.clone()),
         idempotency_replay_window_ms: Some(config.idempotency_replay_window_ms),
         idempotency_key_retention_ms: Some(config.idempotency_key_retention_ms),
@@ -242,17 +241,25 @@ mod tests {
         server.close().await;
     }
 
+    /// The Postgres driver is now wired (FR-242): construction reaches the PG
+    /// migration runner, which fails against an unreachable database rather
+    /// than being rejected up front. (Live PG behavior is covered by
+    /// `frick-store`'s `FRICK_DATABASE_URL`-gated integration tests.)
     #[tokio::test]
-    async fn postgres_driver_is_rejected() {
+    async fn postgres_driver_connects_and_fails_without_a_reachable_db() {
         let mut env = BTreeMap::new();
         env.insert("FRICK_DB_DRIVER".to_string(), "postgres".to_string());
-        env.insert("FRICK_DATABASE_URL".to_string(), "postgres://x".to_string());
+        // Port 1 is reliably connection-refused (fast, deterministic).
+        env.insert(
+            "FRICK_DATABASE_URL".to_string(),
+            "postgres://postgres@127.0.0.1:1/frick_unreachable".to_string(),
+        );
         let config = load_frick_config(&env).unwrap();
         let result = create_frick_server(config, frick_protocol::foundation_schema()).await;
-        let Err(err) = result else {
-            panic!("expected the Postgres driver to be rejected")
-        };
-        assert!(err.to_string().contains("FR-242"));
+        assert!(
+            result.is_err(),
+            "an unreachable Postgres must fail construction"
+        );
     }
 
     /// Minimal blocking HTTP GET (avoids pulling a full client dep into tests).
