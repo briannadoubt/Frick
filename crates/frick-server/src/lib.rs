@@ -4,12 +4,14 @@
 //! Ported from `apps/server/src`. Spec:
 //! `internal/rust-rewrite/maps/02-server-architecture.md`.
 
+pub mod auth_routes;
 pub mod authz;
 pub mod boot;
 pub mod config;
 pub mod error;
 pub mod http;
 pub mod principal;
+pub mod session;
 
 pub use authz::{Action, Decision, DenyReason, ResourceContext, decide_baseline};
 pub use boot::{BootError, FrickServer, create_frick_server};

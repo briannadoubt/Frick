@@ -438,6 +438,7 @@ dependencies = [
  "frick-schema",
  "frick-store",
  "futures-util",
+ "rand",
  "rmpv",
  "serde",
  "serde_json",

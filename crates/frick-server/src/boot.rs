@@ -58,6 +58,7 @@ pub async fn create_frick_server(
         store,
         schema,
         started_at: now_iso(),
+        auth_limiter: std::sync::Mutex::new(crate::http::AuthLimiter::default()),
     });
 
     Ok(FrickServer {
@@ -78,7 +79,8 @@ impl FrickServer {
         let bound_port = listener.local_addr()?.port();
         self.bound_port = bound_port;
 
-        let router = public_router(Arc::clone(&self.state));
+        let router = public_router(Arc::clone(&self.state))
+            .merge(crate::auth_routes::auth_router(Arc::clone(&self.state)));
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         self.shutdown = Some(shutdown_tx);
 
@@ -130,12 +132,19 @@ impl FrickServer {
     }
 }
 
-/// Current time as an ISO-8601 UTC millisecond string (`Date.toISOString`
-/// format). Used only for the `startedAt` log/inspection field.
+/// Current time as an ISO-8601 UTC millisecond string. Used for the
+/// `startedAt` log/inspection field.
 fn now_iso() -> String {
     let total_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+    iso_from_epoch_ms(total_ms)
+}
+
+/// Format an epoch-millisecond instant as a `Date.toISOString`-compatible UTC
+/// string. Shared with the auth-route session minting.
+#[must_use]
+pub fn iso_from_epoch_ms(total_ms: i64) -> String {
     let (days, ms_of_day) = (
         total_ms.div_euclid(86_400_000),
         total_ms.rem_euclid(86_400_000),

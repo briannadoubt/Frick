@@ -14,6 +14,7 @@ frick-protocol = { workspace = true }
 frick-schema = { workspace = true }
 frick-store = { workspace = true }
 futures-util = { workspace = true }
+rand = { workspace = true }
 rmpv = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

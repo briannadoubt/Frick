@@ -6,7 +6,8 @@
 //! routes, protected data-plane routes, and the WebSocket gateway are layered
 //! on in their own modules.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use axum::Json;
 use axum::extract::State;
@@ -27,6 +28,29 @@ pub struct AppStateInner {
     pub schema: FrickSchema,
     /// Wall-clock start, ISO-8601 (stamped at boot by the caller).
     pub started_at: String,
+    /// Fixed-window auth-attempt limiter (`src/server.ts:3030-3072`).
+    pub auth_limiter: Mutex<AuthLimiter>,
+}
+
+/// Fixed-window auth-attempt counter, keyed `route\0tenantId\0identity`
+/// (`src/server.ts:3030-3072`). 30 attempts / 300 s by default.
+#[derive(Debug, Default)]
+pub struct AuthLimiter {
+    windows: HashMap<String, (i64, u32)>,
+}
+
+impl AuthLimiter {
+    /// Record an attempt; returns `true` when it is allowed (under the cap),
+    /// `false` when the window is exhausted. `now_ms` and the window/limit
+    /// come from the caller (config limits).
+    pub fn check(&mut self, key: &str, now_ms: i64, window_ms: i64, limit: u32) -> bool {
+        let entry = self.windows.entry(key.to_string()).or_insert((now_ms, 0));
+        if now_ms - entry.0 >= window_ms {
+            *entry = (now_ms, 0);
+        }
+        entry.1 += 1;
+        entry.1 <= limit
+    }
 }
 
 /// Cheaply-cloneable handle to [`AppStateInner`].
