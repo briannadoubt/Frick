@@ -784,15 +784,18 @@ export async function assertCanReadObject(
  * baseline -> app policy hooks -> grant relaxation — for the `object.read`
  * action, with the subscriber's principal, the registered policy hooks and the
  * grant lookup. Only the baseline differs from {@link assertCanReadObject}:
- *  - The subscription baseline is tenant-wide ALLOW. This is the historic
- *    behavior of the sync object snapshot/fan-out before per-record authz: a
- *    subscriber that passed {@link assertCanSubscribe} saw every in-tenant row,
- *    so absent any app policy the row set is unchanged.
- *  - A registered hook may TIGHTEN that allow to a deny for a given
+ *  - The subscription baseline is supplied by the caller (FR-235): the
+ *    store's ownership check (`isObjectVisibleToUser`) decides whether this
+ *    subscriber's baseline is ALLOW (owner / unowned type / fail-open legacy
+ *    row) or an `ownerMismatch` deny. When omitted it defaults to ALLOW —
+ *    the historic tenant-wide subscription baseline.
+ *  - A registered hook may TIGHTEN an allowed baseline to a deny for a given
  *    principal/record (e.g. a customer portal denying `object.read` for the
  *    customer role), exactly as {@link applyPolicyHooks} does elsewhere.
  *  - A grant then relaxes a remaining deny back to allow for the records the
- *    subscriber holds a grant on, mirroring {@link relaxWithGrants}.
+ *    subscriber holds a grant on, mirroring {@link relaxWithGrants} — this is
+ *    what makes a shared record visible to its grantee even though the
+ *    ownership baseline denies it.
  *
  * `assertCanReadObject` instead starts from deny-by-default because it gates a
  * bare by-id read where the framework cannot assume tenant-wide visibility.
@@ -807,6 +810,7 @@ export async function canSubscriberReadObjectRecord(
   memberships: MembershipReader,
   hooks?: readonly FrickPolicyHook[],
   grantLookup?: FrickGrantLookup,
+  baseline: FrickDecision = ALLOW,
 ): Promise<boolean> {
   void memberships;
   const input: FrickPolicyInput = {
@@ -814,8 +818,60 @@ export async function canSubscriberReadObjectRecord(
     action: "object.read",
     resource: { kind: "object", name: objectType, key: objectId, tenantId: principal.tenantId },
   };
-  const afterHooks = applyPolicyHooks(ALLOW, input, hooks);
+  const afterHooks = applyPolicyHooks(baseline, input, hooks);
   return (await relaxWithGrants(afterHooks, input, grantLookup)).allow;
+}
+
+/**
+ * Per-row read visibility for one object row whose ownership baseline the
+ * caller has already computed via `FrickStore.isObjectVisibleToUser` (FR-235).
+ * This is the single predicate behind every object *list* surface — the WS
+ * subscription snapshot, the live delta fan-out, the HTTP object list route,
+ * and search hit filtering — so all of them scope reads identically.
+ *
+ *  - Admin principals see every in-tenant row.
+ *  - `baselineVisible` rows with no registered hooks short-circuit to allow
+ *    (no per-row SQL).
+ *  - When `perRecordAuthzActive` is false (no hooks AND no grant has ever
+ *    been issued) the ownership baseline is final.
+ *  - Otherwise the full pipeline runs: hooks may tighten an allowed baseline,
+ *    and a sharing grant relaxes an `ownerMismatch` deny for its grantee.
+ *
+ * Rows without a string `id` cannot be keyed for a grant or policy decision;
+ * they resolve to their baseline.
+ */
+export async function canPrincipalReadObjectRow(
+  principal: Principal,
+  objectType: string,
+  object: { id?: unknown },
+  baselineVisible: boolean,
+  perRecordAuthzActive: boolean,
+  memberships: MembershipReader,
+  hooks?: readonly FrickPolicyHook[],
+  grantLookup?: FrickGrantLookup,
+): Promise<boolean> {
+  const visible = principal.scope === "admin" || baselineVisible;
+  if (visible && (!hooks || hooks.length === 0)) {
+    return true;
+  }
+  if (!perRecordAuthzActive) {
+    return visible;
+  }
+  const id = object.id;
+  if (typeof id !== "string") {
+    return visible;
+  }
+  return canSubscriberReadObjectRecord(
+    principal,
+    objectType,
+    id,
+    memberships,
+    hooks,
+    grantLookup,
+    visible
+      ? ALLOW
+      : deny("ownerMismatch", `Object ${objectType}/${id} is not readable by this principal`),
+  );
 }
 
 export async function assertCanWritePresence(

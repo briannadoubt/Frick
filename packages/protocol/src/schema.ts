@@ -107,6 +107,24 @@ export interface ObjectDef {
    * to generated artifacts — see {@link FrickObjectMergePolicy}.
    */
   mergePolicy?: FrickObjectMergePolicy;
+  /**
+   * Which field carries the owning user's id for per-user read scoping
+   * (FR-235). The server treats rows of this type as visible only to the
+   * user named by this field (plus admins, grantees via sharing grants, and
+   * whatever app policy hooks decide), instead of tenant-wide.
+   *
+   *  - Omitted: convention applies — a declared string field named
+   *    `ownerUserId` is used when present, otherwise the type has no owner
+   *    and stays tenant-visible.
+   *  - A field name: that field is the owner field.
+   *  - `null`: explicitly opt this type out of owner scoping (tenant-wide
+   *    visibility, the pre-0.2.1 behavior).
+   *
+   * Like {@link ObjectDef.mergePolicy} this is *server-only*: the generated
+   * native artifacts intentionally do not emit it, and adding it is
+   * wire-backwards-compatible because clients never read it.
+   */
+  ownerField?: string | null;
 }
 
 export interface StreamDef {

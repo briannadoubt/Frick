@@ -231,6 +231,7 @@ export {
   type StoreOptions,
   type FrickStoreWriteEvent,
   type FrickStoreWriteListener,
+  type FrickObjectVisibilityOptions,
 } from "./store.js";
 export type {
   StreamRetentionPolicy,

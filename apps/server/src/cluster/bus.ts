@@ -59,6 +59,13 @@ export type ClusterEnvelope =
       appId?: string;
       type: string;
       objects: PlainObject[];
+      /**
+       * userId of the principal whose write produced these objects, when the
+       * write path knows it. Peers use it to honor the writer-echo guarantee
+       * (FR-234) for the same user's devices connected to other nodes.
+       * Optional on the wire for back-compat, like `appId`.
+       */
+      writerUserId?: string;
     }
   | {
       kind: "objectDeletes";
@@ -67,6 +74,20 @@ export type ClusterEnvelope =
       appId?: string;
       type: string;
       ids: string[];
+    }
+  | {
+      /**
+       * A sharing grant on `(type, id)` was revoked or left (FR-235): peers
+       * re-evaluate the row for their local subscribers and push a removal
+       * Delta to those who can no longer read it. New optional kind on the
+       * wire — older peers' dispatch switches simply ignore it.
+       */
+      kind: "objectVisibilityRevoked";
+      originNodeId: NodeId;
+      tenantId: string;
+      appId?: string;
+      type: string;
+      id: string;
     }
   | {
       kind: "signal";
