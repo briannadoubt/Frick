@@ -113,6 +113,10 @@ impl FrickServer {
         let router = public_router(Arc::clone(&self.state))
             .merge(crate::auth_routes::auth_router(Arc::clone(&self.state)))
             .merge(crate::routes::dataplane_router(Arc::clone(&self.state)))
+            .merge(crate::routes::admin::admin_router(Arc::clone(&self.state)))
+            .merge(crate::routes::inspect::inspect_router(Arc::clone(
+                &self.state,
+            )))
             .merge(self.gateway.router());
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         self.shutdown = Some(shutdown_tx);

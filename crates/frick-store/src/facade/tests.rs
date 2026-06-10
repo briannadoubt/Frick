@@ -441,3 +441,112 @@ async fn rejects_postgres_driver() {
     };
     assert!(err.to_string().contains("FR-242"));
 }
+
+// ── blob bytes (write_content / read_content, map 05 §3.5/§3.6) ──────────────
+
+#[tokio::test]
+async fn write_then_read_content_round_trips_bytes() {
+    use crate::stores::blob::BlobMetadataInput;
+
+    let (store, _clock) = open_store().await;
+
+    // The metadata row must exist first (blob_content.blob_id FK). The default
+    // sqlite blob driver stores bytes in `blob_content`.
+    store
+        .blobs()
+        .create(
+            DEFAULT_TENANT_ID,
+            &BlobMetadataInput {
+                blob_id: "blob-1".into(),
+                owner_id: "user-1".into(),
+                content_hash: "sha256-deadbeef".into(),
+                byte_length: 5,
+                mime_type: "text/plain".into(),
+                storage_key: None,
+            },
+            DEFAULT_APP_ID,
+            NOW,
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        store
+            .read_content(DEFAULT_TENANT_ID, "blob-1", DEFAULT_APP_ID)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    store
+        .write_content(DEFAULT_TENANT_ID, "blob-1", b"hello", DEFAULT_APP_ID, NOW)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        store
+            .read_content(DEFAULT_TENANT_ID, "blob-1", DEFAULT_APP_ID)
+            .await
+            .unwrap(),
+        Some(b"hello".to_vec())
+    );
+
+    // A different app partition does not see the bytes.
+    assert!(
+        store
+            .read_content(DEFAULT_TENANT_ID, "blob-1", "other-app")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn filesystem_blob_driver_is_built_from_options() {
+    use crate::stores::blob::BlobMetadataInput;
+    use crate::stores::blob_bytes::FrickBlobDriver;
+
+    let root = tempfile::tempdir().unwrap();
+    let options = FrickStoreOptions {
+        schema: Some(test_schema()),
+        blob_driver: FrickBlobDriver::Filesystem,
+        blob_storage_path: Some(root.path().to_str().unwrap().to_string()),
+        ..FrickStoreOptions::memory()
+    };
+    let store = FrickStore::open(options).await.expect("store opens");
+
+    store
+        .blobs()
+        .create(
+            DEFAULT_TENANT_ID,
+            &BlobMetadataInput {
+                blob_id: "blob-fs".into(),
+                owner_id: "user-1".into(),
+                content_hash: "sha256-abc".into(),
+                byte_length: 3,
+                mime_type: "application/octet-stream".into(),
+                storage_key: None,
+            },
+            DEFAULT_APP_ID,
+            NOW,
+        )
+        .await
+        .unwrap();
+    store
+        .write_content(DEFAULT_TENANT_ID, "blob-fs", b"PNG", DEFAULT_APP_ID, NOW)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        store
+            .read_content(DEFAULT_TENANT_ID, "blob-fs", DEFAULT_APP_ID)
+            .await
+            .unwrap(),
+        Some(b"PNG".to_vec())
+    );
+    // The bytes landed under the filesystem root, not in SQL.
+    assert!(matches!(
+        store.blob_bytes(),
+        crate::stores::blob_bytes::BlobBytesDriver::Filesystem(_)
+    ));
+}

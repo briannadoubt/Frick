@@ -33,6 +33,7 @@ use crate::packed::encode_packed;
 use crate::stores::account::AccountStore;
 use crate::stores::admin_audit::AdminAuditStore;
 use crate::stores::blob::BlobStore;
+use crate::stores::blob_bytes::{BlobBytesDriver, FrickBlobDriver, create_blob_bytes_driver};
 use crate::stores::grant::GrantStore;
 use crate::stores::idempotency::BoundedIdempotencyCache;
 use crate::stores::invitation::InvitationStore;
@@ -82,6 +83,9 @@ pub const DEFAULT_EXPIRED_SESSION_RETENTION_GRACE_MS: i64 = 0;
 pub const DEFAULT_STREAM_RETENTION_PRUNE_INTERVAL_MS: i64 = 15 * 60 * 1000;
 /// Default TTL for an enqueued signal when the caller omits one: 30 s.
 pub const DEFAULT_SIGNAL_TTL_MS: i64 = 30_000;
+/// Default filesystem blob storage path (`config.ts:253`,
+/// `FRICK_BLOB_STORAGE_PATH`). Only consulted by the `filesystem` driver.
+pub const DEFAULT_BLOB_STORAGE_PATH: &str = "./frick-blobs/";
 
 /// Storage driver selector (`StoreOptions.dbDriver`). Only [`Sqlite`] is wired
 /// in this story; [`Postgres`] is reserved for FR-242.
@@ -105,6 +109,12 @@ pub struct FrickStoreOptions {
     pub path: String,
     /// Storage driver. Defaults to [`StoreDriverKind::Sqlite`].
     pub db_driver: StoreDriverKind,
+    /// Blob *bytes* driver selector (`FRICK_BLOB_DRIVER`, map 05 §3.3).
+    /// Defaults to [`FrickBlobDriver::Sqlite`] (bytes in `blob_content`).
+    pub blob_driver: FrickBlobDriver,
+    /// Filesystem/S3 blob storage path (`FRICK_BLOB_STORAGE_PATH`). Only the
+    /// `filesystem` driver requires it; `None` ⇒ [`DEFAULT_BLOB_STORAGE_PATH`].
+    pub blob_storage_path: Option<String>,
     /// Schema to validate and record. `None` ⇒ [`foundation_schema`].
     pub schema: Option<FrickSchema>,
     /// Accepted and ignored (parity with TS `void options.seed`).
@@ -143,6 +153,8 @@ impl Default for FrickStoreOptions {
         Self {
             path: ":memory:".to_string(),
             db_driver: StoreDriverKind::Sqlite,
+            blob_driver: FrickBlobDriver::Sqlite,
+            blob_storage_path: None,
             schema: None,
             seed: false,
             idempotency_cache_capacity: None,
@@ -232,6 +244,14 @@ pub struct FrickStore {
     saml_assertions: SamlAssertionStore,
     service_principals: ServicePrincipalStore,
     blobs: BlobStore,
+    /// The configured blob *bytes* driver (map 05 §3.3): the byte half of the
+    /// blob surface, behind the metadata store's `blob_metadata` rows. Built
+    /// from [`FrickStoreOptions::blob_driver`] in [`open_with_seams`]. Bytes
+    /// flow through [`write_content`](Self::write_content) /
+    /// [`read_content`](Self::read_content); metadata stays on [`blobs`].
+    ///
+    /// [`blobs`]: Self::blobs
+    blob_bytes: BlobBytesDriver,
     tenants: TenantStore,
     tenant_settings: TenantSettingsStore,
     invitations: InvitationStore,
@@ -332,6 +352,19 @@ impl FrickStore {
         #[allow(clippy::cast_precision_loss)]
         let idempotency_cache = BoundedIdempotencyCache::new(idempotency_cache_capacity as f64)?;
 
+        // 5b. Build the configured blob-bytes driver (map 05 §3.3). The
+        // filesystem arm validates its root (creatable, writable dir) here, so
+        // a misconfigured `filesystem` driver fails fast at construction — the
+        // sqlite arm clones the shared `SqlDriver` Arc. The S3 arm selects the
+        // stub seam (FR-241 follow-up).
+        let blob_storage_path = options
+            .blob_storage_path
+            .as_deref()
+            .filter(|path| !path.is_empty())
+            .unwrap_or(DEFAULT_BLOB_STORAGE_PATH);
+        let blob_bytes =
+            create_blob_bytes_driver(options.blob_driver, &driver, Some(blob_storage_path))?;
+
         // 6. Instantiate every Arc-owning sub-store. The data-plane stores
         // (objects / streams / presence / signals / jobs) are lifetime-borrowing
         // zero-cost views built on demand from `&self.driver` / `&self.schema`.
@@ -344,6 +377,7 @@ impl FrickStore {
             saml_assertions: SamlAssertionStore::new(Arc::clone(&driver)),
             service_principals: ServicePrincipalStore::new(Arc::clone(&driver)),
             blobs: BlobStore::new(Arc::clone(&driver)),
+            blob_bytes,
             tenants: TenantStore::new(Arc::clone(&driver)),
             tenant_settings: TenantSettingsStore::new(Arc::clone(&driver)),
             invitations: InvitationStore::new(Arc::clone(&driver)),
@@ -417,6 +451,46 @@ impl FrickStore {
     #[must_use]
     pub fn blobs(&self) -> &BlobStore {
         &self.blobs
+    }
+
+    /// The configured blob-bytes driver (map 05 §3.3). Most callers should
+    /// prefer [`write_content`](Self::write_content) /
+    /// [`read_content`](Self::read_content); this accessor exists for the GC /
+    /// compliance paths that delete bytes directly
+    /// ([`BlobBytesDriver::delete`](crate::stores::blob_bytes::BlobBytesDriver::delete)).
+    #[must_use]
+    pub fn blob_bytes(&self) -> &BlobBytesDriver {
+        &self.blob_bytes
+    }
+
+    /// Persist (or overwrite) the raw bytes for a blob (TS
+    /// `store.blobs.writeContent`, map 05 §3.5 step 8). Delegates to the
+    /// configured bytes driver; `now_ms` stamps `blob_content.updated_at` on
+    /// the SQL arm. The caller MUST have written the `blob_metadata` row first
+    /// — `blob_content.blob_id` has an FK to it (map 05 §3.5 step 7).
+    pub async fn write_content(
+        &self,
+        tenant_id: &str,
+        blob_id: &str,
+        content: &[u8],
+        app_id: &str,
+        now_ms: i64,
+    ) -> Result<(), StoreError> {
+        self.blob_bytes
+            .write(tenant_id, blob_id, content, app_id, now_ms)
+            .await
+    }
+
+    /// Read the raw bytes for a blob (TS `store.blobs.readContent`, map 05
+    /// §3.6 `GET /blobs/:id/content`). `None` when no bytes are stored for
+    /// `(app_id, tenant_id, blob_id)`.
+    pub async fn read_content(
+        &self,
+        tenant_id: &str,
+        blob_id: &str,
+        app_id: &str,
+    ) -> Result<Option<Vec<u8>>, StoreError> {
+        self.blob_bytes.read(tenant_id, blob_id, app_id).await
     }
     /// Tenant ledger store.
     #[must_use]
@@ -1296,6 +1370,112 @@ impl AppScopedStore<'_> {
             input.app_id = Some(self.app_id.clone());
         }
         self.store.enqueue_job(input).await
+    }
+}
+
+/// One `blob_derivatives` row, mapped to its camelCase HTTP shape (TS
+/// `DerivativeRow`, blob-derivative-store.ts:148-183). `metadata` is the
+/// JSON-decoded `metadata` column (omitted/`None` when the column is NULL or
+/// fails to parse, matching the TS swallow-on-corrupt behavior). The byte
+/// `content` column is NOT carried here — read it via
+/// [`FrickStore::read_derivative`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct DerivativeRow {
+    pub parent_blob_id: String,
+    pub derivative_id: String,
+    pub tenant_id: String,
+    pub processor_id: String,
+    pub mime_type: String,
+    pub byte_length: i64,
+    pub content_hash: String,
+    pub storage_key: String,
+    pub created_at: String,
+    /// Decoded `metadata` JSON; `None` when absent or unparsable.
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Result of [`FrickStore::read_derivative`]: the mapped row plus its inline
+/// bytes (TS `{ row, bytes }`; `bytes` is empty when the `content` column is
+/// NULL).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DerivativeReadResult {
+    pub row: DerivativeRow,
+    pub bytes: Vec<u8>,
+}
+
+impl FrickStore {
+    /// `BlobDerivativeStore.listForParent` (blob-derivative-store.ts:120-128):
+    /// every derivative row for a parent, `ORDER BY derivative_id ASC`. NOT
+    /// app-scoped (the `blob_derivatives` table has no `app_id` column, map 05
+    /// §3.1); the caller gates access by reading the parent metadata with the
+    /// active app id first.
+    pub async fn list_derivatives(
+        &self,
+        parent_blob_id: &str,
+        tenant_id: &str,
+    ) -> Result<Vec<DerivativeRow>, StoreError> {
+        let rows = self
+            .driver
+            .all(
+                "SELECT * FROM blob_derivatives
+                    WHERE tenant_id = ? AND parent_blob_id = ?
+                    ORDER BY derivative_id ASC",
+                &[tenant_id.into(), parent_blob_id.into()],
+            )
+            .await?;
+        Ok(rows.iter().map(map_derivative_row).collect())
+    }
+
+    /// `BlobDerivativeStore.read` (blob-derivative-store.ts:144-159): a single
+    /// derivative row plus its inline bytes, or `None`. Bytes are empty when
+    /// the `content` column is NULL.
+    pub async fn read_derivative(
+        &self,
+        parent_blob_id: &str,
+        derivative_id: &str,
+        tenant_id: &str,
+    ) -> Result<Option<DerivativeReadResult>, StoreError> {
+        let row = self
+            .driver
+            .get(
+                "SELECT * FROM blob_derivatives
+                    WHERE tenant_id = ? AND parent_blob_id = ? AND derivative_id = ?
+                    LIMIT 1",
+                &[
+                    tenant_id.into(),
+                    parent_blob_id.into(),
+                    derivative_id.into(),
+                ],
+            )
+            .await?;
+        Ok(row.as_ref().map(|row| {
+            let bytes = row.blob("content").map(<[u8]>::to_vec).unwrap_or_default();
+            DerivativeReadResult {
+                row: map_derivative_row(row),
+                bytes,
+            }
+        }))
+    }
+}
+
+/// `mapRow` (blob-derivative-store.ts:162-183): a `SELECT *` row → a
+/// [`DerivativeRow`]. The `metadata` column is JSON-decoded; a NULL or
+/// unparsable value yields `None` (the TS swallows the parse error).
+fn map_derivative_row(row: &crate::driver::SqlRow) -> DerivativeRow {
+    let metadata = row
+        .text("metadata")
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok());
+    DerivativeRow {
+        parent_blob_id: row.text("parent_blob_id").unwrap_or_default().to_owned(),
+        derivative_id: row.text("derivative_id").unwrap_or_default().to_owned(),
+        tenant_id: row.text("tenant_id").unwrap_or_default().to_owned(),
+        processor_id: row.text("processor_id").unwrap_or_default().to_owned(),
+        mime_type: row.text("mime_type").unwrap_or_default().to_owned(),
+        byte_length: row.i64("byte_length").unwrap_or_default(),
+        content_hash: row.text("content_hash").unwrap_or_default().to_owned(),
+        storage_key: row.text("storage_key").unwrap_or_default().to_owned(),
+        created_at: row.text("created_at").unwrap_or_default().to_owned(),
+        metadata,
     }
 }
 

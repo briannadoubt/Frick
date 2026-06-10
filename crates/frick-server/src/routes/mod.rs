@@ -12,6 +12,9 @@
 //! ids with `uuid`/`OsRng`, passing them down to the facade/store methods that
 //! take `now_ms`/id parameters.
 
+pub mod admin;
+pub mod blobs;
+pub mod inspect;
 pub mod objects;
 pub mod projections;
 pub mod push;
@@ -43,7 +46,8 @@ pub fn dataplane_router(state: AppState) -> axum::Router {
         .merge(signals::router(state.clone()))
         .merge(share::router(state.clone()))
         .merge(push::router(state.clone()))
-        .merge(projections::router(state))
+        .merge(projections::router(state.clone()))
+        .merge(blobs::blobs_router(state))
 }
 
 /// The app id the data plane resolves to. The Rust port currently runs a
