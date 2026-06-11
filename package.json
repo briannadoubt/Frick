@@ -10,7 +10,7 @@
     "typecheck": "tsc -b packages/protocol packages/core packages/react packages/devtools packages/design packages/design-web apps/web",
     "rust:test": "cargo test --workspace",
     "rust:check": "cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all --check",
-    "schema:generate": "tsx packages/protocol/scripts/generate-native-artifacts.ts",
+    "schema:generate": "cargo run -p frick-cli -- schema generate",
     "fixtures:generate": "tsx packages/protocol/scripts/generate-fixtures.ts",
     "fixtures:wire": "tsx packages/protocol/scripts/generate-wire-fixtures.ts",
     "fixtures:lint": "tsx packages/protocol/scripts/generate-lint-fixtures.ts",

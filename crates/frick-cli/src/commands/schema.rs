@@ -2,11 +2,15 @@
 //! `apps/cli/src/commands/schema.ts`, extended with `export`, FR-261).
 //!
 //! - `check`: `validate_schema(foundation_schema())` then emit the identity.
-//! - `generate`: the TS shells out to `pnpm schema:generate`. The Rust CLI
-//!   instead drives [`frick_codegen`] directly — rendering the native artifacts
-//!   in-process (DEVIATION: pnpm→native). It emits `{ok, command, artifacts}`
-//!   describing what would be written, without touching the monorepo tree (the
-//!   write targets are pnpm-workspace-specific; see openIssues).
+//! - `generate`: the canonical native-artifact generator (FR-261). This is the
+//!   Rust reimplementation of the retired `pnpm schema:generate`
+//!   (`packages/protocol/scripts/generate-native-artifacts.ts`): it drives
+//!   [`frick_codegen`] against the FOUNDATION schema and WRITES the four tracked
+//!   client artifacts to their canonical repo paths, byte-identical to what the
+//!   TS script emitted (so regenerating produces a clean `git diff`). It emits
+//!   `{ok, command, written}`. The optional Ed25519 `schema-signature.json`
+//!   (FR-45) was a no-op without a signing key and only ever wrote a gitignored
+//!   file, so it is not reproduced here (see notes/openIssues).
 //! - `export`: serialize the *active* schema (the foundation schema, or the
 //!   `FRICK_SCHEMA_PATH`-loaded schema when that env var is set) to pretty JSON.
 //!   This is the `schema.json` an app feeds the standalone `frick-server` via
@@ -14,9 +18,11 @@
 //!   README. With `--out` the file is written and a summary record is emitted;
 //!   without it, the JSON is printed on stdout.
 
+use std::path::PathBuf;
+
 use frick_codegen::error_enums::generate_typescript_error_enum;
-use frick_codegen::kotlin::{generate_kotlin_artifact, generate_kotlin_error_enum};
-use frick_codegen::swift::{generate_swift_artifact, generate_swift_error_enum};
+use frick_codegen::kotlin::generate_kotlin_artifact;
+use frick_codegen::swift::generate_swift_artifact;
 use frick_codegen::typescript::generate_typescript_bindings;
 use frick_protocol::{FrickSchema, foundation_schema, validate_schema};
 use frick_server::standalone::{config_env, load_schema};
@@ -25,12 +31,13 @@ use serde_json::json;
 use crate::argv::ParsedArgs;
 use crate::errors::{CliError, EXIT_OK};
 use crate::output::Output;
+use crate::paths::repo_root;
 
 /// `schemaCommand` — dispatch `check` / `generate` / `export`.
 pub fn schema_command(parsed: &ParsedArgs, out: &mut Output) -> Result<i32, CliError> {
     match parsed.positional(0) {
         Some("check") => schema_check(out),
-        Some("generate") => Ok(schema_generate(out)),
+        Some("generate") => schema_generate(out),
         Some("export") => schema_export(parsed, out),
         other => Err(CliError::usage_with(
             format!(
@@ -55,25 +62,73 @@ fn schema_check(out: &mut Output) -> Result<i32, CliError> {
     Ok(EXIT_OK)
 }
 
-fn schema_generate(out: &mut Output) -> i32 {
+/// The four tracked native client artifacts, keyed by their canonical
+/// repo-relative path. Each value is the exact byte content the retired
+/// `generate-native-artifacts.ts` wrote: `<generator output> + "\n"` for every
+/// file (the trailing newline the TS appended uniformly with a template
+/// literal). Pinning the same generators + the same trailing-newline rule keeps
+/// `frick schema generate` byte-identical to the committed tree.
+fn generated_artifacts(schema: &FrickSchema) -> [(&'static str, String); 4] {
+    [
+        (
+            "packages/swift/Sources/FrickSwift/Generated/FrickGenerated.swift",
+            format!("{}\n", generate_swift_artifact(schema)),
+        ),
+        (
+            "apps/android/frick/src/main/java/dev/frick/client/FrickGenerated.kt",
+            format!("{}\n", generate_kotlin_artifact(schema)),
+        ),
+        (
+            "packages/core/src/generated/bindings.ts",
+            format!("{}\n", generate_typescript_bindings(schema)),
+        ),
+        (
+            "packages/core/src/generated/errors.ts",
+            format!("{}\n", generate_typescript_error_enum()),
+        ),
+    ]
+}
+
+/// `frick schema generate` — the canonical native-artifact generator (FR-261).
+/// Writes the four tracked client artifacts to the repo root and emits
+/// `{ok, command, written}`.
+fn schema_generate(out: &mut Output) -> Result<i32, CliError> {
+    write_native_artifacts(&repo_root(), out)
+}
+
+/// Render the FOUNDATION schema's native artifacts and write each to
+/// `root/<canonical path>`, creating parent directories as needed. Parameterised
+/// by `root` so tests can target a temp tree without touching the committed
+/// files. Emits the `{ok, command, written:[paths]}` summary.
+pub fn write_native_artifacts(root: &std::path::Path, out: &mut Output) -> Result<i32, CliError> {
     let schema = foundation_schema();
-    // Render every native artifact in-process (the Rust equivalent of
-    // `pnpm schema:generate`). We report byte counts rather than writing files
-    // because the target paths are pnpm-workspace-specific.
-    let artifacts = json!([
-        { "name": "typescript/bindings.ts", "bytes": generate_typescript_bindings(&schema).len() },
-        { "name": "typescript/errors.ts", "bytes": generate_typescript_error_enum().len() },
-        { "name": "swift/Generated.swift", "bytes": generate_swift_artifact(&schema).len() },
-        { "name": "swift/Errors.swift", "bytes": generate_swift_error_enum().len() },
-        { "name": "kotlin/Generated.kt", "bytes": generate_kotlin_artifact(&schema).len() },
-        { "name": "kotlin/Errors.kt", "bytes": generate_kotlin_error_enum().len() },
-    ]);
+    let mut written: Vec<String> = Vec::new();
+
+    for (relative, content) in generated_artifacts(&schema) {
+        let path: PathBuf = root.join(relative);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|err| {
+                CliError::failure(
+                    "schema.generate.mkdir",
+                    format!("failed to create {}: {err}", parent.display()),
+                )
+            })?;
+        }
+        std::fs::write(&path, content).map_err(|err| {
+            CliError::failure(
+                "schema.generate.write",
+                format!("failed to write {}: {err}", path.display()),
+            )
+        })?;
+        written.push(path.to_string_lossy().into_owned());
+    }
+
     out.emit(&json!({
         "ok": true,
-        "command": "frick codegen (native)",
-        "artifacts": artifacts,
+        "command": "frick schema generate",
+        "written": written,
     }));
-    EXIT_OK
+    Ok(EXIT_OK)
 }
 
 /// Resolve the *active* schema the same way the standalone server does: the
