@@ -15,6 +15,7 @@ mod media_plane;
 mod p2p_media_plane;
 pub mod schema;
 mod sfu_backend;
+mod sfu_livekit;
 mod sfu_media_plane;
 
 pub use control_plane::{
@@ -39,4 +40,5 @@ pub use sfu_backend::{
     FakeSfuBackend, FakeSfuBackendOptions, MintAccessTokenOptions, SfuAccessToken, SfuBackend,
     SfuBackendError, SfuBackendFuture, SfuRoom,
 };
+pub use sfu_livekit::{LiveKitSfuBackend, LiveKitSfuBackendOptions};
 pub use sfu_media_plane::SfuMediaPlaneAdapter;
