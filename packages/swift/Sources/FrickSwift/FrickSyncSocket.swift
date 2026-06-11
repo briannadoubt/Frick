@@ -1059,10 +1059,24 @@ public actor FrickSyncSocket {
     /// Returns immediately if the socket is already closed — the subscribe
     /// replays on reconnect, and a closed socket would never deliver the
     /// snapshot that resolves the waiter. FR-256 client half (opt-in).
-    private func awaitSubscriptionRegistered(token: String) async {
-        if status.state == .closed { return }
+    /// Register a registration waiter for `token` and THEN send `frame`, parking
+    /// the caller until the server's initial reply resolves it. Registering
+    /// before the send is what closes the race: this actor can run `handleIncoming`
+    /// (and so `resolveSubscriptionRegistration`) while `sendFrame` is suspended,
+    /// which would resolve-and-drop a not-yet-parked waiter. The send is detached
+    /// so the waiter is appended synchronously, strictly before the frame goes
+    /// out — and the inbound reply can't arrive before the frame does. A send
+    /// failure surfaces via nack/disconnect (which also drains the waiter), not
+    /// from here. If the socket is already closed, just queue the frame and
+    /// return — nothing would reply to resolve the waiter.
+    private func registerThenSend(token: String, frame: FrickFrame) async {
+        if status.state == .closed {
+            try? await sendFrame(frame)
+            return
+        }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             pendingRegistrations[token, default: []].append(continuation)
+            Task { [weak self] in try? await self?.sendFrame(frame) }
         }
     }
 
@@ -1147,7 +1161,9 @@ public actor FrickSyncSocket {
     }
 
     public func subscribe(stream: String, key: String) async throws {
-        _ = try await sendStreamSubscribe(stream: stream, key: key)
+        let frame = streamSubscribeFrame(subId: UUID().uuidString, stream: stream, key: key)
+        activeSubscriptions["stream:\(stream):\(key)"] = frame
+        try await sendFrame(frame)
     }
 
     /// Like `subscribe(stream:key:)` but resolves only once the server has
@@ -1156,21 +1172,19 @@ public actor FrickSyncSocket {
     /// client half) — so a write issued right after can't race ahead of
     /// registration. Additive: the existing `subscribe(stream:key:)` is unchanged.
     public func subscribeStreamRegistered(stream: String, key: String) async throws {
-        let subId = try await sendStreamSubscribe(stream: stream, key: key)
-        await awaitSubscriptionRegistered(token: subId)
+        let subId = UUID().uuidString
+        let frame = streamSubscribeFrame(subId: subId, stream: stream, key: key)
+        activeSubscriptions["stream:\(stream):\(key)"] = frame
+        await registerThenSend(token: subId, frame: frame)
     }
 
-    private func sendStreamSubscribe(stream: String, key: String) async throws -> String {
-        let subId = UUID().uuidString
-        let frame = FrickFrame(kind: .subscribe, payload: .map([
+    private func streamSubscribeFrame(subId: String, stream: String, key: String) -> FrickFrame {
+        FrickFrame(kind: .subscribe, payload: .map([
             (.string("subscriptionId"), .string(subId)),
             (.string("kind"), .string("stream")),
             (.string("name"), .string(stream)),
             (.string("key"), .string(key)),
         ]))
-        activeSubscriptions["stream:\(stream):\(key)"] = frame
-        try await sendFrame(frame)
-        return subId
     }
 
     /// Subscribe to a presence type (e.g. "CursorState"). Inbound presence
@@ -1214,26 +1228,27 @@ public actor FrickSyncSocket {
     }
 
     public func subscribeProjection(name: String) async throws {
-        try await sendProjectionSubscribe(name: name)
+        let frame = projectionSubscribeFrame(subId: UUID().uuidString, name: name)
+        activeSubscriptions["projection:\(name)"] = frame
+        try await sendFrame(frame)
     }
 
     /// Like `subscribeProjection(name:)` but resolves once the initial
     /// `ProjectionDelta` (the post-registration reply, keyed by projection name)
     /// arrives (FR-256 client half). Additive; the existing method is unchanged.
     public func subscribeProjectionRegistered(name: String) async throws {
-        try await sendProjectionSubscribe(name: name)
-        await awaitSubscriptionRegistered(token: name)
+        let frame = projectionSubscribeFrame(subId: UUID().uuidString, name: name)
+        activeSubscriptions["projection:\(name)"] = frame
+        // Projections correlate by name (that is what the ProjectionDelta carries).
+        await registerThenSend(token: name, frame: frame)
     }
 
-    private func sendProjectionSubscribe(name: String) async throws {
-        let subId = UUID().uuidString
-        let frame = FrickFrame(kind: .subscribe, payload: .map([
+    private func projectionSubscribeFrame(subId: String, name: String) -> FrickFrame {
+        FrickFrame(kind: .subscribe, payload: .map([
             (.string("subscriptionId"), .string(subId)),
             (.string("kind"), .string("projection")),
             (.string("name"), .string(name)),
         ]))
-        activeSubscriptions["projection:\(name)"] = frame
-        try await sendFrame(frame)
     }
 
     /// Subscribe to all objects of `type`. The server replies with a
@@ -1243,7 +1258,9 @@ public actor FrickSyncSocket {
     /// the wire today; per-id filtering happens at the consumer
     /// (see `FrickDraftStore`).
     public func subscribeObject(type: String) async throws {
-        _ = try await sendObjectSubscribe(type: type)
+        let frame = objectSubscribeFrame(subId: UUID().uuidString, type: type)
+        activeSubscriptions["object:\(type)"] = frame
+        try await sendFrame(frame)
     }
 
     /// Like `subscribeObject(type:)` but resolves only once the server's initial
@@ -1253,20 +1270,18 @@ public actor FrickSyncSocket {
     /// `subscribeObject(type:)` is unchanged. Use it before an
     /// immediately-following write you want to observe on the same connection.
     public func subscribeObjectRegistered(type: String) async throws {
-        let subId = try await sendObjectSubscribe(type: type)
-        await awaitSubscriptionRegistered(token: subId)
+        let subId = UUID().uuidString
+        let frame = objectSubscribeFrame(subId: subId, type: type)
+        activeSubscriptions["object:\(type)"] = frame
+        await registerThenSend(token: subId, frame: frame)
     }
 
-    private func sendObjectSubscribe(type: String) async throws -> String {
-        let subId = UUID().uuidString
-        let frame = FrickFrame(kind: .subscribe, payload: .map([
+    private func objectSubscribeFrame(subId: String, type: String) -> FrickFrame {
+        FrickFrame(kind: .subscribe, payload: .map([
             (.string("subscriptionId"), .string(subId)),
             (.string("kind"), .string("object")),
             (.string("name"), .string(type)),
         ]))
-        activeSubscriptions["object:\(type)"] = frame
-        try await sendFrame(frame)
-        return subId
     }
 
     @discardableResult

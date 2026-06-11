@@ -456,6 +456,42 @@ final class FrickSyncSocketTests: XCTestCase {
         await socket.close()
     }
 
+    func testSubscribeStreamRegisteredResolvesOnStreamPage() async throws {
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+        let socket = makeSocket(factory: factory)
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+        task.deliver(.data(helloAckFrame()))
+        _ = await waitForCondition { await socket.status.serverCapabilities != nil }
+
+        let resolved = BoolBox()
+        let subTask = Task {
+            try await socket.subscribeStreamRegistered(stream: "MessageStream", key: "c1")
+            resolved.set(true)
+        }
+        _ = await waitForCondition { task.sentFrameCount >= 2 }
+        let subFrame = try FrickMsgPackCodec.decodeFrame(task.sentFrame(at: 1))
+        XCTAssertEqual(subFrame.payload.mapValue?["kind"]?.stringValue, "stream")
+        let subId = try XCTUnwrap(subFrame.payload.mapValue?["subscriptionId"]?.stringValue)
+        XCTAssertFalse(resolved.value, "resolved before the StreamPage")
+
+        // The StreamPage is the post-registration reply for a stream subscribe.
+        let streamPage = FrickMsgPackCodec.encodeFrame(FrickFrame(kind: .streamPage, payload: .map([
+            (.string("subscriptionId"), .string(subId)),
+            (.string("events"), .array([])),
+            (.string("cursor"), .int(0)),
+            (.string("hasMore"), .bool(false)),
+        ])))
+        task.deliver(.data(streamPage))
+
+        let didResolve = await waitForCondition { resolved.value }
+        XCTAssertTrue(didResolve, "did not resolve after its StreamPage")
+        _ = try await subTask.value
+        await socket.close()
+    }
+
     func testSubscribeProjectionRegisteredResolvesOnProjectionDelta() async throws {
         let factory = MockWebSocketFactory()
         let task = MockWebSocketTask()

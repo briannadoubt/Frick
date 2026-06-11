@@ -208,6 +208,44 @@ class FrickSyncSocketTest {
     }
 
     @Test
+    fun subscribeStreamRegisteredResolvesAfterStreamPage() = runBlocking {
+        enqueueWebSocketHandler(
+            onMessage = { _, frame ->
+                when (frame.first) {
+                    FrameKindCodes.HELLO -> sendFrame(
+                        FrameKindCodes.HELLO_ACK,
+                        mapOf(
+                            "schemaHash" to FRICK_SCHEMA_HASH,
+                            "schemaId" to FRICK_SCHEMA_ID,
+                            "schemaRevision" to FRICK_SCHEMA_REVISION,
+                            "schemaCompatibility" to mapOf("status" to "compatible"),
+                            "serverCapabilities" to emptyMap<String, Any?>(),
+                        ),
+                    )
+                    FrameKindCodes.SUBSCRIBE -> if (frame.second["kind"] == "stream") {
+                        sendFrame(
+                            FrameKindCodes.STREAM_PAGE,
+                            mapOf(
+                                "subscriptionId" to frame.second["subscriptionId"],
+                                "events" to emptyList<Any?>(),
+                                "cursor" to 0,
+                                "hasMore" to false,
+                            ),
+                        )
+                    }
+                }
+            },
+        )
+        val socket = newSocket()
+        try {
+            assertNotNull(withTimeout(2_000) { socket.awaitReady() })
+            withTimeout(10_000) { socket.subscribeStreamRegistered("MessageStream", "c1") }
+        } finally {
+            socket.close()
+        }
+    }
+
+    @Test
     fun subscribeProjectionRegisteredResolvesAfterProjectionDelta() = runBlocking {
         enqueueWebSocketHandler(
             onMessage = { _, frame ->

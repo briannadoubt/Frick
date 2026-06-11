@@ -503,13 +503,18 @@ class FrickSyncSocket internal constructor(
     private val pendingRegistrations =
         ConcurrentHashMap<String, MutableList<CompletableDeferred<Unit>>>()
 
-    /** Park until the server confirms registration of [token]. */
-    private suspend fun awaitSubscriptionRegistered(token: String) {
+    /**
+     * Synchronously register (and return) a waiter for [token], to be awaited by
+     * the caller AFTER it sends the Subscribe frame. Registering before the send
+     * closes the race where the server's reply — handled on the socket thread —
+     * would otherwise resolve-and-drop before the waiter exists.
+     */
+    private fun registerRegistrationWaiter(token: String): CompletableDeferred<Unit> {
         val deferred = CompletableDeferred<Unit>()
         pendingRegistrations.compute(token) { _, list ->
             (list ?: mutableListOf()).also { it.add(deferred) }
         }
-        deferred.await()
+        return deferred
     }
 
     /** Resume every waiter parked on [token]: its initial snapshot arrived. */
@@ -743,7 +748,7 @@ class FrickSyncSocket internal constructor(
 
     /** Subscribe to a stream by key. */
     suspend fun subscribe(stream: String, key: String) {
-        sendStreamSubscribe(stream, key)
+        sendStreamSubscribe(UUID.randomUUID().toString(), stream, key)
     }
 
     /**
@@ -754,12 +759,15 @@ class FrickSyncSocket internal constructor(
      * the existing [subscribe] is unchanged.
      */
     suspend fun subscribeStreamRegistered(stream: String, key: String) {
-        val subId = sendStreamSubscribe(stream, key)
-        awaitSubscriptionRegistered(subId)
+        val subId = UUID.randomUUID().toString()
+        // Register the waiter BEFORE sending so the server's StreamPage (handled
+        // on the socket thread) can't resolve-and-drop before we're parked.
+        val deferred = registerRegistrationWaiter(subId)
+        sendStreamSubscribe(subId, stream, key)
+        deferred.await()
     }
 
-    private suspend fun sendStreamSubscribe(stream: String, key: String): String {
-        val subId = UUID.randomUUID().toString()
+    private suspend fun sendStreamSubscribe(subId: String, stream: String, key: String) {
         val frame = FrickMsgPack.encodeFrame(
             FrameKindCodes.SUBSCRIBE,
             mapOf(
@@ -770,7 +778,6 @@ class FrickSyncSocket internal constructor(
             ),
         )
         sendOrQueue(FrameKindCodes.SUBSCRIBE, frame)
-        return subId
     }
 
     /**
@@ -831,7 +838,7 @@ class FrickSyncSocket internal constructor(
      * the consumer (see `FrickDraftStore`).
      */
     suspend fun subscribeObject(type: String) {
-        sendObjectSubscribe(type)
+        sendObjectSubscribe(UUID.randomUUID().toString(), type)
     }
 
     /**
@@ -842,12 +849,15 @@ class FrickSyncSocket internal constructor(
      * unchanged. Use before an immediately-following write you want to observe.
      */
     suspend fun subscribeObjectRegistered(type: String) {
-        val subId = sendObjectSubscribe(type)
-        awaitSubscriptionRegistered(subId)
+        val subId = UUID.randomUUID().toString()
+        // Register the waiter BEFORE sending so the server's Snapshot can't
+        // resolve-and-drop before we're parked.
+        val deferred = registerRegistrationWaiter(subId)
+        sendObjectSubscribe(subId, type)
+        deferred.await()
     }
 
-    private suspend fun sendObjectSubscribe(type: String): String {
-        val subId = UUID.randomUUID().toString()
+    private suspend fun sendObjectSubscribe(subId: String, type: String) {
         val frame = FrickMsgPack.encodeFrame(
             FrameKindCodes.SUBSCRIBE,
             mapOf(
@@ -857,12 +867,11 @@ class FrickSyncSocket internal constructor(
             ),
         )
         sendOrQueue(FrameKindCodes.SUBSCRIBE, frame)
-        return subId
     }
 
     /** Subscribe to a projection by name. */
     suspend fun subscribeProjection(name: String) {
-        sendProjectionSubscribe(name)
+        sendProjectionSubscribe(UUID.randomUUID().toString(), name)
     }
 
     /**
@@ -871,16 +880,18 @@ class FrickSyncSocket internal constructor(
      * client half). Additive; [subscribeProjection] is unchanged.
      */
     suspend fun subscribeProjectionRegistered(name: String) {
-        sendProjectionSubscribe(name)
         // Projections correlate by name (the ProjectionDelta carries the name).
-        awaitSubscriptionRegistered(name)
+        // Register BEFORE sending so the reply can't resolve-and-drop early.
+        val deferred = registerRegistrationWaiter(name)
+        sendProjectionSubscribe(UUID.randomUUID().toString(), name)
+        deferred.await()
     }
 
-    private suspend fun sendProjectionSubscribe(name: String) {
+    private suspend fun sendProjectionSubscribe(subId: String, name: String) {
         val frame = FrickMsgPack.encodeFrame(
             FrameKindCodes.SUBSCRIBE,
             mapOf(
-                "subscriptionId" to UUID.randomUUID().toString(),
+                "subscriptionId" to subId,
                 "kind" to "projection",
                 "name" to name,
             ),
