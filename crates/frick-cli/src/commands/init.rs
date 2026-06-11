@@ -1,21 +1,36 @@
-//! `frick init <directory>` (ported from `apps/cli/src/commands/init.ts`).
+//! `frick init <directory>` — the canonical Rust-DSL app-authoring scaffold
+//! (FR-263).
 //!
-//! Scaffolds the project (`package.json`, `tsconfig.json`,
-//! `frick.config.json`, `README.md`, `src/schema.ts`, `src/server.ts`,
-//! `tests/smoke.test.ts`). Refuses (exit 3) to overwrite any existing file.
+//! Post-cutover the backend is the Rust `frick-server`, which loads a
+//! serialized [`FrickSchema`] JSON via `FRICK_SCHEMA_PATH`. The epic decided
+//! schemas are **authored in a Rust DSL** (the `frick-schema` builder) with
+//! TS/Swift/Kotlin as codegen targets, so `frick init` scaffolds a small,
+//! buildable Rust binary crate that is the source of truth:
 //!
-//! Post-cutover (FR-255) the scaffold no longer depends on the deleted
-//! `@fricken/server` package: `src/server.ts` exports the app definition as
-//! data and the backend runs as the standalone Rust `frick-server` binary
-//! (see the generated `README.md`).
+//! - `Cargo.toml` — a standalone binary crate depending on `frick-schema` +
+//!   `frick-codegen`.
+//! - `src/main.rs` — defines the app schema with [`SchemaBuilder`] and, on
+//!   `cargo run`, EXPORTS `schema.json` (for the standalone server) and
+//!   GENERATES the Swift/Kotlin/TypeScript client SDKs into `generated/`.
+//! - `README.md` — documents the authoring loop.
+//! - `.gitignore` — ignores build output + generated artifacts.
+//!
+//! The authoring loop is: edit `src/main.rs` → `cargo run` → `schema.json` +
+//! client SDKs → run `frick-server` with `FRICK_SCHEMA_PATH=schema.json`.
+//!
+//! A TypeScript schema/client surface (`package.json`, `src/schema.ts`,
+//! `src/server.ts`, …) is *also* scaffolded as a secondary, optional surface
+//! that `frick scaffold object|stream|projection` can grow — but it is NOT the
+//! source of truth; the Rust crate is.
+//!
+//! Refuses (exit 3) to overwrite any existing file.
 //!
 //! DEVIATIONS:
 //!  - `pnpm install` is never spawned (the Rust CLI has no pnpm dependency); we
 //!    treat `--install` as a no-op and report it. `--no-install` reports
 //!    `{skipped: true}` exactly like the TS.
 //!  - `--agents` agent-kit installation is unported (no Rust `@fricken/agent-kit`
-//!    counterpart) — passing `--agents` yields a `cli.unsupported` failure. See
-//!    openIssues.
+//!    counterpart) — passing `--agents` yields a `cli.unsupported` failure.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -26,11 +41,16 @@ use serde_json::{Value, json};
 
 use crate::argv::{FlagValue, ParsedArgs};
 use crate::errors::{CliError, EXIT_FAILURE, EXIT_OK};
+use crate::init_templates::{
+    CrateDeps, InitVariables, crate_name_from, render_cargo_toml, render_gitignore, render_main_rs,
+    render_readme_md,
+};
 use crate::mcp_config::{McpClientOptions, create_mcp_client_config};
 use crate::output::Output;
+use crate::paths::repo_root;
 use crate::templates::{
-    TemplateVariables, render_frick_config_json, render_package_json, render_readme_md,
-    render_schema_ts, render_server_ts, render_smoke_test_ts, render_tsconfig_json,
+    TemplateVariables, render_frick_config_json, render_package_json, render_schema_ts,
+    render_server_ts, render_smoke_test_ts, render_tsconfig_json,
 };
 
 #[allow(clippy::struct_excessive_bools)]
@@ -43,6 +63,10 @@ struct InitOptions {
     skip_schema_check: bool,
     agents: bool,
     mcp: bool,
+    /// How the scaffolded Rust crate wires its `frick-*` dependencies.
+    crate_deps: CrateDeps,
+    /// Whether to also scaffold the optional TypeScript surface (default true).
+    typescript: bool,
 }
 
 fn read_options(parsed: &ParsedArgs) -> Result<InitOptions, CliError> {
@@ -50,7 +74,7 @@ fn read_options(parsed: &ParsedArgs) -> Result<InitOptions, CliError> {
         return Err(CliError::usage_with(
             "frick init requires a target <directory>",
             json!({
-                "usage": "frick init <directory> [--name <name>] [--port <port>] [--version <ver>] [--no-install] [--agents all|codex,claude,cursor] [--mcp]"
+                "usage": "frick init <directory> [--name <name>] [--port <port>] [--version <ver>] [--no-install] [--crate-deps path|version] [--no-typescript] [--agents all|codex,claude,cursor] [--mcp]"
             }),
         ));
     };
@@ -91,6 +115,12 @@ fn read_options(parsed: &ParsedArgs) -> Result<InitOptions, CliError> {
     let agents = agents_requested(parsed.flags.get("agents"));
     let mcp = parsed.flag_bool_present("mcp") || parsed.flag_str("mcp") == Some("true");
 
+    let crate_deps = resolve_crate_deps(parsed, &version)?;
+    // The TS surface is scaffolded by default; `--no-typescript` skips it.
+    let typescript = !(parsed.flag_bool_present("no-typescript")
+        || parsed.flag_str("typescript") == Some("false")
+        || matches!(parsed.flags.get("typescript"), Some(FlagValue::Bool(false))));
+
     Ok(InitOptions {
         directory: resolved,
         app_name,
@@ -100,7 +130,35 @@ fn read_options(parsed: &ParsedArgs) -> Result<InitOptions, CliError> {
         skip_schema_check,
         agents,
         mcp,
+        crate_deps,
+        typescript,
     })
+}
+
+/// Decide how the scaffolded crate depends on `frick-schema` / `frick-codegen`.
+///
+/// `--crate-deps version[=X]` pins a published registry version (`X`, else the
+/// app version). The default (`--crate-deps path`, or unset) points the
+/// dependencies at the local Frick checkout's `crates/` directory so the
+/// scaffold `cargo build`s today (the crates are not published yet).
+/// `--crates-dir <path>` overrides the auto-detected crates directory.
+fn resolve_crate_deps(parsed: &ParsedArgs, version: &str) -> Result<CrateDeps, CliError> {
+    let mode = parsed.flag_str("crate-deps").unwrap_or("path");
+    match mode {
+        "version" => Ok(CrateDeps::Version(version.to_string())),
+        other if other.starts_with("version=") => {
+            Ok(CrateDeps::Version(other["version=".len()..].to_string()))
+        }
+        "path" => {
+            let crates_dir = parsed
+                .flag_str("crates-dir")
+                .map_or_else(|| repo_root().join("crates"), PathBuf::from);
+            Ok(CrateDeps::Path(crates_dir.to_string_lossy().into_owned()))
+        }
+        other => Err(CliError::usage(format!(
+            "--crate-deps must be 'path' or 'version[=<ver>]', got {other:?}"
+        ))),
+    }
 }
 
 fn resolve_dir(directory: &str) -> PathBuf {
@@ -141,6 +199,9 @@ fn write_file_fresh(path: &Path, body: &str, created: &mut Vec<String>) -> Resul
     Ok(())
 }
 
+/// Validate the empty scaffold schema in-process (the Rust analogue of the
+/// scaffold's `cargo test`): build the same defaults the scaffold encodes and
+/// run [`validate_schema`].
 fn schema_check_in_process(app_name: &str) -> (bool, Option<String>) {
     let schema = FrickSchema {
         name: app_name.to_string(),
@@ -168,6 +229,76 @@ fn schema_check_in_process(app_name: &str) -> (bool, Option<String>) {
     }
 }
 
+/// Write the canonical Rust-DSL authoring crate (the source of truth).
+fn write_rust_scaffold(
+    dir: &Path,
+    init_vars: &InitVariables,
+    created: &mut Vec<String>,
+) -> Result<(), CliError> {
+    write_file_fresh(
+        &dir.join("Cargo.toml"),
+        &render_cargo_toml(init_vars),
+        created,
+    )?;
+    write_file_fresh(
+        &dir.join("src").join("main.rs"),
+        &render_main_rs(init_vars),
+        created,
+    )?;
+    write_file_fresh(
+        &dir.join(".gitignore"),
+        &render_gitignore(init_vars),
+        created,
+    )?;
+    write_file_fresh(
+        &dir.join("README.md"),
+        &render_readme_md(init_vars),
+        created,
+    )?;
+    Ok(())
+}
+
+/// Write the optional TypeScript surface (`frick scaffold` grows these). The
+/// Rust crate remains the source of truth; these are a generated/scaffoldable
+/// convenience, not authoritative.
+fn write_typescript_surface(
+    dir: &Path,
+    ts_vars: &TemplateVariables,
+    created: &mut Vec<String>,
+) -> Result<(), CliError> {
+    write_file_fresh(
+        &dir.join("package.json"),
+        &render_package_json(ts_vars),
+        created,
+    )?;
+    write_file_fresh(
+        &dir.join("tsconfig.json"),
+        &render_tsconfig_json(ts_vars),
+        created,
+    )?;
+    write_file_fresh(
+        &dir.join("frick.config.json"),
+        &render_frick_config_json(ts_vars),
+        created,
+    )?;
+    write_file_fresh(
+        &dir.join("src").join("schema.ts"),
+        &render_schema_ts(ts_vars),
+        created,
+    )?;
+    write_file_fresh(
+        &dir.join("src").join("server.ts"),
+        &render_server_ts(ts_vars),
+        created,
+    )?;
+    write_file_fresh(
+        &dir.join("tests").join("smoke.test.ts"),
+        &render_smoke_test_ts(ts_vars),
+        created,
+    )?;
+    Ok(())
+}
+
 /// `initCommand`.
 pub fn init_command(parsed: &ParsedArgs, out: &mut Output) -> Result<i32, CliError> {
     let opts = read_options(parsed)?;
@@ -179,49 +310,30 @@ pub fn init_command(parsed: &ParsedArgs, out: &mut Output) -> Result<i32, CliErr
         ));
     }
 
-    let vars = TemplateVariables {
+    let crate_name = crate_name_from(&opts.app_name);
+    let init_vars = InitVariables {
         app_name: opts.app_name.clone(),
+        crate_name: crate_name.clone(),
+        schema_id: opts.app_name.clone(),
         port: opts.port,
         version: opts.version.clone(),
+        crate_deps: opts.crate_deps.clone(),
     };
     let mut created: Vec<String> = Vec::new();
 
     let dir = &opts.directory;
-    write_file_fresh(
-        &dir.join("package.json"),
-        &render_package_json(&vars),
-        &mut created,
-    )?;
-    write_file_fresh(
-        &dir.join("tsconfig.json"),
-        &render_tsconfig_json(&vars),
-        &mut created,
-    )?;
-    write_file_fresh(
-        &dir.join("frick.config.json"),
-        &render_frick_config_json(&vars),
-        &mut created,
-    )?;
-    write_file_fresh(
-        &dir.join("README.md"),
-        &render_readme_md(&vars),
-        &mut created,
-    )?;
-    write_file_fresh(
-        &dir.join("src").join("schema.ts"),
-        &render_schema_ts(&vars),
-        &mut created,
-    )?;
-    write_file_fresh(
-        &dir.join("src").join("server.ts"),
-        &render_server_ts(&vars),
-        &mut created,
-    )?;
-    write_file_fresh(
-        &dir.join("tests").join("smoke.test.ts"),
-        &render_smoke_test_ts(&vars),
-        &mut created,
-    )?;
+    // The Rust crate is the source of truth.
+    write_rust_scaffold(dir, &init_vars, &mut created)?;
+
+    // The TypeScript surface is an optional, non-authoritative convenience.
+    if opts.typescript {
+        let ts_vars = TemplateVariables {
+            app_name: opts.app_name.clone(),
+            port: opts.port,
+            version: opts.version.clone(),
+        };
+        write_typescript_surface(dir, &ts_vars, &mut created)?;
+    }
 
     let (schema_ok, schema_error) = if opts.skip_schema_check {
         (true, None)
@@ -254,6 +366,11 @@ pub fn init_command(parsed: &ParsedArgs, out: &mut Output) -> Result<i32, CliErr
         json!({ "ok": false, "error": schema_error })
     };
 
+    let deps_kind = match &opts.crate_deps {
+        CrateDeps::Path(_) => "path",
+        CrateDeps::Version(_) => "version",
+    };
+
     let ok = schema_ok;
     let mut record = serde_json::Map::new();
     record.insert("ok".to_string(), json!(ok));
@@ -262,8 +379,11 @@ pub fn init_command(parsed: &ParsedArgs, out: &mut Output) -> Result<i32, CliErr
         json!(opts.directory.to_string_lossy()),
     );
     record.insert("appName".to_string(), json!(opts.app_name));
+    record.insert("crateName".to_string(), json!(crate_name));
     record.insert("port".to_string(), json!(opts.port));
     record.insert("version".to_string(), json!(opts.version));
+    record.insert("crateDeps".to_string(), json!(deps_kind));
+    record.insert("typescript".to_string(), json!(opts.typescript));
     record.insert("created".to_string(), json!(created));
     if let Some(mcp) = mcp_config {
         record.insert("mcp".to_string(), mcp);

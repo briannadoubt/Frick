@@ -1,4 +1,12 @@
-//! Inline scaffold templates (ported from `apps/cli/src/templates/`).
+//! Inline templates for the **optional TypeScript surface** (ported from
+//! `apps/cli/src/templates/`).
+//!
+//! Post-cutover (FR-263) the canonical authoring scaffold is a Rust crate (see
+//! [`crate::init_templates`]); these renderers emit the secondary,
+//! non-authoritative TypeScript files (`package.json`, `tsconfig.json`,
+//! `src/schema.ts`, `src/server.ts`, …) that `frick init` also lays down and
+//! that `frick scaffold object|stream|projection` grows. They are NOT the
+//! source of truth.
 //!
 //! Each renderer returns the exact file contents the TS templates produce for
 //! the same `{appName, port, version}` — the JSON files are emitted via
@@ -172,51 +180,8 @@ describe(\"smoke\", () => {{\n\
 }});\n"
     )
 }
-
-/// `README.md` (`templates/README.md.ts`). Explains the project shape and how
-/// to run the standalone Rust `frick-server` backend.
-#[must_use]
-pub fn render_readme_md(vars: &TemplateVariables) -> String {
-    let app_name = &vars.app_name;
-    let port = vars.port;
-    format!(
-        "# {app_name}\n\
-\n\
-A [Frick](https://github.com/briannadoubt/Frick) schema + client project.\n\
-\n\
-- `src/schema.ts` — the app schema (objects, streams, events, …). Edit it by\n\
-  hand or with `frick scaffold object|stream <Name>`.\n\
-- `src/server.ts` — the **app definition** (`export const app = {{ schema,\n\
-  projections }}`) that the backend consumes. It does NOT boot a server; the\n\
-  backend is the standalone Rust `frick-server` binary. Add projections with\n\
-  `frick scaffold projection <name>`.\n\
-- `tests/smoke.test.ts` — validates the schema with `vitest run`.\n\
-\n\
-## Running the backend\n\
-\n\
-The backend is the Rust `frick-server` binary — there is no embedded TS server.\n\
-\n\
-### Docker\n\
-\n\
-Build/run the server image (see `ops/deploy/server.Dockerfile` and the deploy\n\
-compose files), pointing `FRICK_SCHEMA_PATH` at this app's exported schema JSON:\n\
-\n\
-```sh\n\
-FRICK_SCHEMA_PATH=./schema.json FRICK_PORT={port} \\\n\
-  docker run --rm -p {port}:{port} \\\n\
-  -e FRICK_SCHEMA_PATH -e FRICK_PORT frick-server:latest\n\
-```\n\
-\n\
-### From source\n\
-\n\
-```sh\n\
-FRICK_SCHEMA_PATH=./schema.json FRICK_PORT={port} cargo run -p frick-server\n\
-```\n\
-\n\
-## Exporting the schema\n\
-\n\
-The standalone server reads the schema as JSON (`FRICK_SCHEMA_PATH`). Exporting\n\
-`src/schema.ts` → `schema.json` is a follow-up: `frick` will gain a\n\
-schema-export command. Until then, serialize the exported `schema` yourself.\n"
-    )
-}
+// NOTE: The project `README.md` is no longer rendered here. `frick init`
+// scaffolds a Rust authoring crate as the source of truth and emits the
+// authoring-loop README via `crate::init_templates::render_readme_md`. These
+// TS templates remain only for the optional, non-authoritative TypeScript
+// surface that `frick scaffold` grows.

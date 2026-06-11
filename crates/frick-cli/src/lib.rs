@@ -12,6 +12,7 @@ pub mod argv;
 pub mod commands;
 pub mod context;
 pub mod errors;
+pub mod init_templates;
 pub mod mcp_config;
 pub mod output;
 pub mod paths;
