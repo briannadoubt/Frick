@@ -124,6 +124,11 @@ pub struct AppStateInner {
     /// documented follow-up and fails fast at boot. Read by the
     /// `/_frick/inspect/platform-events` health report.
     pub platform_events: Arc<dyn frick_store::PlatformEventsDriver>,
+
+    /// The realtime calls control plane (FR-276/FR-283): the call lifecycle
+    /// state machine the gateway routes `CallCommand` frames to, brokering a
+    /// pluggable media plane (`FRICK_CALLS_MEDIA_PLANE`).
+    pub calls: Arc<crate::calls::CallControlPlane>,
 }
 
 impl AppStateInner {

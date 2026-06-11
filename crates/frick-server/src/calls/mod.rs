@@ -15,7 +15,7 @@ pub mod schema;
 
 pub use control_plane::{
     CallActor, CallAuthzReason, CallClock, CallControlPlane, CallError, CallStateReason,
-    CreateCallInput, CreateCallResult, JoinCallResult, call_actor,
+    CreateCallInput, CreateCallResult, JoinCallResult, SystemCallClock, call_actor,
 };
 pub use fake_media_plane::{FakeMediaPlaneAdapter, FakeMediaPlaneOptions};
 pub use media_plane::{

@@ -374,6 +374,17 @@ async fn build_server(
     // kafka is a documented follow-up and fails fast here.
     let platform_events = build_platform_events(&config, &store)?;
 
+    // Realtime calls control plane (FR-283). The media plane is pluggable
+    // (FR-286 P2P / FR-287 SFU); until a real adapter is selected, the
+    // deterministic fake SFU is the default so the call lifecycle is exercisable
+    // end-to-end. Media-plane selection by `FRICK_CALLS_MEDIA_PLANE` is a thin
+    // follow-on once the P2P/SFU adapters land.
+    let calls = Arc::new(crate::calls::CallControlPlane::new(
+        Arc::clone(&store),
+        Arc::new(crate::calls::FakeMediaPlaneAdapter::sfu()),
+        Arc::new(crate::calls::SystemCallClock),
+    ));
+
     let state = Arc::new(AppStateInner {
         config: config.clone(),
         store,
@@ -388,6 +399,7 @@ async fn build_server(
         apps,
         // Populated by `attach_gateway` once the hub is built below (FR-278).
         gateway: std::sync::OnceLock::new(),
+        calls,
         blob_processors,
         platform_events,
     });

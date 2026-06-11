@@ -923,6 +923,11 @@ async fn test_hub() -> std::sync::Arc<GatewayHub> {
         }])
         .unwrap(),
     );
+    let calls = std::sync::Arc::new(crate::calls::CallControlPlane::new(
+        std::sync::Arc::clone(&store),
+        std::sync::Arc::new(crate::calls::FakeMediaPlaneAdapter::sfu()),
+        std::sync::Arc::new(crate::calls::SystemCallClock),
+    ));
     let state = std::sync::Arc::new(AppStateInner {
         config: test_config(),
         store,
@@ -936,6 +941,7 @@ async fn test_hub() -> std::sync::Arc<GatewayHub> {
         email_router: std::sync::Arc::new(crate::email::EmailRouter::noop()),
         apps,
         gateway: std::sync::OnceLock::new(),
+        calls,
         blob_processors: std::sync::Arc::new(crate::blob_processors::BlobProcessorRegistry::new()),
         platform_events: std::sync::Arc::new(frick_store::MemoryPlatformEvents::new()),
     });

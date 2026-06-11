@@ -145,6 +145,22 @@ pub trait CallClock: Send + Sync {
     fn new_call_id(&self) -> String;
 }
 
+/// Production [`CallClock`]: the system wall clock + a UUID call-id source.
+pub struct SystemCallClock;
+
+impl CallClock for SystemCallClock {
+    fn now_ms(&self) -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|d| i64::try_from(d.as_millis()).ok())
+            .unwrap_or(0)
+    }
+    fn new_call_id(&self) -> String {
+        format!("call-{}", uuid::Uuid::new_v4().simple())
+    }
+}
+
 /// The call control plane (FR-79 / FR-283).
 pub struct CallControlPlane {
     store: Arc<FrickStore>,

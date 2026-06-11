@@ -716,20 +716,7 @@ async fn dispatch(hub: &Arc<GatewayHub>, id: u64, frame: FrickFrame) -> bool {
             );
             false
         }
-        FrickFrame::CallCommand(_) => {
-            // Calls are deferred (FR-15): every command → auth.forbidden
-            // reason callsDisabled.
-            let nack = simple_nack(
-                FrickErrorCode::AuthForbidden,
-                "Call control plane is disabled",
-                "call",
-                false,
-                Some(Value::Map(vec![("reason".into(), "callsDisabled".into())])),
-                None,
-            );
-            send_frame(hub, id, &nack);
-            false
-        }
+        FrickFrame::CallCommand(payload) => handle_call_command(hub, id, payload).await,
         // Unknown / server→client frame kinds are silently ignored (§6.6).
         _ => false,
     }
@@ -1541,6 +1528,32 @@ async fn handle_signal(hub: &Arc<GatewayHub>, id: u64, payload: SignalPayload) -
         return false;
     }
     let app_id = connection_app_id(hub, id);
+    // FR-284: gate the WebRTCSignal relay on call membership — only a member of
+    // the call (creator / non-resolved invitee / participant of a non-ended
+    // call) may relay SDP/ICE. The signal is keyed by the call id.
+    if payload.name == crate::calls::schema::WEBRTC_SIGNAL
+        && !hub
+            .state
+            .calls
+            .is_signal_member(
+                &principal.tenant_id,
+                &app_id,
+                &payload.key,
+                &principal.user_id,
+            )
+            .await
+    {
+        let nack = simple_nack(
+            FrickErrorCode::AuthForbidden,
+            "Not a member of this call",
+            &payload.request_id,
+            false,
+            Some(Value::Map(vec![("reason".into(), "notMember".into())])),
+            None,
+        );
+        send_frame(hub, id, &nack);
+        return false;
+    }
     let _ = hub
         .state
         .store
@@ -1556,6 +1569,147 @@ async fn handle_signal(hub: &Arc<GatewayHub>, id: u64, payload: SignalPayload) -
     fan_out_signal(hub, &principal.tenant_id, &app_id, &payload);
     send_frame(hub, id, &ack(payload.request_id));
     false
+}
+
+/// FR-282/FR-283 — route a `CallCommand` to the call control plane and reply
+/// with a typed `CallCommandResult`, or a `Nack` mapped from the control-plane
+/// error. The actor is the connection's authenticated principal.
+async fn handle_call_command(
+    hub: &Arc<GatewayHub>,
+    id: u64,
+    payload: frick_protocol::calls::CallCommandPayload,
+) -> bool {
+    let Some(principal) = active_principal_for_frame(hub, id, &payload.request_id).await else {
+        return false;
+    };
+    let actor = crate::calls::CallActor {
+        tenant_id: principal.tenant_id.clone(),
+        user_id: principal.user_id.clone(),
+        device_id: principal.device_id.clone(),
+        app_id: Some(connection_app_id(hub, id)),
+    };
+    let request_id = payload.request_id.clone();
+    match dispatch_call_command(&hub.state.calls, &actor, payload.command).await {
+        Ok(mut result) => {
+            result.request_id = request_id;
+            send_frame(hub, id, &FrickFrame::CallCommandResult(Box::new(result)));
+        }
+        Err(err) => {
+            let (code, reason) = call_error_to_nack(&err);
+            let nack = simple_nack(
+                code,
+                &err.to_string(),
+                &request_id,
+                false,
+                Some(Value::Map(vec![("reason".into(), reason.into())])),
+                None,
+            );
+            send_frame(hub, id, &nack);
+        }
+    }
+    false
+}
+
+async fn dispatch_call_command(
+    cp: &crate::calls::CallControlPlane,
+    actor: &crate::calls::CallActor,
+    command: frick_protocol::calls::CallCommandOp,
+) -> Result<frick_protocol::calls::CallCommandResultPayload, crate::calls::CallError> {
+    use frick_protocol::calls::{CallCommandName as Name, CallCommandOp as Op};
+    let mut result = frick_protocol::calls::CallCommandResultPayload {
+        request_id: String::new(),
+        op: Name::Create,
+        room: None,
+        invites: None,
+        participant: None,
+        media_grant: None,
+        invite: None,
+        producer: None,
+        consumer: None,
+    };
+    match command {
+        Op::Create {
+            conversation_id,
+            invitee_user_ids,
+            kind,
+            region_hint,
+        } => {
+            let created = cp
+                .create_call(
+                    actor,
+                    crate::calls::CreateCallInput {
+                        conversation_id,
+                        invitee_user_ids,
+                        kind,
+                        region_hint,
+                    },
+                )
+                .await?;
+            result.op = Name::Create;
+            result.room = Some(created.room);
+            result.invites = Some(created.invites);
+        }
+        Op::Join { call_id } => {
+            let joined = cp.join_call(actor, &call_id).await?;
+            result.op = Name::Join;
+            result.room = Some(joined.room);
+            result.participant = Some(joined.participant);
+            result.media_grant = Some(joined.media_grant);
+        }
+        Op::Accept { call_id } => {
+            result.op = Name::Accept;
+            result.invite = Some(cp.accept_invite(actor, &call_id).await?);
+        }
+        Op::Leave { call_id } => {
+            result.op = Name::Leave;
+            result.room = Some(cp.leave_call(actor, &call_id).await?);
+        }
+        Op::End { call_id } => {
+            result.op = Name::End;
+            result.room = Some(cp.end_call(actor, &call_id).await?);
+        }
+        Op::SetMediaState { call_id, media } => {
+            result.op = Name::SetMediaState;
+            result.participant = Some(cp.set_media_state(actor, &call_id, &media).await?);
+        }
+        Op::SfuConnectTransport { .. } | Op::SfuProduce { .. } | Op::SfuConsume { .. } => {
+            return Err(crate::calls::CallError::MediaUnsupported(
+                "SFU media negotiation is not supported by the configured media plane (FR-288)"
+                    .to_string(),
+            ));
+        }
+    }
+    Ok(result)
+}
+
+fn call_error_to_nack(err: &crate::calls::CallError) -> (FrickErrorCode, &'static str) {
+    use crate::calls::{CallAuthzReason, CallError, CallStateReason};
+    match err {
+        CallError::Authz(reason, _) => (
+            FrickErrorCode::AuthForbidden,
+            match reason {
+                CallAuthzReason::NotCreator => "notCreator",
+                CallAuthzReason::NotInvitee => "notInvitee",
+                CallAuthzReason::NotSelf => "notSelf",
+            },
+        ),
+        CallError::State(reason, _) => match reason {
+            CallStateReason::CallNotFound => (FrickErrorCode::StorageNotFound, "callNotFound"),
+            CallStateReason::CapacityExceeded => {
+                (FrickErrorCode::RateLimitExceeded, "capacityExceeded")
+            }
+            CallStateReason::CallEnded => (FrickErrorCode::StorageConflict, "callEnded"),
+            CallStateReason::NotParticipant => (FrickErrorCode::StorageConflict, "notParticipant"),
+            CallStateReason::InviteAlreadyResolved => {
+                (FrickErrorCode::StorageConflict, "inviteAlreadyResolved")
+            }
+            CallStateReason::NoInvitees => (FrickErrorCode::StorageConflict, "noInvitees"),
+        },
+        CallError::MediaUnsupported(_) => (FrickErrorCode::AuthForbidden, "mediaUnsupported"),
+        CallError::Media(_) | CallError::Store(_) | CallError::Decode(_) => {
+            (FrickErrorCode::ServerInternal, "internal")
+        }
+    }
 }
 
 // ---- fan-out funnel (§6.7) --------------------------------------------------
