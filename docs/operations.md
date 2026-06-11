@@ -376,6 +376,9 @@ email/password accounts with single-use password reset tokens:
   same subject value never alias onto one account. Returns
   `{ session, user, isNewUser }`. An unconfigured `:providerId` returns `404`,
   and verification failures return `401 { error: "oidc_token_invalid", code }`.
+  **Enterprise SAML SSO** is supported through this OIDC route by fronting Frick
+  with a SAML→OIDC broker (Dex / Keycloak / Auth0 / Okta) rather than
+  terminating SAML in the server — see [`enterprise-sso.md`](enterprise-sso.md).
 - `POST /auth/email/signup` creates a mapped User row and password account from
   `{ email, password, displayName? }`. Email is normalized to lowercase, the
   default minimum password length is 8, and duplicate emails return `409`.

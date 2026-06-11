@@ -35,7 +35,7 @@ The Rust server reaches feature parity with the former TypeScript server across 
 ### Known gaps (follow-ups)
 
 - **Calls/WebRTC (FR-276)** — the realtime calls control plane (signaling + SFU + E2EE) is not yet ported.
-- **SAML federation (FR-280)** — deferred: the pure-Rust constraint (no OpenSSL) has no mature XML-canonicalization/dsig path yet. Email/password + Apple/Google/OIDC are ported.
+- **SAML federation (FR-280)** — by design, Frick does not terminate SAML in-process (it would require OpenSSL + libxml2 and own the high-risk XML-signature path). Enterprise SAML SSO is supported by fronting Frick with a SAML→OIDC broker (Dex/Keycloak/…) and consuming the already-shipped OIDC route — see [`docs/enterprise-sso.md`](docs/enterprise-sso.md).
 - **Platform-events Kafka driver** — the `memory` + `sqlite` drivers ship; `kafka` fails fast at boot.
 - **Blob image derivatives** — the processor pipeline ships; image-derivative generation (the `image` crate) is a follow-up.
 - **App authoring (FR-263)** — the canonical Rust-DSL authoring loop (`frick init` scaffolding) is still being designed; `frick init` currently scaffolds a schema/client project, and the standalone server loads a serialized schema via `FRICK_SCHEMA_PATH`.
