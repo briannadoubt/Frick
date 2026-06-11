@@ -85,7 +85,11 @@ impl BootSeams {
             credential_env: Arc::new(crate::push::credentials::ProcessCredentialEnv),
             push_transports: crate::push::PushTransports::production(),
             // Default: a Noop-backed router. `forgot-password` still returns 200
-            // (the Noop adapter logs + succeeds); FR-271 swaps in Resend.
+            // (the Noop adapter logs + succeeds). `create_frick_server` overrides
+            // this from config (FR-271): `FRICK_EMAIL_PROVIDER=resend` swaps in a
+            // live `ResendEmailAdapter` via `EmailRouter::from_config`. Tests that
+            // build `BootSeams::production()` directly keep this Noop default
+            // unless they inject their own (e.g. a `RecordingEmailAdapter`).
             email_router: Arc::new(crate::email::EmailRouter::noop()),
             // Production JWKS: a cached `reqwest` fetcher hitting Apple/Google's
             // published key sets (refetched on an unknown `kid`).
@@ -100,7 +104,13 @@ pub async fn create_frick_server(
     config: FrickConfig,
     schema: FrickSchema,
 ) -> Result<FrickServer, BootError> {
-    create_frick_server_with_seams(config, schema, BootSeams::production()).await
+    // FR-271: select the outbound-email router from config. `from_config` wires
+    // a live Resend adapter when `FRICK_EMAIL_PROVIDER=resend` (with the
+    // configured API key + `from:`), and otherwise keeps the Noop default — so
+    // an unconfigured deployment stays Noop and `forgot-password` still 200s.
+    let mut seams = BootSeams::production();
+    seams.email_router = Arc::new(crate::email::EmailRouter::from_config(&config));
+    create_frick_server_with_seams(config, schema, seams).await
 }
 
 /// [`create_frick_server`] with explicit push seams (recording transports + a

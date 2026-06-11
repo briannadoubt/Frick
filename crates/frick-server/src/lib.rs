@@ -42,14 +42,14 @@ pub use cluster::{
     ClusterEnvelope, ClusterEnvelopeHandler, FrickClusterBus, MemoryClusterBus,
     MemoryClusterBusOptions, MemoryClusterChannel, NodeId, Unsubscribe, random_node_id,
 };
-pub use config::{FrickConfig, FrickConfigError, FrickLimits, load_frick_config};
+pub use config::{EmailProvider, FrickConfig, FrickConfigError, FrickLimits, load_frick_config};
 pub use diagnostics::{
     AssembleDiagnosticsOptions, DIAGNOSTICS_VERSION, DiagnosticsCursorProbe,
     assemble_diagnostics_snapshot,
 };
 pub use email::{
     EmailError, EmailKind, EmailMessage, EmailRouter, FrickEmailAdapter, NoopEmailAdapter,
-    RecordingEmailAdapter,
+    RecordingEmailAdapter, ResendEmailAdapter,
 };
 pub use error::{LimitKind, ServerError};
 pub use gateway::{CloseTarget, GatewayHub};

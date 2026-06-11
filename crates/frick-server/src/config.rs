@@ -79,6 +79,28 @@ pub enum PlatformEventsDriver {
     Kafka,
 }
 
+/// Outbound-email provider (`FRICK_EMAIL_PROVIDER`, FR-271). `Noop` is the
+/// default: `forgot-password` still returns 200 but no message leaves the
+/// process (the [`crate::email::NoopEmailAdapter`] logs + succeeds). `Resend`
+/// selects the live [`crate::email::ResendEmailAdapter`] — it additionally
+/// requires `FRICK_RESEND_API_KEY` and `FRICK_EMAIL_FROM`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmailProvider {
+    Noop,
+    Resend,
+}
+
+impl EmailProvider {
+    /// The wire/log label.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Noop => "noop",
+            Self::Resend => "resend",
+        }
+    }
+}
+
 /// An origin-allowlist entry (`FRICK_ALLOWED_ORIGINS`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AllowedOrigin {
@@ -272,6 +294,19 @@ pub struct FrickConfig {
     /// audience(s) + JWKS endpoint for `POST /auth/oidc/:id/verify`. Empty ⇒
     /// every `/auth/oidc/:id/verify` answers "provider not configured" (404).
     pub oidc_providers: Vec<OidcProviderConfig>,
+    /// Outbound-email provider (FR-271), from `FRICK_EMAIL_PROVIDER`
+    /// (`noop` | `resend`). Defaults to [`EmailProvider::Noop`]; an unconfigured
+    /// deployment stays Noop, so `forgot-password` still returns 200 without
+    /// sending. `resend` additionally requires `resend_api_key` + `email_from`.
+    pub email_provider: EmailProvider,
+    /// The Resend API key (`FRICK_RESEND_API_KEY`, FR-271) — the
+    /// `Authorization: Bearer <key>` credential. Required when
+    /// `email_provider == Resend`; `None` otherwise.
+    pub resend_api_key: Option<String>,
+    /// The default `from:` address for framework auth emails
+    /// (`FRICK_EMAIL_FROM`, FR-271). Required when `email_provider == Resend`;
+    /// also used as the [`crate::email::EmailRouter`] `default_from`.
+    pub email_from: Option<String>,
     pub limits: FrickLimits,
 }
 
@@ -653,6 +688,16 @@ pub fn load_frick_config(env: &dyn EnvSource) -> Result<FrickConfig> {
 
     let admin_token = read(env, "FRICK_ADMIN_TOKEN");
 
+    let email_provider = match read(env, "FRICK_EMAIL_PROVIDER").as_deref() {
+        None | Some("noop") => EmailProvider::Noop,
+        Some("resend") => EmailProvider::Resend,
+        Some(other) => {
+            return Err(FrickConfigError::new(format!(
+                "Invalid FRICK_EMAIL_PROVIDER: \"{other}\" (expected noop/resend)"
+            )));
+        }
+    };
+
     let config = FrickConfig {
         env: frick_env,
         demo_auth_enabled,
@@ -711,6 +756,9 @@ pub fn load_frick_config(env: &dyn EnvSource) -> Result<FrickConfig> {
         apple_audiences: parse_comma_list(env, "FRICK_APPLE_AUDIENCES"),
         google_client_ids: parse_comma_list(env, "FRICK_GOOGLE_CLIENT_IDS"),
         oidc_providers: parse_oidc_providers(env)?,
+        email_provider,
+        resend_api_key: read(env, "FRICK_RESEND_API_KEY"),
+        email_from: read(env, "FRICK_EMAIL_FROM"),
         limits: load_limits(env)?,
     };
 
@@ -753,6 +801,26 @@ fn validate_cross_field(config: &FrickConfig) -> Result<()> {
         return Err(FrickConfigError::new(
             "FRICK_BLOB_DRIVER=s3 requires FRICK_BLOB_S3_BUCKET",
         ));
+    }
+    if config.email_provider == EmailProvider::Resend {
+        if config
+            .resend_api_key
+            .as_deref()
+            .is_none_or(|key| key.trim().is_empty())
+        {
+            return Err(FrickConfigError::new(
+                "FRICK_EMAIL_PROVIDER=resend requires FRICK_RESEND_API_KEY",
+            ));
+        }
+        if config
+            .email_from
+            .as_deref()
+            .is_none_or(|from| from.trim().is_empty())
+        {
+            return Err(FrickConfigError::new(
+                "FRICK_EMAIL_PROVIDER=resend requires FRICK_EMAIL_FROM (the default `from:` address)",
+            ));
+        }
     }
     if config.env.is_production() {
         if config.demo_auth_enabled {
@@ -979,6 +1047,46 @@ mod tests {
     fn oidc_providers_reject_invalid_json() {
         let err = load_frick_config(&env(&[("FRICK_OIDC_PROVIDERS", "not json")])).unwrap_err();
         assert!(err.0.contains("Invalid FRICK_OIDC_PROVIDERS"), "{}", err.0);
+    }
+
+    #[test]
+    fn email_provider_defaults_to_noop() {
+        let config = load_frick_config(&env(&[])).unwrap();
+        assert_eq!(config.email_provider, EmailProvider::Noop);
+        assert!(config.resend_api_key.is_none());
+        assert!(config.email_from.is_none());
+    }
+
+    #[test]
+    fn email_provider_resend_requires_key_and_from() {
+        // Provider=resend with no key is fatal.
+        let err = load_frick_config(&env(&[("FRICK_EMAIL_PROVIDER", "resend")])).unwrap_err();
+        assert!(err.0.contains("FRICK_RESEND_API_KEY"), "{}", err.0);
+
+        // Key present but `from` missing is still fatal.
+        let err = load_frick_config(&env(&[
+            ("FRICK_EMAIL_PROVIDER", "resend"),
+            ("FRICK_RESEND_API_KEY", "re_test_key"),
+        ]))
+        .unwrap_err();
+        assert!(err.0.contains("FRICK_EMAIL_FROM"), "{}", err.0);
+
+        // Fully configured resend loads.
+        let config = load_frick_config(&env(&[
+            ("FRICK_EMAIL_PROVIDER", "resend"),
+            ("FRICK_RESEND_API_KEY", "re_test_key"),
+            ("FRICK_EMAIL_FROM", "noreply@frick.dev"),
+        ]))
+        .unwrap();
+        assert_eq!(config.email_provider, EmailProvider::Resend);
+        assert_eq!(config.resend_api_key.as_deref(), Some("re_test_key"));
+        assert_eq!(config.email_from.as_deref(), Some("noreply@frick.dev"));
+    }
+
+    #[test]
+    fn email_provider_rejects_unknown_value() {
+        let err = load_frick_config(&env(&[("FRICK_EMAIL_PROVIDER", "postmark")])).unwrap_err();
+        assert!(err.0.contains("Invalid FRICK_EMAIL_PROVIDER"), "{}", err.0);
     }
 
     #[test]

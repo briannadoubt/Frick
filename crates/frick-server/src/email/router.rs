@@ -66,6 +66,35 @@ impl EmailRouter {
         Self::new(Arc::new(super::NoopEmailAdapter), None, None)
     }
 
+    /// Build the boot email router from config (FR-271). When
+    /// `email_provider == Resend` (validated to carry both an API key and a
+    /// `from:` address), this wires a live [`super::ResendEmailAdapter`] with
+    /// `email_from` as the router's `default_from`. For every other provider
+    /// (the [`crate::config::EmailProvider::Noop`] default — i.e. an
+    /// unconfigured deployment) it returns [`Self::noop`], so `forgot-password`
+    /// still returns 200 without sending. The `appName` falls back to the
+    /// default when no `public_url`-derived name is configured.
+    #[must_use]
+    pub fn from_config(config: &crate::config::FrickConfig) -> Self {
+        use crate::config::EmailProvider;
+        match config.email_provider {
+            EmailProvider::Resend => {
+                // `validate_cross_field` guarantees both are present + non-empty
+                // when the provider is Resend; the `unwrap_or_default` is purely
+                // defensive (a missing key would yield a `Bearer ` header that
+                // Resend rejects — surfaced + logged by the router, never a
+                // panic).
+                let api_key = config.resend_api_key.clone().unwrap_or_default();
+                Self::new(
+                    Arc::new(super::ResendEmailAdapter::new(api_key)),
+                    config.email_from.clone(),
+                    None,
+                )
+            }
+            EmailProvider::Noop => Self::noop(),
+        }
+    }
+
     /// The adapter's provider id (`noop` / `recording` / `resend`).
     #[must_use]
     pub fn provider(&self) -> &'static str {
@@ -243,5 +272,38 @@ mod tests {
         // real adapter + from).
         let router = EmailRouter::default();
         assert_eq!(router.provider(), "noop");
+    }
+
+    fn config_from(pairs: &[(&str, &str)]) -> crate::config::FrickConfig {
+        let mut env: std::collections::BTreeMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
+        // Keep the rest of the config trivially valid (dev defaults).
+        env.entry("FRICK_ENV".to_string())
+            .or_insert_with(|| "test".to_string());
+        crate::config::load_frick_config(&env).unwrap()
+    }
+
+    #[test]
+    fn from_config_default_stays_noop() {
+        // An unconfigured deployment (no FRICK_EMAIL_PROVIDER) must stay Noop so
+        // forgot-password still 200s without a real provider (FR-271).
+        let router = EmailRouter::from_config(&config_from(&[]));
+        assert_eq!(router.provider(), "noop");
+    }
+
+    #[test]
+    fn from_config_resend_selects_live_adapter_with_from() {
+        let router = EmailRouter::from_config(&config_from(&[
+            ("FRICK_EMAIL_PROVIDER", "resend"),
+            ("FRICK_RESEND_API_KEY", "re_test_key"),
+            ("FRICK_EMAIL_FROM", "noreply@frick.dev"),
+        ]));
+        assert_eq!(router.provider(), "resend");
+        // The configured `from:` is threaded through as the router default, so
+        // the password-reset helper formats + dispatches rather than reporting
+        // missingFrom.
+        assert_eq!(router.default_from.as_deref(), Some("noreply@frick.dev"));
     }
 }
