@@ -85,6 +85,17 @@ pub enum PlatformEventsDriver {
     Kafka,
 }
 
+/// Selected realtime-calls media plane (`FRICK_CALLS_MEDIA_PLANE`). `fake`
+/// (deterministic, default) brokers no real media; `p2p` issues ICE/TURN
+/// credentials for one-to-one calls (FR-286); `sfu` brokers a server-side SFU
+/// room over the fake SFU backend (FR-287; a production backend is FR-288).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallsMediaPlane {
+    Fake,
+    P2p,
+    Sfu,
+}
+
 impl PlatformEventsDriver {
     /// The wire/log label.
     #[must_use]
@@ -335,6 +346,7 @@ pub struct FrickConfig {
     pub inspection_enabled: bool,
     pub admin_token: Option<String>,
     pub implicit_tenant_creation: bool,
+    pub calls_media_plane: CallsMediaPlane,
     pub platform_events_driver: PlatformEventsDriver,
     pub platform_events_topic: String,
     pub platform_events_kafka_brokers: Vec<String>,
@@ -834,6 +846,17 @@ pub fn load_frick_config(env: &dyn EnvSource) -> Result<FrickConfig> {
         }
     };
 
+    let calls_media_plane = match read(env, "FRICK_CALLS_MEDIA_PLANE").as_deref() {
+        None | Some("fake") => CallsMediaPlane::Fake,
+        Some("p2p") => CallsMediaPlane::P2p,
+        Some("sfu") => CallsMediaPlane::Sfu,
+        Some(other) => {
+            return Err(FrickConfigError::new(format!(
+                "FRICK_CALLS_MEDIA_PLANE must be one of fake, p2p, sfu (got \"{other}\")"
+            )));
+        }
+    };
+
     let admin_token = read(env, "FRICK_ADMIN_TOKEN");
 
     let email_provider = match read(env, "FRICK_EMAIL_PROVIDER").as_deref() {
@@ -871,6 +894,7 @@ pub fn load_frick_config(env: &dyn EnvSource) -> Result<FrickConfig> {
         admin_token,
         implicit_tenant_creation: parse_boolean(env, "FRICK_IMPLICIT_TENANT_CREATION")?
             .unwrap_or(!production),
+        calls_media_plane,
         platform_events_driver,
         platform_events_topic: read(env, "FRICK_PLATFORM_EVENTS_TOPIC")
             .unwrap_or_else(|| "frick.platform.events".into()),

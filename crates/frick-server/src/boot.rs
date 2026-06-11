@@ -297,6 +297,28 @@ fn build_blob_processor_registry(
 /// documented follow-up: it needs a Kafka-client dependency decision, so it
 /// fails fast with a clear "not yet ported" [`BootError::Config`] rather than a
 /// stub adapter.
+/// Select the realtime-calls media plane per `FRICK_CALLS_MEDIA_PLANE`. `fake`
+/// (default) brokers no real media; `p2p` issues ICE/TURN for 1:1 calls; `sfu`
+/// brokers a server-side room over the fake SFU backend (a production backend is
+/// FR-288). The call lifecycle is identical across all three.
+fn build_call_media_plane(
+    selection: crate::config::CallsMediaPlane,
+) -> Arc<dyn crate::calls::MediaPlaneAdapter> {
+    match selection {
+        crate::config::CallsMediaPlane::Fake => {
+            Arc::new(crate::calls::FakeMediaPlaneAdapter::sfu())
+        }
+        crate::config::CallsMediaPlane::P2p => {
+            Arc::new(crate::calls::P2pMediaPlaneAdapter::stun_only())
+        }
+        crate::config::CallsMediaPlane::Sfu => {
+            Arc::new(crate::calls::SfuMediaPlaneAdapter::new(Arc::new(
+                crate::calls::FakeSfuBackend::new(crate::calls::FakeSfuBackendOptions::default()),
+            )))
+        }
+    }
+}
+
 fn build_platform_events(
     config: &FrickConfig,
     store: &Arc<FrickStore>,
@@ -374,14 +396,11 @@ async fn build_server(
     // kafka is a documented follow-up and fails fast here.
     let platform_events = build_platform_events(&config, &store)?;
 
-    // Realtime calls control plane (FR-283). The media plane is pluggable
-    // (FR-286 P2P / FR-287 SFU); until a real adapter is selected, the
-    // deterministic fake SFU is the default so the call lifecycle is exercisable
-    // end-to-end. Media-plane selection by `FRICK_CALLS_MEDIA_PLANE` is a thin
-    // follow-on once the P2P/SFU adapters land.
+    // Realtime calls control plane (FR-283), over the config-selected media
+    // plane (FR-286 P2P / FR-287 SFU; see `build_call_media_plane`).
     let calls = Arc::new(crate::calls::CallControlPlane::new(
         Arc::clone(&store),
-        Arc::new(crate::calls::FakeMediaPlaneAdapter::sfu()),
+        build_call_media_plane(config.calls_media_plane),
         Arc::new(crate::calls::SystemCallClock),
     ));
 
