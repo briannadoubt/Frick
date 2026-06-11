@@ -60,6 +60,20 @@ tokio-postgres = "0.7"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors"] }
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# OpenTelemetry OTLP export (FR-267). HTTP/protobuf transport only: the
+# `http-proto` feature pairs with reqwest (rustls), so the gRPC/`tonic`
+# transport is NEVER activated and the dep tree stays rustls-only. `tonic` the
+# crate still compiles for the generated protobuf message types, but its
+# transport/channel layer is dormant (no hyper-server, no native-tls).
+opentelemetry = "0.30"
+opentelemetry_sdk = { version = "0.30", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.30", default-features = false, features = [
+  "trace",
+  "http-proto",
+  "reqwest-rustls",
+] }
+tracing-opentelemetry = "0.31"
 uuid = { version = "1", features = ["v4"] }
 
 [workspace.lints.rust]

@@ -7,6 +7,10 @@ documents the stack version and the user-visible changes in that cut.
 
 ## Unreleased
 
+### Added
+
+- **OpenTelemetry trace export for the Rust server (FR-267).** The standalone `frick-server` binary now installs a `tracing-opentelemetry` OTLP **HTTP/protobuf** exporter (over reqwest/rustls — no gRPC/`tonic` transport) when `FRICK_OTEL_ENABLED=true`, so its `tracing` spans flow to an OpenTelemetry Collector. New `FRICK_OTEL_*` config: `FRICK_OTEL_ENABLED`, `FRICK_OTEL_ENDPOINT` (alias for the spec/Compose `FRICK_OTEL_EXPORTER_OTLP_ENDPOINT`, both falling back to `OTEL_EXPORTER_OTLP_ENDPOINT`; default `http://127.0.0.1:4318`), `FRICK_OTEL_SERVICE_NAME` (fallback `OTEL_SERVICE_NAME`, default `frick-server`), `FRICK_OTEL_HEADERS` (a `key=value` list), and `FRICK_OTEL_SAMPLE_RATIO` (`[0.0, 1.0]`, parent-based). Off by default, so an unconfigured deployment is unchanged; the exporter is flushed and shut down cleanly on exit. OTLP metrics export is not yet ported (traces only).
+
 ### Changed
 
 - **Backend rewritten in Rust (FR-236).** The sync server, CLI, MCP bridge, and the schema/codegen/storage pipeline are now Rust crates under `crates/` (`frick-protocol`, `frick-schema`, `frick-codegen`, `frick-store`, `frick-server`, `frick-cli`, `frick-mcp`, `frick-conformance`). The wire protocol, schema identity, error envelope, and HTTP/WebSocket surface are unchanged, so the existing web, Swift, and Kotlin clients connect without modification. Storage runs on SQLite and Postgres. Parity is pinned by the golden wire/lint/codegen/migration fixtures under `conformance/` and the black-box `frick-conformance` scenario suite (which passed against both the Rust and the prior TypeScript server before cutover).

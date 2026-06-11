@@ -7,7 +7,7 @@
 //! entry point only wires config + schema into the runtime and waits.
 
 use frick_server::standalone::{config_env, load_schema};
-use frick_server::{create_frick_server, load_frick_config};
+use frick_server::{create_frick_server, install_tracing, load_frick_config};
 
 #[tokio::main]
 async fn main() {
@@ -22,6 +22,15 @@ async fn run() -> Result<(), String> {
 
     let config =
         load_frick_config(&env).map_err(|error| format!("invalid configuration: {error}"))?;
+
+    // Install the process-global tracing subscriber (FR-267). Always a local
+    // `fmt` logger; additionally an OTLP HTTP/protobuf export layer when
+    // `FRICK_OTEL_ENABLED=true`. The guard flushes + shuts the exporter down on
+    // drop, so it MUST outlive the serve loop — it is dropped at the end of
+    // `run`, after `server.close()`. With OTel off this is a no-op and the
+    // runtime is byte-for-byte the pre-FR-267 binary.
+    let _telemetry = install_tracing(config.log_level, &config.otel);
+
     let schema = load_schema(&env)?;
     let schema_id = schema.schema_id.clone();
 

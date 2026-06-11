@@ -32,6 +32,15 @@ tokio = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+# OpenTelemetry OTLP export (FR-267). The `telemetry` module installs a
+# tracing-opentelemetry layer when `FRICK_OTEL_ENABLED=true`; otherwise these
+# stay dormant and the runtime behaves exactly as before. HTTP/protobuf
+# transport only (no gRPC/`tonic` transport) — see the workspace manifest.
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+tracing-opentelemetry = { workspace = true }
 uuid = { workspace = true }
 # Push subsystem (map 06 §3). Pure-Rust crypto, no `ring`/native deps, no
 # network client (the live APNs/FCM send sits behind a documented trait seam):

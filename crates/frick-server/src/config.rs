@@ -101,6 +101,50 @@ impl EmailProvider {
     }
 }
 
+/// OpenTelemetry OTLP export settings (FR-267), from the `FRICK_OTEL_*` env.
+///
+/// Disabled by default: with [`enabled`](Self::enabled) `false` the standalone
+/// binary installs only the plain `fmt` logging layer and nothing changes from
+/// the pre-FR-267 runtime. When enabled, [`crate::telemetry`] installs a
+/// `tracing-opentelemetry` OTLP **HTTP/protobuf** layer pointing at
+/// [`endpoint`](Self::endpoint) (e.g. an OpenTelemetry Collector on `:4318`).
+///
+/// The endpoint resolution accepts both the assignment's `FRICK_OTEL_ENDPOINT`
+/// and the spec/Compose name `FRICK_OTEL_EXPORTER_OTLP_ENDPOINT` (with the
+/// standard `OTEL_EXPORTER_OTLP_ENDPOINT` fallback), so the checked-in compose
+/// files keep working unchanged.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OtelConfig {
+    /// `FRICK_OTEL_ENABLED`. Defaults to `false`; when unset it flips to `true`
+    /// only if an OTLP endpoint env var is explicitly configured (mirroring the
+    /// TS "enabled iff an endpoint is set" default — see `docs/operations.md`).
+    pub enabled: bool,
+    /// The OTLP HTTP base endpoint the span exporter posts to. The exporter
+    /// appends `/v1/traces`. Default `http://127.0.0.1:4318`.
+    pub endpoint: String,
+    /// `FRICK_OTEL_SERVICE_NAME` (fallback `OTEL_SERVICE_NAME`). The
+    /// `service.name` resource attribute. Default `frick-server`.
+    pub service_name: String,
+    /// `FRICK_OTEL_HEADERS` — extra OTLP request headers as a `k=v` comma list
+    /// (e.g. an auth token for a hosted collector). Empty when unset.
+    pub headers: BTreeMap<String, String>,
+    /// `FRICK_OTEL_SAMPLE_RATIO` — head-based trace sampling probability in
+    /// `[0.0, 1.0]`. `None` ⇒ always-on (sample every trace).
+    pub sample_ratio: Option<f64>,
+}
+
+impl Default for OtelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: "http://127.0.0.1:4318".to_string(),
+            service_name: "frick-server".to_string(),
+            headers: BTreeMap::new(),
+            sample_ratio: None,
+        }
+    }
+}
+
 /// An origin-allowlist entry (`FRICK_ALLOWED_ORIGINS`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AllowedOrigin {
@@ -311,6 +355,10 @@ pub struct FrickConfig {
     /// (`FRICK_EMAIL_FROM`, FR-271). Required when `email_provider == Resend`;
     /// also used as the [`crate::email::EmailRouter`] `default_from`.
     pub email_from: Option<String>,
+    /// OpenTelemetry OTLP export settings (FR-267), from `FRICK_OTEL_*`.
+    /// Disabled by default, so nothing changes unless `FRICK_OTEL_ENABLED=true`
+    /// (or an OTLP endpoint is explicitly configured).
+    pub otel: OtelConfig,
     pub limits: FrickLimits,
 }
 
@@ -397,6 +445,54 @@ fn parse_non_negative_integer(env: &dyn EnvSource, key: &str) -> Result<Option<i
         ))),
         None => Ok(None),
     }
+}
+
+/// Parse a sampling-ratio float in `[0.0, 1.0]` (`FRICK_OTEL_SAMPLE_RATIO`).
+/// Absent/empty ⇒ `None` (always-on). A non-finite or out-of-range value is
+/// fatal at load time, like every other invalid numeric knob.
+fn parse_ratio(env: &dyn EnvSource, key: &str) -> Result<Option<f64>> {
+    let Some(raw) = read(env, key) else {
+        return Ok(None);
+    };
+    let value = raw
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite())
+        .ok_or_else(|| FrickConfigError::new(format!("Invalid float for {key}: \"{raw}\"")))?;
+    if (0.0..=1.0).contains(&value) {
+        Ok(Some(value))
+    } else {
+        Err(FrickConfigError::new(format!(
+            "Invalid {key}: {value} (expected a ratio in [0.0, 1.0])"
+        )))
+    }
+}
+
+/// Parse a `key=value` comma list into a map (`FRICK_OTEL_HEADERS`). Whitespace
+/// around keys/values is trimmed; entries without `=`, or with an empty key,
+/// are fatal so a typo can't silently drop an auth header. Empty/absent ⇒ no
+/// headers. A later duplicate key wins.
+fn parse_key_value_map(env: &dyn EnvSource, key: &str) -> Result<BTreeMap<String, String>> {
+    let Some(raw) = read(env, key) else {
+        return Ok(BTreeMap::new());
+    };
+    let mut map = BTreeMap::new();
+    for entry in raw.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+        let (k, v) = entry.split_once('=').ok_or_else(|| {
+            FrickConfigError::new(format!(
+                "Invalid {key} entry \"{entry}\" (expected key=value)"
+            ))
+        })?;
+        let k = k.trim();
+        if k.is_empty() {
+            return Err(FrickConfigError::new(format!(
+                "Invalid {key} entry \"{entry}\" (empty header name)"
+            )));
+        }
+        map.insert(k.to_string(), v.trim().to_string());
+    }
+    Ok(map)
 }
 
 fn parse_comma_list(env: &dyn EnvSource, key: &str) -> Vec<String> {
@@ -566,6 +662,35 @@ fn parse_allowed_origin(entry: &str) -> Result<AllowedOrigin> {
             port,
         })
     }
+}
+
+/// Parse the OpenTelemetry OTLP export settings (FR-267) from `FRICK_OTEL_*`.
+///
+/// Endpoint resolution prefers the assignment's `FRICK_OTEL_ENDPOINT`, then the
+/// spec/Compose `FRICK_OTEL_EXPORTER_OTLP_ENDPOINT`, then the standard
+/// `OTEL_EXPORTER_OTLP_ENDPOINT`, falling back to the local-collector default
+/// `http://127.0.0.1:4318`. `FRICK_OTEL_ENABLED` defaults to `false`; when the
+/// var is unset it flips to `true` only if one of those endpoint vars is
+/// explicitly set (the documented "enabled iff an endpoint is configured"
+/// default). The service name falls back to `OTEL_SERVICE_NAME`.
+fn parse_otel_config(env: &dyn EnvSource) -> Result<OtelConfig> {
+    let endpoint_env = read(env, "FRICK_OTEL_ENDPOINT")
+        .or_else(|| read(env, "FRICK_OTEL_EXPORTER_OTLP_ENDPOINT"))
+        .or_else(|| read(env, "OTEL_EXPORTER_OTLP_ENDPOINT"));
+    let endpoint_configured = endpoint_env.is_some();
+
+    let enabled = parse_boolean(env, "FRICK_OTEL_ENABLED")?.unwrap_or(endpoint_configured);
+
+    let defaults = OtelConfig::default();
+    Ok(OtelConfig {
+        enabled,
+        endpoint: endpoint_env.unwrap_or(defaults.endpoint),
+        service_name: read(env, "FRICK_OTEL_SERVICE_NAME")
+            .or_else(|| read(env, "OTEL_SERVICE_NAME"))
+            .unwrap_or(defaults.service_name),
+        headers: parse_key_value_map(env, "FRICK_OTEL_HEADERS")?,
+        sample_ratio: parse_ratio(env, "FRICK_OTEL_SAMPLE_RATIO")?,
+    })
 }
 
 /// Load configuration from an [`EnvSource`]. Mirrors `loadFrickConfig`; pass
@@ -764,6 +889,7 @@ pub fn load_frick_config(env: &dyn EnvSource) -> Result<FrickConfig> {
         email_provider,
         resend_api_key: read(env, "FRICK_RESEND_API_KEY"),
         email_from: read(env, "FRICK_EMAIL_FROM"),
+        otel: parse_otel_config(env)?,
         limits: load_limits(env)?,
     };
 
@@ -1153,5 +1279,114 @@ mod tests {
         .unwrap();
         assert_eq!(config.platform_events_driver, PlatformEventsDriver::Kafka);
         assert_eq!(config.platform_events_kafka_brokers.len(), 2);
+    }
+
+    #[test]
+    fn otel_defaults_disabled() {
+        // FR-267: OTel is OFF unless explicitly enabled, so an unconfigured
+        // deployment is byte-for-byte the pre-FR-267 runtime.
+        let config = load_frick_config(&env(&[])).unwrap();
+        assert!(!config.otel.enabled);
+        assert_eq!(config.otel.endpoint, "http://127.0.0.1:4318");
+        assert_eq!(config.otel.service_name, "frick-server");
+        assert!(config.otel.headers.is_empty());
+        assert_eq!(config.otel.sample_ratio, None);
+    }
+
+    #[test]
+    fn otel_enabled_by_explicit_flag() {
+        let config = load_frick_config(&env(&[("FRICK_OTEL_ENABLED", "true")])).unwrap();
+        assert!(config.otel.enabled);
+        // Still falls back to the local-collector default endpoint.
+        assert_eq!(config.otel.endpoint, "http://127.0.0.1:4318");
+    }
+
+    #[test]
+    fn otel_enabled_implicitly_when_endpoint_set() {
+        // Setting an endpoint (and no explicit FRICK_OTEL_ENABLED) flips it on —
+        // the documented "enabled iff an endpoint is configured" default.
+        let config = load_frick_config(&env(&[(
+            "FRICK_OTEL_EXPORTER_OTLP_ENDPOINT",
+            "http://otel-collector:4318",
+        )]))
+        .unwrap();
+        assert!(config.otel.enabled);
+        assert_eq!(config.otel.endpoint, "http://otel-collector:4318");
+
+        // An explicit `false` still wins over the endpoint-implied default.
+        let off = load_frick_config(&env(&[
+            ("FRICK_OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318"),
+            ("FRICK_OTEL_ENABLED", "false"),
+        ]))
+        .unwrap();
+        assert!(!off.otel.enabled);
+    }
+
+    #[test]
+    fn otel_endpoint_name_precedence() {
+        // FRICK_OTEL_ENDPOINT (the assignment name) wins over the spec/Compose
+        // FRICK_OTEL_EXPORTER_OTLP_ENDPOINT, which wins over OTEL_*.
+        let config = load_frick_config(&env(&[
+            ("FRICK_OTEL_ENDPOINT", "http://primary:4318"),
+            ("FRICK_OTEL_EXPORTER_OTLP_ENDPOINT", "http://secondary:4318"),
+            ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://tertiary:4318"),
+        ]))
+        .unwrap();
+        assert_eq!(config.otel.endpoint, "http://primary:4318");
+
+        let fallback = load_frick_config(&env(&[(
+            "OTEL_EXPORTER_OTLP_ENDPOINT",
+            "http://tertiary:4318",
+        )]))
+        .unwrap();
+        assert_eq!(fallback.otel.endpoint, "http://tertiary:4318");
+        assert!(fallback.otel.enabled, "OTEL_* endpoint implies enabled");
+    }
+
+    #[test]
+    fn otel_service_name_falls_back_to_standard_env() {
+        let config = load_frick_config(&env(&[("OTEL_SERVICE_NAME", "billing-api")])).unwrap();
+        assert_eq!(config.otel.service_name, "billing-api");
+        // FRICK_OTEL_SERVICE_NAME wins over the standard fallback.
+        let override_config = load_frick_config(&env(&[
+            ("FRICK_OTEL_SERVICE_NAME", "frick-edge"),
+            ("OTEL_SERVICE_NAME", "billing-api"),
+        ]))
+        .unwrap();
+        assert_eq!(override_config.otel.service_name, "frick-edge");
+    }
+
+    #[test]
+    fn otel_headers_parse_to_map() {
+        let config = load_frick_config(&env(&[(
+            "FRICK_OTEL_HEADERS",
+            "authorization=Bearer tok , x-tenant=acme",
+        )]))
+        .unwrap();
+        assert_eq!(
+            config.otel.headers.get("authorization").map(String::as_str),
+            Some("Bearer tok")
+        );
+        assert_eq!(
+            config.otel.headers.get("x-tenant").map(String::as_str),
+            Some("acme")
+        );
+    }
+
+    #[test]
+    fn otel_headers_reject_malformed_entry() {
+        let err = load_frick_config(&env(&[("FRICK_OTEL_HEADERS", "no-equals-sign")])).unwrap_err();
+        assert!(err.0.contains("FRICK_OTEL_HEADERS"), "{}", err.0);
+    }
+
+    #[test]
+    fn otel_sample_ratio_parses_and_is_bounded() {
+        let config = load_frick_config(&env(&[("FRICK_OTEL_SAMPLE_RATIO", "0.25")])).unwrap();
+        assert_eq!(config.otel.sample_ratio, Some(0.25));
+
+        // Out-of-range and non-numeric are both fatal at load time.
+        assert!(load_frick_config(&env(&[("FRICK_OTEL_SAMPLE_RATIO", "1.5")])).is_err());
+        assert!(load_frick_config(&env(&[("FRICK_OTEL_SAMPLE_RATIO", "-0.1")])).is_err());
+        assert!(load_frick_config(&env(&[("FRICK_OTEL_SAMPLE_RATIO", "nope")])).is_err());
     }
 }

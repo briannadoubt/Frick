@@ -28,6 +28,7 @@ pub mod routes;
 pub mod search;
 pub mod session;
 pub mod standalone;
+pub mod telemetry;
 
 pub use apps::{AppDefinition, AppDescriptor, AppEntry, AppResolution, FrickAppRegistry};
 pub use auth::{
@@ -51,7 +52,9 @@ pub use cluster::{
     ClusterEnvelope, ClusterEnvelopeHandler, FrickClusterBus, MemoryClusterBus,
     MemoryClusterBusOptions, MemoryClusterChannel, NodeId, Unsubscribe, random_node_id,
 };
-pub use config::{EmailProvider, FrickConfig, FrickConfigError, FrickLimits, load_frick_config};
+pub use config::{
+    EmailProvider, FrickConfig, FrickConfigError, FrickLimits, OtelConfig, load_frick_config,
+};
 pub use diagnostics::{
     AssembleDiagnosticsOptions, DIAGNOSTICS_VERSION, DiagnosticsCursorProbe,
     assemble_diagnostics_snapshot,
@@ -74,3 +77,4 @@ pub use search::{
     SearchSource,
 };
 pub use standalone::{SCHEMA_PATH_ENV, config_env, load_schema};
+pub use telemetry::{TelemetryGuard, install_tracing};

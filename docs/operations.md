@@ -77,12 +77,12 @@ All variables are optional. Defaults match the runtime mode.
 | `FRICK_BLOB_S3_PREFIX`      | unset                       | unset                                 | Key prefix every blob object lives under in the bucket. Optional. |
 | `FRICK_BLOB_S3_FORCE_PATH_STYLE` | unset                  | unset                                 | Force path-style addressing (`<endpoint>/<bucket>/<key>`) instead of virtual-hosted (`<bucket>.<endpoint>/<key>`). One of `true`/`false`/`1`/`0`/`yes`/`no`. Unset ⇒ defaults to `true` when `FRICK_BLOB_S3_ENDPOINT` is set (most S3-compatible stores), `false` otherwise. |
 | `FRICK_LOG_LEVEL`           | `info`                      | `info`                                | One of `debug`, `info`, `warn`, `error`.                             |
-| `FRICK_OTEL_ENABLED`        | `true` when an OTLP endpoint is set; otherwise `false` | same | Enables the built-in OpenTelemetry SDK runtime.                      |
-| `FRICK_OTEL_SERVICE_NAME`   | `frick-server`              | `frick-server`                        | OTel service name. Falls back to `OTEL_SERVICE_NAME` when set.        |
-| `FRICK_OTEL_EXPORTER_OTLP_ENDPOINT` | unset              | unset                                 | Base OTLP HTTP collector endpoint. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT`; Frick appends `/v1/traces` and `/v1/metrics`. |
-| `FRICK_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | unset       | unset                                 | Signal-specific traces endpoint. Falls back to `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`. |
-| `FRICK_OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | unset      | unset                                 | Signal-specific metrics endpoint. Falls back to `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`. |
-| `FRICK_OTEL_METRIC_EXPORT_INTERVAL_MS` | `60000`          | `60000`                               | OTel metric export interval. Positive integer milliseconds.          |
+| `FRICK_OTEL_ENABLED`        | `true` when an OTLP endpoint is set; otherwise `false` | same | Enables OpenTelemetry trace export (FR-267). When `true`, the standalone `frick-server` binary installs a `tracing-opentelemetry` OTLP **HTTP/protobuf** exporter (over reqwest/rustls — no gRPC) alongside the local log layer. Off by default, so an unconfigured deployment is unchanged. |
+| `FRICK_OTEL_ENDPOINT`       | `http://127.0.0.1:4318`     | `http://127.0.0.1:4318`               | OTLP HTTP base endpoint the trace exporter posts to (it appends `/v1/traces`). Alias for `FRICK_OTEL_EXPORTER_OTLP_ENDPOINT`; if both are set, `FRICK_OTEL_ENDPOINT` wins. Both fall back to the standard `OTEL_EXPORTER_OTLP_ENDPOINT`. |
+| `FRICK_OTEL_EXPORTER_OTLP_ENDPOINT` | unset              | unset                                 | Spec/Compose name for the base OTLP HTTP collector endpoint. Honored for backward compatibility; see `FRICK_OTEL_ENDPOINT`. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT`. Setting any endpoint variable implicitly enables OTel unless `FRICK_OTEL_ENABLED=false`. |
+| `FRICK_OTEL_SERVICE_NAME`   | `frick-server`              | `frick-server`                        | OTel `service.name` resource attribute. Falls back to `OTEL_SERVICE_NAME` when set.        |
+| `FRICK_OTEL_HEADERS`        | unset                       | unset                                 | Extra OTLP request headers as a `key=value` comma list (e.g. `authorization=Bearer <token>` for a hosted collector). A malformed entry is rejected at startup. |
+| `FRICK_OTEL_SAMPLE_RATIO`   | unset (always-on)           | unset                                 | Head-based trace sampling probability in `[0.0, 1.0]` (parent-based). Unset ⇒ every trace is sampled. Out-of-range or non-numeric values are rejected at startup. |
 | `FRICK_DEMO_AUTH_ENABLED`   | `true`                      | `false`                               | Toggles `POST /auth/dev-login`. Forcing on in prod logs a warning.   |
 | `FRICK_SESSION_TTL_SECONDS` | `604800` (7d)               | `604800`                              | New sessions get `expiresAt = now + ttl`.                            |
 | `FRICK_INSPECTION_ENABLED`  | `true`                      | `false`                               | Gates `/_frick/inspect/*`. Forcing on in prod logs a warning.        |
@@ -722,22 +722,15 @@ server exposes these GET endpoints under `/_frick/inspect/`:
   `frick.http.errors.total{code}`, and `frick.ws.frames.total{kind}`. Gauges
   include `frick.ws.connections.current`. No retention or historical
   aggregation — scrape periodically to integrate with a metrics backend. When
-  OTel is enabled, the server also exports HTTP request spans, WebSocket
-  connection spans, job-run spans, and request/WebSocket/job metrics through
-  OTLP:
-  `frick.http.server.requests{method,status}`,
-  `frick.http.server.duration_ms{method,status}`,
-  `frick.ws.connections.current{authenticated}`,
-  `frick.ws.frames.total{kind}`,
-  `frick.ws.frame.bytes{kind}`,
-  `frick.ws.connection.duration_ms{authenticated}`,
-  `frick.jobs.runs.total{jobType,status}`, and
-  `frick.jobs.run.duration_ms{jobType,status}`. WebSocket frame `kind` is
-  bounded to known protocol names or `unknown`; close telemetry records the
-  close code and a bounded category, not raw close text. Tenant/user ids are
-  span attributes, not metric labels. Keep job type names low-cardinality and
-  registry-defined. The in-process inspection snapshot remains available for
-  local dashboard panels and simple health checks.
+  OTel is enabled (`FRICK_OTEL_ENABLED=true`, FR-267), the standalone
+  `frick-server` binary also installs a `tracing-opentelemetry` OTLP
+  **HTTP/protobuf** exporter so the server's `tracing` spans are exported to the
+  configured collector over OTLP (reqwest/rustls — no gRPC). Trace export is the
+  ported surface today; OTLP **metrics** export and the per-request/WebSocket/
+  job instrument set listed for the TypeScript runtime are not yet ported, so
+  use the in-process `/_frick/inspect/metrics` snapshot for counters and gauges
+  in the meantime. This snapshot remains available for local dashboard panels
+  and simple health checks regardless of OTel.
 - `/_frick/inspect/platform-events` — platform event pipeline health:
   `{ adapter, ok, pending, claimed, deadLettered, retained, unclaimed,
   consumers }`. The default adapter is SQLite, with bounded retention and
