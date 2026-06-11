@@ -21,6 +21,7 @@ pub use facade::{
     FrickStoreSearchProjector, FrickStoreWriteEvent, FrickStoreWriteListener, MaintenanceHandle,
     MaintenanceIntervals, PruneResult, StoreDriverKind,
 };
+pub use stores::blob_bytes::{FrickBlobDriver, S3BlobBytesConfig};
 pub use stores::search::{
     DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT, SEARCH_ADAPTER_ID, SearchFilterValue, SearchHit,
     SearchOp, SearchQueryResult,

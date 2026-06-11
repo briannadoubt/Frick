@@ -265,6 +265,10 @@ pub struct FrickConfig {
     pub blob_s3_region: Option<String>,
     pub blob_s3_endpoint: Option<String>,
     pub blob_s3_prefix: Option<String>,
+    /// Force path-style S3 addressing (`FRICK_BLOB_S3_FORCE_PATH_STYLE`,
+    /// FR-273). `None` ⇒ the driver defaults it from the endpoint presence
+    /// (path-style when a custom endpoint is set, virtual-hosted otherwise).
+    pub blob_s3_force_path_style: Option<bool>,
     pub log_level: LogLevel,
     pub inspection_enabled: bool,
     pub admin_token: Option<String>,
@@ -717,6 +721,7 @@ pub fn load_frick_config(env: &dyn EnvSource) -> Result<FrickConfig> {
         blob_s3_region: read(env, "FRICK_BLOB_S3_REGION"),
         blob_s3_endpoint: read(env, "FRICK_BLOB_S3_ENDPOINT"),
         blob_s3_prefix: read(env, "FRICK_BLOB_S3_PREFIX"),
+        blob_s3_force_path_style: parse_boolean(env, "FRICK_BLOB_S3_FORCE_PATH_STYLE")?,
         log_level,
         inspection_enabled: parse_boolean(env, "FRICK_INSPECTION_ENABLED")?.unwrap_or(!production),
         admin_token,
@@ -919,6 +924,56 @@ mod tests {
     fn empty_string_is_unset() {
         let config = load_frick_config(&env(&[("FRICK_HOST", "  ")])).unwrap();
         assert_eq!(config.host, "127.0.0.1");
+    }
+
+    #[test]
+    fn s3_driver_requires_bucket() {
+        let err = load_frick_config(&env(&[("FRICK_BLOB_DRIVER", "s3")])).unwrap_err();
+        assert!(err.0.contains("FRICK_BLOB_S3_BUCKET"), "{}", err.0);
+    }
+
+    #[test]
+    fn s3_config_parses_full_surface() {
+        // FR-273: bucket/region/endpoint/prefix/force-path-style all flow into
+        // the config; the driver selection + AWS env credentials do the rest.
+        let config = load_frick_config(&env(&[
+            ("FRICK_BLOB_DRIVER", "s3"),
+            ("FRICK_BLOB_S3_BUCKET", "frick-blobs"),
+            ("FRICK_BLOB_S3_REGION", "us-west-2"),
+            ("FRICK_BLOB_S3_ENDPOINT", "https://minio.example:9000"),
+            ("FRICK_BLOB_S3_PREFIX", "blobs/v1"),
+            ("FRICK_BLOB_S3_FORCE_PATH_STYLE", "true"),
+        ]))
+        .unwrap();
+        assert_eq!(config.blob_driver, BlobDriver::S3);
+        assert_eq!(config.blob_s3_bucket.as_deref(), Some("frick-blobs"));
+        assert_eq!(config.blob_s3_region.as_deref(), Some("us-west-2"));
+        assert_eq!(
+            config.blob_s3_endpoint.as_deref(),
+            Some("https://minio.example:9000")
+        );
+        assert_eq!(config.blob_s3_prefix.as_deref(), Some("blobs/v1"));
+        assert_eq!(config.blob_s3_force_path_style, Some(true));
+    }
+
+    #[test]
+    fn s3_force_path_style_is_optional_and_validated() {
+        // Absent ⇒ None (the driver defaults it from endpoint presence).
+        let config = load_frick_config(&env(&[
+            ("FRICK_BLOB_DRIVER", "s3"),
+            ("FRICK_BLOB_S3_BUCKET", "b"),
+        ]))
+        .unwrap();
+        assert_eq!(config.blob_s3_force_path_style, None);
+
+        // A bad boolean is fatal at load time, like every other boolean knob.
+        let err = load_frick_config(&env(&[
+            ("FRICK_BLOB_DRIVER", "s3"),
+            ("FRICK_BLOB_S3_BUCKET", "b"),
+            ("FRICK_BLOB_S3_FORCE_PATH_STYLE", "maybe"),
+        ]))
+        .unwrap_err();
+        assert!(err.0.contains("Invalid boolean"), "{}", err.0);
     }
 
     #[test]
