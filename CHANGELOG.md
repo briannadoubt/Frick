@@ -9,7 +9,23 @@ documents the stack version and the user-visible changes in that cut.
 
 ### Added
 
-- **OpenTelemetry trace export for the Rust server (FR-267).** The standalone `frick-server` binary now installs a `tracing-opentelemetry` OTLP **HTTP/protobuf** exporter (over reqwest/rustls — no gRPC/`tonic` transport) when `FRICK_OTEL_ENABLED=true`, so its `tracing` spans flow to an OpenTelemetry Collector. New `FRICK_OTEL_*` config: `FRICK_OTEL_ENABLED`, `FRICK_OTEL_ENDPOINT` (alias for the spec/Compose `FRICK_OTEL_EXPORTER_OTLP_ENDPOINT`, both falling back to `OTEL_EXPORTER_OTLP_ENDPOINT`; default `http://127.0.0.1:4318`), `FRICK_OTEL_SERVICE_NAME` (fallback `OTEL_SERVICE_NAME`, default `frick-server`), `FRICK_OTEL_HEADERS` (a `key=value` list), and `FRICK_OTEL_SAMPLE_RATIO` (`[0.0, 1.0]`, parent-based). Off by default, so an unconfigured deployment is unchanged; the exporter is flushed and shut down cleanly on exit. OTLP metrics export is not yet ported (traces only).
+The Rust server reaches feature parity with the former TypeScript server across these surfaces (all wire-compatible with the existing web/Swift/Kotlin clients):
+
+- **Standalone `frick-server` binary + Docker image (FR-259).** A real server binary (env config + `FRICK_SCHEMA_PATH` schema loading, graceful SIGINT/SIGTERM) and a multi-stage `ops/deploy/server.Dockerfile` that the compose profiles + `frick deploy` build into `frick-server:latest`.
+- **Search (FR-266).** A SQLite FTS5 search adapter + a `POST /search` route with per-hit visibility filtering, app-registered indexes, and `/_frick/inspect/search`.
+- **Push delivery, end to end (FR-265) + Web Push (FR-264).** APNs, FCM, and a new RFC 8291/8292 **Web Push (VAPID)** adapter are wired into a live `PushRegistry` at boot with real `reqwest` transports and the `push.deliver` job handler.
+- **Auth providers.** Email/password + password reset + refresh tokens (FR-268), **Sign in with Apple + Google** id-token verification (FR-269), and generic **OIDC** (FR-270) — RS256 verified over the pure-Rust `rsa` crate (alg-pinned; iss/aud/exp/nonce enforced; provider-scoped subjects), behind an injectable JWKS seam. Outbound email via a Resend adapter (FR-271).
+- **Multi-app routing (FR-277).** An app registry with per-app projection/search registries; HTTP base-path + WS schemaId resolution; cross-app isolation. Single-app behavior is byte-for-byte unchanged.
+- **Blobs at scale.** An S3 blob-bytes driver via `object_store` (FR-273) and a blob processor/validator pipeline with the `blob.process` job (FR-272).
+- **Platform-events pipeline (FR-275).** An outbox/event-stream behind a pluggable driver — `memory` + durable `sqlite` (Kafka deferred) — with `/_frick/inspect/platform-events`.
+- **CLI + tooling (FR-261/262).** `frick backup`/`restore` (NDJSON), `frick schema export`, native `frick verify`, `frick inspect diagnostics`, and `frick schema generate` writing the canonical client artifacts (`pnpm schema:generate` is now a shim).
+- **OpenTelemetry trace export (FR-267).** A `tracing-opentelemetry` OTLP HTTP/protobuf exporter (reqwest/rustls — no gRPC/`tonic`) behind `FRICK_OTEL_ENABLED`, off by default. Traces only.
+- **DevTools event feed + diagnostics (FR-274).** A durable devtools-events feed, real `/_frick/inspect/devtools/*`, and populated `recentErrors` + idempotency-cache stats in the diagnostics snapshot.
+- **Gateway session revocation (FR-278).** Logout and admin `sessions/revoke` now live-close the matching WebSocket connections; the inspect tier enforces the admin token in production.
+
+### Fixed
+
+- An object-Delta wire divergence (id-less object types), missing CORS on the composed router, bearer-token logout, the FR-256 subscribe-then-write gateway race, a password-login timing oracle, and the cutover's broken `frick deploy`/`frick init` defaults.
 
 ### Changed
 
@@ -18,8 +34,12 @@ documents the stack version and the user-visible changes in that cut.
 
 ### Known gaps (follow-ups)
 
-- Calls/WebRTC (FR-15), multi-app routing, the search adapter, the web-push adapter, and outbound email are not yet ported to the Rust server.
-- `frick-server` is currently an embeddable library (no standalone server binary yet); `frick init` still scaffolds a TypeScript app and `frick`'s `verify`/`backup`/`restore` return `cli.unsupported`. `frick-codegen` is byte-identical to the TS generators but `pnpm schema:generate` is still the canonical artifact generator.
+- **Calls/WebRTC (FR-276)** — the realtime calls control plane (signaling + SFU + E2EE) is not yet ported.
+- **SAML federation (FR-280)** — deferred: the pure-Rust constraint (no OpenSSL) has no mature XML-canonicalization/dsig path yet. Email/password + Apple/Google/OIDC are ported.
+- **Platform-events Kafka driver** — the `memory` + `sqlite` drivers ship; `kafka` fails fast at boot.
+- **Blob image derivatives** — the processor pipeline ships; image-derivative generation (the `image` crate) is a follow-up.
+- **App authoring (FR-263)** — the canonical Rust-DSL authoring loop (`frick init` scaffolding) is still being designed; `frick init` currently scaffolds a schema/client project, and the standalone server loads a serialized schema via `FRICK_SCHEMA_PATH`.
+- **Client subscribe-acks (FR-279)** — the FR-256 race is fixed server-side; the Swift/Kotlin/web defense-in-depth (resolve-on-registration) is pending.
 
 ## 0.3.0 — 2026-06-09
 
