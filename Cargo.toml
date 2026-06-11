@@ -35,6 +35,13 @@ argon2 = "0.5"
 async-trait = "0.1"
 axum = { version = "0.7", features = ["ws"] }
 base64 = "0.22"
+# Call E2EE (FR-289). Pure-Rust crypto only — no `ring`, OpenSSL, or C/asm
+# defaults — preserving the workspace no-native-deps invariant:
+# - x25519-dalek: X25519 ECDH key agreement for per-recipient key wrapping.
+# - chacha20poly1305: ChaCha20-Poly1305 AEAD for the sealed envelopes + media
+#   frames. Both pair with `rand_core 0.6` (matching `rand = "0.8"` above).
+chacha20poly1305 = "0.10"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
 bytes = "1"
 clap = { version = "4", features = ["derive"] }
 deadpool-postgres = "0.14"
