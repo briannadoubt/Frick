@@ -82,6 +82,12 @@ pub fn product_test_schema() -> &'static FrickSchema {
 pub struct ServerHandle {
     http_base: String,
     ws_url: String,
+    /// The schema the target runs — the product-test schema for the default
+    /// targets, or a caller-supplied schema for
+    /// [`ServerHandle::in_process_with_schema`] (e.g. the calls scenarios splice
+    /// the current call control-plane types in). Every [`WsConn`] this handle
+    /// opens hellos with this schema, so the capability handshake agrees.
+    schema: FrickSchema,
     /// `Some` only for the in-process Rust server; dropping it (via
     /// [`ServerHandle::shutdown`]) closes the server.
     inprocess: Option<frick_server::FrickServer>,
@@ -104,6 +110,7 @@ impl ServerHandle {
         Self {
             http_base,
             ws_url,
+            schema: product_test_schema().clone(),
             inprocess: None,
         }
     }
@@ -114,17 +121,33 @@ impl ServerHandle {
     /// auto-register declared projections). The registration lets the
     /// projection-subscribe scenario observe a `ProjectionDelta` snapshot.
     async fn in_process() -> Self {
-        let schema = product_test_schema().clone();
-        let mut server = frick_server::create_frick_server(in_process_config(), schema)
+        let server = Self::in_process_with_schema(product_test_schema().clone()).await;
+        if let Some(inner) = server.inprocess.as_ref() {
+            register_conversation_inbox(inner);
+        }
+        server
+    }
+
+    /// Boot an in-process Rust server running a **caller-supplied** schema (port
+    /// 0, `:memory:`, dev-auth on). The FR-290 calls scenarios use this to run a
+    /// schema that splices the *current* call control-plane object/stream/signal
+    /// types in — the committed product-test fixture carries an older, partial
+    /// call schema, so the live control-plane record shapes (e.g. `CallRoom.kind`)
+    /// would fail the store's schema-pack. Every [`WsConn`] this handle opens
+    /// hellos with the same schema, so the capability handshake agrees.
+    ///
+    /// Only valid for the in-process target; ignores `FRICK_CONFORMANCE_URL`.
+    pub async fn in_process_with_schema(schema: FrickSchema) -> Self {
+        let mut server = frick_server::create_frick_server(in_process_config(), schema.clone())
             .await
             .expect("in-process Rust server boots");
-        register_conversation_inbox(&server);
         let port = server.listen().await.expect("in-process server listens");
         let http_base = format!("http://127.0.0.1:{port}");
         let ws_url = format!("ws://127.0.0.1:{port}/_frick/sync");
         Self {
             http_base,
             ws_url,
+            schema,
             inprocess: Some(server),
         }
     }
@@ -143,8 +166,8 @@ impl ServerHandle {
 
     /// The active schema both servers must run.
     #[must_use]
-    pub fn schema(&self) -> &'static FrickSchema {
-        product_test_schema()
+    pub fn schema(&self) -> &FrickSchema {
+        &self.schema
     }
 
     /// A configured HTTP client for this target.
@@ -156,12 +179,17 @@ impl ServerHandle {
         }
     }
 
-    /// Open a WebSocket to the sync endpoint.
+    /// Open a WebSocket to the sync endpoint. The connection hellos with this
+    /// handle's [`ServerHandle::schema`], so the capability handshake agrees with
+    /// whatever schema the target runs.
     pub async fn connect_ws(&self) -> WsConn {
         let (socket, _response) = tokio_tungstenite::connect_async(&self.ws_url)
             .await
             .expect("ws connect");
-        WsConn { socket }
+        WsConn {
+            socket,
+            schema: self.schema.clone(),
+        }
     }
 
     /// Gracefully shut down the in-process server (no-op for external).
@@ -345,6 +373,9 @@ type WsStream =
 /// A WebSocket connection that speaks msgpack [`FrickFrame`]s.
 pub struct WsConn {
     socket: WsStream,
+    /// The schema this connection hellos with — the target's active schema, so
+    /// the capability handshake agrees (see [`ServerHandle::connect_ws`]).
+    schema: FrickSchema,
 }
 
 impl WsConn {
@@ -389,7 +420,7 @@ impl WsConn {
     /// the server takes the capability-negotiation path (not the legacy
     /// hash-equality path).
     pub async fn hello(&mut self, session_token: &str) -> String {
-        let schema = product_test_schema();
+        let schema = &self.schema;
         let hello = FrickFrame::Hello(Box::new(HelloPayload {
             replica_id: "conformance-replica".into(),
             device_id: "conformance-device".into(),
@@ -438,6 +469,46 @@ impl WsConn {
         self.send(&FrickFrame::Ping(frick_protocol::frame::PingPayload {
             sent_at: 0,
         }))
+        .await;
+    }
+
+    /// Send a `CallCommand` frame (FR-15 call control plane). The server routes
+    /// it to the control plane and replies with a `CallCommandResult` (or a
+    /// `Nack` on failure). Mirrors the way [`Self::subscribe`] sends a typed
+    /// frame; the conformance scenarios await the reply via [`Self::next_frame`].
+    pub async fn call_command(
+        &mut self,
+        request_id: &str,
+        command: frick_protocol::calls::CallCommandOp,
+    ) {
+        self.send(&FrickFrame::CallCommand(
+            frick_protocol::calls::CallCommandPayload {
+                request_id: request_id.to_string(),
+                command,
+            },
+        ))
+        .await;
+    }
+
+    /// Send a `SignalSend` frame for the given signal type + key, carrying a
+    /// `Value` payload. Used by the calls conformance scenarios to relay a
+    /// `WebRTCSignal` (gated on call membership in FR-284). Mirrors the typed
+    /// frame send of [`Self::subscribe`].
+    pub async fn signal_send(
+        &mut self,
+        request_id: &str,
+        name: &str,
+        key: &str,
+        value: frick_protocol::Value,
+    ) {
+        self.send(&FrickFrame::SignalSend(
+            frick_protocol::frame::SignalPayload {
+                request_id: request_id.to_string(),
+                name: name.to_string(),
+                key: key.to_string(),
+                value,
+            },
+        ))
         .await;
     }
 
