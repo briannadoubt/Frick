@@ -884,6 +884,95 @@ async fn fr256_subscribe_then_immediate_write_delivers_echo_delta() {
     );
 }
 
+/// FR-285 — creating a call enqueues one `call.ringing` push intent per invitee.
+///
+/// Drives [`enqueue_ringing_push`] directly (the `Op::Create` arm of
+/// [`handle_call_command`] calls it after the control plane returns the room +
+/// invites). Asserts the durable `push.deliver` jobs landed in the store, one
+/// per invitee, each decoding to a `call.ringing` intent that targets that
+/// invitee and carries `{ type, callId, conversationId, createdBy }` in `data`.
+#[tokio::test]
+async fn create_call_enqueues_a_ringing_push_per_invitee() {
+    use crate::push::router::decode_intent;
+    use frick_protocol::calls::{
+        CallInviteRecord, CallInviteState, CallKind, CallRoomRecord, CallRoomState,
+    };
+    use frick_store::stores::job::ListJobsFilter;
+
+    let hub = test_hub().await;
+    let tenant_id = DEFAULT_TENANT_ID;
+
+    let room = CallRoomRecord {
+        id: "call-1".into(),
+        conversation_id: "conv-9".into(),
+        state: CallRoomState::Ringing,
+        created_by: "alice".into(),
+        kind: CallKind::Video,
+        created_at: "1970-01-01T00:00:00.000Z".into(),
+        started_at: None,
+        ended_at: None,
+        media_session_id: None,
+        transport: None,
+    };
+    let invite = |id: &str, invitee: &str| CallInviteRecord {
+        id: id.into(),
+        call_id: room.id.clone(),
+        invitee_user_id: invitee.into(),
+        status: CallInviteState::Ringing,
+        invited_by: room.created_by.clone(),
+        invited_at: room.created_at.clone(),
+        responded_at: None,
+    };
+    let invites = vec![invite("inv-1", "bob"), invite("inv-2", "carol")];
+
+    enqueue_ringing_push(&hub, tenant_id, &room, &invites).await;
+
+    // One durable `push.deliver` job per invitee landed in the store.
+    let jobs = hub
+        .state
+        .store
+        .jobs()
+        .list(&ListJobsFilter {
+            tenant_id: Some(tenant_id.to_string()),
+            job_type: Some("push.deliver".to_string()),
+            ..ListJobsFilter::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(jobs.len(), 2, "one ringing push per invitee");
+
+    // Decode each job payload back into an intent and check the per-invitee shape.
+    let mut recipients: Vec<String> = Vec::new();
+    for job in &jobs {
+        let intent = decode_intent(&job.payload).expect("a valid push.deliver intent");
+        assert_eq!(intent.intent, "call.ringing");
+        assert_eq!(intent.tenant_id, tenant_id);
+        assert_eq!(intent.recipient_user_ids.len(), 1);
+        let recipient = intent.recipient_user_ids[0].clone();
+        // Title/body reference the creator.
+        assert_eq!(intent.body.title.as_deref(), Some("Incoming call"));
+        assert_eq!(intent.body.body.as_deref(), Some("alice is calling you"));
+        // data carries { type, callId, conversationId, createdBy }.
+        let Some(Value::Map(data)) = intent.body.data.as_ref() else {
+            panic!("ringing push must carry a data map");
+        };
+        let field = |key: &str| -> Option<&str> {
+            data.iter()
+                .find(|(k, _)| k.as_str() == Some(key))
+                .and_then(|(_, v)| v.as_str())
+        };
+        assert_eq!(field("type"), Some("callRinging"));
+        assert_eq!(field("callId"), Some("call-1"));
+        assert_eq!(field("conversationId"), Some("conv-9"));
+        assert_eq!(field("createdBy"), Some("alice"));
+        // Ringing pushes for one call are grouped by the call id.
+        assert_eq!(intent.thread_id.as_deref(), Some("call-1"));
+        recipients.push(recipient);
+    }
+    recipients.sort();
+    assert_eq!(recipients, vec!["bob".to_string(), "carol".to_string()]);
+}
+
 // ---- helpers ----------------------------------------------------------------
 
 fn test_config() -> FrickConfig {

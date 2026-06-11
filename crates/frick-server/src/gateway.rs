@@ -1592,6 +1592,14 @@ async fn handle_call_command(
     match dispatch_call_command(&hub.state.calls, &actor, payload.command).await {
         Ok(mut result) => {
             result.request_id = request_id;
+            // FR-285 — fan a "ringing" push out to each invitee. Best-effort: the
+            // room is already created, so a push failure must never fail the
+            // command (errors are swallowed/logged inside the helper).
+            if result.op == frick_protocol::calls::CallCommandName::Create
+                && let (Some(room), Some(invites)) = (result.room.as_ref(), result.invites.as_ref())
+            {
+                enqueue_ringing_push(hub, &actor.tenant_id, room, invites).await;
+            }
             send_frame(hub, id, &FrickFrame::CallCommandResult(Box::new(result)));
         }
         Err(err) => {
@@ -1608,6 +1616,76 @@ async fn handle_call_command(
         }
     }
     false
+}
+
+/// FR-285 — enqueue a "ringing" push notification per invitee of a freshly
+/// created call.
+///
+/// Each invitee gets one `call.ringing` intent referencing the incoming call
+/// from the creator, with `data` carrying at least
+/// `{ type: "callRinging", callId, conversationId, createdBy }`. The intent is
+/// enqueued as a durable `push.deliver` job via the notification router (the
+/// same path HTTP admin-push and message notifications use), so delivery fans
+/// out to every active device registration on the next worker tick.
+///
+/// **Best-effort by contract**: the call room already exists by the time this
+/// runs, so a push failure must never fail the `CallCommand`. Every enqueue
+/// error is logged and swallowed — this function never returns an error and
+/// never panics. One intent is enqueued per invitee so a partial failure still
+/// rings the rest.
+async fn enqueue_ringing_push(
+    hub: &Arc<GatewayHub>,
+    tenant_id: &str,
+    room: &frick_protocol::calls::CallRoomRecord,
+    invites: &[frick_protocol::calls::CallInviteRecord],
+) {
+    use crate::push::types::{FrickNotificationIntent, NotificationBody};
+
+    if invites.is_empty() {
+        return;
+    }
+
+    let router = &hub.state.notification_router;
+    let now_ms = now_ms();
+    let created_by = room.created_by.as_str();
+    let title = "Incoming call".to_string();
+    let body = format!("{created_by} is calling you");
+
+    for invite in invites {
+        let data = Value::Map(vec![
+            (Value::from("type"), Value::from("callRinging")),
+            (Value::from("callId"), Value::from(room.id.as_str())),
+            (
+                Value::from("conversationId"),
+                Value::from(room.conversation_id.as_str()),
+            ),
+            (Value::from("createdBy"), Value::from(created_by)),
+        ]);
+        let intent = FrickNotificationIntent {
+            intent: "call.ringing".to_string(),
+            tenant_id: tenant_id.to_string(),
+            recipient_user_ids: vec![invite.invitee_user_id.clone()],
+            body: NotificationBody {
+                title: Some(title.clone()),
+                body: Some(body.clone()),
+                data: Some(data),
+            },
+            // Group ringing pushes for one call so a later end/cancel can
+            // collapse them on the device.
+            thread_id: Some(room.id.clone()),
+            deep_link: None,
+        };
+        if let Err(err) = router.enqueue_intent(&intent, now_ms).await {
+            tracing::warn!(
+                target: "frick.calls.ringing_push",
+                tenant_id = %tenant_id,
+                call_id = %room.id,
+                invitee_user_id = %invite.invitee_user_id,
+                error = %err,
+                "failed to enqueue ringing push for invitee (call already created; ignoring)",
+            );
+        }
+    }
 }
 
 async fn dispatch_call_command(
