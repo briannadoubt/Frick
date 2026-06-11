@@ -22,6 +22,7 @@ The Rust server reaches feature parity with the former TypeScript server across 
 - **OpenTelemetry trace export (FR-267).** A `tracing-opentelemetry` OTLP HTTP/protobuf exporter (reqwest/rustls — no gRPC/`tonic`) behind `FRICK_OTEL_ENABLED`, off by default. Traces only.
 - **DevTools event feed + diagnostics (FR-274).** A durable devtools-events feed, real `/_frick/inspect/devtools/*`, and populated `recentErrors` + idempotency-cache stats in the diagnostics snapshot.
 - **Gateway session revocation (FR-278).** Logout and admin `sessions/revoke` now live-close the matching WebSocket connections; the inspect tier enforces the admin token in production.
+- **Client subscribe-registration await (FR-256 client half).** Additive opt-in subscribe variants that resolve only once the server has *registered* the subscription (its initial `Snapshot`/`StreamPage`/`ProjectionDelta` reply) instead of on frame-send, so a write issued immediately after can't race ahead of registration and lose its echo: TypeScript `FrickClient.subscribeObject`/`subscribeStream`/`subscribeProjection` (returning `Promise<void>`), and Swift/Kotlin `subscribe{Object,Stream,Projection}Registered`. Each registers its waiter before sending and drains on close/logout so it never strands; the existing non-awaiting accessors are unchanged. See [`docs/cross-platform-client-contract.md`](docs/cross-platform-client-contract.md#subscribe-then-write-registration-fr-256).
 
 ### Fixed
 
@@ -39,7 +40,7 @@ The Rust server reaches feature parity with the former TypeScript server across 
 - **Platform-events Kafka driver** — the `memory` + `sqlite` drivers ship; `kafka` fails fast at boot.
 - **Blob image derivatives** — the processor pipeline ships; image-derivative generation (the `image` crate) is a follow-up.
 - **App authoring (FR-263)** — the canonical Rust-DSL authoring loop (`frick init` scaffolding) is still being designed; `frick init` currently scaffolds a schema/client project, and the standalone server loads a serialized schema via `FRICK_SCHEMA_PATH`.
-- **Client subscribe-acks (FR-279)** — the FR-256 race is fixed server-side; the Swift/Kotlin/web defense-in-depth (resolve-on-registration) is pending.
+- **Realtime calls acceptance (FR-276)** — the call-control plane (signaling + SFU + E2EE) is still pending in Rust; decomposed into FR-281…FR-290 with a delivery plan in [`internal/plans/2026-06-11-calls-epic-rust-port.md`](internal/plans/2026-06-11-calls-epic-rust-port.md).
 
 ## 0.3.0 — 2026-06-09
 

@@ -295,6 +295,17 @@ export class FrickClient {
     for (const resolver of this.#callCommandResolvers.values()) {
       resolver.reject(clearedError);
     }
+    // FR-256: drain parked subscribe-registration awaiters so a logout / user
+    // swap mid-`subscribeObject`/`subscribeStream`/`subscribeProjection` can't
+    // strand the promise — the subscription won't replay under the cleared
+    // session. Resolve (rather than reject) to match the Swift/Kotlin
+    // resolve-on-drain behavior; the caller's screen is being torn down anyway.
+    for (const resolvers of this.#subscriptionRegistrations.values()) {
+      for (const resolve of resolvers) {
+        resolve();
+      }
+    }
+    this.#subscriptionRegistrations.clear();
     this.#callCommandResolvers.clear();
     this.#appendResolvers.clear();
     this.#pendingUpserts.clear();
@@ -425,9 +436,10 @@ export class FrickClient {
    * registration. Awaiting this method closes that window.
    *
    * The Snapshot still populates the local store exactly as before — only the
-   * resolution timing changes. Resolves immediately if the runtime is offline
-   * (the Subscribe replays on reconnect, where the snapshot resolves any
-   * still-pending waiter).
+   * resolution timing changes. If the runtime is offline when called, the
+   * Subscribe is held and replays on reconnect, and the promise resolves when
+   * the post-registration snapshot then arrives; it also resolves if the user
+   * state is cleared (logout / user swap) so a torn-down caller never strands.
    */
   subscribeObject(type: string): Promise<void> {
     this.objects(type);

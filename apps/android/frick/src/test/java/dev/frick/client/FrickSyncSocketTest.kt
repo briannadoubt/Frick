@@ -280,6 +280,39 @@ class FrickSyncSocketTest {
     }
 
     @Test
+    fun subscribeObjectRegisteredResolvesOnServerCloseWithoutSnapshot() = runBlocking {
+        // Server acks Hello, then closes the connection on the Subscribe WITHOUT
+        // ever sending the snapshot — the drain (failPendingRequests →
+        // resolveAllSubscriptionRegistrations) must unblock the awaiter instead
+        // of stranding it, mirroring the Swift close-drain test (FR-256).
+        enqueueWebSocketHandler(
+            onMessage = { ws, frame ->
+                when (frame.first) {
+                    FrameKindCodes.HELLO -> sendFrame(
+                        FrameKindCodes.HELLO_ACK,
+                        mapOf(
+                            "schemaHash" to FRICK_SCHEMA_HASH,
+                            "schemaId" to FRICK_SCHEMA_ID,
+                            "schemaRevision" to FRICK_SCHEMA_REVISION,
+                            "schemaCompatibility" to mapOf("status" to "compatible"),
+                            "serverCapabilities" to emptyMap<String, Any?>(),
+                        ),
+                    )
+                    FrameKindCodes.SUBSCRIBE -> ws.close(1011, "server-gone")
+                }
+            },
+        )
+        val socket = newSocket()
+        try {
+            assertNotNull(withTimeout(2_000) { socket.awaitReady() })
+            // Resolves (does not hang) because the close drains the waiter.
+            withTimeout(10_000) { socket.subscribeObjectRegistered("Account") }
+        } finally {
+            socket.close()
+        }
+    }
+
+    @Test
     fun appendReceivesAck() = runBlocking {
         enqueueWebSocketHandler(
             onMessage = { _, frame ->

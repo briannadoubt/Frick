@@ -376,6 +376,34 @@ describe("foundation runtime", () => {
 
       await expect(pending).resolves.toBeUndefined();
     });
+
+    it("drains a parked registration awaiter on user-state clear (no strand)", async () => {
+      const socket = TestWebSocket.prepare();
+      const client = new FrickClient({
+        endpoint: "ws://test",
+        schema: productTestSchema,
+        WebSocketImpl: TestWebSocket as never,
+      });
+
+      client.connect();
+      socket.emit("open", {});
+
+      // Park an awaiter — no Snapshot will ever arrive for it.
+      const pending = client.subscribeObject("Conversation");
+      let resolved = false;
+      void pending.then(() => {
+        resolved = true;
+      });
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+
+      // A logout / user swap clears user state. The parked awaiter must resolve
+      // rather than hang forever (the subscription won't replay under the
+      // cleared session) — mirrors the Swift/Kotlin drain-on-close behavior.
+      client.clearUserState();
+
+      await expect(pending).resolves.toBeUndefined();
+    });
   });
 
   it("merges projection deltas into the projection signal", () => {

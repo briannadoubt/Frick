@@ -177,6 +177,7 @@ Pending appends are preserved across compatible reloads. When an incompatible-ca
 | Capability negotiation in handshake | ✓ (WebSocket) | ✓ (WebSocket) | ✓ (WebSocket) |
 | Object delete deltas carry `removed` ids | ✓ (wire type) | Back-compat tombstone/refetch path | Back-compat tombstone/refetch path |
 | Projection subscribe + `ProjectionDelta` apply into observable keyed store | `client.projection(name)` → `Signal<Map>` | `FrickProjectionStore` (`rows: [String: FrickMsgPackValue]`) | `FrickProjectionStore` (`rows: StateFlow<Map>`) |
+| Opt-in subscribe that resolves on server registration (FR-256) | `subscribeObject/Stream/Projection` → `Promise<void>` | `subscribe{Object,Stream,Projection}Registered` | `subscribe{Object,Stream,Projection}Registered` |
 
 ## Product Analytics
 
@@ -245,6 +246,47 @@ the local `(type, id)` row without a full refetch; they must keep the tombstone
 path for servers that predate `removed`.
 
 Schema field definitions may also carry an optional `sensitivity` classification — `public | private | pii | secret | content` — that informs how the server treats field values in logs, diagnostics, and admin inspection (and, in future, export/deletion workflows). Like `mergePolicy`, `sensitivity` is **server-only** metadata: it is validated by `validateSchema`, defaults to `private` when omitted, and is intentionally *not* emitted into the generated Swift / Kotlin / TS client artifacts, so adding or changing it is wire-backwards-compatible and requires no artifact regeneration. The server's `redactRecord` helper masks `pii`/`secret`/`content` values by default; see [`docs/operations.md`](operations.md) for where this is applied.
+
+## Subscribe-Then-Write Registration (FR-256)
+
+A write issued **immediately after** a subscribe can race the gateway's
+registration of that subscription and miss the write's own echo `Delta`. The fix
+has two halves; together they make subscribe-then-write reliable.
+
+**Server.** The gateway registers a subscription *synchronously* — before its
+async per-frame session re-validation — so a fan-out that races an in-flight
+`Subscribe` (e.g. an HTTP upsert handled on another task) finds the subscriber
+instead of seeing `subscribers: 0` and dropping the echo. Delivery is still authz
+-gated: registration happens only after the cap check, projection-existence
+check, and baseline authz on the Hello principal, so it exposes no data the
+principal isn't entitled to. This closes the in-server window for every
+subscription kind (object/stream/projection/presence/signal share the same
+registration path).
+
+**Client (opt-in).** The plain subscribe accessors return as soon as the
+`Subscribe` frame is *sent*, which can still race registration over the network.
+Each SDK additionally exposes an **awaitable** subscribe variant that resolves
+only when the server's initial reply for that subscription arrives — the implicit
+registration ack: an object `Snapshot` or stream `StreamPage` (correlated by
+`subscriptionId`), or a projection's initial `ProjectionDelta` (correlated by
+projection name). Await it before a write you must observe on the same
+connection.
+
+| Kind | TS (returns `Promise<void>`) | Swift | Android/Kotlin |
+| --- | --- | --- | --- |
+| Object | `client.subscribeObject(type)` | `subscribeObjectRegistered(type:)` | `subscribeObjectRegistered(type)` |
+| Stream | `client.subscribeStream(stream, key)` | `subscribeStreamRegistered(stream:key:)` | `subscribeStreamRegistered(stream, key)` |
+| Projection | `client.subscribeProjection(name)` | `subscribeProjectionRegistered(name:)` | `subscribeProjectionRegistered(name)` |
+
+The existing non-awaiting accessors (`client.objects/stream/projection`, Swift/
+Kotlin `subscribe`/`subscribeObject`/`subscribeProjection`) are **unchanged** —
+the awaitable variants are additive. The higher-level observable stores keep
+using the non-awaiting form because they reconcile to the reply snapshot, so they
+never lose state; reach for the awaitable variant only when app code keys off the
+live delta of a write issued right after subscribing. Each awaitable also
+resolves (rather than hanging) if the connection closes or the user state is
+cleared before registration — the subscription replays and re-snapshots on
+reconnect.
 
 ## Projections Over Sync
 

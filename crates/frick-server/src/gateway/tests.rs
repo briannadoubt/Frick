@@ -759,6 +759,14 @@ async fn ws_handshake_gate_over_socket() {
 /// cannot backstop a dropped Delta: the live Delta is the only delivery path.
 /// Against the old ordering the parked handler has not registered yet, so the
 /// write sees `subscribers:0` and the Delta is dropped — this test fails.
+///
+/// This exercises `SubscriptionKind::Object`, but the fix is **kind-agnostic**:
+/// `handle_subscribe` calls `add_subscription` (gateway.rs) with the payload's
+/// `kind` unconditionally, synchronously, before the session-revalidation await
+/// — the same ordering for object/stream/projection/presence/signal alike. The
+/// Object scenario is therefore representative of the registration ordering for
+/// every kind; the per-kind fan-out paths (stream `StreamPage`, projection
+/// `ProjectionDelta`) are covered by their own gateway/conformance tests.
 #[tokio::test]
 async fn fr256_subscribe_then_immediate_write_delivers_echo_delta() {
     use frick_protocol::frame::SubscribePayload;
