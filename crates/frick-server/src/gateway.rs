@@ -60,6 +60,7 @@ use crate::config::FrickLimits;
 use crate::error::ServerError;
 use crate::http::AppState;
 use crate::principal::{DEFAULT_APP_ID, Principal};
+use crate::projections::ProjectionRegistry;
 use crate::session::principal_from_active_session_token;
 
 /// WebSocket close codes used by the gateway (`src/sync/gateway.ts`,
@@ -83,8 +84,10 @@ struct Connection {
     /// The session token this connection authenticated with, if any. Per-frame
     /// revalidation re-reads the session under this token.
     session_token: Option<String>,
-    /// Storage app id this connection is pinned to (FR-153). `_default` unless a
-    /// multi-app server matched a different app at Hello (not wired here yet).
+    /// Storage app id this connection is pinned to (FR-277). `_default` unless a
+    /// multi-app server matched a different app at Hello via the advertised
+    /// `schemaId` (`handle_hello` sets it; it doubles as the per-app
+    /// projection/search registry key — see [`projections_for_app`]).
     app_id: String,
     /// Whether the Hello handshake has completed (the gate at §6.3).
     handshake_complete: bool,
@@ -703,9 +706,59 @@ async fn handle_hello(hub: &Arc<GatewayHub>, id: u64, payload: HelloPayload) -> 
         }
     }
 
-    // 2. Schema compatibility against the (single-app) store schema. Multi-app
-    //    routing is not wired in this story; the store schema is the target.
-    let target = &hub.state.schema;
+    // 2. App routing (FR-277, `gateway.ts:540-551`). The advertised client
+    //    capabilities' `schema.schemaId` selects the app via `findBySchemaId`.
+    //    On a GENUINE multi-app server an advertised schemaId that matches no
+    //    registered app AND isn't the store schemaId → Nack `auth.forbidden`
+    //    reason `appNotAuthorized` (tenant-app-isolation-4). On a single-app
+    //    server this never rejects — the store schema is the only target and the
+    //    existing schema-hash compatibility behavior is preserved.
+    //
+    //    The compatibility target is the matched app's schema (so a multi-app
+    //    client is checked against ITS app's schema, not the store/foundation
+    //    schema); single-app keeps the store schema as the target. The storage
+    //    app id pinned on the connection is `storage_app_id(matched)` — the
+    //    matched id on multi-app, else `_default`.
+    let advertised_schema_id = payload
+        .client_capabilities
+        .as_ref()
+        .map(|caps| caps.schema.schema_id.as_str());
+    let matched_app = advertised_schema_id.and_then(|id| hub.state.apps.find_by_schema_id(id));
+
+    if hub.state.apps.is_multi_app()
+        && let Some(advertised) = advertised_schema_id
+        && matched_app.is_none()
+        && advertised != hub.state.schema.schema_id
+    {
+        let known_app_ids: Vec<Value> = hub
+            .state
+            .apps
+            .descriptors()
+            .into_iter()
+            .map(|descriptor| Value::from(descriptor.id))
+            .collect();
+        let nack = simple_nack(
+            FrickErrorCode::AuthForbidden,
+            "Application not authorized for this connection",
+            "hello",
+            false,
+            Some(Value::Map(vec![
+                ("reason".into(), "appNotAuthorized".into()),
+                ("knownAppIds".into(), Value::Array(known_app_ids)),
+            ])),
+            Some(hub.state.schema.clone()),
+        );
+        send_frame(hub, id, &nack);
+        return false;
+    }
+
+    // The resolved storage app id for the connection + the compatibility target.
+    let resolved_app_id = hub
+        .state
+        .apps
+        .storage_app_id(matched_app.map_or(crate::principal::DEFAULT_APP_ID, |app| app.id.as_str()))
+        .to_string();
+    let target = matched_app.map_or(&hub.state.schema, |app| &app.schema);
     let server_caps = default_server_capabilities(target);
 
     let compatibility = match &payload.client_capabilities {
@@ -793,6 +846,12 @@ async fn handle_hello(hub: &Arc<GatewayHub>, id: u64, payload: HelloPayload) -> 
                 tenant_transitions.push((new_tenant, 1));
             }
         }
+        // Pin the connection to its resolved storage app id (FR-277). On a
+        // single-app server this is always `_default`; on multi-app it is the
+        // Hello-matched app id, so every subsequent frame's store call + the
+        // per-app projection/search lookups scope to that app
+        // (tenant-app-isolation-3).
+        connection.app_id = resolved_app_id;
         connection.handshake_complete = true;
     }
     apply_tenant_transitions(hub, tenant_transitions);
@@ -835,10 +894,12 @@ async fn handle_subscribe(hub: &Arc<GatewayHub>, id: u64, payload: SubscribePayl
         return false;
     }
 
-    // Projection subscriptions: the projection must exist in the registry
-    // (map 05 §1.6) — an unknown name → auth.forbidden reason projectionNotFound.
+    // Projection subscriptions: the projection must exist in the CONNECTION'S
+    // app registry (map 05 §1.6; tenant-app-isolation-3) — an unknown name →
+    // auth.forbidden reason projectionNotFound. On multi-app this is the matched
+    // app's per-app registry, so app A cannot subscribe to app B's projection.
     if payload.kind == SubscriptionKind::Projection
-        && !hub.state.projections.contains(&payload.name)
+        && !projections_for_app(hub, &app_id).contains(&payload.name)
     {
         let nack = simple_nack(
             FrickErrorCode::AuthForbidden,
@@ -1006,10 +1067,8 @@ async fn handle_subscribe(hub: &Arc<GatewayHub>, id: u64, payload: SubscribePayl
         // the principal's tenant as one initial ProjectionDelta snapshot frame
         // (empty `changes` when there are none yet) — map 05 §1.6.
         SubscriptionKind::Projection => {
-            let rows = hub
-                .state
-                .projections
-                .snapshot(&payload.name, &principal.tenant_id);
+            let rows =
+                projections_for_app(hub, &app_id).snapshot(&payload.name, &principal.tenant_id);
             send_frame(
                 hub,
                 id,
@@ -2105,6 +2164,23 @@ fn connection_app_id(hub: &Arc<GatewayHub>, id: u64) -> String {
                 .map_or_else(|| DEFAULT_APP_ID.to_string(), |c| c.app_id.clone())
         },
     )
+}
+
+/// The projection registry scoped to a connection's app (FR-277,
+/// `gateway.ts:510-515`): the per-app registry of the connection's
+/// (Hello-resolved) `app_id` on a genuine multi-app server, else the shared
+/// `_default` registry. On a single-app server the `app_id` is always `_default`
+/// and this is `state.projections`, so subscribe validation + snapshots are
+/// unchanged.
+fn projections_for_app<'a>(hub: &'a Arc<GatewayHub>, app_id: &str) -> &'a ProjectionRegistry {
+    if hub.state.apps.is_multi_app() {
+        hub.state
+            .apps
+            .get(app_id)
+            .map_or(&hub.state.projections, |app| &app.projections)
+    } else {
+        &hub.state.projections
+    }
 }
 
 fn set_connection_principal(hub: &Arc<GatewayHub>, id: u64, principal: Principal) {

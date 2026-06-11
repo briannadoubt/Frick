@@ -8,7 +8,7 @@ use axum::routing::get;
 use frick_store::StoreError;
 use serde_json::json;
 
-use super::{ACTIVE_APP_ID, authenticate, new_request_id, parse_body_value, value_to_json};
+use super::{ActiveApp, authenticate, new_request_id, parse_body_value, value_to_json};
 use crate::authz::{Action, Decision, ResourceContext, decide_baseline};
 use crate::error::ServerError;
 use crate::http::{AppState, respond_error};
@@ -30,6 +30,7 @@ pub fn router(state: AppState) -> axum::Router {
 /// is wired into boot, publish the signal to live subscribers here too.
 async fn send_signal(
     State(state): State<AppState>,
+    active: ActiveApp,
     Path((name, key)): Path<(String, String)>,
     headers: HeaderMap,
     body: Bytes,
@@ -55,7 +56,7 @@ async fn send_signal(
             &key,
             &value,
             None,
-            ACTIVE_APP_ID,
+            active.app_id(),
         )
         .await
     {
@@ -68,6 +69,7 @@ async fn send_signal(
 /// decision, then drain (at-most-once) → `{schemaHash, name, key, data}`.
 async fn drain_signals(
     State(state): State<AppState>,
+    active: ActiveApp,
     Path((name, key)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
@@ -83,7 +85,7 @@ async fn drain_signals(
     match state
         .store
         .signals()
-        .drain(&principal.tenant_id, &name, &key, ACTIVE_APP_ID, now)
+        .drain(&principal.tenant_id, &name, &key, active.app_id(), now)
         .await
     {
         Ok(rows) => {

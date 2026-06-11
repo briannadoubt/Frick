@@ -13,7 +13,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 
-use super::{ACTIVE_APP_ID, authenticate, new_request_id};
+use super::{ActiveApp, authenticate, new_request_id};
 use crate::authz::{Action, Decision, ResourceContext, decide_baseline};
 use crate::http::{AppState, respond_error};
 use crate::projections::{
@@ -31,13 +31,13 @@ pub fn router(state: AppState) -> axum::Router {
 
 /// `GET /projections` (`src/server.ts:2128-2137`): 200 `{schemaHash,
 /// projections:[{name, sources}]}` from the shared registry.
-async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response {
+async fn list(State(state): State<AppState>, active: ActiveApp, headers: HeaderMap) -> Response {
     let request_id = new_request_id();
     if let Err(error) = authenticate(&state, &headers).await {
         return respond_error(&error, &request_id);
     }
     axum::Json(list_projections_body(
-        &state.projections,
+        active.projections(&state),
         &state.schema.hash,
     ))
     .into_response()
@@ -46,6 +46,7 @@ async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response {
 /// `GET /projections/:name` (`src/server.ts:2139-2185`).
 async fn read(
     State(state): State<AppState>,
+    active: ActiveApp,
     Path(name): Path<String>,
     Query(query): Query<BTreeMap<String, String>>,
     headers: HeaderMap,
@@ -56,8 +57,8 @@ async fn read(
         Err(error) => return respond_error(&error, &request_id),
     };
 
-    let ctx = FrickProjectionContext::new(principal.tenant_id.clone(), ACTIVE_APP_ID);
-    match read_projection(&state.projections, &name, &ctx, &query) {
+    let ctx = FrickProjectionContext::new(principal.tenant_id.clone(), active.resolved_id());
+    match read_projection(active.projections(&state), &name, &ctx, &query) {
         ProjectionHttpRead::NotFound => {
             // The TS 404 uses sync.protocolError (not storage.notFound), so the
             // registry helper builds the faithful envelope directly.

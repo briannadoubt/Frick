@@ -14,7 +14,7 @@ use frick_store::stores::stream::StoredEvent;
 use serde_json::json;
 
 use super::{
-    ACTIVE_APP_ID, authenticate, map_get, msgpack_byte_len, new_request_id, parse_body_value,
+    ActiveApp, authenticate, map_get, msgpack_byte_len, new_request_id, parse_body_value,
     require_record, require_string, value_to_json,
 };
 use crate::authz::{Action, Decision, DenyReason, ResourceContext, decide_baseline};
@@ -37,6 +37,7 @@ pub fn router(state: AppState) -> axum::Router {
 /// `hasMore`).
 async fn read_stream(
     State(state): State<AppState>,
+    active: ActiveApp,
     Path((stream, key)): Path<(String, String)>,
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
@@ -51,6 +52,7 @@ async fn read_stream(
     }
 
     let max_page = state.config.limits.max_stream_page_size;
+    let app_id = active.app_id();
 
     if params.contains_key("since") {
         since_page(
@@ -61,6 +63,7 @@ async fn read_stream(
             &params,
             &request_id,
             max_page,
+            app_id,
         )
         .await
     } else if params.contains_key("before") {
@@ -72,6 +75,7 @@ async fn read_stream(
             &params,
             &request_id,
             max_page,
+            app_id,
         )
         .await
     } else {
@@ -83,6 +87,7 @@ async fn read_stream(
             &params,
             &request_id,
             max_page,
+            app_id,
         )
         .await
     }
@@ -98,6 +103,7 @@ async fn since_page(
     params: &HashMap<String, String>,
     request_id: &str,
     max_page: i64,
+    app_id: &str,
 ) -> Response {
     let Some(since) = params.get("since").and_then(|raw| parse_cursor(raw)) else {
         return respond_error(&ServerError::InvalidStreamCursor, request_id);
@@ -106,7 +112,7 @@ async fn since_page(
     match state
         .store
         .streams()
-        .read(tenant_id, stream, key, since, Some(limit), ACTIVE_APP_ID)
+        .read(tenant_id, stream, key, since, Some(limit), app_id)
         .await
     {
         Ok(events) => axum::Json(json!({ "events": events_json(&events) })).into_response(),
@@ -125,6 +131,7 @@ async fn before_page(
     params: &HashMap<String, String>,
     request_id: &str,
     max_page: i64,
+    app_id: &str,
 ) -> Response {
     let before = params
         .get("before")
@@ -134,7 +141,7 @@ async fn before_page(
     match state
         .store
         .streams()
-        .read_before(tenant_id, stream, key, before, limit, ACTIVE_APP_ID)
+        .read_before(tenant_id, stream, key, before, limit, app_id)
         .await
     {
         Ok(events) => {
@@ -155,6 +162,7 @@ async fn forward_page(
     params: &HashMap<String, String>,
     request_id: &str,
     max_page: i64,
+    app_id: &str,
 ) -> Response {
     let after = params
         .get("after")
@@ -164,14 +172,7 @@ async fn forward_page(
     match state
         .store
         .streams()
-        .read(
-            tenant_id,
-            stream,
-            key,
-            after,
-            Some(limit + 1),
-            ACTIVE_APP_ID,
-        )
+        .read(tenant_id, stream, key, after, Some(limit + 1), app_id)
         .await
     {
         Ok(mut page) => {
@@ -208,6 +209,7 @@ fn page_response(
 /// head probe → `{headSequence, count}`.
 async fn stream_cursor(
     State(state): State<AppState>,
+    active: ActiveApp,
     Path((stream, key)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
@@ -223,7 +225,7 @@ async fn stream_cursor(
     match state
         .store
         .streams()
-        .head(&principal.tenant_id, &stream, &key, ACTIVE_APP_ID)
+        .head(&principal.tenant_id, &stream, &key, active.app_id())
         .await
     {
         Ok(head) => axum::Json(json!({
@@ -238,7 +240,12 @@ async fn stream_cursor(
 /// `POST /append` (`src/server.ts:2740-2776`): payload-size guard, the append
 /// decision, then `append_event` (idempotent by `(tenant, replica, requestId)`).
 /// 200 `{ok, event}`; the store write listener fans out — no inline broadcast.
-async fn append(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+async fn append(
+    State(state): State<AppState>,
+    active: ActiveApp,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
     let request_id = new_request_id();
     let (principal, _now) = match authenticate(&state, &headers).await {
         Ok(result) => result,
@@ -313,7 +320,7 @@ async fn append(State(state): State<AppState>, headers: HeaderMap, body: Bytes) 
             &append_request_id,
             &event,
             &payload,
-            ACTIVE_APP_ID,
+            active.app_id(),
         )
         .await
     {

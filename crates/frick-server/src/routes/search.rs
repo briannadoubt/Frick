@@ -37,9 +37,7 @@ use frick_store::{
 };
 use serde_json::{Value as JsonValue, json};
 
-use super::{
-    ACTIVE_APP_ID, authenticate, map_get, new_request_id, parse_body_value, require_string,
-};
+use super::{ActiveApp, authenticate, map_get, new_request_id, parse_body_value, require_string};
 use crate::authz::{Action, Decision, ResourceContext, decide_baseline};
 use crate::error::ServerError;
 use crate::http::{AppState, respond_error};
@@ -56,6 +54,7 @@ pub fn router(state: AppState) -> axum::Router {
 /// `POST /search` (`src/server.ts:2187-2246`).
 async fn search(
     State(state): State<AppState>,
+    active: ActiveApp,
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
@@ -72,8 +71,9 @@ async fn search(
 
     // Resolve the index → its source (unknown index is a 404, like TS
     // `SearchIndexNotFoundError`). The source kind drives the per-hit
-    // visibility post-filter.
-    let Some(source) = state.search.source_of(&parsed.index) else {
+    // visibility post-filter. The index registry is the active app's per-app
+    // registry on a multi-app server, else the shared `_default` one.
+    let Some(source) = active.search(&state).source_of(&parsed.index) else {
         return respond_error(
             &ServerError::SearchIndexNotFound {
                 index: parsed.index,
@@ -113,13 +113,17 @@ async fn search(
         MAX_SEARCH_LIMIT
     };
 
+    // Scope the storage index name by the resolved app (multi-app only) so this
+    // query can only match the querying app's FTS rows — the same namespacing
+    // the search projector applies on write (FR-277). Single-app is unchanged.
+    let scoped_index = state.apps.scoped_index_name(active.app_id(), &parsed.index);
     // Adapter/store errors are deliberately wrapped — the FTS parser detail is
     // not exposed (TS `InvalidSearchQueryError`).
     let Ok(result) = state
         .store
         .search_query(
             &principal.tenant_id,
-            &parsed.index,
+            &scoped_index,
             &parsed.q,
             &parsed.filter,
             adapter_limit,
@@ -129,7 +133,8 @@ async fn search(
         return respond_error(&invalid_search_query(), &request_id);
     };
 
-    let visible = filter_result_for_principal(&state, &principal, &source, result).await;
+    let visible =
+        filter_result_for_principal(&state, &principal, &source, result, active.app_id()).await;
 
     // Slice to the caller's limit AFTER authz filtering (non-admin parity);
     // admin already got exactly `limit` from the adapter.
@@ -307,6 +312,7 @@ async fn filter_result_for_principal(
     principal: &Principal,
     source: &SearchSource,
     result: SearchQueryResult,
+    app_id: &str,
 ) -> SearchQueryResult {
     if principal.is_admin() {
         return SearchQueryResult {
@@ -316,7 +322,7 @@ async fn filter_result_for_principal(
     }
     let mut visible = Vec::new();
     for hit in result.hits {
-        if hit_is_visible(state, principal, source, &hit).await {
+        if hit_is_visible(state, principal, source, &hit, app_id).await {
             visible.push(hit);
         }
     }
@@ -336,6 +342,7 @@ async fn hit_is_visible(
     principal: &Principal,
     source: &SearchSource,
     hit: &SearchHit,
+    app_id: &str,
 ) -> bool {
     match source {
         SearchSource::Object { type_name } => {
@@ -345,7 +352,7 @@ async fn hit_is_visible(
             let Ok(Some(object)) = state
                 .store
                 .objects()
-                .read(&principal.tenant_id, type_name, &object_id, ACTIVE_APP_ID)
+                .read(&principal.tenant_id, type_name, &object_id, app_id)
                 .await
             else {
                 return false;

@@ -9,6 +9,7 @@ use frick_store::{FrickStore, FrickStoreOptions, StoreError};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
+use crate::apps::AppDefinition;
 use crate::config::{DbDriver, FrickConfig};
 use crate::gateway::GatewayHub;
 use crate::http::{AppState, AppStateInner, public_router};
@@ -116,6 +117,120 @@ pub async fn create_frick_server_with_seams(
     schema: FrickSchema,
     seams: BootSeams,
 ) -> Result<FrickServer, BootError> {
+    // Single-app boot: the store opens with `schema`, and the registry holds the
+    // one `_default` app (base_path `""`) whose per-app registries ARE the
+    // top-level `state.projections` / `state.search` handles. `storage_app_id`
+    // always returns `_default` here, so storage stays byte-for-byte identical
+    // to the pre-FR-277 path.
+    let default_projections = crate::projections::ProjectionRegistry::new();
+    let default_search = crate::search::SearchRegistry::new();
+    let registry = crate::apps::FrickAppRegistry::new(vec![crate::apps::AppEntry {
+        id: crate::principal::DEFAULT_APP_ID.to_string(),
+        base_path: String::new(),
+        schema: schema.clone(),
+        projections: default_projections.clone(),
+        search: default_search.clone(),
+    }])
+    .map_err(BootError::Config)?;
+    build_server(
+        config,
+        schema,
+        registry,
+        default_projections,
+        default_search,
+        seams,
+    )
+    .await
+}
+
+/// Build a multi-app server (FR-277): one [`crate::apps::AppEntry`] per
+/// [`AppDefinition`], all partitioning the shared store by `app_id`. The store
+/// opens with `store_schema` (the foundation schema in TS multi-app mode, so
+/// HTTP error envelopes carry the foundation hash/revision even on a multi-app
+/// server — map 02 §13.3). `state.schema` / `state.projections` / `state.search`
+/// are the ROOT app's values: the entry whose `base_path` is `""` (or, if there
+/// is none, the first app). Server-wide projections/search registered through
+/// those top-level handles therefore drive the root app.
+///
+/// Per-app projections + search are registered AFTER construction via the
+/// registry handles, e.g.
+/// `server.state.apps.get("chat").unwrap().projections.register(..)`. The store
+/// write funnel routes each write to the per-app projection / search registry of
+/// the app that owns it (`event.app_id()`), so app A's projections never fire on
+/// app B's writes ([`app_projections_for_event`] / [`app_search_for_event`]).
+///
+/// # Errors
+/// - [`BootError::Config`] when the app set fails validation (duplicate id /
+///   base_path, malformed base_path).
+/// - [`BootError::Store`] / [`BootError::Io`] from store open + migration.
+///
+/// # Panics
+/// Panics only via the boot `push.deliver` registration invariant (see
+/// [`create_frick_server_with_seams`]).
+pub async fn create_frick_server_with_apps(
+    config: FrickConfig,
+    store_schema: FrickSchema,
+    apps: Vec<AppDefinition>,
+    seams: BootSeams,
+) -> Result<FrickServer, BootError> {
+    // Build each app's `AppEntry` with its own per-app registries. The root app
+    // (base_path `""`, else the first app) reuses the handles that become
+    // `state.projections` / `state.search`, so server-wide registration through
+    // the top-level fields drives it. `state.schema` tracks the STORE schema
+    // (the error-envelope contract — map 02 §13.3); the root app's own schema
+    // lives on its `AppEntry`.
+    let root_index = apps
+        .iter()
+        .position(|app| app.base_path.is_empty())
+        .unwrap_or(0);
+    let mut root_projections = crate::projections::ProjectionRegistry::new();
+    let mut root_search = crate::search::SearchRegistry::new();
+
+    let entries: Vec<crate::apps::AppEntry> = apps
+        .into_iter()
+        .enumerate()
+        .map(|(index, def)| {
+            let projections = crate::projections::ProjectionRegistry::new();
+            let search = crate::search::SearchRegistry::new();
+            if index == root_index {
+                root_projections = projections.clone();
+                root_search = search.clone();
+            }
+            crate::apps::AppEntry {
+                id: def.id,
+                base_path: def.base_path,
+                schema: def.schema,
+                projections,
+                search,
+            }
+        })
+        .collect();
+
+    let registry = crate::apps::FrickAppRegistry::new(entries).map_err(BootError::Config)?;
+    build_server(
+        config,
+        store_schema,
+        registry,
+        root_projections,
+        root_search,
+        seams,
+    )
+    .await
+}
+
+/// The shared server-construction body for both the single-app and multi-app
+/// boot paths. `state_projections` / `state_search` become the top-level
+/// `AppStateInner` fields and MUST be `Arc`-clones of the root app's per-app
+/// registries (so the store write funnel + the gateway drive the same interiors
+/// the registry exposes for the root app).
+async fn build_server(
+    config: FrickConfig,
+    schema: FrickSchema,
+    registry: crate::apps::FrickAppRegistry,
+    state_projections: crate::projections::ProjectionRegistry,
+    state_search: crate::search::SearchRegistry,
+    seams: BootSeams,
+) -> Result<FrickServer, BootError> {
     let options = FrickStoreOptions {
         path: config.db_path.clone(),
         db_driver: match config.db_driver {
@@ -151,52 +266,89 @@ pub async fn create_frick_server_with_seams(
         .expect("push.deliver is the only handler registered for that type at boot");
     let jobs = Arc::new(jobs);
 
+    let apps = Arc::new(registry);
+
     let state = Arc::new(AppStateInner {
         config: config.clone(),
         store,
         schema,
         started_at: now_iso(),
         auth_limiter: std::sync::Mutex::new(crate::http::AuthLimiter::default()),
-        projections: crate::projections::ProjectionRegistry::new(),
-        search: crate::search::SearchRegistry::new(),
+        projections: state_projections,
+        search: state_search,
         push_registry: Arc::clone(&push.registry),
         notification_router: Arc::clone(&push.router),
         email_router: Arc::clone(&seams.email_router),
+        apps,
     });
 
     // The gateway hub owns the live connections and the fan-out funnel. The
     // store's single write listener (FR-114) drives BOTH the gateway's
     // object/stream fan-out AND the projection engine (objectUpsert +
     // streamAppend; deletes never reach projections — map 05 §1.4).
+    //
+    // FR-277 per-app routing (tenant-app-isolation): on a genuine multi-app
+    // server each write is routed to the per-app projection / search registry
+    // of the app that owns the write (`event.app_id()`), so app A's projection
+    // never fires on app B's writes and vice-versa. On a single-app server the
+    // registry lookup always resolves the `_default` app, whose registries ARE
+    // the `state.projections` / `state.search` handles, so behavior is
+    // byte-for-byte identical.
     let gateway = GatewayHub::new(Arc::clone(&state));
     {
         let gateway_listener = gateway.write_listener();
-        let projections = state.projections.clone();
+        let state_for_listener = Arc::clone(&state);
         state.store.set_write_listener(Box::new(move |event| {
             gateway_listener(event);
-            crate::projections::drive_projection_write(&projections, event);
+            let projections = app_projections_for_event(&state_for_listener, event);
+            crate::projections::drive_projection_write(projections, event);
         }));
     }
     // Search projector (FR-245, map 03 §13): the store applies the SearchOps
     // this registry derives from each object/stream write to its FTS tables, so
     // registered indexes stay in sync without the gateway in the loop. The
     // projector is pure (it never re-enters the store). Detached on close.
+    // Routed to the writing app's per-app search registry (FR-277).
     {
-        let search = state.search.clone();
-        state
-            .store
-            .set_search_projector(Box::new(move |event| search.project_event(event)));
+        let state_for_search = Arc::clone(&state);
+        state.store.set_search_projector(Box::new(move |event| {
+            let app_id = event_app_id(event).to_string();
+            let apps = &state_for_search.apps;
+            // Namespace the stored index name by the writing app (multi-app
+            // only) so two apps' same-named indexes never share FTS rows; the
+            // `POST /search` route scopes its query the same way (FR-277).
+            app_search_for_event(&state_for_search, event)
+                .project_event(event)
+                .into_iter()
+                .map(|op| scope_search_op(apps, &app_id, op))
+                .collect()
+        }));
     }
     // Projection deltas fan out over the gateway to projection subscribers.
+    // Each notice carries its `app_id`, so the gateway fans it out only to that
+    // app's subscribers. On a multi-app server every app's per-app projection
+    // registry gets its own listener (so a delta from any app reaches the
+    // gateway); on a single-app server this is just `state.projections` (which
+    // IS the `_default` app's registry — the same interior — so the loop wires
+    // it exactly once).
     {
-        let weak = Arc::downgrade(&gateway);
-        state
-            .projections
-            .set_delta_listener(Some(Box::new(move |notice| {
+        let install = |registry: &crate::projections::ProjectionRegistry| {
+            let weak = Arc::downgrade(&gateway);
+            registry.set_delta_listener(Some(Box::new(move |notice| {
                 if let Some(hub) = weak.upgrade() {
                     hub.publish_projection_delta(notice);
                 }
             })));
+        };
+        if state.apps.is_multi_app() {
+            for descriptor in state.apps.descriptors() {
+                if let Some(app) = state.apps.get(&descriptor.id) {
+                    install(&app.projections);
+                }
+            }
+        } else {
+            install(&state.projections);
+        }
     }
 
     Ok(FrickServer {
@@ -221,6 +373,19 @@ impl FrickServer {
         let bound_port = listener.local_addr()?.port();
         self.bound_port = bound_port;
 
+        // Data plane (FR-277, `dispatchHttp` step 4): on a genuine multi-app
+        // server each app's `dataplane_router` is `nest`ed under its base_path
+        // (the nest strips the prefix so the inner routes match, and a per-app
+        // layer stamps the storage app id + registry id onto the request — so
+        // `/a/objects` writes partition under app A and `/b/objects` under app
+        // B). On a single-app server the data plane is merged flat at the root
+        // with NO per-app layer, so the `ActiveApp` extractor falls back to
+        // `_default` and every byte of the single-app path is unchanged.
+        let dataplane = if self.state.apps.is_multi_app() {
+            crate::routes::multi_app_dataplane_router(&self.state)
+        } else {
+            crate::routes::dataplane_router(Arc::clone(&self.state))
+        };
         let router = public_router(Arc::clone(&self.state))
             .merge(crate::auth_routes::auth_router(Arc::clone(&self.state)))
             // Sign in with Apple / Google id-token verify routes (FR-269). The
@@ -229,7 +394,7 @@ impl FrickServer {
                 Arc::clone(&self.state),
                 Arc::clone(&self.jwks_provider),
             ))
-            .merge(crate::routes::dataplane_router(Arc::clone(&self.state)))
+            .merge(dataplane)
             .merge(crate::routes::admin::admin_router(Arc::clone(&self.state)))
             // Admin push credential + deliver routes (FR-265). Dispatches an
             // enqueue through the SAME `NotificationRouter` the job worker
@@ -325,6 +490,80 @@ impl FrickServer {
     }
 }
 
+/// The storage app id a store-write event was made under. The enum has no
+/// accessor (the `StreamAppend` variant carries it on the nested event), so this
+/// is the single place that reaches in.
+fn event_app_id(event: &frick_store::FrickStoreWriteEvent) -> &str {
+    match event {
+        frick_store::FrickStoreWriteEvent::ObjectUpsert { app_id, .. }
+        | frick_store::FrickStoreWriteEvent::ObjectDelete { app_id, .. } => app_id,
+        frick_store::FrickStoreWriteEvent::StreamAppend { event, .. } => &event.app_id,
+    }
+}
+
+/// The projection registry that should observe a store write (FR-277): on a
+/// genuine multi-app server the per-app registry of the app that owns the write
+/// ([`event_app_id`]), else the shared `_default` registry on `state`. A write
+/// whose `app_id` matches no registered app (impossible on a well-formed
+/// multi-app server, but defensive) falls back to the `_default` registry.
+fn app_projections_for_event<'a>(
+    state: &'a AppStateInner,
+    event: &frick_store::FrickStoreWriteEvent,
+) -> &'a crate::projections::ProjectionRegistry {
+    if state.apps.is_multi_app() {
+        state
+            .apps
+            .get(event_app_id(event))
+            .map_or(&state.projections, |app| &app.projections)
+    } else {
+        &state.projections
+    }
+}
+
+/// The search registry that should index a store write (FR-277); see
+/// [`app_projections_for_event`].
+fn app_search_for_event<'a>(
+    state: &'a AppStateInner,
+    event: &frick_store::FrickStoreWriteEvent,
+) -> &'a crate::search::SearchRegistry {
+    if state.apps.is_multi_app() {
+        state
+            .apps
+            .get(event_app_id(event))
+            .map_or(&state.search, |app| &app.search)
+    } else {
+        &state.search
+    }
+}
+
+/// Rewrite a derived [`SearchOp`]'s index name to the app-scoped storage key
+/// (FR-277). `app_id` is the writing app's storage id; on a single-app server
+/// `scoped_index_name` is the identity, so this is a no-op there.
+fn scope_search_op(
+    apps: &crate::apps::FrickAppRegistry,
+    app_id: &str,
+    op: frick_store::SearchOp,
+) -> frick_store::SearchOp {
+    use frick_store::SearchOp;
+    match op {
+        SearchOp::Upsert {
+            index,
+            doc_id,
+            text,
+            fields,
+        } => SearchOp::Upsert {
+            index: apps.scoped_index_name(app_id, &index),
+            doc_id,
+            text,
+            fields,
+        },
+        SearchOp::Delete { index, doc_id } => SearchOp::Delete {
+            index: apps.scoped_index_name(app_id, &index),
+            doc_id,
+        },
+    }
+}
+
 /// Current time as an ISO-8601 UTC millisecond string. Used for the
 /// `startedAt` log/inspection field.
 fn now_iso() -> String {
@@ -393,6 +632,71 @@ mod tests {
         );
 
         server.close().await;
+    }
+
+    /// Backward-compat invariant (FR-277): the single-app boot path builds a
+    /// one-app `_default` registry, so `is_multi_app()` is false and storage
+    /// stays pinned to `_default`. Also asserts the `_default` app's projection
+    /// registry shares its `Arc` interior with `state.projections`.
+    #[tokio::test]
+    async fn single_app_boot_builds_default_registry() {
+        let schema = frick_protocol::foundation_schema();
+        let server = create_frick_server(test_config(), schema).await.unwrap();
+        let apps = &server.state.apps;
+        assert_eq!(apps.len(), 1);
+        assert!(!apps.is_multi_app());
+        assert_eq!(apps.storage_app_id("anything"), crate::DEFAULT_APP_ID);
+
+        // The `_default` app entry's projection handle is the SAME interior as
+        // `state.projections`: a projection registered through the state field
+        // is visible via the registry.
+        let default_app = apps.get(crate::DEFAULT_APP_ID).expect("default app");
+        server
+            .state
+            .projections
+            .register(crate::projections::FrickProjection::new(
+                "p1",
+                vec![crate::projections::FrickProjectionSource::object("Note")],
+                Box::new(NoopProjection),
+            ))
+            .unwrap();
+        assert!(default_app.projections.contains("p1"));
+    }
+
+    /// The multi-app boot path (FR-277) registers every app, flips
+    /// `is_multi_app()`, and resolves storage app ids by base_path.
+    #[tokio::test]
+    async fn multi_app_boot_registers_all_apps() {
+        let foundation = frick_protocol::foundation_schema();
+        let mut chat = frick_protocol::foundation_schema();
+        chat.schema_id = "chat.schema".to_string();
+        let apps = vec![
+            AppDefinition::new("root", "", foundation.clone()),
+            AppDefinition::new("chat", "/chat", chat),
+        ];
+        let server =
+            create_frick_server_with_apps(test_config(), foundation, apps, BootSeams::production())
+                .await
+                .unwrap();
+        let registry = &server.state.apps;
+        assert_eq!(registry.len(), 2);
+        assert!(registry.is_multi_app());
+        assert_eq!(registry.storage_app_id("chat"), "chat");
+        let resolution = registry.resolve_by_path("/chat/rooms").unwrap();
+        assert_eq!(resolution.app_id, "chat");
+        assert_eq!(resolution.relative_path, "/rooms");
+    }
+
+    /// A no-op projection handler for the registry-wiring assertion above.
+    struct NoopProjection;
+    impl crate::projections::FrickProjectionHandler for NoopProjection {
+        fn apply(
+            &self,
+            _event: &crate::projections::FrickProjectionWriteEvent,
+            _ctx: &crate::projections::FrickProjectionContext,
+        ) -> crate::projections::ProjectionApplyResult {
+            crate::projections::ProjectionApplyResult::none()
+        }
     }
 
     /// The Postgres driver is now wired (FR-242): construction reaches the PG

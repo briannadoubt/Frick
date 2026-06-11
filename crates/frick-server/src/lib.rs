@@ -5,6 +5,7 @@
 //! Ported from `apps/server/src`. Spec:
 //! `internal/rust-rewrite/maps/02-server-architecture.md`.
 
+pub mod apps;
 pub mod auth;
 pub mod auth_routes;
 pub mod authz;
@@ -27,13 +28,15 @@ pub mod search;
 pub mod session;
 pub mod standalone;
 
+pub use apps::{AppDefinition, AppDescriptor, AppEntry, AppResolution, FrickAppRegistry};
 pub use auth::{
     FixedJwksProvider, Jwks, JwksProvider, ReqwestJwksProvider, RsaJwk, SharedJwksProvider,
     VerifiedIdentity, VerifyError, VerifyParams, provider_auth_router, verify_id_token,
 };
 pub use authz::{Action, Decision, DenyReason, ResourceContext, decide_baseline};
 pub use boot::{
-    BootError, BootSeams, FrickServer, create_frick_server, create_frick_server_with_seams,
+    BootError, BootSeams, FrickServer, create_frick_server, create_frick_server_with_apps,
+    create_frick_server_with_seams,
 };
 pub use cluster::{
     ClusterEnvelope, ClusterEnvelopeHandler, FrickClusterBus, MemoryClusterBus,

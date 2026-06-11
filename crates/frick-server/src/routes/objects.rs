@@ -13,8 +13,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::{
-    ACTIVE_APP_ID, authenticate, new_request_id, parse_body_value, value_to_json,
-    without_envelope_id,
+    ActiveApp, authenticate, new_request_id, parse_body_value, value_to_json, without_envelope_id,
 };
 use crate::authz::{Action, Decision, DenyReason, ResourceContext, decide_baseline};
 use crate::error::ServerError;
@@ -43,6 +42,7 @@ struct ListQuery {
 /// owner-visible rows.
 async fn list_objects(
     State(state): State<AppState>,
+    active: ActiveApp,
     headers: HeaderMap,
     Query(query): Query<ListQuery>,
 ) -> Response {
@@ -71,7 +71,7 @@ async fn list_objects(
     let rows = match state
         .store
         .objects()
-        .list(&principal.tenant_id, &object_type, ACTIVE_APP_ID)
+        .list(&principal.tenant_id, &object_type, active.app_id())
         .await
     {
         Ok(rows) => rows,
@@ -93,6 +93,7 @@ async fn list_objects(
 /// renders the inline 409 `storage.conflict` envelope with `ETag: actualVersion`.
 async fn write_object(
     State(state): State<AppState>,
+    active: ActiveApp,
     Path((object_type, object_id)): Path<(String, String)>,
     headers: HeaderMap,
     body: Bytes,
@@ -122,7 +123,7 @@ async fn write_object(
         .store
         .upsert_object_with_policy(
             &principal.tenant_id,
-            ACTIVE_APP_ID,
+            active.app_id(),
             &object_type,
             &object_id,
             &value,
@@ -175,6 +176,7 @@ async fn write_object(
 /// decision; always 200 `{schemaHash, existed}` (idempotent — never 204/404).
 async fn delete_object(
     State(state): State<AppState>,
+    active: ActiveApp,
     Path((object_type, object_id)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
@@ -194,7 +196,7 @@ async fn delete_object(
             &principal.tenant_id,
             &object_type,
             &object_id,
-            ACTIVE_APP_ID,
+            active.app_id(),
         )
         .await
     {

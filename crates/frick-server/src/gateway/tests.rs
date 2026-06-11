@@ -732,17 +732,30 @@ async fn test_hub() -> std::sync::Arc<GatewayHub> {
         std::sync::Arc::new(crate::push::credentials::ProcessCredentialEnv),
         push_transports_for_test(),
     );
+    let projections = crate::projections::ProjectionRegistry::new();
+    let search = crate::search::SearchRegistry::new();
+    let apps = std::sync::Arc::new(
+        crate::apps::FrickAppRegistry::new(vec![crate::apps::AppEntry {
+            id: crate::principal::DEFAULT_APP_ID.to_string(),
+            base_path: String::new(),
+            schema: note_schema(),
+            projections: projections.clone(),
+            search: search.clone(),
+        }])
+        .unwrap(),
+    );
     let state = std::sync::Arc::new(AppStateInner {
         config: test_config(),
         store,
         schema: note_schema(),
         started_at: "1970-01-01T00:00:00.000Z".into(),
         auth_limiter: std::sync::Mutex::new(crate::http::AuthLimiter::default()),
-        projections: crate::projections::ProjectionRegistry::new(),
-        search: crate::search::SearchRegistry::new(),
+        projections,
+        search,
         push_registry: push.registry,
         notification_router: push.router,
         email_router: std::sync::Arc::new(crate::email::EmailRouter::noop()),
+        apps,
     });
     GatewayHub::new(state)
 }

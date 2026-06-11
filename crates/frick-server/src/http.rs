@@ -18,6 +18,7 @@ use frick_protocol::FrickSchema;
 use frick_store::FrickStore;
 use serde_json::json;
 
+use crate::apps::FrickAppRegistry;
 use crate::config::FrickConfig;
 use crate::email::EmailRouter;
 use crate::error::ServerError;
@@ -27,6 +28,28 @@ use crate::push::{NotificationRouter, PushRegistry};
 use crate::search::SearchRegistry;
 
 /// Shared application state handed to every handler.
+///
+/// ## The `apps` registry and the legacy single-app fields (FR-277)
+///
+/// [`schema`](Self::schema), [`projections`](Self::projections), and
+/// [`search`](Self::search) are the **`_default` app's** values. They are kept
+/// as top-level fields so every existing route + the gateway keep working
+/// unchanged on a single-app server (`state.schema` / `state.projections` /
+/// `state.search`). The registry's `_default` [`AppEntry`] holds the SAME
+/// registry handles — `projections` and `search` are `Arc`-backed clones that
+/// share one interior — so `registry.get("_default").projections` observes
+/// every projection registered through `state.projections`, and likewise for
+/// search. `schema` is a value: the `_default` entry holds an equal clone.
+///
+/// On a single-app server the registry holds exactly one app (`_default`,
+/// base_path `""`) and [`FrickAppRegistry::storage_app_id`] always returns
+/// `_default`, so storage behavior is byte-for-byte identical to before this
+/// field existed. A multi-app server is built via
+/// [`crate::boot::create_frick_server_with_apps`]; the HTTP nest routing + the
+/// WS Hello routing read [`apps`](Self::apps) to resolve the active app per
+/// request.
+///
+/// [`AppEntry`]: crate::apps::AppEntry
 pub struct AppStateInner {
     pub config: FrickConfig,
     /// The shared store. Held behind an `Arc` so the durable-job worker
@@ -34,18 +57,23 @@ pub struct AppStateInner {
     /// `'static` task without cloning the (non-`Clone`) store. Handlers keep
     /// using `state.store.method()` — `Arc<FrickStore>` derefs to `FrickStore`.
     pub store: Arc<FrickStore>,
+    /// The `_default` (root) app's schema. On a single-app server this is the
+    /// only app's schema; equal to `apps.get("_default").schema`.
     pub schema: FrickSchema,
     /// Wall-clock start, ISO-8601 (stamped at boot by the caller).
     pub started_at: String,
     /// Fixed-window auth-attempt limiter (`src/server.ts:3030-3072`).
     pub auth_limiter: Mutex<AuthLimiter>,
-    /// The shared projection registry (FR-245). Empty until an app registers
-    /// projections; the gateway reads snapshots and the routes list/read it.
+    /// The `_default` app's projection registry (FR-245). Empty until an app
+    /// registers projections; the gateway reads snapshots and the routes
+    /// list/read it. Shares its `Arc` interior with
+    /// `apps.get("_default").projections` (see the struct doc).
     pub projections: ProjectionRegistry,
-    /// The shared search index registry (FR-245, map 03 §13). Empty until an
-    /// app registers indexes; installed as the store's search projector at boot
-    /// so object/stream writes flow into the FTS tables, and read by the
-    /// `POST /search` route + the `/_frick/inspect/search` report.
+    /// The `_default` app's search index registry (FR-245, map 03 §13). Empty
+    /// until an app registers indexes; installed as the store's search projector
+    /// at boot so object/stream writes flow into the FTS tables, and read by the
+    /// `POST /search` route + the `/_frick/inspect/search` report. Shares its
+    /// `Arc` interior with `apps.get("_default").search` (see the struct doc).
     pub search: SearchRegistry,
     /// The wired push-adapter registry (FR-265): APNs / FCM / Web Push + test,
     /// each over a real transport. Held so the server can close adapters at
@@ -61,6 +89,14 @@ pub struct AppStateInner {
     /// Tests inject a [`crate::email::RecordingEmailAdapter`]; FR-271 plugs a
     /// Resend adapter here. The injection point is [`crate::boot::BootSeams`].
     pub email_router: Arc<EmailRouter>,
+    /// The multi-app registry (FR-277). Always holds at least the `_default`
+    /// (root, base_path `""`) app, whose `schema` / `projections` / `search`
+    /// are the legacy top-level fields above (same `Arc` interiors). On a
+    /// single-app server `apps.is_multi_app()` is `false` and every storage call
+    /// stays pinned to `_default`; on a multi-app server the HTTP nest routing
+    /// (`routes::multi_app_dataplane_router`) and the WS Hello routing
+    /// (`gateway::handle_hello`) resolve the active app from this registry.
+    pub apps: Arc<FrickAppRegistry>,
 }
 
 /// The durable-job worker / recurring scheduler read the store through this

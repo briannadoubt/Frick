@@ -57,9 +57,7 @@ use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use super::{
-    ACTIVE_APP_ID, authenticate, map_get, new_request_id, parse_body_value, require_string,
-};
+use super::{ActiveApp, authenticate, map_get, new_request_id, parse_body_value, require_string};
 use crate::authz::{Action, Decision, DenyReason, ResourceContext, decide_baseline};
 use crate::error::{LimitKind, ServerError};
 use crate::http::{AppState, respond_error};
@@ -104,6 +102,7 @@ struct OwnerQuery {
 /// listing is owner-scoped.
 async fn list_blobs(
     State(state): State<AppState>,
+    active: ActiveApp,
     headers: HeaderMap,
     Query(query): Query<OwnerQuery>,
 ) -> Response {
@@ -137,7 +136,7 @@ async fn list_blobs(
         .list(
             &principal.tenant_id,
             requested_owner_id.as_deref(),
-            ACTIVE_APP_ID,
+            active.app_id(),
         )
         .await
     {
@@ -155,7 +154,7 @@ async fn list_blobs(
         let used_bytes = match state
             .store
             .blobs()
-            .total_bytes_for_owner(&principal.tenant_id, owner, ACTIVE_APP_ID)
+            .total_bytes_for_owner(&principal.tenant_id, owner, active.app_id())
             .await
         {
             Ok(total) => total,
@@ -182,7 +181,12 @@ async fn list_blobs(
 /// `{blobId, ownerId, contentHash, byteLength, mimeType, storageKey?}`. The
 /// `blob.write` ownership assertion runs against the declared owner; 201
 /// `{ok:true, blobId}`.
-async fn declare_blob(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+async fn declare_blob(
+    State(state): State<AppState>,
+    active: ActiveApp,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
     let request_id = new_request_id();
     let (principal, now) = match authenticate(&state, &headers).await {
         Ok(result) => result,
@@ -234,7 +238,7 @@ async fn declare_blob(State(state): State<AppState>, headers: HeaderMap, body: B
                 mime_type,
                 storage_key,
             },
-            ACTIVE_APP_ID,
+            active.app_id(),
             now,
         )
         .await
@@ -253,6 +257,7 @@ async fn declare_blob(State(state): State<AppState>, headers: HeaderMap, body: B
 /// the grant cascade) gates visibility.
 async fn get_metadata(
     State(state): State<AppState>,
+    active: ActiveApp,
     Path(blob_id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
@@ -268,7 +273,7 @@ async fn get_metadata(
         match state
             .store
             .blobs()
-            .read(&principal.tenant_id, &blob_id, ACTIVE_APP_ID)
+            .read(&principal.tenant_id, &blob_id, active.app_id())
             .await
         {
             Ok(metadata) => metadata,
@@ -296,8 +301,10 @@ async fn get_metadata(
 /// `Content-Type` before `;`). The per-principal quota projection runs before
 /// any write; the metadata row is created BEFORE the bytes (FK). Blob
 /// processors/validators are deferred — see the `TODO(FR-248/processors)`.
+#[allow(clippy::too_many_lines)] // the upload sequence is one linear TS-faithful flow
 async fn put_content(
     State(state): State<AppState>,
+    active: ActiveApp,
     Path(blob_id): Path<String>,
     OriginalUri(uri): OriginalUri,
     headers: HeaderMap,
@@ -320,7 +327,7 @@ async fn put_content(
     let metadata = match state
         .store
         .blobs()
-        .read(&principal.tenant_id, &blob_id, ACTIVE_APP_ID)
+        .read(&principal.tenant_id, &blob_id, active.app_id())
         .await
     {
         Ok(metadata) => metadata,
@@ -359,7 +366,7 @@ async fn put_content(
         let current_bytes = match state
             .store
             .blobs()
-            .total_bytes_for_owner(&principal.tenant_id, &resolved_owner_id, ACTIVE_APP_ID)
+            .total_bytes_for_owner(&principal.tenant_id, &resolved_owner_id, active.app_id())
             .await
         {
             Ok(total) => total,
@@ -393,7 +400,7 @@ async fn put_content(
                     mime_type: infer_mime_type(&headers),
                     storage_key: None,
                 },
-                ACTIVE_APP_ID,
+                active.app_id(),
                 now,
             )
             .await
@@ -404,7 +411,13 @@ async fn put_content(
     // 7. Write the bytes.
     if let Err(error) = state
         .store
-        .write_content(&principal.tenant_id, &blob_id, content, ACTIVE_APP_ID, now)
+        .write_content(
+            &principal.tenant_id,
+            &blob_id,
+            content,
+            active.app_id(),
+            now,
+        )
         .await
     {
         return respond_error(&store_error(&error), &request_id);
@@ -489,6 +502,7 @@ fn resolve_upload(
 /// bytes.
 async fn get_content(
     State(state): State<AppState>,
+    active: ActiveApp,
     Path(blob_id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
@@ -501,7 +515,7 @@ async fn get_content(
     let metadata = match state
         .store
         .blobs()
-        .read(&principal.tenant_id, &blob_id, ACTIVE_APP_ID)
+        .read(&principal.tenant_id, &blob_id, active.app_id())
         .await
     {
         Ok(metadata) => metadata,
@@ -509,7 +523,7 @@ async fn get_content(
     };
     let content = match state
         .store
-        .read_content(&principal.tenant_id, &blob_id, ACTIVE_APP_ID)
+        .read_content(&principal.tenant_id, &blob_id, active.app_id())
         .await
     {
         Ok(content) => content,
@@ -540,6 +554,7 @@ async fn get_content(
 /// access); the derivative rows themselves are not app-scoped.
 async fn list_derivatives(
     State(state): State<AppState>,
+    active: ActiveApp,
     Path(blob_id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
@@ -552,7 +567,7 @@ async fn list_derivatives(
     let metadata = match state
         .store
         .blobs()
-        .read(&principal.tenant_id, &blob_id, ACTIVE_APP_ID)
+        .read(&principal.tenant_id, &blob_id, active.app_id())
         .await
     {
         Ok(metadata) => metadata,
@@ -588,6 +603,7 @@ async fn list_derivatives(
 /// `x-frick-content-hash` (derivative hash), `etag: "\"<hash>\""`.
 async fn get_derivative_content(
     State(state): State<AppState>,
+    active: ActiveApp,
     Path((blob_id, derivative_id)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
@@ -600,7 +616,7 @@ async fn get_derivative_content(
     let metadata = match state
         .store
         .blobs()
-        .read(&principal.tenant_id, &blob_id, ACTIVE_APP_ID)
+        .read(&principal.tenant_id, &blob_id, active.app_id())
         .await
     {
         Ok(metadata) => metadata,

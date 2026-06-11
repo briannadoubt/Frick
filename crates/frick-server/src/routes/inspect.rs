@@ -115,8 +115,9 @@ fn not_found_response() -> Response {
 }
 
 /// `GET /_frick/inspect/server` (`src/server.ts:1218-1230`): schema identity +
-/// the runtime feature flags + `startedAt`. Uses the active app schema (single
-/// `_default` app, so the active schema is `state.schema`).
+/// the runtime feature flags + `startedAt`. This is the deployment-level view —
+/// it reports the default app schema (`state.schema`) and `_default`; per-app
+/// schemas on a multi-app server (FR-277) are listed by `/_frick/inspect/apps`.
 async fn server(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let request_id = new_request_id();
     if let Err(response) = guard(&state, &headers, &request_id).await {
@@ -136,24 +137,29 @@ async fn server(State(state): State<AppState>, headers: HeaderMap) -> Response {
     .into_response()
 }
 
-/// `GET /_frick/inspect/apps` (`src/server.ts:1231-1241`): the registered apps.
-/// The Rust port runs a single `_default` app (the multi-app registry is
-/// FR-245), so this is the one-element list describing it. `basePath` is the
-/// root (`""`); the schema id/revision are the active schema's.
+/// `GET /_frick/inspect/apps` (`src/server.ts:1231-1241`): the registered apps
+/// from the app registry (FR-277) — `{id, basePath, schemaId, schemaRevision}`
+/// per app. A single-app deployment reports the one `_default` app at the root
+/// base path.
 async fn apps(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let request_id = new_request_id();
     if let Err(response) = guard(&state, &headers, &request_id).await {
         return response;
     }
-    axum::Json(json!({
-        "apps": [{
-            "id": DEFAULT_APP_ID,
-            "basePath": "",
-            "schemaId": state.schema.schema_id,
-            "schemaRevision": state.schema.schema_revision,
-        }],
-    }))
-    .into_response()
+    let apps: Vec<serde_json::Value> = state
+        .apps
+        .descriptors()
+        .into_iter()
+        .map(|descriptor| {
+            json!({
+                "id": descriptor.id,
+                "basePath": descriptor.base_path,
+                "schemaId": descriptor.schema_id,
+                "schemaRevision": descriptor.schema_revision,
+            })
+        })
+        .collect();
+    axum::Json(json!({ "apps": apps })).into_response()
 }
 
 /// `GET /_frick/inspect/migrations` (`src/server.ts:1242-1255`): the applied
