@@ -8,14 +8,18 @@
 //!   tenant-isolated, content-addressed files. Path layout and
 //!   [`encode_segment`] are **byte-identical** to the TS driver (lines
 //!   234–247 and 557–565), so a Rust server can read a TS server's blob tree.
-//! - [`S3BlobBytesDriver`] — seam reserved; every call returns
-//!   `StoreError::Store("s3 blob bytes driver not yet ported (FR-241
-//!   follow-up)")` until the S3 port lands.
+//! - [`S3BlobBytesDriver`] — bytes in an S3-compatible object store (FR-273),
+//!   keyed by the same content-addressed `<prefix>/<app>/<tenant>/<aa>/<blob>`
+//!   layout as the filesystem driver. Selected by `FRICK_BLOB_DRIVER=s3` +
+//!   `FRICK_BLOB_S3_*`. See [`s3`] for the driver, its config, and the pure,
+//!   unit-tested key-mapping / settings-resolution helpers.
 //!
 //! Every method is `(app, tenant, blob)`-scoped. A driver MUST NOT let one
 //! tenant (or app) read, write, or delete another's bytes — the filesystem
-//! driver enforces this structurally by deriving every path segment from a
-//! content-addressed encoding of the identifiers.
+//! and S3 drivers enforce this structurally by deriving every path/key segment
+//! from a content-addressed encoding of the identifiers.
+
+pub mod s3;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -25,6 +29,8 @@ use sha2::{Digest, Sha256};
 
 use crate::driver::SqlDriver;
 use crate::error::StoreError;
+
+pub use self::s3::{ResolvedS3Settings, S3BlobBytesConfig, S3BlobBytesDriver};
 
 /// `DEFAULT_APP_ID` (`apps/server/src/app-id.ts:37`): the app partition used
 /// when a caller does not opt into multi-app namespacing.
@@ -80,7 +86,7 @@ impl BlobBytesDriver {
                     .await
             }
             Self::Filesystem(driver) => driver.write(tenant_id, blob_id, content, app_id),
-            Self::S3(driver) => driver.write(tenant_id, blob_id, content, app_id),
+            Self::S3(driver) => driver.write(tenant_id, blob_id, content, app_id).await,
         }
     }
 
@@ -94,7 +100,7 @@ impl BlobBytesDriver {
         match self {
             Self::Sql(driver) => driver.read(tenant_id, blob_id, app_id).await,
             Self::Filesystem(driver) => driver.read(tenant_id, blob_id, app_id),
-            Self::S3(driver) => driver.read(tenant_id, blob_id, app_id),
+            Self::S3(driver) => driver.read(tenant_id, blob_id, app_id).await,
         }
     }
 
@@ -108,7 +114,7 @@ impl BlobBytesDriver {
         match self {
             Self::Sql(driver) => driver.delete(tenant_id, blob_id, app_id).await,
             Self::Filesystem(driver) => driver.delete(tenant_id, blob_id, app_id),
-            Self::S3(driver) => driver.delete(tenant_id, blob_id, app_id),
+            Self::S3(driver) => driver.delete(tenant_id, blob_id, app_id).await,
         }
     }
 
@@ -122,21 +128,27 @@ impl BlobBytesDriver {
         match self {
             Self::Sql(driver) => driver.exists(tenant_id, blob_id, app_id).await,
             Self::Filesystem(driver) => driver.exists(tenant_id, blob_id, app_id),
-            Self::S3(driver) => driver.exists(tenant_id, blob_id, app_id),
+            Self::S3(driver) => driver.exists(tenant_id, blob_id, app_id).await,
         }
     }
 }
 
 /// Build the configured blob-bytes driver (`createBlobBytesDriver`,
-/// `blob-bytes-driver.ts:259-293`). The filesystem driver requires a
-/// non-empty storage path and validates it (creatable, writable directory) at
-/// construction. The S3 selection returns the stub seam — the TS server
-/// injects a pre-built SDK-backed driver here; the Rust port does not carry
-/// it yet (FR-241 follow-up).
+/// `blob-bytes-driver.ts:259-293`). The filesystem driver requires a non-empty
+/// storage path and validates it (creatable, writable directory) at
+/// construction. The S3 driver (FR-273) builds its [`object_store`]-backed
+/// `AmazonS3` client from `s3_config` and fails fast when the bucket is blank
+/// or the client cannot be configured — both surfaced here so a misconfigured
+/// driver never starts the server half-broken.
+///
+/// `s3_config` is consulted only for the [`S3`](FrickBlobDriver::S3) arm; the
+/// sqlite / filesystem arms ignore it. Passing `None` while selecting S3 fails
+/// with the missing-bucket error.
 pub fn create_blob_bytes_driver(
     driver: FrickBlobDriver,
     db: &Arc<SqlDriver>,
     blob_storage_path: Option<&str>,
+    s3_config: Option<&S3BlobBytesConfig>,
 ) -> Result<BlobBytesDriver, StoreError> {
     match driver {
         FrickBlobDriver::Filesystem => {
@@ -150,7 +162,12 @@ pub fn create_blob_bytes_driver(
                 path,
             )?))
         }
-        FrickBlobDriver::S3 => Ok(BlobBytesDriver::S3(S3BlobBytesDriver)),
+        FrickBlobDriver::S3 => {
+            let config = s3_config.cloned().unwrap_or_default();
+            Ok(BlobBytesDriver::S3(S3BlobBytesDriver::from_config(
+                &config,
+            )?))
+        }
         // Default: store bytes in `blob_content` via the seam — works on
         // SQLite (and the FR-242 Postgres arm) without a raw handle.
         FrickBlobDriver::Sqlite => Ok(BlobBytesDriver::Sql(SqlBlobBytesDriver::new(Arc::clone(
@@ -365,61 +382,6 @@ impl FilesystemBlobBytesDriver {
                 .join(fanout)
                 .join(&blob_segment)
         }
-    }
-}
-
-/// S3 bytes-driver seam (TS `S3BlobBytesDriver`, FR-54). The key layout is
-/// `[prefix/][appSegment/]<tenantSegment>/<aa>/<blobSegment>` with the same
-/// [`encode_segment`] encoding — NOT yet ported: every method returns
-/// [`S3_BLOB_BYTES_STUB_MESSAGE`] so wiring it up is loud, not silent.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct S3BlobBytesDriver;
-
-/// The stub error message every [`S3BlobBytesDriver`] call returns.
-pub const S3_BLOB_BYTES_STUB_MESSAGE: &str =
-    "s3 blob bytes driver not yet ported (FR-241 follow-up)";
-
-#[allow(clippy::unused_self)] // stub keeps the real driver's method shape
-impl S3BlobBytesDriver {
-    fn stub<T>() -> Result<T, StoreError> {
-        Err(StoreError::store(S3_BLOB_BYTES_STUB_MESSAGE))
-    }
-
-    pub fn write(
-        &self,
-        _tenant_id: &str,
-        _blob_id: &str,
-        _content: &[u8],
-        _app_id: &str,
-    ) -> Result<(), StoreError> {
-        Self::stub()
-    }
-
-    pub fn read(
-        &self,
-        _tenant_id: &str,
-        _blob_id: &str,
-        _app_id: &str,
-    ) -> Result<Option<Vec<u8>>, StoreError> {
-        Self::stub()
-    }
-
-    pub fn delete(
-        &self,
-        _tenant_id: &str,
-        _blob_id: &str,
-        _app_id: &str,
-    ) -> Result<(), StoreError> {
-        Self::stub()
-    }
-
-    pub fn exists(
-        &self,
-        _tenant_id: &str,
-        _blob_id: &str,
-        _app_id: &str,
-    ) -> Result<bool, StoreError> {
-        Self::stub()
     }
 }
 
@@ -1000,37 +962,14 @@ mod tests {
         assert!(driver.exists("tenant-a", "blob-1", "app-a").await.unwrap());
     }
 
-    // ── S3 stub + factory ──────────────────────────────────────────────────
-
-    #[test]
-    fn s3_stub_returns_the_follow_up_error() {
-        let driver = S3BlobBytesDriver;
-        for err in [
-            driver.write("t", "b", HELLO, DEFAULT_APP_ID).unwrap_err(),
-            driver
-                .read("t", "b", DEFAULT_APP_ID)
-                .map(|_| ())
-                .unwrap_err(),
-            driver.delete("t", "b", DEFAULT_APP_ID).unwrap_err(),
-            driver
-                .exists("t", "b", DEFAULT_APP_ID)
-                .map(|_| ())
-                .unwrap_err(),
-        ] {
-            assert!(matches!(err, StoreError::Store(_)));
-            assert_eq!(
-                err.to_string(),
-                "s3 blob bytes driver not yet ported (FR-241 follow-up)"
-            );
-        }
-    }
+    // ── factory / driver selection ─────────────────────────────────────────
 
     #[tokio::test]
     async fn factory_selects_and_validates_drivers() {
         let sql = Arc::new(SqlDriver::open_sqlite(":memory:").unwrap());
 
         // Default: the seam-backed sql driver.
-        let driver = create_blob_bytes_driver(FrickBlobDriver::Sqlite, &sql, None).unwrap();
+        let driver = create_blob_bytes_driver(FrickBlobDriver::Sqlite, &sql, None, None).unwrap();
         assert!(matches!(driver, BlobBytesDriver::Sql(_)));
 
         // Filesystem with a path builds the filesystem driver.
@@ -1039,22 +978,38 @@ mod tests {
             FrickBlobDriver::Filesystem,
             &sql,
             Some(root.path().to_str().unwrap()),
+            None,
         )
         .unwrap();
         assert!(matches!(driver, BlobBytesDriver::Filesystem(_)));
 
         // Filesystem without (or with a blank) path fails clearly.
         for path in [None, Some("   ")] {
-            let err =
-                create_blob_bytes_driver(FrickBlobDriver::Filesystem, &sql, path).unwrap_err();
+            let err = create_blob_bytes_driver(FrickBlobDriver::Filesystem, &sql, path, None)
+                .unwrap_err();
             assert!(matches!(err, StoreError::BlobStorage(_)));
             assert!(err.to_string().contains("requires FRICK_BLOB_STORAGE_PATH"));
         }
 
-        // S3 selects the stub seam (errors at use, not at construction).
-        let driver = create_blob_bytes_driver(FrickBlobDriver::S3, &sql, None).unwrap();
+        // S3 with a configured bucket builds the live (object_store-backed)
+        // driver at construction — no network round-trip, just client setup.
+        let s3_config = S3BlobBytesConfig {
+            bucket: "frick-blobs".into(),
+            region: Some("us-east-1".into()),
+            ..S3BlobBytesConfig::default()
+        };
+        let driver =
+            create_blob_bytes_driver(FrickBlobDriver::S3, &sql, None, Some(&s3_config)).unwrap();
         assert!(matches!(driver, BlobBytesDriver::S3(_)));
-        let err = driver.read("t", "b", DEFAULT_APP_ID).await.unwrap_err();
-        assert_eq!(err.to_string(), S3_BLOB_BYTES_STUB_MESSAGE);
+
+        // S3 without a bucket (no config, or a blank bucket) fails fast at
+        // construction with the missing-bucket error.
+        let blank = S3BlobBytesConfig::default();
+        for config in [None, Some(&blank)] {
+            let err =
+                create_blob_bytes_driver(FrickBlobDriver::S3, &sql, None, config).unwrap_err();
+            assert!(matches!(err, StoreError::BlobStorage(_)));
+            assert!(err.to_string().contains("FRICK_BLOB_S3_BUCKET"), "{err}");
+        }
     }
 }

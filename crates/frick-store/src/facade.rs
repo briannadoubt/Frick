@@ -35,7 +35,9 @@ use crate::packed::encode_packed;
 use crate::stores::account::AccountStore;
 use crate::stores::admin_audit::AdminAuditStore;
 use crate::stores::blob::BlobStore;
-use crate::stores::blob_bytes::{BlobBytesDriver, FrickBlobDriver, create_blob_bytes_driver};
+use crate::stores::blob_bytes::{
+    BlobBytesDriver, FrickBlobDriver, S3BlobBytesConfig, create_blob_bytes_driver,
+};
 use crate::stores::grant::GrantStore;
 use crate::stores::idempotency::BoundedIdempotencyCache;
 use crate::stores::invitation::InvitationStore;
@@ -120,9 +122,13 @@ pub struct FrickStoreOptions {
     /// Blob *bytes* driver selector (`FRICK_BLOB_DRIVER`, map 05 §3.3).
     /// Defaults to [`FrickBlobDriver::Sqlite`] (bytes in `blob_content`).
     pub blob_driver: FrickBlobDriver,
-    /// Filesystem/S3 blob storage path (`FRICK_BLOB_STORAGE_PATH`). Only the
+    /// Filesystem blob storage path (`FRICK_BLOB_STORAGE_PATH`). Only the
     /// `filesystem` driver requires it; `None` ⇒ [`DEFAULT_BLOB_STORAGE_PATH`].
     pub blob_storage_path: Option<String>,
+    /// S3 blob-bytes configuration (`FRICK_BLOB_S3_*`, FR-273). Only consulted
+    /// when `blob_driver == S3`; the bucket is required for that driver. `None`
+    /// ⇒ defaults (and a missing-bucket error if S3 is nonetheless selected).
+    pub blob_s3_config: Option<S3BlobBytesConfig>,
     /// Schema to validate and record. `None` ⇒ [`foundation_schema`].
     pub schema: Option<FrickSchema>,
     /// Accepted and ignored (parity with TS `void options.seed`).
@@ -164,6 +170,7 @@ impl Default for FrickStoreOptions {
             database_url: None,
             blob_driver: FrickBlobDriver::Sqlite,
             blob_storage_path: None,
+            blob_s3_config: None,
             schema: None,
             seed: false,
             idempotency_cache_capacity: None,
@@ -395,15 +402,20 @@ impl FrickStore {
         // 5b. Build the configured blob-bytes driver (map 05 §3.3). The
         // filesystem arm validates its root (creatable, writable dir) here, so
         // a misconfigured `filesystem` driver fails fast at construction — the
-        // sqlite arm clones the shared `SqlDriver` Arc. The S3 arm selects the
-        // stub seam (FR-241 follow-up).
+        // sqlite arm clones the shared `SqlDriver` Arc. The S3 arm (FR-273)
+        // builds its `object_store`-backed client from `blob_s3_config` and
+        // fails fast on a blank bucket or a client-config error.
         let blob_storage_path = options
             .blob_storage_path
             .as_deref()
             .filter(|path| !path.is_empty())
             .unwrap_or(DEFAULT_BLOB_STORAGE_PATH);
-        let blob_bytes =
-            create_blob_bytes_driver(options.blob_driver, &driver, Some(blob_storage_path))?;
+        let blob_bytes = create_blob_bytes_driver(
+            options.blob_driver,
+            &driver,
+            Some(blob_storage_path),
+            options.blob_s3_config.as_ref(),
+        )?;
 
         // 6. Instantiate every Arc-owning sub-store. The data-plane stores
         // (objects / streams / presence / signals / jobs) are lifetime-borrowing

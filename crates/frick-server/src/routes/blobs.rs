@@ -24,25 +24,15 @@
 //! ```
 //!
 //! Both blob-bytes storage (the facade's `write_content`/`read_content` +
-//! `blob_driver`/`blob_storage_path` options) and the derivative read helpers
-//! (`FrickStore::list_derivatives` / `read_derivative`) are already merged into
-//! the facade. The only outstanding wiring for full TS parity is plumbing
-//! `config.blob_driver` / `config.blob_storage_path` into `FrickStoreOptions`
-//! in `boot::create_frick_server` (today it leaves the defaults — sqlite +
-//! `./frick-blobs/`):
-//!
-//! ```ignore
-//! let options = FrickStoreOptions {
-//!     // ...existing fields...
-//!     blob_driver: match config.blob_driver {
-//!         BlobDriver::Sqlite => FrickBlobDriver::Sqlite,
-//!         BlobDriver::Filesystem => FrickBlobDriver::Filesystem,
-//!         BlobDriver::S3 => FrickBlobDriver::S3,
-//!     },
-//!     blob_storage_path: Some(config.blob_storage_path.clone()),
-//!     ..FrickStoreOptions::default()
-//! };
-//! ```
+//! `blob_driver`/`blob_storage_path`/`blob_s3_config` options) and the
+//! derivative read helpers (`FrickStore::list_derivatives` / `read_derivative`)
+//! live in the facade. `boot::build_server` plumbs `config.blob_driver`,
+//! `config.blob_storage_path`, and the `FRICK_BLOB_S3_*` settings into
+//! `FrickStoreOptions` (FR-273), so the byte backend is config-selectable:
+//! `sqlite` (bytes in `blob_content`, the default), `filesystem`
+//! (`FRICK_BLOB_STORAGE_PATH`), or `s3` (`FRICK_BLOB_S3_BUCKET`/`REGION`/
+//! `ENDPOINT`/`PREFIX`/`FORCE_PATH_STYLE` + the standard `AWS_*` credentials).
+//! The S3 driver is `object_store`-backed (rustls, no openssl).
 
 use axum::body::{Body, Bytes};
 use axum::extract::{DefaultBodyLimit, OriginalUri, Path, Query, State};

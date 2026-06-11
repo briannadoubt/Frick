@@ -5,12 +5,12 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use frick_protocol::FrickSchema;
-use frick_store::{FrickStore, FrickStoreOptions, StoreError};
+use frick_store::{FrickBlobDriver, FrickStore, FrickStoreOptions, S3BlobBytesConfig, StoreError};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
 use crate::apps::AppDefinition;
-use crate::config::{DbDriver, FrickConfig};
+use crate::config::{BlobDriver, DbDriver, FrickConfig};
 use crate::gateway::GatewayHub;
 use crate::http::{AppState, AppStateInner, public_router};
 use crate::jobs::{JobHandlerRegistry, JobWorker, JobWorkerHandle, JobWorkerOptions};
@@ -218,6 +218,43 @@ pub async fn create_frick_server_with_apps(
     .await
 }
 
+/// Map a loaded [`FrickConfig`] onto the storage-layer [`FrickStoreOptions`],
+/// including the blob-bytes driver selection (FR-273). The blob `bytes` backend
+/// is config-driven (`sqlite` default / `filesystem` / `s3`); the S3 arm carries
+/// the `FRICK_BLOB_S3_*` settings, and cross-field validation in `config` has
+/// already guaranteed the bucket is present when the driver is `s3`. Static S3
+/// credentials are left unset so the driver's `AmazonS3Builder::from_env` resolves
+/// them through the standard AWS environment chain.
+fn store_options(config: &FrickConfig, schema: &FrickSchema) -> FrickStoreOptions {
+    FrickStoreOptions {
+        path: config.db_path.clone(),
+        db_driver: match config.db_driver {
+            DbDriver::Sqlite => frick_store::StoreDriverKind::Sqlite,
+            DbDriver::Postgres => frick_store::StoreDriverKind::Postgres,
+        },
+        database_url: config.database_url.clone(),
+        blob_driver: match config.blob_driver {
+            BlobDriver::Sqlite => FrickBlobDriver::Sqlite,
+            BlobDriver::Filesystem => FrickBlobDriver::Filesystem,
+            BlobDriver::S3 => FrickBlobDriver::S3,
+        },
+        blob_storage_path: Some(config.blob_storage_path.clone()),
+        blob_s3_config: Some(S3BlobBytesConfig {
+            bucket: config.blob_s3_bucket.clone().unwrap_or_default(),
+            region: config.blob_s3_region.clone(),
+            endpoint: config.blob_s3_endpoint.clone(),
+            prefix: config.blob_s3_prefix.clone(),
+            force_path_style: config.blob_s3_force_path_style,
+            access_key_id: None,
+            secret_access_key: None,
+        }),
+        schema: Some(schema.clone()),
+        idempotency_replay_window_ms: Some(config.idempotency_replay_window_ms),
+        idempotency_key_retention_ms: Some(config.idempotency_key_retention_ms),
+        ..FrickStoreOptions::default()
+    }
+}
+
 /// The shared server-construction body for both the single-app and multi-app
 /// boot paths. `state_projections` / `state_search` become the top-level
 /// `AppStateInner` fields and MUST be `Arc`-clones of the root app's per-app
@@ -231,19 +268,7 @@ async fn build_server(
     state_search: crate::search::SearchRegistry,
     seams: BootSeams,
 ) -> Result<FrickServer, BootError> {
-    let options = FrickStoreOptions {
-        path: config.db_path.clone(),
-        db_driver: match config.db_driver {
-            DbDriver::Sqlite => frick_store::StoreDriverKind::Sqlite,
-            DbDriver::Postgres => frick_store::StoreDriverKind::Postgres,
-        },
-        database_url: config.database_url.clone(),
-        schema: Some(schema.clone()),
-        idempotency_replay_window_ms: Some(config.idempotency_replay_window_ms),
-        idempotency_key_retention_ms: Some(config.idempotency_key_retention_ms),
-        ..FrickStoreOptions::default()
-    };
-    let store = Arc::new(FrickStore::open(options).await?);
+    let store = Arc::new(FrickStore::open(store_options(&config, &schema)).await?);
 
     // Push subsystem (FR-265): build the adapter registry (APNs / FCM / Web Push
     // over the supplied transports, plus the default `test` adapter) and the

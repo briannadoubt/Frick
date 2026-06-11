@@ -75,6 +75,7 @@ All variables are optional. Defaults match the runtime mode.
 | `FRICK_BLOB_S3_REGION`      | unset                       | unset                                 | AWS region for the `s3` blob driver. Optional for S3-compatible stores that ignore it. |
 | `FRICK_BLOB_S3_ENDPOINT`    | unset                       | unset                                 | Custom endpoint for an S3-compatible store (MinIO, Cloudflare R2, DigitalOcean Spaces, …). Omit for real AWS S3. Setting it defaults path-style addressing on. |
 | `FRICK_BLOB_S3_PREFIX`      | unset                       | unset                                 | Key prefix every blob object lives under in the bucket. Optional. |
+| `FRICK_BLOB_S3_FORCE_PATH_STYLE` | unset                  | unset                                 | Force path-style addressing (`<endpoint>/<bucket>/<key>`) instead of virtual-hosted (`<bucket>.<endpoint>/<key>`). One of `true`/`false`/`1`/`0`/`yes`/`no`. Unset ⇒ defaults to `true` when `FRICK_BLOB_S3_ENDPOINT` is set (most S3-compatible stores), `false` otherwise. |
 | `FRICK_LOG_LEVEL`           | `info`                      | `info`                                | One of `debug`, `info`, `warn`, `error`.                             |
 | `FRICK_OTEL_ENABLED`        | `true` when an OTLP endpoint is set; otherwise `false` | same | Enables the built-in OpenTelemetry SDK runtime.                      |
 | `FRICK_OTEL_SERVICE_NAME`   | `frick-server`              | `frick-server`                        | OTel service name. Falls back to `OTEL_SERVICE_NAME` when set.        |
@@ -104,29 +105,37 @@ server refuses to boot.
 
 ## Object-storage blob driver
 
-Selecting `FRICK_BLOB_DRIVER=s3` (FR-54) is intended to move blob *bytes* from
-SQLite into any S3-compatible object store — AWS S3, MinIO, Cloudflare R2,
-DigitalOcean Spaces, etc. — while blob *metadata* stays in SQLite. Bytes would be
-written under a tenant-isolated, content-addressed key prefix (the same
-collision-free, traversal-proof encoding the `filesystem` driver uses), so a
-crafted blob id can never reach another tenant's objects.
+Selecting `FRICK_BLOB_DRIVER=s3` (FR-273/FR-54) moves blob *bytes* from SQLite
+into any S3-compatible object store — AWS S3, MinIO, Cloudflare R2, DigitalOcean
+Spaces, etc. — while blob *metadata* stays in SQLite. Bytes are written under a
+tenant-isolated, content-addressed key prefix
+(`<prefix>/<app>/<tenant>/<aa>/<blob>`, the same collision-free,
+traversal-proof encoding the `filesystem` driver uses), so a crafted blob id can
+never reach another tenant's objects.
 
-> **Not yet ported to the Rust server (tracked in FR-264 / FR-241).** The Rust
-> `frick-server` recognizes the `FRICK_BLOB_DRIVER`/`FRICK_BLOB_S3_*` config
-> surface — `FRICK_BLOB_DRIVER=s3` is accepted and `FRICK_BLOB_S3_BUCKET` is
-> required at startup — but the S3 bytes driver itself is a reserved seam in
-> `crates/frick-store/src/stores/blob_bytes.rs`: every read/write/delete returns
-> a "s3 blob bytes driver not yet ported" error. Until that port lands, run with
-> the default `sqlite` driver or the `filesystem` driver
-> (`FRICK_BLOB_DRIVER=filesystem` + a writable `FRICK_BLOB_STORAGE_PATH`), both
-> of which are fully implemented. There is no host-injected
-> `createS3BlobBytesDriver` API in the Rust server — selection is env-driven, so
-> no code wiring is required once the driver ships.
+The driver is `object_store`-backed (rustls TLS, no OpenSSL) and built from
+[`AmazonS3Builder::from_env`], so it honours the **standard AWS environment
+chain** for credentials and session tokens (`AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`, instance/role
+profiles, …). The `FRICK_BLOB_S3_*` variables layer Frick-specific overrides on
+top:
 
-Both fully-ported byte drivers and the s3 seam keep blob *metadata* in SQLite,
-and a malformed/missing `FRICK_BLOB_STORAGE_PATH` (for `filesystem`) or
+- `FRICK_BLOB_S3_BUCKET` — required; a blank bucket fails fast at startup.
+- `FRICK_BLOB_S3_REGION` / `FRICK_BLOB_S3_ENDPOINT` / `FRICK_BLOB_S3_PREFIX` —
+  optional; set `ENDPOINT` for S3-compatible stores (it flips path-style
+  addressing on by default).
+- `FRICK_BLOB_S3_FORCE_PATH_STYLE` — optional explicit override of the
+  path-style heuristic.
+
+Misconfiguration (a blank bucket, or a client that cannot be constructed) fails
+fast at store construction — a half-broken `s3` driver never starts the server.
+
+Both filesystem and S3 drivers keep blob *metadata* in SQLite, and a
+malformed/missing `FRICK_BLOB_STORAGE_PATH` (for `filesystem`) or
 `FRICK_BLOB_S3_BUCKET` (for `s3`) fails fast at config load. SQLite remains the
 default, so this is fully opt-in.
+
+[`AmazonS3Builder::from_env`]: https://docs.rs/object_store/latest/object_store/aws/struct.AmazonS3Builder.html#method.from_env
 
 ## Blob processing pipeline
 
