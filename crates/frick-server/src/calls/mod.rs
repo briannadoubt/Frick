@@ -11,6 +11,7 @@
 mod control_plane;
 mod fake_media_plane;
 mod media_plane;
+mod p2p_media_plane;
 pub mod schema;
 mod sfu_backend;
 mod sfu_media_plane;
@@ -25,6 +26,7 @@ pub use media_plane::{
     MediaPlaneAdapter, MediaPlaneCapabilities, MediaPlaneError, MediaPlaneFuture,
     MediaPlaneTransport, MediaSession,
 };
+pub use p2p_media_plane::{P2pIceServer, P2pMediaPlaneAdapter, P2pMediaPlaneOptions, P2pTurnConfig};
 pub use sfu_backend::{
     FakeSfuBackend, FakeSfuBackendOptions, MintAccessTokenOptions, SfuAccessToken, SfuBackend,
     SfuBackendError, SfuBackendFuture, SfuRoom,

@@ -21,11 +21,16 @@ frick-protocol = { workspace = true }
 frick-schema = { workspace = true }
 frick-store = { workspace = true }
 futures-util = { workspace = true }
+# Ephemeral coturn-REST TURN credentials for the P2P media plane (FR-286):
+# `credential = base64(HMAC-SHA1(sharedSecret, username))`. Pure-Rust RustCrypto
+# crates sharing the `digest 0.10` core `sha2` already pulls in — no native deps.
+hmac = "0.12"
 indexmap = { workspace = true }
 rand = { workspace = true }
 rmpv = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha1 = "0.10"
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
