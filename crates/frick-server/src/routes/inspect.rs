@@ -53,14 +53,21 @@ pub fn inspect_router(state: AppState) -> axum::Router {
         .route("/_frick/inspect/db", get(db))
         .route("/_frick/inspect/jobs", get(jobs))
         .route("/_frick/inspect/diagnostics", get(diagnostics))
-        // DevTools / platform-events / analytics stubs (later stories).
-        .route("/_frick/inspect/platform-events", get(stub_not_available))
-        .route("/_frick/inspect/analytics/summary", get(stub_not_available))
-        .route("/_frick/inspect/devtools/events", get(stub_devtools_events))
+        // DevTools event feed (FR-274): list newest-first with filters,
+        // summary aggregates by kind over a rolling window, and the per-id
+        // drill-in. All gated by the same `inspection_enabled` flag.
+        .route("/_frick/inspect/devtools/events", get(devtools_events))
         .route(
-            "/_frick/inspect/devtools/summary",
-            get(stub_devtools_summary),
+            "/_frick/inspect/devtools/events/:id",
+            get(devtools_event_by_id),
         )
+        .route("/_frick/inspect/devtools/summary", get(devtools_summary))
+        // Product-analytics summary (FR-274): the durable read model is empty
+        // until the analytics worker lands (later story), so this reports an
+        // empty admin-scoped summary rather than 404-ing.
+        .route("/_frick/inspect/analytics/summary", get(analytics_summary))
+        // Platform-events pipeline health stub (later story).
+        .route("/_frick/inspect/platform-events", get(stub_not_available))
         // Any other `/_frick/inspect/...` path → 404 `{error:"not_found"}`. A
         // prefix-scoped wildcard (NOT a router-wide `.fallback`, which would
         // collide when merged with sibling routers that also set one). Static
@@ -296,9 +303,8 @@ async fn search(State(state): State<AppState>, headers: HeaderMap) -> Response {
 
 /// `GET /_frick/inspect/db` (`src/server.ts:1301-1322`): readiness, applied
 /// count, the last applied migration, and the idempotency-cache stats. The
-/// in-process cache stats are not exposed by the facade yet (TODO), so they are
-/// reported as zeros with the configured/default capacity; `ready` + the applied
-/// counts are real.
+/// cache stats come from the facade getter (FR-274) — `size`/`capacity`/
+/// `evictions` are real; `ready` + the applied counts are real.
 async fn db(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let request_id = new_request_id();
     if let Err(response) = guard(&state, &headers, &request_id).await {
@@ -310,15 +316,14 @@ async fn db(State(state): State<AppState>, headers: HeaderMap) -> Response {
         .list_applied_migrations()
         .await
         .unwrap_or_default();
+    let cache = state.store.idempotency_cache_stats();
     let mut body = json!({
         "ready": ready,
         "applied": applied.len(),
-        // TODO(idempotency-stats): the facade does not yet expose the bounded
-        // cache's size/capacity/evictions; report zeros until a getter lands.
         "idempotencyCache": {
-            "size": 0,
-            "capacity": 0,
-            "evictions": 0,
+            "size": cache.size,
+            "capacity": cache.capacity,
+            "evictions": cache.evictions,
         },
     });
     if let Some(last) = applied.last()
@@ -484,37 +489,235 @@ fn decode_query_component(input: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Stub for `platform-events` / `analytics/summary` (later stories): authorize
-/// like every inspect route, then return an empty object so the console renders
-/// "no data" rather than failing.
+/// Stub for `platform-events` (later story): authorize like every inspect
+/// route, then return an empty object so the console renders "no data" rather
+/// than failing.
 async fn stub_not_available(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let request_id = new_request_id();
     if let Err(response) = guard(&state, &headers, &request_id).await {
         return response;
     }
-    // TODO(platform-events / analytics): port the pipeline health + analytics
-    // summary builders; empty body until then.
+    // TODO(platform-events): port the pipeline health builder; empty body until
+    // then.
     axum::Json(json!({})).into_response()
 }
 
-/// Stub for `devtools/events` (later story): empty newest-first feed.
-async fn stub_devtools_events(State(state): State<AppState>, headers: HeaderMap) -> Response {
+/// `GET /_frick/inspect/devtools/events` (`src/server.ts:1335-1357`): the
+/// DevTools event feed, newest-first, with optional `kind` / `tenantId` /
+/// `sinceId` / `limit` query filters. A non-finite `sinceId`/`limit` is dropped
+/// (the store then defaults the limit), matching the TS `Number.isFinite`
+/// guards. Each row is serialized to its camelCase wire shape.
+async fn devtools_events(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
     let request_id = new_request_id();
     if let Err(response) = guard(&state, &headers, &request_id).await {
         return response;
     }
-    // TODO(devtools): durable DevTools event feed is FR-249.
-    axum::Json(json!({ "events": json!([]) })).into_response()
+    let filter = parse_devtools_filter(raw_query.as_deref());
+    match state.store.devtools_events().list(&filter).await {
+        Ok(rows) => {
+            let events: Vec<serde_json::Value> = rows.iter().map(devtools_row_to_json).collect();
+            axum::Json(json!({ "events": events })).into_response()
+        }
+        Err(error) => respond_inspect_store_error(&error, &request_id),
+    }
 }
 
-/// Stub for `devtools/summary` (later story): empty per-kind aggregate.
-async fn stub_devtools_summary(State(state): State<AppState>, headers: HeaderMap) -> Response {
+/// `GET /_frick/inspect/devtools/events/:id` (`src/server.ts:1367-1386`): drill
+/// into a single emission by `id`. A non-positive / unparsable id or a missing
+/// row is a 404 `{error:"not_found"}` (the TS guard rejects `id <= 0` and a
+/// missing row identically).
+async fn devtools_event_by_id(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(id_raw): axum::extract::Path<String>,
+) -> Response {
     let request_id = new_request_id();
     if let Err(response) = guard(&state, &headers, &request_id).await {
         return response;
     }
-    // TODO(devtools): per-kind rolling-window summary is FR-249.
-    axum::Json(json!({})).into_response()
+    let Ok(id) = id_raw.parse::<i64>() else {
+        return not_found_response();
+    };
+    if id <= 0 {
+        return not_found_response();
+    }
+    match state.store.devtools_events().get_by_id(id).await {
+        Ok(Some(row)) => axum::Json(json!({ "event": devtools_row_to_json(&row) })).into_response(),
+        Ok(None) => not_found_response(),
+        Err(error) => respond_inspect_store_error(&error, &request_id),
+    }
+}
+
+/// `GET /_frick/inspect/devtools/summary` (`src/server.ts:1359-1366`): aggregate
+/// counts by kind over a rolling `windowMs` (default 60 000 ms; a non-finite or
+/// non-positive value falls back to the default). `snapshotAt`/the cutoff are
+/// derived from the route clock so the store stays clock-free.
+async fn devtools_summary(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    let request_id = new_request_id();
+    if let Err(response) = guard(&state, &headers, &request_id).await {
+        return response;
+    }
+    let window_ms = parse_window_ms(raw_query.as_deref());
+    let now = now_ms();
+    match state.store.devtools_events().summary(window_ms, now).await {
+        Ok(summary) => {
+            let by_kind: serde_json::Map<String, serde_json::Value> = summary
+                .by_kind
+                .iter()
+                .map(|entry| (entry.kind.clone(), json!(entry.count)))
+                .collect();
+            axum::Json(json!({
+                "windowMs": summary.window_ms,
+                "total": summary.total,
+                "byKind": by_kind,
+            }))
+            .into_response()
+        }
+        Err(error) => respond_inspect_store_error(&error, &request_id),
+    }
+}
+
+/// `GET /_frick/inspect/analytics/summary` (`src/server.ts:1269-1280`): the
+/// product-analytics rolling summary. The durable analytics read model + its
+/// ingestion worker are a later story, so the read model is empty here: this
+/// reports a well-formed, empty admin-scoped summary (the same shape the TS
+/// `buildAnalyticsSummary` returns over an empty store) rather than 404-ing, so
+/// the console's analytics view degrades to "no data". `generatedAt`/`since`
+/// are stamped from the route clock (the determinism boundary).
+async fn analytics_summary(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    let request_id = new_request_id();
+    if let Err(response) = guard(&state, &headers, &request_id).await {
+        return response;
+    }
+    let window_ms = parse_analytics_window_ms(raw_query.as_deref());
+    let now = now_ms();
+    let generated_at = crate::boot::iso_from_epoch_ms(now);
+    let since = crate::boot::iso_from_epoch_ms(now - window_ms);
+    // TODO(analytics): once the analytics ingestion worker + read model land,
+    // build the real summary from `analytics_aggregate_buckets` /
+    // `analytics_recent_events`. Until then the read model is empty.
+    axum::Json(json!({
+        "family": "analytics.user_event",
+        "generatedAt": generated_at,
+        "since": since,
+        "windowMs": window_ms,
+        "scope": { "kind": "admin" },
+        "totals": { "events": 0, "uniqueUsers": 0, "uniqueTenants": 0 },
+        "topEvents": json!([]),
+        "topRoutes": json!([]),
+        "recentEvents": json!([]),
+    }))
+    .into_response()
+}
+
+/// Serialize a [`frick_store::DevToolsEventRow`] to its camelCase wire shape
+/// (`{id, occurredAt, kind, tenantId, fields}`). `tenantId` is `null` when the
+/// row's tenant is absent (the TS `tenant_id` column maps straight to `null`).
+fn devtools_row_to_json(row: &frick_store::DevToolsEventRow) -> serde_json::Value {
+    json!({
+        "id": row.id,
+        "occurredAt": row.occurred_at,
+        "kind": row.kind,
+        "tenantId": row.tenant_id,
+        "fields": serde_json::Value::Object(row.fields.clone()),
+    })
+}
+
+/// Parse the `devtools/events` query filters. Empty `kind`/`tenantId` are
+/// dropped; a non-integer `sinceId`/`limit` is dropped (so the store defaults
+/// the limit), mirroring the TS `Number.isFinite` guards.
+fn parse_devtools_filter(raw_query: Option<&str>) -> frick_store::DevToolsEventListFilter {
+    let mut filter = frick_store::DevToolsEventListFilter::default();
+    let Some(query) = raw_query else {
+        return filter;
+    };
+    for pair in query.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let value = decode_query_component(value);
+        match key {
+            "kind" if !value.is_empty() => filter.kind = Some(value),
+            "tenantId" if !value.is_empty() => filter.tenant_id = Some(value),
+            "sinceId" => {
+                if let Ok(parsed) = value.parse::<i64>() {
+                    filter.since_id = Some(parsed);
+                }
+            }
+            "limit" => {
+                if let Ok(parsed) = value.parse::<i64>() {
+                    filter.limit = Some(parsed);
+                }
+            }
+            _ => {}
+        }
+    }
+    filter
+}
+
+/// Parse the `devtools/summary` `windowMs` query (default 60 000; a non-positive
+/// or unparsable value falls back to the default), mirroring the TS guard.
+fn parse_window_ms(raw_query: Option<&str>) -> i64 {
+    parse_query_i64(raw_query, "windowMs")
+        .filter(|&value| value > 0)
+        .unwrap_or(frick_store::DEFAULT_SUMMARY_WINDOW_MS)
+}
+
+/// Default analytics summary window: 24 h
+/// (`DEFAULT_ANALYTICS_SUMMARY_WINDOW_MS`).
+const DEFAULT_ANALYTICS_SUMMARY_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
+/// Min/max clamp on the analytics window (`MIN`/`MAX_ANALYTICS_SUMMARY_WINDOW_MS`).
+const MIN_ANALYTICS_SUMMARY_WINDOW_MS: i64 = 60 * 1000;
+const MAX_ANALYTICS_SUMMARY_WINDOW_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+
+/// Parse + clamp the analytics `windowMs` query (default 24 h, clamped to
+/// `[60_000, 30 days]`), mirroring the TS `buildAnalyticsSummary` clamp.
+fn parse_analytics_window_ms(raw_query: Option<&str>) -> i64 {
+    parse_query_i64(raw_query, "windowMs")
+        .filter(|&value| value > 0)
+        .unwrap_or(DEFAULT_ANALYTICS_SUMMARY_WINDOW_MS)
+        .clamp(
+            MIN_ANALYTICS_SUMMARY_WINDOW_MS,
+            MAX_ANALYTICS_SUMMARY_WINDOW_MS,
+        )
+}
+
+/// Read a single integer query param by key (last wins), decoding `%XX`/`+`.
+fn parse_query_i64(raw_query: Option<&str>, key: &str) -> Option<i64> {
+    let query = raw_query?;
+    let mut found = None;
+    for pair in query.split('&') {
+        let (k, value) = pair.split_once('=').unwrap_or((pair, ""));
+        if k == key
+            && let Ok(parsed) = decode_query_component(value).parse::<i64>()
+        {
+            found = Some(parsed);
+        }
+    }
+    found
+}
+
+/// Map a store error from an inspect handler to a 500 `server.internal` error
+/// body. The feed reads should not fail in practice, but a degraded database
+/// must surface a clean error rather than panicking. The cause is logged, not
+/// leaked into the response (the wire `Internal` variant carries no message).
+fn respond_inspect_store_error(error: &frick_store::StoreError, request_id: &str) -> Response {
+    tracing::warn!(
+        target: "frick.inspect.devtools_read_failed",
+        error = %error,
+        "devtools feed read failed",
+    );
+    respond_error(&ServerError::Internal, request_id)
 }
 
 /// `GET /_frick/inspect/` (trailing slash, no sub-path) → 404 `not_found`,

@@ -3,6 +3,7 @@ pub mod account;
 pub mod admin_audit;
 pub mod blob;
 pub mod blob_bytes;
+pub mod devtools_events;
 pub mod grant;
 pub mod idempotency;
 pub mod invitation;

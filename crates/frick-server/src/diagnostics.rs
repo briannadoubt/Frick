@@ -43,36 +43,30 @@
 //! sibling inspect handlers thread `now_ms` in. Only the async store reads
 //! (migration ledger + stream-head probes) touch the database.
 //!
-//! ## Known store-surface gaps (documented defaults)
+//! ## Store-surface integration (FR-274)
 //!
-//! The Rust [`FrickStore`] facade does not yet expose two surfaces the TS
-//! assembler read directly:
+//! Both surfaces the TS assembler read directly are now live on the Rust
+//! facade:
 //!
-//! * **Idempotency cache stats.** `store.idempotencyCache.{size,capacity,
-//!   evictions}` is private in the Rust facade (a `Mutex<Option<…>>` field), so
-//!   the `idempotency` cache entry is reported with documented defaults
-//!   (`size: 0`, `capacity: 0`, `evictions: 0`) — exactly as the sibling
-//!   `GET /_frick/inspect/db` route does. TODO(idempotency-stats): replace with
-//!   the real getter once the facade exposes one.
-//! * **DevTools event feed.** `store.devtoolsEvents.list(...)` (the source of
-//!   `recentErrors`) has no Rust port yet (the inspect `devtools/*` routes are
-//!   stubbed, FR-249), so `recentErrors` is the empty array — "observed, and
-//!   empty". TODO(devtools): derive recent errors from the durable feed once it
-//!   lands.
+//! * **Idempotency cache stats.** `store.idempotency_cache_stats()` returns the
+//!   real `{size, capacity, evictions}` of the in-process front-cache; the
+//!   `idempotency` cache entry reports them (matching the sibling
+//!   `GET /_frick/inspect/db` route).
+//! * **DevTools event feed.** `store.recent_error_events(limit)` derives the
+//!   redacted `recentErrors` envelopes from the durable
+//!   [`frick_store::DevToolsEventStore`] feed (`isErrorEvent` filter + secret
+//!   redaction). A feed read failure degrades to an empty array — "observed,
+//!   and empty".
 
 use frick_protocol::{FrickSchema, default_server_capabilities};
-use frick_store::FrickStore;
-use serde_json::{Value, json};
+use frick_store::{DEFAULT_RECENT_ERROR_LIMIT, DiagnosticsErrorEnvelope, FrickStore};
+use serde_json::{Map, Value, json};
 
 use crate::routes::ACTIVE_APP_ID;
 
 /// The diagnostics snapshot version this assembler stamps
 /// (`DIAGNOSTICS_VERSION = 1`, `packages/protocol/src/diagnostics.ts:172`).
 pub const DIAGNOSTICS_VERSION: i64 = 1;
-
-/// Default cap on the number of recent error envelopes surfaced
-/// (`AssembleDiagnosticsOptions.recentErrorLimit ?? 20`).
-const DEFAULT_RECENT_ERROR_LIMIT: usize = 20;
 
 /// A specific stream cursor the caller wants probed into the snapshot
 /// (`DiagnosticsCursorProbe`, `apps/server/src/diagnostics.ts`). The CLI parses
@@ -137,13 +131,22 @@ pub async fn assemble_diagnostics_snapshot(
     // for a nonexistent stream simply contributes no cursor (errors swallowed).
     let cursors = assemble_cursors(store, opts).await;
 
-    // Recent error envelopes come from the DevTools feed in the TS server; the
-    // Rust feed is not ported yet (FR-249), so this is the empty array =
-    // "observed, and empty". Honour the configured limit for forward-compat.
-    let _recent_error_limit = opts
+    // Recent error envelopes from the DevTools feed (FR-274): over-fetch +
+    // filter to error-shaped events + redact. A feed read failure degrades to
+    // the empty array = "observed, and empty".
+    let recent_error_limit = opts
         .recent_error_limit
         .unwrap_or(DEFAULT_RECENT_ERROR_LIMIT);
-    let recent_errors: Vec<Value> = Vec::new();
+    let recent_errors: Vec<Value> = store
+        .recent_error_events(recent_error_limit)
+        .await
+        .iter()
+        .map(error_envelope_to_json)
+        .collect();
+
+    // Idempotency front-cache stats from the facade getter (FR-274), the same
+    // values the sibling `/_frick/inspect/db` route reports.
+    let cache_stats = store.idempotency_cache_stats();
 
     let mut snapshot = json!({
         "diagnosticsVersion": DIAGNOSTICS_VERSION,
@@ -157,14 +160,11 @@ pub async fn assemble_diagnostics_snapshot(
         "compatibility": compatibility,
         "cursors": cursors,
         "recentErrors": recent_errors,
-        // Idempotency cache stats are not exposed by the Rust facade yet
-        // (private `Mutex<Option<…>>`); documented defaults, matching the
-        // sibling `/_frick/inspect/db` route. TODO(idempotency-stats).
         "caches": [{
             "name": "idempotency",
-            "size": 0,
-            "capacity": 0,
-            "evictions": 0,
+            "size": cache_stats.size,
+            "capacity": cache_stats.capacity,
+            "evictions": cache_stats.evictions,
         }],
         "syncTiming": assemble_sync_timing(opts),
     });
@@ -249,6 +249,25 @@ async fn assemble_cursors(store: &FrickStore, opts: &AssembleDiagnosticsOptions)
     cursors
 }
 
+/// Serialize a [`DiagnosticsErrorEnvelope`] to its wire JSON in the TS producer
+/// key order (`code, message, at, [tenantId], [context]`). `tenantId` is
+/// emitted only when present; `context` is always emitted (the facade builds a
+/// redacted bag for every envelope, mirroring the TS `context !== undefined`
+/// spread after `redactDiagnosticsContext`).
+fn error_envelope_to_json(envelope: &DiagnosticsErrorEnvelope) -> Value {
+    let mut row = Map::new();
+    row.insert("code".to_string(), json!(envelope.code));
+    row.insert("message".to_string(), json!(envelope.message));
+    row.insert("at".to_string(), json!(envelope.at));
+    if let Some(tenant_id) = envelope.tenant_id.as_ref() {
+        row.insert("tenantId".to_string(), json!(tenant_id));
+    }
+    if let Some(context) = envelope.context.as_ref() {
+        row.insert("context".to_string(), Value::Object(context.clone()));
+    }
+    Value::Object(row)
+}
+
 /// `syncTiming` block: `snapshotAt` is always present; the rest are present only
 /// when the caller observed them.
 fn assemble_sync_timing(opts: &AssembleDiagnosticsOptions) -> Value {
@@ -288,12 +307,25 @@ fn assemble_capabilities(schema: &FrickSchema) -> Value {
 mod tests {
     use super::*;
     use frick_protocol::foundation_schema;
-    use frick_store::{FrickStore, FrickStoreOptions};
+    use frick_store::{DevToolsEventInput, FrickStore, FrickStoreOptions};
 
     async fn memory_store(schema: &FrickSchema) -> FrickStore {
         let mut options = FrickStoreOptions::memory();
         options.schema = Some(schema.clone());
         FrickStore::open(options).await.unwrap()
+    }
+
+    fn devtools_input(
+        kind: &str,
+        tenant: Option<&str>,
+        fields_json: Option<&str>,
+    ) -> DevToolsEventInput {
+        DevToolsEventInput {
+            kind: kind.to_string(),
+            tenant_id: tenant.map(str::to_string),
+            fields_json: fields_json.map(str::to_string),
+            occurred_at: None,
+        }
     }
 
     fn base_opts() -> AssembleDiagnosticsOptions {
@@ -422,5 +454,97 @@ mod tests {
         // real row — OR the unknown-stream read errors and is skipped. Either
         // way `cursors` is a present array (observed) and never panics.
         assert!(snapshot["cursors"].is_array());
+    }
+
+    #[tokio::test]
+    async fn caches_report_the_real_idempotency_capacity() {
+        let schema = foundation_schema();
+        let store = memory_store(&schema).await;
+        let snapshot = assemble_diagnostics_snapshot(&store, &schema, &base_opts()).await;
+        // An empty store's front-cache reports the configured default capacity
+        // (10_000), zero size, zero evictions — the real getter, not a 0 stub.
+        let cache = &snapshot["caches"][0];
+        assert_eq!(cache["name"], json!("idempotency"));
+        assert_eq!(cache["size"], json!(0));
+        assert_eq!(cache["capacity"], json!(10_000));
+        assert_eq!(cache["evictions"], json!(0));
+    }
+
+    #[tokio::test]
+    async fn recent_errors_are_derived_filtered_and_redacted() {
+        let schema = foundation_schema();
+        let store = memory_store(&schema).await;
+        let feed = store.devtools_events();
+        // A successful request (NOT an error — must be filtered out).
+        feed.record(
+            &devtools_input(
+                "http.request",
+                None,
+                Some(r#"{"status":200,"method":"GET","path":"/ok"}"#),
+            ),
+            1_000,
+        )
+        .await;
+        // A 500 http.request → error code `http.500`, message `<method> <path>`.
+        feed.record(
+            &devtools_input(
+                "http.request",
+                Some("t1"),
+                Some(r#"{"status":500,"method":"POST","path":"/boom","token":"sk-secret"}"#),
+            ),
+            2_000,
+        )
+        .await;
+        // A `.failed` kind → error by suffix; carries an explicit message + code.
+        feed.record(
+            &devtools_input(
+                "job.failed",
+                None,
+                Some(r#"{"errorCode":"job.boom","message":"worker exploded"}"#),
+            ),
+            3_000,
+        )
+        .await;
+
+        let snapshot = assemble_diagnostics_snapshot(&store, &schema, &base_opts()).await;
+        let errors = snapshot["recentErrors"].as_array().unwrap();
+        // Two error events, newest first (job.failed then the 500).
+        assert_eq!(errors.len(), 2, "errors: {errors:?}");
+
+        assert_eq!(errors[0]["code"], json!("job.boom"));
+        assert_eq!(errors[0]["message"], json!("worker exploded"));
+        assert_eq!(errors[0]["at"], json!("1970-01-01T00:00:03.000Z"));
+        assert!(
+            errors[0].get("tenantId").is_none(),
+            "global event omits tenantId"
+        );
+
+        assert_eq!(errors[1]["code"], json!("http.500"));
+        assert_eq!(errors[1]["message"], json!("POST /boom"));
+        assert_eq!(errors[1]["tenantId"], json!("t1"));
+        // The secret-looking `token` field is redacted; the others survive.
+        assert_eq!(errors[1]["context"]["token"], json!("<redacted>"));
+        assert_eq!(errors[1]["context"]["status"], json!(500));
+        assert_eq!(errors[1]["context"]["path"], json!("/boom"));
+    }
+
+    #[tokio::test]
+    async fn recent_error_limit_caps_the_envelope_count() {
+        let schema = foundation_schema();
+        let store = memory_store(&schema).await;
+        let feed = store.devtools_events();
+        for i in 0..10 {
+            feed.record(
+                &devtools_input("job.failed", None, None),
+                1_000 + i64::from(i),
+            )
+            .await;
+        }
+        let opts = AssembleDiagnosticsOptions {
+            recent_error_limit: Some(3),
+            ..base_opts()
+        };
+        let snapshot = assemble_diagnostics_snapshot(&store, &schema, &opts).await;
+        assert_eq!(snapshot["recentErrors"].as_array().unwrap().len(), 3);
     }
 }
