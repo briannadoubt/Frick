@@ -165,6 +165,82 @@ class FrickSyncSocketTest {
         }
     }
 
+    // FR-256 client half (FR-291): the opt-in `…Registered` subscribe methods
+    // resolve only once the server's post-registration reply arrives. withTimeout
+    // makes a broken await fail the test instead of hanging it.
+
+    @Test
+    fun subscribeObjectRegisteredResolvesAfterSnapshot() = runBlocking {
+        enqueueWebSocketHandler(
+            onMessage = { _, frame ->
+                when (frame.first) {
+                    FrameKindCodes.HELLO -> sendFrame(
+                        FrameKindCodes.HELLO_ACK,
+                        mapOf(
+                            "schemaHash" to FRICK_SCHEMA_HASH,
+                            "schemaId" to FRICK_SCHEMA_ID,
+                            "schemaRevision" to FRICK_SCHEMA_REVISION,
+                            "schemaCompatibility" to mapOf("status" to "compatible"),
+                            "serverCapabilities" to emptyMap<String, Any?>(),
+                        ),
+                    )
+                    FrameKindCodes.SUBSCRIBE -> if (frame.second["kind"] == "object") {
+                        sendFrame(
+                            FrameKindCodes.SNAPSHOT,
+                            mapOf(
+                                "subscriptionId" to frame.second["subscriptionId"],
+                                "objects" to emptyList<Any?>(),
+                                "cursor" to 0,
+                            ),
+                        )
+                    }
+                }
+            },
+        )
+        val socket = newSocket()
+        try {
+            assertNotNull(withTimeout(2_000) { socket.awaitReady() })
+            // Resolves when the server's Snapshot for this subscription arrives.
+            withTimeout(10_000) { socket.subscribeObjectRegistered("Account") }
+        } finally {
+            socket.close()
+        }
+    }
+
+    @Test
+    fun subscribeProjectionRegisteredResolvesAfterProjectionDelta() = runBlocking {
+        enqueueWebSocketHandler(
+            onMessage = { _, frame ->
+                when (frame.first) {
+                    FrameKindCodes.HELLO -> sendFrame(
+                        FrameKindCodes.HELLO_ACK,
+                        mapOf(
+                            "schemaHash" to FRICK_SCHEMA_HASH,
+                            "schemaId" to FRICK_SCHEMA_ID,
+                            "schemaRevision" to FRICK_SCHEMA_REVISION,
+                            "schemaCompatibility" to mapOf("status" to "compatible"),
+                            "serverCapabilities" to emptyMap<String, Any?>(),
+                        ),
+                    )
+                    FrameKindCodes.SUBSCRIBE -> if (frame.second["kind"] == "projection") {
+                        // Projections correlate by name (the frame carries it).
+                        sendFrame(
+                            FrameKindCodes.PROJECTION_DELTA,
+                            mapOf("projection" to frame.second["name"], "changes" to emptyList<Any?>()),
+                        )
+                    }
+                }
+            },
+        )
+        val socket = newSocket()
+        try {
+            assertNotNull(withTimeout(2_000) { socket.awaitReady() })
+            withTimeout(10_000) { socket.subscribeProjectionRegistered("Inbox") }
+        } finally {
+            socket.close()
+        }
+    }
+
     @Test
     fun appendReceivesAck() = runBlocking {
         enqueueWebSocketHandler(

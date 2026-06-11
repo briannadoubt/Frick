@@ -495,6 +495,36 @@ class FrickSyncSocket internal constructor(
     // callCommand() (FR-15). Mirrors pendingObjectWrites' correlation plumbing.
     private val pendingCallCommands = ConcurrentHashMap<String, CompletableDeferred<CallCommandResult>>()
 
+    // FR-256 (client half, opt-in): waiters parked by subscribeObjectRegistered
+    // / subscribeStreamRegistered / subscribeProjectionRegistered. Resolved when
+    // the server's initial Snapshot/StreamPage (keyed by subscriptionId) or
+    // ProjectionDelta (keyed by projection name) confirms registration; drained
+    // on disconnect so a waiter never strands.
+    private val pendingRegistrations =
+        ConcurrentHashMap<String, MutableList<CompletableDeferred<Unit>>>()
+
+    /** Park until the server confirms registration of [token]. */
+    private suspend fun awaitSubscriptionRegistered(token: String) {
+        val deferred = CompletableDeferred<Unit>()
+        pendingRegistrations.compute(token) { _, list ->
+            (list ?: mutableListOf()).also { it.add(deferred) }
+        }
+        deferred.await()
+    }
+
+    /** Resume every waiter parked on [token]: its initial snapshot arrived. */
+    private fun resolveSubscriptionRegistration(token: String) {
+        pendingRegistrations.remove(token)?.forEach { it.complete(Unit) }
+    }
+
+    /** Resume all parked registration waiters — connection reset/closed, so a
+     *  subscribe…Registered caller must not hang; it replays on reconnect. */
+    private fun resolveAllSubscriptionRegistrations() {
+        for (token in pendingRegistrations.keys.toList()) {
+            pendingRegistrations.remove(token)?.forEach { it.complete(Unit) }
+        }
+    }
+
     init {
         URI(buildSyncUrl(baseUrl))
     }
@@ -582,6 +612,9 @@ class FrickSyncSocket internal constructor(
         for (requestId in calls) {
             pendingCallCommands.remove(requestId)?.complete(CallCommandResult.Failed(envelope))
         }
+        // Don't strand subscribe…Registered callers on a reset connection
+        // (FR-256); the subscription replays + re-snapshots on reconnect.
+        resolveAllSubscriptionRegistrations()
     }
 
     /**
@@ -710,16 +743,34 @@ class FrickSyncSocket internal constructor(
 
     /** Subscribe to a stream by key. */
     suspend fun subscribe(stream: String, key: String) {
+        sendStreamSubscribe(stream, key)
+    }
+
+    /**
+     * Like [subscribe] but resolves only once the server has REGISTERED the
+     * subscription — when the initial `StreamPage` for this subscription id
+     * arrives (the gateway sends it AFTER registering, FR-256 client half) — so
+     * a write issued right after can't race ahead of registration. Additive:
+     * the existing [subscribe] is unchanged.
+     */
+    suspend fun subscribeStreamRegistered(stream: String, key: String) {
+        val subId = sendStreamSubscribe(stream, key)
+        awaitSubscriptionRegistered(subId)
+    }
+
+    private suspend fun sendStreamSubscribe(stream: String, key: String): String {
+        val subId = UUID.randomUUID().toString()
         val frame = FrickMsgPack.encodeFrame(
             FrameKindCodes.SUBSCRIBE,
             mapOf(
-                "subscriptionId" to UUID.randomUUID().toString(),
+                "subscriptionId" to subId,
                 "kind" to "stream",
                 "name" to stream,
                 "key" to key,
             ),
         )
         sendOrQueue(FrameKindCodes.SUBSCRIBE, frame)
+        return subId
     }
 
     /**
@@ -780,19 +831,52 @@ class FrickSyncSocket internal constructor(
      * the consumer (see `FrickDraftStore`).
      */
     suspend fun subscribeObject(type: String) {
+        sendObjectSubscribe(type)
+    }
+
+    /**
+     * Like [subscribeObject] but resolves only once the server's initial
+     * `Snapshot` for this subscription id arrives — it is sent AFTER the gateway
+     * registers the subscription, so a write right after this can't race ahead
+     * of registration (FR-256 client half). Additive; [subscribeObject] is
+     * unchanged. Use before an immediately-following write you want to observe.
+     */
+    suspend fun subscribeObjectRegistered(type: String) {
+        val subId = sendObjectSubscribe(type)
+        awaitSubscriptionRegistered(subId)
+    }
+
+    private suspend fun sendObjectSubscribe(type: String): String {
+        val subId = UUID.randomUUID().toString()
         val frame = FrickMsgPack.encodeFrame(
             FrameKindCodes.SUBSCRIBE,
             mapOf(
-                "subscriptionId" to UUID.randomUUID().toString(),
+                "subscriptionId" to subId,
                 "kind" to "object",
                 "name" to type,
             ),
         )
         sendOrQueue(FrameKindCodes.SUBSCRIBE, frame)
+        return subId
     }
 
     /** Subscribe to a projection by name. */
     suspend fun subscribeProjection(name: String) {
+        sendProjectionSubscribe(name)
+    }
+
+    /**
+     * Like [subscribeProjection] but resolves once the initial `ProjectionDelta`
+     * (the post-registration reply, keyed by projection name) arrives (FR-256
+     * client half). Additive; [subscribeProjection] is unchanged.
+     */
+    suspend fun subscribeProjectionRegistered(name: String) {
+        sendProjectionSubscribe(name)
+        // Projections correlate by name (the ProjectionDelta carries the name).
+        awaitSubscriptionRegistered(name)
+    }
+
+    private suspend fun sendProjectionSubscribe(name: String) {
         val frame = FrickMsgPack.encodeFrame(
             FrameKindCodes.SUBSCRIBE,
             mapOf(
@@ -984,6 +1068,15 @@ class FrickSyncSocket internal constructor(
                     .mapNotNull(::decodePackedObjectRecord)
                 val cursor = payload.intField("cursor") ?: 0
                 _events.tryEmit(FrickInboundEvent.Delta(objects, emptyList(), cursor))
+                // FR-256: the object Snapshot is the post-registration reply;
+                // resolve a subscribeObjectRegistered waiter on this id.
+                resolveSubscriptionRegistration(payload.stringField("subscriptionId") ?: "")
+            }
+            FrameKindCodes.STREAM_PAGE -> {
+                // FR-256: the StreamPage confirms a stream subscribe's
+                // registration (the Android client doesn't surface stream pages
+                // as events yet); resolve a subscribeStreamRegistered waiter.
+                resolveSubscriptionRegistration(payload.stringField("subscriptionId") ?: "")
             }
             FrameKindCodes.CALL_COMMAND_RESULT -> {
                 // FR-15: the server's reply to a CallCommand (kind 21). Resolve
@@ -1015,6 +1108,9 @@ class FrickSyncSocket internal constructor(
                     ProjectionChange(key, value)
                 }
                 _events.tryEmit(FrickInboundEvent.ProjectionDelta(name, changes))
+                // FR-256: the initial ProjectionDelta is the post-registration
+                // reply; resolve a subscribeProjectionRegistered waiter (by name).
+                resolveSubscriptionRegistration(name)
             }
             FrameKindCodes.SYNC_STATUS -> {
                 val connected = (payload["connected"] as? Boolean) ?: false

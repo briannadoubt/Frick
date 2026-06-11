@@ -16,6 +16,14 @@ private final class TaskLock: @unchecked Sendable {
     }
 }
 
+/// Lock-protected `Bool` for cross-task signalling in the FR-256 tests.
+private final class BoolBox: @unchecked Sendable {
+    private let lock = TaskLock()
+    private var v = false
+    var value: Bool { lock.withLock { v } }
+    func set(_ newValue: Bool) { lock.withLock { v = newValue } }
+}
+
 // MARK: - Mock WebSocket task
 
 /// Mocks the WebSocket task at the `FrickWebSocketTaskProtocol` boundary.
@@ -401,6 +409,108 @@ final class FrickSyncSocketTests: XCTestCase {
         XCTAssertEqual(map["name"]?.stringValue, "MessageStream")
 
         await socket.close()
+    }
+
+    // FR-256 client half (FR-291): the opt-in `…Registered` subscribe methods
+    // resolve only once the server's post-registration reply arrives.
+
+    func testSubscribeObjectRegisteredResolvesOnSnapshot() async throws {
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+        let socket = makeSocket(factory: factory)
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+        task.deliver(.data(helloAckFrame()))
+        _ = await waitForCondition { await socket.status.serverCapabilities != nil }
+
+        let resolved = BoolBox()
+        let subTask = Task {
+            try await socket.subscribeObjectRegistered(type: "Account")
+            resolved.set(true)
+        }
+
+        // The Subscribe frame is sent; capture its subscriptionId.
+        let sent = await waitForCondition { task.sentFrameCount >= 2 }
+        XCTAssertTrue(sent)
+        let subFrame = try FrickMsgPackCodec.decodeFrame(task.sentFrame(at: 1))
+        XCTAssertEqual(subFrame.kind, .subscribe)
+        XCTAssertEqual(subFrame.payload.mapValue?["kind"]?.stringValue, "object")
+        let subId = try XCTUnwrap(subFrame.payload.mapValue?["subscriptionId"]?.stringValue)
+
+        // It must NOT resolve before the snapshot — that is the whole point.
+        XCTAssertFalse(resolved.value, "resolved before the Snapshot")
+
+        // Deliver the post-registration Snapshot for this subscription id.
+        let snapshot = FrickMsgPackCodec.encodeFrame(FrickFrame(kind: .snapshot, payload: .map([
+            (.string("subscriptionId"), .string(subId)),
+            (.string("objects"), .array([])),
+            (.string("cursor"), .int(0)),
+        ])))
+        task.deliver(.data(snapshot))
+
+        // Now it resolves (bounded wait — a bug fails the test, never hangs it).
+        let didResolve = await waitForCondition { resolved.value }
+        XCTAssertTrue(didResolve, "did not resolve after its Snapshot")
+        _ = try await subTask.value
+        await socket.close()
+    }
+
+    func testSubscribeProjectionRegisteredResolvesOnProjectionDelta() async throws {
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+        let socket = makeSocket(factory: factory)
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+        task.deliver(.data(helloAckFrame()))
+        _ = await waitForCondition { await socket.status.serverCapabilities != nil }
+
+        let resolved = BoolBox()
+        let subTask = Task {
+            try await socket.subscribeProjectionRegistered(name: "Inbox")
+            resolved.set(true)
+        }
+        _ = await waitForCondition { task.sentFrameCount >= 2 }
+        XCTAssertFalse(resolved.value, "resolved before the ProjectionDelta")
+
+        // Projections correlate by name (the frame carries the projection name).
+        let delta = FrickMsgPackCodec.encodeFrame(FrickFrame(kind: .projectionDelta, payload: .map([
+            (.string("projection"), .string("Inbox")),
+            (.string("changes"), .array([])),
+        ])))
+        task.deliver(.data(delta))
+
+        let didResolve = await waitForCondition { resolved.value }
+        XCTAssertTrue(didResolve, "did not resolve after its ProjectionDelta")
+        _ = try await subTask.value
+        await socket.close()
+    }
+
+    func testSubscribeObjectRegisteredResolvesOnClose() async throws {
+        // A closed socket must not strand the awaiter (it replays on reconnect).
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+        let socket = makeSocket(factory: factory)
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+        task.deliver(.data(helloAckFrame()))
+        _ = await waitForCondition { await socket.status.serverCapabilities != nil }
+
+        let resolved = BoolBox()
+        let subTask = Task {
+            try? await socket.subscribeObjectRegistered(type: "Account")
+            resolved.set(true)
+        }
+        _ = await waitForCondition { task.sentFrameCount >= 2 }
+        XCTAssertFalse(resolved.value)
+
+        await socket.close()
+
+        let didResolve = await waitForCondition { resolved.value }
+        XCTAssertTrue(didResolve, "close() must drain pending registration awaiters")
+        _ = await subTask.value
     }
 
     func testObjectUpsertResolvesOnAck() async throws {
