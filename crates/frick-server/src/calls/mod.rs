@@ -10,6 +10,7 @@
 
 mod fake_media_plane;
 mod media_plane;
+pub mod schema;
 
 pub use fake_media_plane::{FakeMediaPlaneAdapter, FakeMediaPlaneOptions};
 pub use media_plane::{
