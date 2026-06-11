@@ -160,6 +160,12 @@ impl SqlRow {
             .map(|(_, value)| value)
     }
 
+    /// Iterate `(column, value)` pairs in select-list order. Used by the NDJSON
+    /// dump (`backup.rs`), which round-trips raw column shapes.
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &SqlValue)> {
+        self.columns.iter().map(|(column, value)| (column, value))
+    }
+
     /// The column's i64 value; `None` when absent or NULL/non-integer.
     #[must_use]
     pub fn i64(&self, name: &str) -> Option<i64> {

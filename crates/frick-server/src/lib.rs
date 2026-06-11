@@ -11,6 +11,7 @@ pub mod boot;
 pub mod cluster;
 pub mod config;
 pub mod cors;
+pub mod diagnostics;
 pub mod error;
 pub mod extract;
 pub mod gateway;
@@ -30,6 +31,10 @@ pub use cluster::{
     MemoryClusterBusOptions, MemoryClusterChannel, NodeId, Unsubscribe, random_node_id,
 };
 pub use config::{FrickConfig, FrickConfigError, FrickLimits, load_frick_config};
+pub use diagnostics::{
+    AssembleDiagnosticsOptions, DIAGNOSTICS_VERSION, DiagnosticsCursorProbe,
+    assemble_diagnostics_snapshot,
+};
 pub use error::{LimitKind, ServerError};
 pub use gateway::GatewayHub;
 pub use http::{AppState, AppStateInner, respond_error};

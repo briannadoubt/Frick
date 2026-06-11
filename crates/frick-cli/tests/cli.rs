@@ -4,7 +4,7 @@
 //! exactly the contract a downstream automation script would observe.
 
 use base64::Engine as _;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tempfile::TempDir;
 
 struct CliResult {
@@ -349,6 +349,128 @@ async fn schema_check_emits_identity() {
     assert_eq!(body["ok"], true);
     assert!(body["schemaId"].is_string());
     assert!(body["schemaHash"].is_string());
+}
+
+#[tokio::test]
+async fn schema_export_stdout_emits_loadable_schema() {
+    let result = run_cli(&["schema", "export"]).await;
+    assert_eq!(result.exit_code, 0, "{}", result.stderr);
+    // Without --out the whole stdout is the pretty-printed schema document
+    // itself (the on-disk `schema.json` shape), not a one-line summary record.
+    let body: Value = serde_json::from_str(result.stdout.trim()).expect("schema JSON on stdout");
+    assert!(body["schemaId"].is_string());
+    // The schema document's identity hash lives under `hash` (not the
+    // `schemaHash` alias used by the `--out` summary record).
+    assert!(body["hash"].is_string());
+    // It must carry the framework's primitive arrays (camelCase fields).
+    assert!(body["objects"].is_array());
+    assert!(body["projections"].is_array());
+
+    // The emitted JSON round-trips: it parses back into a `FrickSchema` that
+    // validates, and its identity matches the document the CLI printed.
+    let schema: frick_protocol::FrickSchema =
+        serde_json::from_str(result.stdout.trim()).expect("schema parses as FrickSchema");
+    frick_protocol::validate_schema(&schema).expect("exported schema validates");
+    assert_eq!(json!(schema.schema_id), body["schemaId"]);
+}
+
+#[tokio::test]
+async fn schema_export_out_writes_file_and_summary() {
+    let dir = TempDir::new().unwrap();
+    let out = dir.path().join("schema.json");
+    let result = run_cli(&["schema", "export", "--out", out.to_str().unwrap()]).await;
+    assert_eq!(result.exit_code, 0, "{}", result.stderr);
+
+    let body = parse_first_json(&result.stdout);
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["out"], out.to_str().unwrap());
+    assert!(body["schemaId"].is_string());
+    assert!(body["schemaHash"].is_string());
+    assert!(body["bytes"].as_u64().unwrap() > 0);
+
+    // The written file is the schema document, whose identity matches the
+    // summary record (the document keys the hash as `hash`; the summary aliases
+    // it to `schemaHash`).
+    let written = std::fs::read_to_string(&out).unwrap();
+    let parsed: Value = serde_json::from_str(&written).unwrap();
+    assert_eq!(parsed["schemaId"], body["schemaId"]);
+    assert_eq!(parsed["hash"], body["schemaHash"]);
+}
+
+// ---- verify -----------------------------------------------------------------
+
+#[tokio::test]
+async fn verify_clean_tree_exits_zero() {
+    let result = run_cli(&["verify"]).await;
+    assert_eq!(result.exit_code, 0, "{}", result.stderr);
+    let body = parse_first_json(&result.stdout);
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["command"], "frick verify (native)");
+    let targets: Vec<&str> = body["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert!(targets.contains(&"swift"));
+    assert!(targets.contains(&"kotlin"));
+    assert!(targets.contains(&"typescript"));
+}
+
+/// Force the drift path (exit 1) deterministically by pointing the gate at a
+/// temp fixture root whose snapshots are copied from the committed goldens with
+/// one deliberately corrupted — so the real fixtures are never mutated.
+#[tokio::test]
+async fn verify_drift_exits_one() {
+    use frick_cli::output::{Output, OutputMode};
+
+    // The six golden snapshots `frick verify` compares, relative to the root.
+    const FIXTURES: &[&str] = &[
+        "conformance/fixtures/codegen/swift/foundation.swift",
+        "conformance/fixtures/codegen/swift/error-enum.swift",
+        "conformance/fixtures/codegen/kotlin/foundation.kt",
+        "conformance/fixtures/codegen/kotlin/error-enum.kt",
+        "conformance/fixtures/codegen/typescript/foundation-bindings.ts",
+        "conformance/fixtures/codegen/typescript/errors.ts",
+    ];
+    // Resolve the committed goldens the same way the gate does (repo root).
+    let repo_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+
+    let temp_root = TempDir::new().unwrap();
+    let corrupt = "conformance/fixtures/codegen/swift/foundation.swift";
+    for fixture in FIXTURES {
+        let dest = temp_root.path().join(fixture);
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        if *fixture == corrupt {
+            // Deliberately wrong bytes ⇒ the generated swift artifact drifts.
+            std::fs::write(&dest, "// drifted golden snapshot\n").unwrap();
+        } else {
+            std::fs::copy(repo_root.join(fixture), &dest).unwrap();
+        }
+    }
+
+    let mut stdout: Vec<u8> = Vec::new();
+    let mut stderr: Vec<u8> = Vec::new();
+    let mut out = Output {
+        mode: OutputMode::Json,
+        stdout: &mut stdout,
+        stderr: &mut stderr,
+    };
+    let error = frick_cli::commands::verify::verify_with_fixture_root(temp_root.path(), &mut out)
+        .expect_err("drift must return an error");
+    assert_eq!(error.exit_code, 1);
+    assert_eq!(error.code, "verify.drift");
+    // The drift detail names the corrupted target (swift).
+    let drift = error.details.expect("drift details")["drift"]
+        .as_array()
+        .expect("drift array")
+        .iter()
+        .map(|d| d["target"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        drift.contains(&"swift".to_string()),
+        "drift targets: {drift:?}"
+    );
 }
 
 // ---- migrate ----------------------------------------------------------------
@@ -735,6 +857,167 @@ async fn inspect_diagnostics_malformed_probe_is_usage() {
     ])
     .await;
     assert_eq!(result.exit_code, 2);
+}
+
+#[tokio::test]
+async fn inspect_diagnostics_emits_snapshot() {
+    let dir = TempDir::new().unwrap();
+    let db = db_path(&dir);
+    migrate_up(&db).await;
+    let result = run_cli(&[
+        "inspect",
+        "diagnostics",
+        "--db-path",
+        &db,
+        "--env",
+        "development",
+    ])
+    .await;
+    assert_eq!(result.exit_code, 0, "{}", result.stderr);
+    let body = parse_first_json(&result.stdout);
+    assert_eq!(body["source"], "cli");
+    assert_eq!(body["env"], "development");
+    assert!(body["diagnosticsVersion"].is_number());
+    assert!(body["schema"]["schemaId"].is_string());
+    // A fresh migrated DB is at the foundation revision ⇒ compatible.
+    assert_eq!(body["compatibility"]["matched"], true);
+    assert!(body["syncTiming"]["snapshotAt"].is_string());
+    // `include_capabilities = false` from the CLI ⇒ no capabilities block.
+    assert!(body.get("capabilities").is_none());
+}
+
+// ---- backup / restore -------------------------------------------------------
+
+#[tokio::test]
+async fn backup_to_file_then_restore_round_trip() {
+    let dir = TempDir::new().unwrap();
+    let db = db_path(&dir);
+    migrate_up(&db).await;
+
+    // A whole-DB dump to a file.
+    let dump = dir.path().join("dump.ndjson");
+    let result = run_cli(&[
+        "backup",
+        "--tenant-id",
+        "all",
+        "--output",
+        dump.to_str().unwrap(),
+        "--db-path",
+        &db,
+        "--env",
+        "development",
+    ])
+    .await;
+    assert_eq!(result.exit_code, 0, "{}", result.stderr);
+    let body = parse_last_json(&result.stdout);
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["tenantId"], "all");
+    assert_eq!(body["output"], dump.to_str().unwrap());
+    assert!(body["rows"].as_u64().unwrap() >= 1);
+
+    let written = std::fs::read_to_string(&dump).unwrap();
+    assert!(written.ends_with('\n'));
+    let first: Value = serde_json::from_str(written.lines().next().unwrap()).unwrap();
+    assert_eq!(first["type"], "header");
+
+    // Restore the dump into a fresh, already-migrated DB.
+    let dir2 = TempDir::new().unwrap();
+    let db2 = db_path(&dir2);
+    migrate_up(&db2).await;
+    let result = run_cli(&[
+        "restore",
+        "--input",
+        dump.to_str().unwrap(),
+        "--confirm",
+        "yes",
+        "--overwrite",
+        "--db-path",
+        &db2,
+        "--env",
+        "development",
+    ])
+    .await;
+    assert_eq!(result.exit_code, 0, "{}", result.stderr);
+    let body = parse_last_json(&result.stdout);
+    assert_eq!(body["ok"], true);
+    assert_eq!(body["schemaCompatibility"]["matched"], true);
+    assert!(body["rowCounts"].is_object());
+    assert!(body["startedAt"].is_string());
+    assert!(body["finishedAt"].is_string());
+}
+
+#[tokio::test]
+async fn backup_stdout_stream_summary_to_stderr() {
+    let dir = TempDir::new().unwrap();
+    let db = db_path(&dir);
+    migrate_up(&db).await;
+    let result = run_cli(&["backup", "--db-path", &db, "--env", "development"]).await;
+    assert_eq!(result.exit_code, 0, "{}", result.stderr);
+    // Default tenant scope is `_default` (no --tenant-id given).
+    let header: Value = serde_json::from_str(result.stdout.lines().next().unwrap()).unwrap();
+    assert_eq!(header["type"], "header");
+    // The summary lands on stderr so the NDJSON stream on stdout stays clean.
+    let summary = parse_last_json(&result.stderr);
+    assert_eq!(summary["ok"], true);
+    assert_eq!(summary["tenantId"], "_default");
+}
+
+#[tokio::test]
+async fn restore_requires_input() {
+    let result = run_cli(&["restore", "--confirm", "yes"]).await;
+    assert_eq!(result.exit_code, 2);
+    let err = parse_last_json(&result.stderr);
+    assert_eq!(err["error"]["code"], "cli.usage");
+}
+
+#[tokio::test]
+async fn restore_refuses_without_confirm() {
+    let dir = TempDir::new().unwrap();
+    let db = db_path(&dir);
+    migrate_up(&db).await;
+    let dump = dir.path().join("dump.ndjson");
+    std::fs::write(&dump, "{}\n").unwrap();
+    let result = run_cli(&[
+        "restore",
+        "--input",
+        dump.to_str().unwrap(),
+        "--db-path",
+        &db,
+        "--env",
+        "development",
+    ])
+    .await;
+    assert_eq!(result.exit_code, 3);
+    let err = parse_last_json(&result.stderr);
+    assert_eq!(err["error"]["code"], "cli.refused");
+    assert_eq!(err["error"]["details"]["reason"], "missingConfirmation");
+}
+
+#[tokio::test]
+async fn restore_store_refusal_is_failure_exit_one() {
+    // A dump with no header line is a store-side refusal (`missingHeader`),
+    // which the CLI maps to a `cli.restore.<reason>` failure (exit 1) — the
+    // deliberate asymmetry vs the missing-confirm refusal (exit 3).
+    let dir = TempDir::new().unwrap();
+    let db = db_path(&dir);
+    migrate_up(&db).await;
+    let dump = dir.path().join("dump.ndjson");
+    std::fs::write(&dump, "{\"type\":\"objects\",\"row\":{}}\n").unwrap();
+    let result = run_cli(&[
+        "restore",
+        "--input",
+        dump.to_str().unwrap(),
+        "--confirm",
+        "yes",
+        "--db-path",
+        &db,
+        "--env",
+        "development",
+    ])
+    .await;
+    assert_eq!(result.exit_code, 1, "{}", result.stdout);
+    let err = parse_last_json(&result.stderr);
+    assert_eq!(err["error"]["code"], "cli.restore.missingHeader");
 }
 
 // ---- lint -------------------------------------------------------------------

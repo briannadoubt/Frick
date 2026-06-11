@@ -87,7 +87,7 @@ All variables are optional. Defaults match the runtime mode.
 | `FRICK_INSPECTION_ENABLED`  | `true`                      | `false`                               | Gates `/_frick/inspect/*`. Forcing on in prod logs a warning.        |
 | `FRICK_ADMIN_TOKEN`         | unset                       | unset                                 | Enables `/_frick/admin/*` and production inspection auth. Must be at least 32 chars in production. |
 | `FRICK_IMPLICIT_TENANT_CREATION` | `true`                 | `false`                               | Allows auth routes to create unknown tenants automatically.           |
-| `FRICK_PLATFORM_EVENTS_DRIVER` | `sqlite`                  | `sqlite` unless brokers are set       | One of `sqlite` or `kafka`. Kafka uses the built-in KafkaJS adapter. |
+| `FRICK_PLATFORM_EVENTS_DRIVER` | `sqlite`                  | `sqlite` unless brokers are set       | One of `sqlite` or `kafka`. The Rust runtime recognizes `kafka` as a config value (and the Compose profiles set it), but the platform-event store is SQLite-backed in every mode today — the Kafka/Redpanda runtime adapter is not yet ported (FR-264). |
 | `FRICK_PLATFORM_EVENTS_TOPIC` | `frick.platform.events`    | `frick.platform.events`               | Kafka/Redpanda topic name for platform events.                        |
 | `FRICK_PLATFORM_EVENTS_KAFKA_BROKERS` | unset             | unset                                 | Comma-separated Kafka/Redpanda brokers. When set and no driver is forced, the driver defaults to `kafka`. |
 | `FRICK_PLATFORM_EVENTS_RETENTION_MS` | `604800000` (7d)    | `604800000`                           | SQLite platform event retention window. Positive integer milliseconds. |
@@ -104,99 +104,56 @@ server refuses to boot.
 
 ## Object-storage blob driver
 
-Setting `FRICK_BLOB_DRIVER=s3` (FR-54) moves blob *bytes* from SQLite into any
-S3-compatible object store — AWS S3, MinIO, Cloudflare R2, DigitalOcean Spaces,
-etc. — while blob *metadata* stays in SQLite. Bytes are written under a
-tenant-isolated, content-addressed key prefix (the same collision-free,
-traversal-proof encoding the `filesystem` driver uses), so a crafted blob id can
-never reach another tenant's objects.
+Selecting `FRICK_BLOB_DRIVER=s3` (FR-54) is intended to move blob *bytes* from
+SQLite into any S3-compatible object store — AWS S3, MinIO, Cloudflare R2,
+DigitalOcean Spaces, etc. — while blob *metadata* stays in SQLite. Bytes would be
+written under a tenant-isolated, content-addressed key prefix (the same
+collision-free, traversal-proof encoding the `filesystem` driver uses), so a
+crafted blob id can never reach another tenant's objects.
 
-The AWS SDK (`@aws-sdk/client-s3`) is an **optional** dependency, imported lazily
-only when the s3 driver is built — `sqlite`/`filesystem` deployments never load
-it. Because the SDK import is asynchronous and the store constructor is
-synchronous, the s3 driver is built by the host process and injected, exactly
-like a `RedisClusterBus`:
+> **Not yet ported to the Rust server (tracked in FR-264 / FR-241).** The Rust
+> `frick-server` recognizes the `FRICK_BLOB_DRIVER`/`FRICK_BLOB_S3_*` config
+> surface — `FRICK_BLOB_DRIVER=s3` is accepted and `FRICK_BLOB_S3_BUCKET` is
+> required at startup — but the S3 bytes driver itself is a reserved seam in
+> `crates/frick-store/src/stores/blob_bytes.rs`: every read/write/delete returns
+> a "s3 blob bytes driver not yet ported" error. Until that port lands, run with
+> the default `sqlite` driver or the `filesystem` driver
+> (`FRICK_BLOB_DRIVER=filesystem` + a writable `FRICK_BLOB_STORAGE_PATH`), both
+> of which are fully implemented. There is no host-injected
+> `createS3BlobBytesDriver` API in the Rust server — selection is env-driven, so
+> no code wiring is required once the driver ships.
 
-```ts
-import { createFrickServer, createS3BlobBytesDriver } from "@fricken/server";
-
-const blobBytesDriver = await createS3BlobBytesDriver({
-  bucket: process.env.FRICK_BLOB_S3_BUCKET!,
-  region: process.env.FRICK_BLOB_S3_REGION,
-  endpoint: process.env.FRICK_BLOB_S3_ENDPOINT, // omit for real AWS S3
-  prefix: process.env.FRICK_BLOB_S3_PREFIX,
-  // credentials default to the AWS provider chain; pass accessKeyId /
-  // secretAccessKey to override.
-});
-
-const server = createFrickServer({ blobBytesDriver });
-```
-
-`createS3BlobBytesDriver` also accepts `forcePathStyle` (defaults to `true` when
-a custom `endpoint` is set — most S3-compatible stores need it) and static
-`accessKeyId`/`secretAccessKey`. Selecting `FRICK_BLOB_DRIVER=s3` without
-injecting a driver throws at construction; selecting it without
-`FRICK_BLOB_S3_BUCKET` fails fast at config load. SQLite remains the default, so
-this is fully opt-in.
+Both fully-ported byte drivers and the s3 seam keep blob *metadata* in SQLite,
+and a malformed/missing `FRICK_BLOB_STORAGE_PATH` (for `filesystem`) or
+`FRICK_BLOB_S3_BUCKET` (for `s3`) fails fast at config load. SQLite remains the
+default, so this is fully opt-in.
 
 ## Blob processing pipeline
 
-Blob processors (registered via `createFrickServer({ blobProcessors: [...] })`)
-hook the upload pipeline in two phases: a synchronous `validate(...)` that runs
-before any row is written (rejected uploads short-circuit with
-`blob.unsupportedContentType`), and an asynchronous `process(...)` that runs as a
-`blob.process` job after the upload commits and persists any returned
-derivatives. Frick ships three stock processor factories (FR-55, FR-130) — all
-additive and behind the same registry surface:
+Blob processors hook the upload pipeline in two phases: a synchronous
+`validate(...)` that runs before any row is written (rejected uploads
+short-circuit with `blob.unsupportedContentType`), and an asynchronous
+`process(...)` that runs as a `blob.process` job after the upload commits and
+persists any returned derivatives. The prior TypeScript server shipped three
+stock processor factories (FR-55, FR-130) — a MIME/size validator, an image
+derivative extractor, and a moderation hook — registered through a
+`blobProcessors` option.
 
-```ts
-import {
-  createFrickServer,
-  imageBlobProcessor,
-  mimeSizeValidator,
-  moderationProcessor,
-} from "@fricken/server";
+> **Not yet ported to the Rust server (tracked in FR-264).** The Rust
+> `frick-server` does **not** yet expose a blob-processor registry: there is no
+> `blobProcessors` config surface and no `mimeSizeValidator` / `imageBlobProcessor`
+> / `moderationProcessor` factory, so uploads are not validated or transformed
+> by framework processors today. The underlying derivative *storage* primitives
+> and read routes are in place — see below — but nothing writes derivatives
+> through a processor pipeline yet. Until this ports, enforce MIME/size limits
+> at the reverse proxy or in an app-owned upload route.
 
-const server = createFrickServer({
-  blobProcessors: [
-    // MIME/size gate: reject anything not on the allow-list or over the cap.
-    // Allow-list entries match exactly, or by prefix when they end in `/`.
-    mimeSizeValidator({
-      allowedMimeTypes: ["image/", "application/pdf"],
-      maxBytes: 10 * 1024 * 1024,
-      matches: { mimePrefixes: ["application/"] },
-    }),
-
-    // Image validation + derivative extraction. The derivative generator is
-    // pluggable; the default `copyDerivativeGenerator` re-tags the source bytes
-    // (no native image library required). Supply your own (e.g. a `sharp`
-    // wrapper) for real resizing.
-    imageBlobProcessor({
-      matches: { mimePrefixes: ["image/"] },
-      derivatives: [
-        { derivativeId: "thumb-256", maxEdge: 256, mimeType: "image/webp" },
-        { derivativeId: "thumb-64", maxEdge: 64 },
-      ],
-      // derivativeGenerator: myResizer,
-    }),
-
-    // Moderation extension point — Frick ships the hook *mechanism*, not a
-    // moderation impl. The hook runs in the async `process` phase (never blocks
-    // the upload) and its verdict is persisted as a JSON sidecar derivative.
-    moderationProcessor({
-      hook: async ({ blobId, content }) => {
-        const verdict = await myModerationVendor.scan(content);
-        return { decision: verdict.flagged ? "flag" : "allow", details: verdict };
-      },
-    }),
-  ],
-});
-```
-
-Derivatives are retrievable through the existing derivative routes
-(`GET /blobs/:blobId/derivatives` and
-`GET /blobs/:blobId/derivatives/:derivativeId/content`). Re-running a processor
-overwrites the prior derivative on the `(tenant, parent, derivative)` key.
+The derivative **read** routes are mounted today
+(`GET /blobs/:id/derivatives` and
+`GET /blobs/:id/derivatives/:derivativeId/content`, in
+`crates/frick-server/src/routes/blobs.rs`), so any derivatives produced once the
+processor pipeline ports — keyed on `(tenant, parent, derivative)` — are already
+retrievable through the stable API.
 
 ## Local runtime profiles
 
@@ -365,11 +322,19 @@ shutdown.
 
 ## Identity provider routes
 
-`createFrickServer({ identityProviders })` mounts provider-owned auth routes
-alongside the built-in `/auth/signup`, `/auth/login`, and `/auth/dev-login`
-routes. The current implementation supports Apple, Google ID tokens, generic
-OpenID Connect issuers, and email/password accounts with single-use password
-reset tokens:
+> **Not yet ported to the Rust server (tracked in FR-264).** The Rust
+> `frick-server` mounts the core auth routes `/auth/signup`, `/auth/login`,
+> `/auth/dev-login`, and `/auth/logout` (`crates/frick-server/src/auth_routes.rs`).
+> The provider-owned identity routes described below — Apple, Google, generic
+> OIDC, email/password reset, and SAML — are **not yet implemented** in the Rust
+> server, and there is no `identityProviders` configuration surface. The contract
+> below is retained as the target behavior; treat it as follow-up work and do not
+> rely on these routes being live today.
+
+Provider-owned auth routes are intended to mount alongside the built-in
+`/auth/signup`, `/auth/login`, and `/auth/dev-login` routes. The target
+contract supports Apple, Google ID tokens, generic OpenID Connect issuers, and
+email/password accounts with single-use password reset tokens:
 
 - `POST /auth/apple/verify` verifies an Apple `identityToken` against Apple's
   JWKS with the configured audience, creates or finds the mapped app-owned User
@@ -388,7 +353,7 @@ reset tokens:
   discovery, claimMappings? }]`. Each provider resolves its signing keys
   either from a directly-configured `jwksUri` or by fetching the issuer's
   discovery document at `<issuer>/.well-known/openid-configuration` and reading
-  its `jwks_uri` (when `discovery: true`). Verification uses `jose` to check the
+  its `jwks_uri` (when `discovery: true`). Verification checks the
   signature against the resolved JWKS, the `iss` claim against the configured
   `issuer`, the `aud` claim against `audience` (defaulting to `clientId`), and
   expiry; the optional request `nonce` is checked when supplied in the body.
@@ -660,72 +625,23 @@ Plan and execute any data move explicitly, out of band, after the identity move.
 
 ## Outbound email
 
-> **Not yet ported.** The outbound-email surface below describes the prior
-> TypeScript server and is not yet implemented in the Rust `frick-server`. It is
-> retained here as the target contract; treat it as follow-up work.
+> **Not yet ported to the Rust server (tracked in FR-264).** Outbound email is
+> **not implemented** in the Rust `frick-server` — there is no email module,
+> adapter registry, or Resend integration in `crates/frick-server/`, and no
+> `RESEND_API_KEY` wiring. Because the email/password identity routes themselves
+> are also unported (see "Identity provider routes"), nothing dispatches reset or
+> welcome mail today.
 
-Frick ships a pluggable outbound email surface that mirrors the push-adapter
-convention: the framework defines the `FrickEmailAdapter` interface, apps
-register an implementation, and the framework's identity flows dispatch through
-it. Credential-bearing provider SDKs stay out of the core bundle.
-
-Public exports from `@fricken/server`:
-
-- `FrickEmailAdapter`, `FrickEmailMessage`, `FrickEmailDelivery`, and
-  `FrickEmailContext` — the adapter interface and its message/result shapes. An
-  adapter implements `send(message, ctx)` and returns a `FrickEmailDelivery`
-  (`status: "delivered" | "failed"`, optional `receiptId`, structured `error`).
-- `createFrickResendEmailAdapter(options?)` — the Resend reference adapter. It
-  POSTs to the Resend v1 `/emails` endpoint with a bearer token; `apiKey`
-  defaults to `RESEND_API_KEY`. HTTP failures map to structured codes
-  (`email.unauthorized`, `email.rateLimited`, `email.serverError`,
-  `email.invalidRequest`, `email.networkError`) rather than throwing. Also
-  importable from the `@fricken/server/email/resend-adapter` subpath, matching
-  `@fricken/server/push/apns-adapter`.
-- `createFrickTestEmailAdapter()` — an in-memory adapter that records every
-  send and always succeeds. Use it in tests to assert what the framework
-  dispatched.
-- `createFrickEmailRouter(options)` — wraps an adapter with the framework's
-  common concerns: provider exceptions become `adapter.threw` failures, and
-  every attempt is logged and recorded in the DevTools event feed
-  (`frick.email.delivery`) with the recipient local-part redacted. Exposes
-  `send`, `sendVerificationEmail`, and `sendPasswordResetEmail` helpers.
-
-Wire it into the email/password identity flows via
-`identityProviders.email.outbound`:
-
-```ts
-import { createFrickServer } from "@fricken/server";
-import { createFrickResendEmailAdapter } from "@fricken/server/email/resend-adapter";
-
-createFrickServer({
-  identityProviders: {
-    email: {
-      outbound: {
-        adapter: createFrickResendEmailAdapter(), // reads RESEND_API_KEY
-        defaultFrom: "noreply@yourapp.com",
-        appName: "Your App",
-        // App composes the link — only the app knows its host + screen paths.
-        resetUrl: ({ token }) => `https://yourapp.com/reset?token=${token}`,
-        welcome: {}, // optional first-sign-in welcome email; supply body/subject to customize
-      },
-    },
-  },
-});
-```
-
-With `outbound` set, the framework dispatches the templated password-reset
-email on `/auth/email/forgot-password` (only when `resetUrl` is provided and the
-email maps to a real account) and a welcome email on `/auth/email/signup` (when
-`welcome` is set). Sends are best-effort: a failed delivery is logged and
-audited but never fails the originating auth request. Apps that want completely
-custom email content can build a `FrickEmailRouter` themselves and call its
-`send(...)` with their own `FrickEmailMessage`, or keep using the
-`onPasswordResetRequested` hook (which still fires alongside the framework send).
-
-Today the framework ships only the Resend reference adapter and the in-memory
-test adapter; other providers (SES, Postmark, SMTP) are implemented out-of-tree
-against the same `FrickEmailAdapter` interface.
+The intended contract (carried over from the prior TypeScript server) is a
+pluggable outbound-email surface mirroring the push-adapter convention: the
+framework defines an email-adapter interface, apps register an implementation
+(a Resend reference adapter plus an in-memory test adapter, with SES/Postmark/SMTP
+provided out-of-tree), and the email/password identity flows dispatch the
+templated password-reset and welcome messages through it on a best-effort basis
+(a failed delivery is logged and audited but never fails the originating auth
+request). None of this surface exists in the Rust crates yet; treat it as
+follow-up work and do not wire against a `@fricken/server` email import — that
+TypeScript package was removed in the cutover.
 
 ## Health vs. ready
 
@@ -899,16 +815,18 @@ per-tenant `limits`, optional `retentionMs`, push credential configured/not
 configured flags for APNs, FCM, and Web Push, plus stored setting key names.
 Encrypted push credential values and unknown setting values are never returned.
 
-The platform event pipeline defaults to SQLite for local and lightweight
-deployments. Set `FRICK_PLATFORM_EVENTS_DRIVER=kafka` with
-`FRICK_PLATFORM_EVENTS_KAFKA_BROKERS=host:9092` to use the built-in
-KafkaJS adapter against Redpanda or Kafka. The Kafka adapter connects lazily
-on first publish or claim so server construction remains synchronous. This
-baseline commits only contiguous terminal offsets on `ack`, republishes
-retried events to the broker, and publishes poison messages to `<topic>.dlq`.
+The platform event pipeline is SQLite-backed in the Rust server today. The
+`FRICK_PLATFORM_EVENTS_DRIVER=kafka` setting (with
+`FRICK_PLATFORM_EVENTS_KAFKA_BROKERS=host:9092`) is recognized as config and is
+set by the Compose profiles, but the Kafka/Redpanda runtime adapter is **not yet
+ported to the Rust server (tracked in FR-264)** — the store falls back to SQLite
+regardless, so a broker is not actually contacted. The target Kafka adapter
+would connect lazily on first publish or claim, commit only contiguous terminal
+offsets on `ack`, republish retried events to the broker, and publish poison
+messages to `<topic>.dlq`. The SQLite pipeline described next is what runs.
 The job worker publishes initial `jobs.lifecycle` events for completed,
 retryable failed, and dead-lettered jobs; downstream consumers can claim those
-events from the same adapter as analytics and telemetry events. SQLite claims
+events from the same pipeline as analytics and telemetry events. SQLite claims
 use a five-minute visibility lease; if a consumer crashes after claiming but
 before `ack`, `retry`, or `deadLetter`, the same consumer name can reclaim that
 event after the lease expires and the delivery attempt count increments.
@@ -1295,17 +1213,34 @@ The server returns `204 No Content` on success, `400` with
 `{ "error": "push.credentials.disabled" }` when `FRICK_PUSH_CRED_KEY` is
 unset, or `400` when required fields are missing.
 
-4. Register the adapter at server boot:
+4. Register the adapter at server boot. In the Rust server the push subsystem
+   lives in `crates/frick-server/src/push/`: build a `PushRegistry`, register an
+   `ApnsAdapter`, then wire the `NotificationRouter` over the store + registry
+   and merge the admin push router. The integrator recipe is documented on the
+   `frick::push` module and `push::router`:
 
-```ts
-import { createFrickApnsAdapter } from "@fricken/server";
+```rust
+use std::sync::Arc;
+use frick_server::push::{PushRegistry, SystemPushClock};
+use frick_server::push::apns_adapter::{ApnsAdapter, ApnsAdapterOptions};
 
-const server = createFrickServer({
-  push: {
-    adapters: [createFrickApnsAdapter()],
-  },
-});
+let mut registry = PushRegistry::new();
+registry.register_adapter(Arc::new(ApnsAdapter::new(ApnsAdapterOptions {
+    clock: Arc::new(SystemPushClock),
+    env,        // credential-env seam (reads per-tenant APNs creds)
+    transport,  // HTTP/2 transport to api(.sandbox).push.apple.com
+    endpoint: None,
+})))?;
+// Then build NotificationRouter over the store + registry, register its
+// job handler under PUSH_DELIVER_JOB_TYPE, and merge admin_push_router.
 ```
+
+The `clock`/`env`/`transport` seams keep the adapter deterministic and testable;
+production wires `SystemPushClock`, the real credential env, and an HTTP/2
+transport. There is no `@fricken/server` / `createFrickApnsAdapter` import — that
+TypeScript package was removed in the cutover. APNs, FCM, and Web Push adapters
+are all ported (`apns_adapter.rs`, `fcm_adapter.rs`, and the Web Push
+credentials seam).
 
 ### FCM (Firebase Cloud Messaging)
 
@@ -1353,13 +1288,17 @@ Content-Type: application/json
   return `cli.unsupported`.
 - Blob bytes default to SQLite (`FRICK_BLOB_DRIVER=sqlite`, the `blob_content`
   table). Set `FRICK_BLOB_DRIVER=filesystem` with a writable
-  `FRICK_BLOB_STORAGE_PATH` to store bytes on the local filesystem, or
-  `FRICK_BLOB_DRIVER=s3` with `FRICK_BLOB_S3_BUCKET` to store bytes in an
-  S3-compatible object store. Blob metadata stays in SQLite under every driver.
-  External blob byte stores are not yet included in NDJSON backup/restore or
-  account export payloads, so operators must back up the filesystem path or
-  bucket separately. Byte export and derivative offloading are follow-ups.
-- Outbound email ships the Resend reference adapter and an in-memory test
-  adapter only (see "Outbound email"). Other providers (SES, Postmark, SMTP)
-  are implemented out-of-tree against the exported `FrickEmailAdapter`
-  interface.
+  `FRICK_BLOB_STORAGE_PATH` to store bytes on the local filesystem — both the
+  SQLite and filesystem drivers are fully ported. `FRICK_BLOB_DRIVER=s3` (with
+  `FRICK_BLOB_S3_BUCKET`) is config-recognized but the S3 byte driver is not yet
+  ported (reserved seam in `crates/frick-store/src/stores/blob_bytes.rs`; tracked
+  in FR-264 / FR-241) — see "Object-storage blob driver". Blob metadata stays in
+  SQLite under every driver. External (filesystem) blob byte stores are not yet
+  included in NDJSON backup/restore or account export payloads, so operators must
+  back up the filesystem path separately. Byte export and derivative offloading
+  are follow-ups.
+- Outbound email is not yet ported to the Rust server (see "Outbound email";
+  tracked in FR-264). There is no email adapter, Resend integration, or
+  `RESEND_API_KEY` wiring in `crates/frick-server/` today, and the
+  email/password identity routes that would dispatch reset/welcome mail are
+  themselves unported.

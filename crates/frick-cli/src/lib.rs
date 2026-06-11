@@ -33,8 +33,8 @@ struct CommandSpec {
 const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "schema",
-        summary: "Validate or regenerate the schema",
-        subcommands: &["check", "generate"],
+        summary: "Validate, regenerate, or export the schema",
+        subcommands: &["check", "generate", "export"],
     },
     CommandSpec {
         name: "lint",
@@ -68,7 +68,7 @@ const COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "verify",
-        summary: "Run `pnpm verify:generated` end-to-end",
+        summary: "Drift-check the generated codegen artifacts against committed snapshots",
         subcommands: &[],
     },
     CommandSpec {
@@ -175,7 +175,9 @@ pub async fn run(
         "scaffold" => commands::scaffold::scaffold_command(&child, &mut out),
         "dashboard" => commands::dashboard::dashboard_command(&child, &mut out).await,
         "mcp" => commands::mcp::mcp_command(&child, &mut out).await,
-        "verify" | "backup" | "restore" => Err(deferred_command(&command)),
+        "verify" => commands::verify::verify_command(&child, &mut out),
+        "backup" => commands::backup::backup_command(&child, &mut out).await,
+        "restore" => commands::restore::restore_command(&child, &mut out).await,
         other => Err(unknown_command(other)),
     };
 
@@ -199,20 +201,6 @@ fn unknown_command(command: &str) -> CliError {
         })),
         exit_code: EXIT_USAGE,
     }
-}
-
-/// The TS commands `verify` / `backup` / `restore` shell out to pnpm scripts or
-/// the unported `dumpFrickDatabase`/`restoreFrickDatabase` helpers. They are
-/// deferred in the Rust CLI (see openIssues) but remain listed in `--help` for
-/// surface parity.
-fn deferred_command(command: &str) -> CliError {
-    CliError::failure(
-        "cli.unsupported",
-        format!(
-            "frick {command} is not yet available in the Rust CLI \
-             (no Rust counterpart for its pnpm/dump/restore helpers)"
-        ),
-    )
 }
 
 /// Map an unknown-command result to the usage exit code, for callers that want

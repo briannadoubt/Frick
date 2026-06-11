@@ -3,12 +3,17 @@
 //!
 //! Mirrors the `/_frick/inspect/*` routes but driven from the local DB. No HTTP.
 //!
-//! `diagnostics` depends on the TS `assembleDiagnosticsSnapshot`, which has no
-//! Rust counterpart yet (FR-76/FR-77 not ported). It is stubbed with a clear
-//! `cli.unsupported` failure — see openIssues. Cursor-probe validation still
-//! happens first so a malformed probe returns the usage error (exit 2) the test
-//! suite asserts.
+//! `diagnostics` drives the clock-free `frick_server::assemble_diagnostics_snapshot`
+//! over the local DB (the same assembler the `/_frick/inspect/diagnostics` route
+//! uses). The CLI is the time boundary: it stamps `snapshotAt` from the wall
+//! clock and feeds the stores, which stay clock-free. Cursor-probe validation
+//! still happens first so a malformed probe returns the usage error (exit 2) the
+//! test suite asserts.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use frick_server::standalone::{config_env, load_schema};
+use frick_server::{AssembleDiagnosticsOptions, DiagnosticsCursorProbe};
 use frick_store::facade::DEFAULT_IDEMPOTENCY_CACHE_CAPACITY;
 use serde_json::json;
 
@@ -108,25 +113,54 @@ async fn inspect_jobs(parsed: &ParsedArgs, out: &mut Output<'_>) -> Result<i32, 
 
 async fn inspect_diagnostics(parsed: &ParsedArgs, out: &mut Output<'_>) -> Result<i32, CliError> {
     let config = load_config(&context_flags_from(parsed))?;
-    let _store = open_store(&config).await?;
+    let store = open_store(&config).await?;
+
     // Validate cursor probes first so a malformed probe is a usage error (the
     // TS contract: `stream:streamId`).
+    let tenant_id = parsed.flag_str("tenant-id").map(ToString::to_string);
+    let mut cursors: Vec<DiagnosticsCursorProbe> = Vec::new();
     for positional in parsed.positionals.iter().skip(1) {
         let sep = positional.find(':');
         let valid = match sep {
             Some(idx) => idx > 0 && idx != positional.len() - 1,
             None => false,
         };
-        if !valid {
+        let Some(idx) = sep.filter(|_| valid) else {
             return Err(CliError::usage(format!(
                 "Invalid cursor probe \"{positional}\" — expected stream:streamId"
             )));
-        }
+        };
+        cursors.push(DiagnosticsCursorProbe {
+            tenant_id: tenant_id.clone(),
+            stream: positional[..idx].to_string(),
+            stream_id: positional[idx + 1..].to_string(),
+        });
     }
-    let _ = out;
-    Err(CliError::failure(
-        "cli.unsupported",
-        "frick inspect diagnostics is not yet available in the Rust CLI \
-         (assembleDiagnosticsSnapshot is unported — FR-76/FR-77)",
-    ))
+
+    // Resolve the active schema the same way `schema export` does
+    // (`FRICK_SCHEMA_PATH`-aware), so the CLI and standalone server agree.
+    let schema =
+        load_schema(&config_env()).map_err(|err| CliError::failure("schema.invalid", err))?;
+
+    let opts = AssembleDiagnosticsOptions {
+        source: Some("cli".to_string()),
+        env: Some(config.env.as_str().to_string()),
+        cursors,
+        snapshot_at: now_iso(),
+        include_capabilities: false,
+        ..AssembleDiagnosticsOptions::default()
+    };
+
+    let snapshot = frick_server::assemble_diagnostics_snapshot(&store, &schema, &opts).await;
+    out.emit(&snapshot);
+    Ok(EXIT_OK)
+}
+
+/// Current wall-clock instant as an ISO-8601 UTC millisecond string. The CLI is
+/// the time boundary: the clock-free assembler receives this as `snapshotAt`.
+fn now_iso() -> String {
+    let total_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+    frick_server::boot::iso_from_epoch_ms(total_ms)
 }

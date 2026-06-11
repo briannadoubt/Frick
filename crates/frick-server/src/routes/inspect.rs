@@ -52,6 +52,7 @@ pub fn inspect_router(state: AppState) -> axum::Router {
         .route("/_frick/inspect/search", get(search))
         .route("/_frick/inspect/db", get(db))
         .route("/_frick/inspect/jobs", get(jobs))
+        .route("/_frick/inspect/diagnostics", get(diagnostics))
         // DevTools / platform-events / analytics stubs (later stories).
         .route("/_frick/inspect/platform-events", get(stub_not_available))
         .route("/_frick/inspect/analytics/summary", get(stub_not_available))
@@ -328,6 +329,120 @@ async fn jobs(State(state): State<AppState>, headers: HeaderMap) -> Response {
         "workerEnabled": false,
     }))
     .into_response()
+}
+
+/// `GET /_frick/inspect/diagnostics` (FR-76, FR-262): the full structured
+/// diagnostics snapshot (`assembleDiagnosticsSnapshot`). Gated/authorized like
+/// every sibling inspect route, then assembled from the store + active schema.
+///
+/// This handler is the determinism boundary: it stamps `snapshotAt` (ISO from
+/// the system clock), `startedAt` (the boot-stamped ISO), and `uptimeSeconds`,
+/// then hands them to the clock-free [`assemble_diagnostics_snapshot`]. Because
+/// it runs on a live server it reports `source: "server"` and includes the
+/// negotiated capabilities block.
+///
+/// Optional cursor probes ride the query string as repeated
+/// `?cursor=<stream>:<streamId>` params (the CLI passes them as positionals);
+/// `?tenantId=<id>` applies to every probe. A malformed `cursor` (no `:`) is
+/// skipped rather than erroring, so a bad probe degrades gracefully.
+async fn diagnostics(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    let request_id = new_request_id();
+    if let Err(response) = guard(&state, &headers, &request_id).await {
+        return response;
+    }
+
+    let now = now_ms();
+    let probes = parse_cursor_probes(raw_query.as_deref());
+    let opts = crate::diagnostics::AssembleDiagnosticsOptions {
+        source: Some("server".to_string()),
+        env: Some(state.config.env.as_str().to_string()),
+        recent_error_limit: None,
+        cursors: probes,
+        snapshot_at: crate::boot::iso_from_epoch_ms(now),
+        last_successful_sync_at: None,
+        started_at: Some(state.started_at.clone()),
+        uptime_seconds: Some(uptime_seconds(&state.started_at, now)),
+        include_capabilities: true,
+    };
+    let snapshot =
+        crate::diagnostics::assemble_diagnostics_snapshot(&state.store, &state.schema, &opts).await;
+    axum::Json(snapshot).into_response()
+}
+
+/// Parse repeated `cursor=<stream>:<streamId>` query params into probes, applying
+/// a single shared `tenantId=<id>` to all of them (mirrors the CLI's
+/// `--tenant-id` applying to every positional probe). Malformed `cursor` values
+/// (missing the `:` separator, empty stream/id) are dropped.
+fn parse_cursor_probes(raw_query: Option<&str>) -> Vec<crate::diagnostics::DiagnosticsCursorProbe> {
+    let Some(query) = raw_query else {
+        return Vec::new();
+    };
+    let mut tenant_id: Option<String> = None;
+    let mut raw_probes: Vec<(String, String)> = Vec::new();
+    for pair in query.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let value = decode_query_component(value);
+        match key {
+            "tenantId" if !value.is_empty() => tenant_id = Some(value),
+            "cursor" => {
+                if let Some((stream, stream_id)) = value.split_once(':')
+                    && !stream.is_empty()
+                    && !stream_id.is_empty()
+                {
+                    raw_probes.push((stream.to_string(), stream_id.to_string()));
+                }
+            }
+            _ => {}
+        }
+    }
+    raw_probes
+        .into_iter()
+        .map(
+            |(stream, stream_id)| crate::diagnostics::DiagnosticsCursorProbe {
+                tenant_id: tenant_id.clone(),
+                stream,
+                stream_id,
+            },
+        )
+        .collect()
+}
+
+/// Minimal `application/x-www-form-urlencoded` component decode: `+` → space and
+/// `%XX` → byte. Good enough for the stream/tenant ids these probes carry (which
+/// are `[A-Za-z0-9_.:-]`-shaped); unparseable escapes are left literal.
+fn decode_query_component(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                let hi = (bytes[i + 1] as char).to_digit(16);
+                let lo = (bytes[i + 2] as char).to_digit(16);
+                if let (Some(hi), Some(lo)) = (hi, lo) {
+                    #[allow(clippy::cast_possible_truncation)]
+                    out.push((hi * 16 + lo) as u8);
+                    i += 3;
+                } else {
+                    out.push(b'%');
+                    i += 1;
+                }
+            }
+            other => {
+                out.push(other);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Stub for `platform-events` / `analytics/summary` (later stories): authorize
