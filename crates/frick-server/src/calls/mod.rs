@@ -12,6 +12,8 @@ mod control_plane;
 mod fake_media_plane;
 mod media_plane;
 pub mod schema;
+mod sfu_backend;
+mod sfu_media_plane;
 
 pub use control_plane::{
     CallActor, CallAuthzReason, CallClock, CallControlPlane, CallError, CallStateReason,
@@ -23,3 +25,8 @@ pub use media_plane::{
     MediaPlaneAdapter, MediaPlaneCapabilities, MediaPlaneError, MediaPlaneFuture,
     MediaPlaneTransport, MediaSession,
 };
+pub use sfu_backend::{
+    FakeSfuBackend, FakeSfuBackendOptions, MintAccessTokenOptions, SfuAccessToken, SfuBackend,
+    SfuBackendError, SfuBackendFuture, SfuRoom,
+};
+pub use sfu_media_plane::SfuMediaPlaneAdapter;
