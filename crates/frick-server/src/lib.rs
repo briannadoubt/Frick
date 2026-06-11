@@ -11,6 +11,7 @@ pub mod auth_routes;
 pub mod authz;
 pub mod blob_processors;
 pub mod boot;
+pub mod calls;
 pub mod cluster;
 pub mod config;
 pub mod cors;
