@@ -949,21 +949,6 @@ public actor FrickSyncSocket {
     /// and clears), this map persists for the life of the socket.
     private var activeSubscriptions: [String: FrickFrame] = [:]
 
-    /// FR-256 (client half) — continuations parked by `subscribeObject` /
-    /// `subscribe(stream:key:)` / `subscribeProjection` until the server
-    /// confirms the subscription is REGISTERED. The gateway sends the initial
-    /// snapshot AFTER registering (FR-256), so its arrival is the registration
-    /// confirmation: an object `Snapshot` / stream `StreamPage` correlated by
-    /// `subscriptionId`, or a projection's initial `ProjectionDelta` keyed by
-    /// the projection `name`. Keyed by that correlation token (subscriptionId
-    /// for objects/streams, name for projections). Resolving on the snapshot —
-    /// rather than when the Subscribe frame is merely sent — closes the window
-    /// where a write issued right after `subscribe...()` returns could race
-    /// ahead of registration. Presence/Signal subscriptions get no snapshot and
-    /// so never park here. A bucket holds every waiter for the same token, all
-    /// resolved on the first matching snapshot.
-    private var pendingRegistrations: [String: [CheckedContinuation<Void, Never>]] = [:]
-
     private var statusValue: FrickSyncStatus = .initial
     private var statusContinuations: [UUID: AsyncStream<FrickSyncStatus>.Continuation] = [:]
 
@@ -1061,37 +1046,6 @@ public actor FrickSyncSocket {
         eventSubscribers.removeValue(forKey: id)
     }
 
-    /// Park the calling task until the server confirms registration of the
-    /// subscription identified by `token` — the `subscriptionId` echoed in the
-    /// initial `Snapshot` (objects) / `StreamPage` (streams), or the projection
-    /// `name` in the initial `ProjectionDelta`. `resolveRegistration(token:)`
-    /// resumes it (FR-256 client half). Returns immediately if the socket is
-    /// already closed — the subscribe replays on reconnect, and a closed socket
-    /// would otherwise never deliver the snapshot that resolves the waiter.
-    private func awaitRegistration(token: String) async {
-        if statusValue.state == .closed { return }
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            pendingRegistrations[token, default: []].append(continuation)
-        }
-    }
-
-    /// Resume every waiter parked on `token`: the initial snapshot/streamPage/
-    /// projectionDelta arrived, so the subscription is registered server-side.
-    private func resolveRegistration(token: String) {
-        guard let waiters = pendingRegistrations.removeValue(forKey: token) else { return }
-        for waiter in waiters { waiter.resume() }
-    }
-
-    /// Resume every parked registration waiter regardless of token — used when
-    /// the connection closes or resets so `subscribe...()` callers don't hang;
-    /// the subscriptions replay (and re-snapshot) on reconnect.
-    private func resolveAllRegistrations() {
-        for (_, waiters) in pendingRegistrations {
-            for waiter in waiters { waiter.resume() }
-        }
-        pendingRegistrations.removeAll()
-    }
-
     /// Fan an inbound event out to every registered subscriber.
     private func broadcast(_ event: FrickInboundEvent) {
         for (_, continuation) in eventSubscribers {
@@ -1106,9 +1060,6 @@ public actor FrickSyncSocket {
             continuation.finish()
         }
         eventSubscribers.removeAll()
-        // Don't strand `subscribe...()` callers awaiting a snapshot that will
-        // never arrive on a finished socket (FR-256).
-        resolveAllRegistrations()
     }
 
     public func connect() {
@@ -1155,11 +1106,6 @@ public actor FrickSyncSocket {
         try await sendOrQueue(requestId: requestId, frame: frame, expectResponse: true)
     }
 
-    /// Subscribe to a `(stream, key)` tail. Resolves once the server has
-    /// REGISTERED the subscription — i.e. when the initial `StreamPage`
-    /// correlated by this subscription's id arrives (FR-256 client half) —
-    /// rather than when the Subscribe frame is merely sent, so a write issued
-    /// right after this returns can no longer race ahead of registration.
     public func subscribe(stream: String, key: String) async throws {
         let subId = UUID().uuidString
         let frame = FrickFrame(kind: .subscribe, payload: .map([
@@ -1171,7 +1117,6 @@ public actor FrickSyncSocket {
         activeSubscriptions["stream:\(stream):\(key)"] = frame
 
         try await sendFrame(frame)
-        await awaitRegistration(token: subId)
     }
 
     /// Subscribe to a presence type (e.g. "CursorState"). Inbound presence
@@ -1214,12 +1159,6 @@ public actor FrickSyncSocket {
         try await sendFrame(frame)
     }
 
-    /// Subscribe to a projection by name. Resolves once the server has
-    /// REGISTERED the subscription — i.e. when the initial `ProjectionDelta`
-    /// snapshot keyed by this projection `name` arrives (FR-256 client half) —
-    /// rather than when the Subscribe frame is merely sent. Projections
-    /// correlate by name (not subscriptionId) because that is what the
-    /// `ProjectionDelta` frame carries.
     public func subscribeProjection(name: String) async throws {
         let subId = UUID().uuidString
         let frame = FrickFrame(kind: .subscribe, payload: .map([
@@ -1230,7 +1169,6 @@ public actor FrickSyncSocket {
         activeSubscriptions["projection:\(name)"] = frame
 
         try await sendFrame(frame)
-        await awaitRegistration(token: name)
     }
 
     /// Subscribe to all objects of `type`. The server replies with a
@@ -1486,8 +1424,6 @@ public actor FrickSyncSocket {
             break
         case .delta:
             handleDelta(payload: frame.payload)
-        case .streamPage:
-            handleStreamPage(payload: frame.payload)
         case .snapshot:
             // Server response to `subscribe { kind: "object" }`. Same
             // `objects` payload as Delta — surface via the existing
@@ -1544,11 +1480,6 @@ public actor FrickSyncSocket {
         // (dropping rows deleted while disconnected), rather than a pure merge
         // that would leave such rows lingering (native-swift-5).
         broadcast(.objectsSnapshot(records: records, cursor: cursor))
-        // FR-256: the object Snapshot is the server's post-registration reply,
-        // so a `subscribeObject` waiter on this subscriptionId can resolve.
-        if let subId = map["subscriptionId"]?.stringValue {
-            resolveRegistration(token: subId)
-        }
     }
 
     private func handleDelta(payload: FrickMsgPackValue) {
@@ -1707,20 +1638,6 @@ public actor FrickSyncSocket {
             }
         }
         broadcast(.projectionDelta(projection: projection, changes: changes))
-        // FR-256: the initial ProjectionDelta is the post-registration reply;
-        // resolve a `subscribeProjection` waiter (projections correlate by name).
-        resolveRegistration(token: projection)
-    }
-
-    /// `StreamPage` (the server's reply to `subscribe { kind: "stream" }`,
-    /// re-sent on reconnect). The Swift client does not yet surface stream pages
-    /// as events, but the frame confirms registration, so resolve any
-    /// `subscribe(stream:key:)` waiter parked on this `subscriptionId` (FR-256).
-    private func handleStreamPage(payload: FrickMsgPackValue) {
-        guard let map = payload.mapValue else { return }
-        if let subId = map["subscriptionId"]?.stringValue {
-            resolveRegistration(token: subId)
-        }
     }
 
     private func handlePresenceDelta(payload: FrickMsgPackValue) {
