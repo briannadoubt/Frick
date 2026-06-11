@@ -127,6 +127,36 @@ impl AllowedOrigin {
     }
 }
 
+/// One generic-OIDC provider an app plugs in via `FRICK_OIDC_PROVIDERS`
+/// (FR-270). Ported from the deleted TS `OidcProviderConfig` (`auth/oidc.ts`).
+///
+/// Where Apple/Google hard-wire a single issuer + JWKS URL, this is
+/// config-driven: an app declares one or more standards-compliant OIDC issuers
+/// (Okta, Auth0, Microsoft Entra, Keycloak, …) keyed by a stable, URL-safe
+/// `id`, and Frick verifies the supplied `id_token` against that provider's
+/// published JWKS exactly the way the Google path does. The `:id` segment of
+/// `POST /auth/oidc/:id/verify` selects the provider; an unknown id is a 404 so
+/// a token is NEVER accepted for an unconfigured provider.
+///
+/// SAML is intentionally out of scope for FR-270 (tracked separately); only the
+/// OIDC half is modeled here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OidcProviderConfig {
+    /// App-chosen stable id used in the route (`/auth/oidc/:id/verify`) and to
+    /// scope the account handle (`oidc:<id>:<sub>`). Unique within the registry.
+    pub id: String,
+    /// Expected `iss` claim, e.g. `https://example.okta.com`. The verified
+    /// id-token's `iss` must equal this exactly.
+    pub issuer: String,
+    /// The expected `aud` value(s) — the OAuth client id(s) registered with the
+    /// provider. The id-token's `aud` must match one of these. Never empty.
+    pub audiences: Vec<String>,
+    /// The provider's JWKS endpoint, resolved through the [`JwksProvider`] seam.
+    ///
+    /// [`JwksProvider`]: crate::auth::jwks::JwksProvider
+    pub jwks_uri: String,
+}
+
 /// Operational limits (`FrickLimits`, `src/limits.ts`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrickLimits {
@@ -237,6 +267,11 @@ pub struct FrickConfig {
     /// (comma list). Empty ⇒ the `/auth/google/verify` route answers "provider
     /// not configured".
     pub google_client_ids: Vec<String>,
+    /// Generic OIDC providers (FR-270), keyed by `id`, from
+    /// `FRICK_OIDC_PROVIDERS` (a JSON array). Each entry pins one issuer +
+    /// audience(s) + JWKS endpoint for `POST /auth/oidc/:id/verify`. Empty ⇒
+    /// every `/auth/oidc/:id/verify` answers "provider not configured" (404).
+    pub oidc_providers: Vec<OidcProviderConfig>,
     pub limits: FrickLimits,
 }
 
@@ -245,6 +280,13 @@ impl FrickConfig {
     #[must_use]
     pub fn admin_enabled(&self) -> bool {
         self.admin_token.is_some()
+    }
+
+    /// Look up a configured OIDC provider by its `id` (FR-270). `None` ⇒ the
+    /// route returns 404 `providerNotConfigured` rather than accepting a token.
+    #[must_use]
+    pub fn oidc_provider(&self, id: &str) -> Option<&OidcProviderConfig> {
+        self.oidc_providers.iter().find(|p| p.id == id)
     }
 }
 
@@ -328,6 +370,113 @@ fn parse_comma_list(env: &dyn EnvSource, key: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Parse the OIDC provider registry from `FRICK_OIDC_PROVIDERS` (FR-270).
+///
+/// The value is a JSON array of objects. Each object is:
+/// ```json
+/// [
+///   {
+///     "id": "okta",
+///     "issuer": "https://example.okta.com",
+///     "audiences": ["0oa1b2c3client"],
+///     "jwksUri": "https://example.okta.com/oauth2/v1/keys"
+///   }
+/// ]
+/// ```
+/// A single string `audience` is also accepted as shorthand for a one-element
+/// `audiences`. Absent/empty ⇒ no providers (every `/auth/oidc/:id/verify`
+/// answers 404). Every field is required and non-empty; the `id`s must be
+/// unique. Any structural error is fatal at load time — the same failure mode
+/// the TS used when `identityProviders.oidc` had a duplicate/invalid entry.
+/// `aud` shorthand in `FRICK_OIDC_PROVIDERS`: a single string OR an array of
+/// strings.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum AudiencesField {
+    One(String),
+    Many(Vec<String>),
+}
+
+/// The raw JSON shape of one `FRICK_OIDC_PROVIDERS` entry, before validation.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawOidcProvider {
+    id: String,
+    issuer: String,
+    #[serde(default)]
+    audience: Option<AudiencesField>,
+    #[serde(default)]
+    audiences: Option<AudiencesField>,
+    jwks_uri: String,
+}
+
+fn parse_oidc_providers(env: &dyn EnvSource) -> Result<Vec<OidcProviderConfig>> {
+    let Some(raw) = read(env, "FRICK_OIDC_PROVIDERS") else {
+        return Ok(Vec::new());
+    };
+
+    let parsed: Vec<RawOidcProvider> = serde_json::from_str(&raw).map_err(|err| {
+        FrickConfigError::new(format!(
+            "Invalid FRICK_OIDC_PROVIDERS: expected a JSON array of {{id, issuer, audiences, jwksUri}}: {err}"
+        ))
+    })?;
+
+    let mut providers = Vec::with_capacity(parsed.len());
+    let mut seen_ids = std::collections::BTreeSet::new();
+    for raw in parsed {
+        let id = raw.id.trim().to_string();
+        if id.is_empty() {
+            return Err(FrickConfigError::new(
+                "FRICK_OIDC_PROVIDERS entry has an empty \"id\"",
+            ));
+        }
+        if !seen_ids.insert(id.clone()) {
+            return Err(FrickConfigError::new(format!(
+                "FRICK_OIDC_PROVIDERS has a duplicate provider id \"{id}\""
+            )));
+        }
+        let issuer = raw.issuer.trim().to_string();
+        if issuer.is_empty() {
+            return Err(FrickConfigError::new(format!(
+                "FRICK_OIDC_PROVIDERS provider \"{id}\" has an empty \"issuer\""
+            )));
+        }
+        let jwks_uri = raw.jwks_uri.trim().to_string();
+        if jwks_uri.is_empty() {
+            return Err(FrickConfigError::new(format!(
+                "FRICK_OIDC_PROVIDERS provider \"{id}\" has an empty \"jwksUri\""
+            )));
+        }
+        // `audiences` wins; `audience` is the single-value shorthand. At least
+        // one non-empty audience is required so a token's `aud` always has
+        // something to match — we never accept an unaudienced OIDC token.
+        let audiences: Vec<String> = match (raw.audiences, raw.audience) {
+            (Some(field), _) | (None, Some(field)) => match field {
+                AudiencesField::One(value) => vec![value],
+                AudiencesField::Many(values) => values,
+            },
+            (None, None) => Vec::new(),
+        }
+        .into_iter()
+        .map(|a| a.trim().to_string())
+        .filter(|a| !a.is_empty())
+        .collect();
+        if audiences.is_empty() {
+            return Err(FrickConfigError::new(format!(
+                "FRICK_OIDC_PROVIDERS provider \"{id}\" needs at least one audience"
+            )));
+        }
+
+        providers.push(OidcProviderConfig {
+            id,
+            issuer,
+            audiences,
+            jwks_uri,
+        });
+    }
+    Ok(providers)
 }
 
 /// Parse one allowlist entry (`config.ts:721-800`). `*` is the wildcard-all;
@@ -561,6 +710,7 @@ pub fn load_frick_config(env: &dyn EnvSource) -> Result<FrickConfig> {
         .unwrap_or(0),
         apple_audiences: parse_comma_list(env, "FRICK_APPLE_AUDIENCES"),
         google_client_ids: parse_comma_list(env, "FRICK_GOOGLE_CLIENT_IDS"),
+        oidc_providers: parse_oidc_providers(env)?,
         limits: load_limits(env)?,
     };
 
@@ -770,6 +920,65 @@ mod tests {
         let config = load_frick_config(&env(&[("FRICK_SESSION_TTL_SECONDS", "-1")])).unwrap();
         assert!((config.session_ttl_seconds - (-1.0)).abs() < f64::EPSILON);
         assert!(load_frick_config(&env(&[("FRICK_SESSION_TTL_SECONDS", "abc")])).is_err());
+    }
+
+    #[test]
+    fn oidc_providers_default_empty() {
+        let config = load_frick_config(&env(&[])).unwrap();
+        assert!(config.oidc_providers.is_empty());
+        assert!(config.oidc_provider("okta").is_none());
+    }
+
+    #[test]
+    fn oidc_providers_parse_from_json_array() {
+        let config = load_frick_config(&env(&[(
+            "FRICK_OIDC_PROVIDERS",
+            r#"[
+                {"id":"okta","issuer":"https://example.okta.com",
+                 "audiences":["client-a","client-b"],
+                 "jwksUri":"https://example.okta.com/oauth2/v1/keys"},
+                {"id":"auth0","issuer":"https://example.auth0.com/",
+                 "audience":"single-client",
+                 "jwksUri":"https://example.auth0.com/.well-known/jwks.json"}
+            ]"#,
+        )]))
+        .unwrap();
+        assert_eq!(config.oidc_providers.len(), 2);
+        let okta = config.oidc_provider("okta").unwrap();
+        assert_eq!(okta.issuer, "https://example.okta.com");
+        assert_eq!(okta.audiences, vec!["client-a", "client-b"]);
+        // The single-string `audience` shorthand becomes a one-element list.
+        let auth0 = config.oidc_provider("auth0").unwrap();
+        assert_eq!(auth0.audiences, vec!["single-client"]);
+    }
+
+    #[test]
+    fn oidc_providers_reject_duplicate_id() {
+        let err = load_frick_config(&env(&[(
+            "FRICK_OIDC_PROVIDERS",
+            r#"[
+                {"id":"okta","issuer":"https://a","audiences":["c"],"jwksUri":"https://a/keys"},
+                {"id":"okta","issuer":"https://b","audiences":["c"],"jwksUri":"https://b/keys"}
+            ]"#,
+        )]))
+        .unwrap_err();
+        assert!(err.0.contains("duplicate provider id"), "{}", err.0);
+    }
+
+    #[test]
+    fn oidc_providers_reject_missing_audience() {
+        let err = load_frick_config(&env(&[(
+            "FRICK_OIDC_PROVIDERS",
+            r#"[{"id":"okta","issuer":"https://a","jwksUri":"https://a/keys"}]"#,
+        )]))
+        .unwrap_err();
+        assert!(err.0.contains("at least one audience"), "{}", err.0);
+    }
+
+    #[test]
+    fn oidc_providers_reject_invalid_json() {
+        let err = load_frick_config(&env(&[("FRICK_OIDC_PROVIDERS", "not json")])).unwrap_err();
+        assert!(err.0.contains("Invalid FRICK_OIDC_PROVIDERS"), "{}", err.0);
     }
 
     #[test]

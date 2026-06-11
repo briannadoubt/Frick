@@ -22,7 +22,7 @@
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
@@ -44,14 +44,18 @@ use crate::principal::DEFAULT_TENANT_ID;
 /// [`crate::auth::jwks::ReqwestJwksProvider`]; tests inject a fixed key set.
 pub type SharedJwksProvider = Arc<dyn JwksProvider>;
 
-/// `POST /auth/apple/verify` + `/auth/google/verify` + `/auth/apple/notifications`.
-/// The JWKS provider is closed over via per-route state so it can be injected.
+/// The provider-verify routes: `POST /auth/apple/verify`, `/auth/google/verify`,
+/// `/auth/apple/notifications`, and `/auth/oidc/:id/verify` (FR-270). The JWKS
+/// provider is closed over via per-route state so it can be injected.
 pub fn provider_auth_router(state: AppState, jwks: SharedJwksProvider) -> axum::Router {
     let ctx = ProviderCtx { state, jwks };
     axum::Router::new()
         .route("/auth/apple/verify", post(apple_verify))
         .route("/auth/google/verify", post(google_verify))
         .route("/auth/apple/notifications", post(apple_notifications))
+        // Generic OIDC id-token verify, one route covering every configured
+        // provider; the `:id` segment selects the provider (FR-270).
+        .route("/auth/oidc/:id/verify", post(oidc_verify))
         .with_state(ctx)
 }
 
@@ -96,6 +100,16 @@ struct GoogleVerifyBody {
 #[serde(rename_all = "camelCase")]
 struct AppleNotificationsBody {
     payload: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OidcVerifyBody {
+    id_token: Option<String>,
+    nonce: Option<String>,
+    device_id: Option<String>,
+    replica_id: Option<String>,
+    tenant_id: Option<String>,
 }
 
 /// `POST /auth/apple/verify`.
@@ -228,6 +242,116 @@ async fn google_verify(
         state,
         &request_id,
         "google",
+        &tenant_id,
+        &verified,
+        &display_name,
+        body.device_id,
+        body.replica_id,
+        now,
+    )
+    .await
+}
+
+/// `POST /auth/oidc/:id/verify` (FR-270). The generic OIDC id-token verify:
+/// where Apple/Google hard-wire one issuer, this selects a configured provider
+/// by the `:id` path segment and verifies the id-token against THAT provider's
+/// issuer / audiences / JWKS endpoint through the SAME [`verify_id_token`] path.
+///
+/// Differences from Apple/Google (ported from the deleted TS `handleOidcVerify`
+/// in `auth/identity-routes.ts`):
+/// - An unknown / unconfigured `{id}` is a 404 `providerNotConfigured` — we
+///   never accept a token for a provider we don't have an issuer/JWKS for.
+/// - The account handle is provider-id-scoped (`oidc:<id>:<sub>`) so two OIDC
+///   issuers that reuse the same `sub` can never alias onto one account.
+/// - The AuthLimiter label is `oidc-verify:<id>` (per-provider, keyed by IP).
+/// - **A nonce is REQUIRED** here (OIDC replay defense): the request must carry
+///   a `nonce` and it must match the token's `nonce` claim. A missing nonce is a
+///   generic 401, exactly like a mismatched one — no oracle.
+async fn oidc_verify(
+    State(ctx): State<ProviderCtx>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<OidcVerifyBody>,
+) -> Response {
+    let request_id = new_request_id();
+    let state = &ctx.state;
+
+    // Unknown provider id ⇒ 404 provider-not-configured. We resolve the issuer /
+    // audiences / JWKS from the registry BEFORE anything else, so a token for an
+    // unconfigured provider is never even verified.
+    let Some(provider) = state.config.oidc_provider(&id) else {
+        return provider_not_configured(&request_id, &format!("oidc:{id}"));
+    };
+
+    let tenant_id = body
+        .tenant_id
+        .clone()
+        .unwrap_or_else(|| DEFAULT_TENANT_ID.to_string());
+    let now = now_ms();
+
+    // Shared AuthLimiter (label "oidc-verify:<id>") keyed by client IP — the
+    // id-token isn't a stable per-user identifier yet (TS FR-29).
+    let limiter_label = format!("oidc-verify:{id}");
+    if let Err(error) = precheck(state, &limiter_label, &tenant_id, &client_ip(&headers), now).await
+    {
+        return respond_error(&error, &request_id);
+    }
+
+    let Some(token) = body.id_token.as_deref().filter(|t| !t.is_empty()) else {
+        return respond_error(&bad_request("idToken required"), &request_id);
+    };
+
+    // OIDC enforces the nonce: it MUST be supplied and MUST match the token
+    // claim. A missing nonce collapses to the same generic 401 as a mismatch so
+    // the client learns nothing about which check failed.
+    let Some(nonce) = body.nonce.as_deref().filter(|n| !n.is_empty()) else {
+        tracing::info!(
+            target: "frick.auth",
+            provider = "oidc",
+            id = %id,
+            code = "missing_nonce",
+            "frick.auth.oidc_verify_failed"
+        );
+        return respond_error(&invalid_provider_token(), &request_id);
+    };
+
+    let issuer = provider.issuer.clone();
+    let issuers = [issuer.as_str()];
+    let params = VerifyParams {
+        issuers: &issuers,
+        jwks_uri: &provider.jwks_uri,
+        audiences: &provider.audiences,
+        expected_nonce: Some(nonce),
+    };
+    let verified = match verify_id_token(token, &params, ctx.jwks.as_ref(), now).await {
+        Ok(verified) => verified,
+        Err(error) => {
+            tracing::info!(
+                target: "frick.auth",
+                provider = "oidc",
+                id = %id,
+                code = error.code(),
+                "frick.auth.oidc_verify_failed"
+            );
+            return respond_error(&invalid_provider_token(), &request_id);
+        }
+    };
+
+    // Standard OIDC display-name resolution: `name`, else the email local-part,
+    // else a generic fallback (mirrors the TS `defaultDisplayName`).
+    let display_name = verified
+        .name
+        .clone()
+        .or_else(|| verified.email.as_deref().map(email_local_part))
+        .unwrap_or_else(|| "Frick user".to_string());
+
+    // The provider label is the id-scoped `oidc:<id>` so the handle becomes
+    // `oidc:<id>:<sub>` (see `provider_handle`) — provider-id-scoped subjects.
+    let provider_label = format!("oidc:{id}");
+    finish_provider_login(
+        state,
+        &request_id,
+        &provider_label,
         &tenant_id,
         &verified,
         &display_name,
@@ -558,6 +682,10 @@ mod tests {
     const KID: &str = "test-key-1";
     const APPLE_AUD: &str = "com.example.frick";
     const GOOGLE_AUD: &str = "client-123.apps.googleusercontent.com";
+    const OIDC_ID: &str = "okta";
+    const OIDC_ISSUER: &str = "https://example.okta.com";
+    const OIDC_AUD: &str = "0oa-client-okta";
+    const OIDC_JWKS_URI: &str = "https://example.okta.com/oauth2/v1/keys";
 
     fn test_key() -> &'static RsaPrivateKey {
         static KEY: OnceLock<RsaPrivateKey> = OnceLock::new();
@@ -600,6 +728,13 @@ mod tests {
         env.insert(
             "FRICK_GOOGLE_CLIENT_IDS".to_string(),
             GOOGLE_AUD.to_string(),
+        );
+        env.insert(
+            "FRICK_OIDC_PROVIDERS".to_string(),
+            format!(
+                r#"[{{"id":"{OIDC_ID}","issuer":"{OIDC_ISSUER}",
+                     "audiences":["{OIDC_AUD}"],"jwksUri":"{OIDC_JWKS_URI}"}}]"#
+            ),
         );
         load_frick_config(&env).unwrap()
     }
@@ -935,6 +1070,363 @@ mod tests {
         assert_eq!(status, axum::http::StatusCode::OK);
         assert_eq!(body["applied"], false);
         assert_eq!(body["reason"], "unknown_user");
+        srv.close().await;
+    }
+
+    // ----- Generic OIDC (FR-270) -----------------------------------------
+
+    /// Mint a valid OIDC id-token for the configured `okta` provider, with an
+    /// optional nonce baked into the claims.
+    fn oidc_token(sub: &str, nonce: Option<&str>) -> String {
+        let mut claims = json!({
+            "iss": OIDC_ISSUER,
+            "sub": sub,
+            "aud": OIDC_AUD,
+            "exp": now_seconds() + 3600,
+            "email": "user@example.com",
+            "email_verified": true,
+            "name": "Olive C",
+        });
+        if let Some(nonce) = nonce {
+            claims["nonce"] = json!(nonce);
+        }
+        sign(claims)
+    }
+
+    const OIDC_ID_2: &str = "auth0";
+    const OIDC_ISSUER_2: &str = "https://example.auth0.com";
+
+    /// A config with TWO OIDC providers that share an audience and (via the
+    /// `FixedJwksProvider`) the same signing key, so issuer-pinning is the SOLE
+    /// defense against cross-provider token replay.
+    fn two_provider_config() -> crate::config::FrickConfig {
+        let mut env = BTreeMap::new();
+        env.insert("FRICK_ENV".to_string(), "test".to_string());
+        env.insert("FRICK_DB_PATH".to_string(), ":memory:".to_string());
+        env.insert("FRICK_PORT".to_string(), "0".to_string());
+        env.insert(
+            "FRICK_OIDC_PROVIDERS".to_string(),
+            format!(
+                r#"[{{"id":"{OIDC_ID}","issuer":"{OIDC_ISSUER}","audiences":["{OIDC_AUD}"],"jwksUri":"{OIDC_JWKS_URI}"}},
+                     {{"id":"{OIDC_ID_2}","issuer":"{OIDC_ISSUER_2}","audiences":["{OIDC_AUD}"],"jwksUri":"{OIDC_JWKS_URI}"}}]"#
+            ),
+        );
+        load_frick_config(&env).unwrap()
+    }
+
+    async fn two_provider_server() -> crate::boot::FrickServer {
+        create_frick_server(two_provider_config(), frick_protocol::foundation_schema())
+            .await
+            .unwrap()
+    }
+
+    fn oidc_token_for(issuer: &str, sub: &str, nonce: &str) -> String {
+        sign(json!({
+            "iss": issuer,
+            "sub": sub,
+            "aud": OIDC_AUD,
+            "exp": now_seconds() + 3600,
+            "email": "user@example.com",
+            "email_verified": true,
+            "name": "X",
+            "nonce": nonce,
+        }))
+    }
+
+    /// A valid token for provider A must NOT authenticate against provider B's
+    /// route — issuer-pinning prevents cross-provider account takeover even when
+    /// the two providers share an audience and signing key.
+    #[tokio::test]
+    async fn oidc_token_for_one_provider_is_rejected_by_another() {
+        let mut srv = two_provider_server().await;
+        // Minted by auth0 (iss = OIDC_ISSUER_2).
+        let token = oidc_token_for(OIDC_ISSUER_2, "shared-sub", "n1");
+
+        // Replayed against okta's route ⇒ 401 (issuer mismatch is the only
+        // thing standing between A's token and a B account).
+        let (status, body) = post(
+            &srv,
+            "/auth/oidc/okta/verify",
+            json!({ "idToken": token, "nonce": "n1" }),
+        )
+        .await;
+        assert_eq!(
+            status,
+            axum::http::StatusCode::UNAUTHORIZED,
+            "cross-provider replay must fail: {body}"
+        );
+        assert_eq!(body["code"], "auth.unauthenticated");
+
+        // The same token against its OWN provider's route ⇒ 201.
+        let (status, body) = post(
+            &srv,
+            "/auth/oidc/auth0/verify",
+            json!({ "idToken": token, "nonce": "n1" }),
+        )
+        .await;
+        assert_eq!(
+            status,
+            axum::http::StatusCode::CREATED,
+            "own-provider must succeed: {body}"
+        );
+        assert_eq!(body["handle"], "oidc:auth0:shared-sub");
+        srv.close().await;
+    }
+
+    /// Two providers presenting the SAME `sub` yield two DISTINCT accounts
+    /// (provider-id-scoped handle), so a sub collision across IdPs cannot alias
+    /// one user onto another.
+    #[tokio::test]
+    async fn oidc_same_sub_across_providers_is_distinct_accounts() {
+        let mut srv = two_provider_server().await;
+        let okta = oidc_token_for(OIDC_ISSUER, "123", "n1");
+        let auth0 = oidc_token_for(OIDC_ISSUER_2, "123", "n1");
+
+        let (s1, b1) = post(
+            &srv,
+            "/auth/oidc/okta/verify",
+            json!({ "idToken": okta, "nonce": "n1" }),
+        )
+        .await;
+        assert_eq!(s1, axum::http::StatusCode::CREATED);
+        let (s2, b2) = post(
+            &srv,
+            "/auth/oidc/auth0/verify",
+            json!({ "idToken": auth0, "nonce": "n1" }),
+        )
+        .await;
+        assert_eq!(s2, axum::http::StatusCode::CREATED);
+
+        assert_eq!(b1["handle"], "oidc:okta:123");
+        assert_eq!(b2["handle"], "oidc:auth0:123");
+        assert_ne!(
+            b1["userId"], b2["userId"],
+            "same sub, different providers ⇒ distinct accounts"
+        );
+        srv.close().await;
+    }
+
+    #[tokio::test]
+    async fn oidc_verify_mints_session_with_matching_nonce_and_is_idempotent() {
+        let mut srv = server().await;
+        let token = oidc_token("oidc-sub-1", Some("nonce-abc"));
+
+        let (status, body) = post(
+            &srv,
+            "/auth/oidc/okta/verify",
+            json!({ "idToken": token, "nonce": "nonce-abc" }),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::CREATED, "body: {body}");
+        assert_eq!(body["isNewUser"], true);
+        // Provider-id-scoped handle: `oidc:<id>:<sub>`.
+        assert_eq!(body["handle"], "oidc:okta:oidc-sub-1");
+        assert_eq!(body["provider"], "oidc:okta");
+        assert_eq!(body["displayName"], "Olive C");
+
+        // The minted session resolves to a principal (end-to-end auth).
+        let session_token = body["sessionToken"].as_str().unwrap();
+        let principal =
+            principal_from_active_session_token(&srv.state.store, session_token, now_ms())
+                .await
+                .unwrap();
+        assert_eq!(principal.user_id, body["userId"].as_str().unwrap());
+
+        // Repeat ⇒ idempotent: 200 (not 201), same userId, reused account.
+        let first_user = body["userId"].as_str().unwrap().to_string();
+        let (s2, b2) = post(
+            &srv,
+            "/auth/oidc/okta/verify",
+            json!({ "idToken": token, "nonce": "nonce-abc" }),
+        )
+        .await;
+        assert_eq!(s2, axum::http::StatusCode::OK);
+        assert_eq!(b2["isNewUser"], false);
+        assert_eq!(b2["userId"].as_str().unwrap(), first_user);
+        srv.close().await;
+    }
+
+    #[tokio::test]
+    async fn oidc_verify_unknown_provider_is_404() {
+        let mut srv = server().await;
+        // A token that WOULD verify against `okta`, but the route id is unknown.
+        let token = oidc_token("oidc-sub-x", Some("nonce-abc"));
+        let (status, body) = post(
+            &srv,
+            "/auth/oidc/keycloak/verify",
+            json!({ "idToken": token, "nonce": "nonce-abc" }),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "body: {body}");
+        srv.close().await;
+    }
+
+    #[tokio::test]
+    async fn oidc_verify_requires_nonce() {
+        let mut srv = server().await;
+
+        // Token carries a nonce, but the request omits it ⇒ generic 401.
+        let token = oidc_token("oidc-sub-2", Some("nonce-abc"));
+        let (status, body) =
+            post(&srv, "/auth/oidc/okta/verify", json!({ "idToken": token })).await;
+        assert_eq!(
+            status,
+            axum::http::StatusCode::UNAUTHORIZED,
+            "missing nonce"
+        );
+        assert_eq!(body["code"], "auth.unauthenticated");
+
+        // Request supplies a nonce, but the token has none ⇒ mismatch ⇒ 401.
+        let token = oidc_token("oidc-sub-2", None);
+        let (status, _) = post(
+            &srv,
+            "/auth/oidc/okta/verify",
+            json!({ "idToken": token, "nonce": "nonce-abc" }),
+        )
+        .await;
+        assert_eq!(
+            status,
+            axum::http::StatusCode::UNAUTHORIZED,
+            "token no nonce"
+        );
+
+        // Both present but differ ⇒ 401.
+        let token = oidc_token("oidc-sub-2", Some("the-real-nonce"));
+        let (status, _) = post(
+            &srv,
+            "/auth/oidc/okta/verify",
+            json!({ "idToken": token, "nonce": "WRONG" }),
+        )
+        .await;
+        assert_eq!(
+            status,
+            axum::http::StatusCode::UNAUTHORIZED,
+            "nonce mismatch"
+        );
+        srv.close().await;
+    }
+
+    #[tokio::test]
+    async fn oidc_verify_rejects_wrong_aud_and_wrong_iss() {
+        let mut srv = server().await;
+
+        // Wrong audience.
+        let token = sign(json!({
+            "iss": OIDC_ISSUER, "sub": "s", "aud": "some-other-client",
+            "exp": now_seconds() + 3600, "nonce": "n",
+        }));
+        let (status, body) = post(
+            &srv,
+            "/auth/oidc/okta/verify",
+            json!({ "idToken": token, "nonce": "n" }),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::UNAUTHORIZED, "wrong aud");
+        assert_eq!(body["code"], "auth.unauthenticated");
+
+        // Wrong issuer (e.g. a token from a DIFFERENT IdP that reused our aud).
+        let token = sign(json!({
+            "iss": "https://evil.example", "sub": "s", "aud": OIDC_AUD,
+            "exp": now_seconds() + 3600, "nonce": "n",
+        }));
+        let (status, _) = post(
+            &srv,
+            "/auth/oidc/okta/verify",
+            json!({ "idToken": token, "nonce": "n" }),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::UNAUTHORIZED, "wrong iss");
+        srv.close().await;
+    }
+
+    #[tokio::test]
+    async fn oidc_verify_rejects_expired_and_alg_forgery() {
+        let mut srv = server().await;
+
+        // Expired.
+        let expired = sign(json!({
+            "iss": OIDC_ISSUER, "sub": "s", "aud": OIDC_AUD,
+            "exp": now_seconds() - 3600, "nonce": "n",
+        }));
+        let (s, _) = post(
+            &srv,
+            "/auth/oidc/okta/verify",
+            json!({ "idToken": expired, "nonce": "n" }),
+        )
+        .await;
+        assert_eq!(s, axum::http::StatusCode::UNAUTHORIZED, "expired");
+
+        // alg=none / HS256 alg-confusion forgeries — rejected at the header.
+        let claims = json!({
+            "iss": OIDC_ISSUER, "sub": "s", "aud": OIDC_AUD,
+            "exp": now_seconds() + 3600, "nonce": "n",
+        });
+        let payload_b64 = B64.encode(serde_json::to_vec(&claims).unwrap());
+        for alg in ["none", "HS256"] {
+            let header_b64 =
+                B64.encode(serde_json::to_vec(&json!({ "alg": alg, "kid": KID })).unwrap());
+            let token = format!("{header_b64}.{payload_b64}.AAAA");
+            let (status, _) = post(
+                &srv,
+                "/auth/oidc/okta/verify",
+                json!({ "idToken": token, "nonce": "n" }),
+            )
+            .await;
+            assert_eq!(status, axum::http::StatusCode::UNAUTHORIZED, "alg {alg}");
+        }
+        srv.close().await;
+    }
+
+    #[tokio::test]
+    async fn oidc_verify_rejects_bad_signature() {
+        let mut srv = server().await;
+        // A token signed with the real test key, but the JWKS publishes a
+        // DIFFERENT key under the same kid — signature must fail.
+        let token = oidc_token("s", Some("n"));
+        let other = RsaPrivateKey::new(&mut rand::rngs::OsRng, 2048).unwrap();
+        let bad_jwks = Jwks::new(vec![RsaJwk {
+            kid: KID.to_string(),
+            n: B64.encode(other.n().to_bytes_be()),
+            e: B64.encode(other.e().to_bytes_be()),
+        }]);
+        let bad_provider: SharedJwksProvider = Arc::new(FixedJwksProvider::new(bad_jwks));
+        let router = provider_auth_router(Arc::clone(&srv.state), bad_provider);
+        let response = {
+            use tower::ServiceExt;
+            let req = axum::http::Request::builder()
+                .method("POST")
+                .uri("/auth/oidc/okta/verify")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(
+                    serde_json::to_vec(&json!({ "idToken": token, "nonce": "n" })).unwrap(),
+                ))
+                .unwrap();
+            router.oneshot(req).await.unwrap()
+        };
+        assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+        srv.close().await;
+    }
+
+    #[tokio::test]
+    async fn oidc_verify_404_when_no_providers_configured() {
+        // No FRICK_OIDC_PROVIDERS ⇒ every /auth/oidc/:id/verify is a 404.
+        let mut env = BTreeMap::new();
+        env.insert("FRICK_ENV".to_string(), "test".to_string());
+        env.insert("FRICK_DB_PATH".to_string(), ":memory:".to_string());
+        env.insert("FRICK_PORT".to_string(), "0".to_string());
+        let config = load_frick_config(&env).unwrap();
+        let mut srv = create_frick_server(config, frick_protocol::foundation_schema())
+            .await
+            .unwrap();
+
+        let token = oidc_token("s", Some("n"));
+        let (status, _) = post(
+            &srv,
+            "/auth/oidc/okta/verify",
+            json!({ "idToken": token, "nonce": "n" }),
+        )
+        .await;
+        assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
         srv.close().await;
     }
 }
