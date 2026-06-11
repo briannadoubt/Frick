@@ -226,6 +226,17 @@ pub struct FrickConfig {
     pub idempotency_key_retention_ms: i64,
     pub devtools_events_retention_ms: i64,
     pub expired_session_retention_grace_ms: i64,
+    /// Sign in with Apple audience(s) (FR-269): the iOS bundle id(s) and/or
+    /// Services id(s) the verified id-token's `aud` must match. From
+    /// `FRICK_APPLE_AUDIENCES` (comma list). Empty ⇒ the `/auth/apple/*` routes
+    /// answer "provider not configured" rather than accepting unaudienced
+    /// tokens.
+    pub apple_audiences: Vec<String>,
+    /// Sign in with Google audience(s) (FR-269): the OAuth client id(s) the
+    /// verified id-token's `aud` must match. From `FRICK_GOOGLE_CLIENT_IDS`
+    /// (comma list). Empty ⇒ the `/auth/google/verify` route answers "provider
+    /// not configured".
+    pub google_client_ids: Vec<String>,
     pub limits: FrickLimits,
 }
 
@@ -548,6 +559,8 @@ pub fn load_frick_config(env: &dyn EnvSource) -> Result<FrickConfig> {
             "FRICK_EXPIRED_SESSION_RETENTION_GRACE_MS",
         )?
         .unwrap_or(0),
+        apple_audiences: parse_comma_list(env, "FRICK_APPLE_AUDIENCES"),
+        google_client_ids: parse_comma_list(env, "FRICK_GOOGLE_CLIENT_IDS"),
         limits: load_limits(env)?,
     };
 

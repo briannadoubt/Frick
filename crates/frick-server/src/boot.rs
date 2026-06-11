@@ -32,6 +32,10 @@ pub struct FrickServer {
     /// aborted on [`FrickServer::close`] (or drop). `None` before `listen`.
     worker: Option<JobWorkerHandle>,
     bound_port: u16,
+    /// JWKS resolver for the Sign in with Apple / Google verify routes (FR-269).
+    /// Production wires a cached `reqwest` fetcher; tests inject a fixed key set
+    /// so the provider-verify path runs offline.
+    jwks_provider: crate::auth::SharedJwksProvider,
 }
 
 /// Construction failure.
@@ -63,6 +67,10 @@ pub struct BootSeams {
     /// [`crate::email::RecordingEmailAdapter`]; FR-271 will plug a Resend
     /// adapter here. This is the documented email-seam injection point.
     pub email_router: Arc<crate::email::EmailRouter>,
+    /// JWKS resolver for the Apple/Google id-token verify routes (FR-269).
+    /// Production fetches + caches over HTTPS; tests inject a fixed key set so
+    /// the whole verification path is exercised without a network.
+    pub jwks_provider: crate::auth::SharedJwksProvider,
 }
 
 impl BootSeams {
@@ -78,6 +86,9 @@ impl BootSeams {
             // Default: a Noop-backed router. `forgot-password` still returns 200
             // (the Noop adapter logs + succeeds); FR-271 swaps in Resend.
             email_router: Arc::new(crate::email::EmailRouter::noop()),
+            // Production JWKS: a cached `reqwest` fetcher hitting Apple/Google's
+            // published key sets (refetched on an unknown `kid`).
+            jwks_provider: Arc::new(crate::auth::ReqwestJwksProvider::default()),
         }
     }
 }
@@ -197,6 +208,7 @@ pub async fn create_frick_server_with_seams(
         join: None,
         worker: None,
         bound_port: 0,
+        jwks_provider: seams.jwks_provider,
     })
 }
 
@@ -211,6 +223,12 @@ impl FrickServer {
 
         let router = public_router(Arc::clone(&self.state))
             .merge(crate::auth_routes::auth_router(Arc::clone(&self.state)))
+            // Sign in with Apple / Google id-token verify routes (FR-269). The
+            // JWKS resolver is the injected seam (cached `reqwest` in prod).
+            .merge(crate::auth::provider_auth_router(
+                Arc::clone(&self.state),
+                Arc::clone(&self.jwks_provider),
+            ))
             .merge(crate::routes::dataplane_router(Arc::clone(&self.state)))
             .merge(crate::routes::admin::admin_router(Arc::clone(&self.state)))
             // Admin push credential + deliver routes (FR-265). Dispatches an

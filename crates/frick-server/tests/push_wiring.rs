@@ -104,6 +104,9 @@ fn recording_seams(apns: Arc<RecordingApnsTransport>) -> BootSeams {
             web_push: Arc::new(UnavailableWebPushTransport),
         },
         email_router: Arc::new(frick_server::EmailRouter::noop()),
+        // FR-269: the provider-verify JWKS seam is unused by these push tests;
+        // take the production default.
+        jwks_provider: BootSeams::production().jwks_provider,
     }
 }
 

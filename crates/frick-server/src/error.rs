@@ -51,6 +51,12 @@ pub enum ServerError {
     InvalidStreamCursor,
     #[error("projection not found: {projection}")]
     ProjectionNotFound { projection: String },
+    /// A `/auth/<provider>/*` route was hit but no audience/client-id is
+    /// configured for that provider (FR-269). → 404 (mirrors the TS
+    /// `404 { error: "<provider>_provider_not_configured" }`): the route is
+    /// effectively absent rather than accepting an unaudienced token.
+    #[error("{provider} provider not configured")]
+    ProviderNotConfigured { provider: String },
     #[error("Search index \"{index}\" not found")]
     SearchIndexNotFound { index: String },
     /// A search query was rejected (q too large, malformed filter, reserved
@@ -85,7 +91,9 @@ impl ServerError {
                 _ => 413,
             },
             Self::BlobValidationRejected => 415,
-            Self::ProjectionNotFound { .. } | Self::SearchIndexNotFound { .. } => 404,
+            Self::ProjectionNotFound { .. }
+            | Self::SearchIndexNotFound { .. }
+            | Self::ProviderNotConfigured { .. } => 404,
             Self::AdminAuditWrite | Self::Internal => 500,
             Self::EmailTaken => 409,
             Self::InvalidStreamCursor
@@ -114,9 +122,9 @@ impl ServerError {
             Self::BlobValidationRejected => FrickErrorCode::BlobUnsupportedContentType,
             Self::InvalidStreamCursor => FrickErrorCode::StreamInvalidCursor,
             Self::StorageConflict { .. } | Self::EmailTaken => FrickErrorCode::StorageConflict,
-            Self::ProjectionNotFound { .. } | Self::SearchIndexNotFound { .. } => {
-                FrickErrorCode::StorageNotFound
-            }
+            Self::ProjectionNotFound { .. }
+            | Self::SearchIndexNotFound { .. }
+            | Self::ProviderNotConfigured { .. } => FrickErrorCode::StorageNotFound,
             Self::AdminAuditWrite | Self::Internal => FrickErrorCode::ServerInternal,
             Self::Limit { kind, .. } => match kind {
                 LimitKind::MaxBlobBytes => FrickErrorCode::BlobTooLarge,
@@ -152,6 +160,10 @@ impl ServerError {
             }
             Self::ProjectionNotFound { projection } => {
                 details.push(("projection".to_string(), Value::from(projection.as_str())));
+            }
+            Self::ProviderNotConfigured { provider } => {
+                details.push(("reason".to_string(), Value::from("providerNotConfigured")));
+                details.push(("provider".to_string(), Value::from(provider.as_str())));
             }
             Self::SearchIndexNotFound { index } => {
                 details.push(("reason".to_string(), Value::from("searchIndexNotFound")));

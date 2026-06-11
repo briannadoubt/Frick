@@ -862,12 +862,12 @@ async fn mint_email_session_response(
 }
 
 /// A minted session token + its expiry.
-struct MintedSession {
-    token: String,
-    expires_at: String,
+pub(crate) struct MintedSession {
+    pub(crate) token: String,
+    pub(crate) expires_at: String,
 }
 
-async fn mint_session(
+pub(crate) async fn mint_session(
     state: &AppState,
     tenant_id: &str,
     user_id: &str,
@@ -912,7 +912,7 @@ async fn mint_session(
 }
 
 /// Tenant pre-check + the fixed-window auth limiter (`src/server.ts:3030-3072`).
-async fn precheck(
+pub(crate) async fn precheck(
     state: &AppState,
     route: &str,
     tenant_id: &str,
@@ -983,7 +983,7 @@ fn dev_handle_from_user_id(user_id: &str) -> String {
 }
 
 /// `randomToken(byteLength)`: base64url (no padding) of N random bytes.
-fn random_token(byte_length: usize) -> String {
+pub(crate) fn random_token(byte_length: usize) -> String {
     let mut bytes = vec![0u8; byte_length];
     rand::rngs::OsRng.fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
@@ -1020,13 +1020,13 @@ fn normalize_handle_strict(raw: &str) -> Result<String, ServerError> {
     }
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
-fn new_request_id() -> String {
+pub(crate) fn new_request_id() -> String {
     format!("req-{}", uuid::Uuid::new_v4())
 }
 
@@ -1076,7 +1076,7 @@ fn reset_url(token: &str) -> String {
 /// real client is in `x-forwarded-for` (first hop) or `x-real-ip`. Falls back
 /// to `"unknown"` (the TS fallback) so a missing header still yields a stable,
 /// non-empty bucket suffix.
-fn client_ip(headers: &HeaderMap) -> String {
+pub(crate) fn client_ip(headers: &HeaderMap) -> String {
     if let Some(forwarded) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
         let first = forwarded.split(',').next().unwrap_or("").trim();
         if !first.is_empty() {
