@@ -91,7 +91,7 @@ All variables are optional. Defaults match the runtime mode.
 | `FRICK_EMAIL_PROVIDER`      | `noop`                      | `noop`                                | Outbound-email provider (FR-271). One of `noop` or `resend`. `noop` (the default) drops messages after logging, so `POST /auth/email/forgot-password` still returns `200` without sending. `resend` wires the live Resend HTTP adapter and additionally requires `FRICK_RESEND_API_KEY` and `FRICK_EMAIL_FROM` (both validated at startup). |
 | `FRICK_RESEND_API_KEY`      | unset                       | unset                                 | Resend API key, sent as `Authorization: Bearer <key>` to `https://api.resend.com/emails`. Required when `FRICK_EMAIL_PROVIDER=resend`; inert otherwise. |
 | `FRICK_EMAIL_FROM`          | unset                       | unset                                 | Default `from:` address for framework auth emails (password reset / verification). Required when `FRICK_EMAIL_PROVIDER=resend`; also used as the email router's `defaultFrom`. |
-| `FRICK_PLATFORM_EVENTS_DRIVER` | `sqlite`                  | `sqlite` unless brokers are set       | One of `sqlite` or `kafka`. The Rust runtime recognizes `kafka` as a config value (and the Compose profiles set it), but the platform-event store is SQLite-backed in every mode today — the Kafka/Redpanda runtime adapter is not yet ported (FR-264). |
+| `FRICK_PLATFORM_EVENTS_DRIVER` | `sqlite`                  | `sqlite` unless brokers are set       | One of `memory`, `sqlite`, or `kafka` (FR-275). `sqlite` is durable (over the `platform_events` tables); `memory` is an in-process, single-node queue. `kafka` is recognized as a config value (the Compose profiles set it), but the Kafka/Redpanda runtime adapter is not yet ported — selecting it fails the boot with a clear "not yet ported" error (FR-264). |
 | `FRICK_PLATFORM_EVENTS_TOPIC` | `frick.platform.events`    | `frick.platform.events`               | Kafka/Redpanda topic name for platform events.                        |
 | `FRICK_PLATFORM_EVENTS_KAFKA_BROKERS` | unset             | unset                                 | Comma-separated Kafka/Redpanda brokers. When set and no driver is forced, the driver defaults to `kafka`. |
 | `FRICK_PLATFORM_EVENTS_RETENTION_MS` | `604800000` (7d)    | `604800000`                           | SQLite platform event retention window. Positive integer milliseconds. |
@@ -733,8 +733,12 @@ server exposes these GET endpoints under `/_frick/inspect/`:
   and simple health checks regardless of OTel.
 - `/_frick/inspect/platform-events` — platform event pipeline health:
   `{ adapter, ok, pending, claimed, deadLettered, retained, unclaimed,
-  consumers }`. The default adapter is SQLite, with bounded retention and
-  row-cap pruning controlled by the platform event env vars above.
+  consumers }`. The driver is selected by `FRICK_PLATFORM_EVENTS_DRIVER`:
+  `sqlite` (default — durable, over the `platform_events` tables, with bounded
+  retention and row-cap pruning controlled by the platform event env vars
+  above) or `memory` (in-process, single-node). `kafka` is a documented
+  follow-up and is not yet ported to the Rust backend — selecting it fails the
+  boot with a clear "not yet ported" error.
 - `/_frick/inspect/analytics/summary?windowMs=86400000` — authenticated,
   tenant-scoped product analytics summary derived from the same materialized
   read model as the mounted dashboard API. The response includes event totals,

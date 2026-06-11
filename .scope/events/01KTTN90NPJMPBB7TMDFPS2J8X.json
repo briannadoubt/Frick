@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTTN90NPJMPBB7TMDFPS2J8X",
+  "ts": "2026-06-11T06:17:55.126Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTT8N6C32SYGGM8W15QZPWP2",
+    "commentId": "01KTTN90NPJMPBB7TMDFPS2J8W",
+    "author": "claude",
+    "body": "DONE + on PR #8 (parallel worktree wave, merged 4a9430a). Reqwest-backed ResendEmailAdapter (POST api.resend.com/emails, Bearer); FRICK_EMAIL_PROVIDER=noop|resend + FRICK_RESEND_API_KEY/FRICK_EMAIL_FROM; BootSeams::production wires Resend when configured else Noop (forgot-password still 200). Request construction unit-tested; live send not CI-reachable. Closes the FR-268 email seam."
+  }
+}

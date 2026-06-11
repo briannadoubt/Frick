@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTTN90NPJMPBB7TMDFPS2J93",
+  "ts": "2026-06-11T06:17:55.126Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTT8NXG539Y7ASXGDVWDASZP",
+    "commentId": "01KTTN90NPJMPBB7TMDFPS2J92",
+    "author": "claude",
+    "body": "DONE + on PR #8 (merged 4a9430a). DevTools event feed (frick-store DevToolsEventStore over the migrated devtools_events table) + facade getters (recent_error_events, idempotency_cache_stats); real /_frick/inspect/devtools/events|/events/:id|/summary routes; diagnostics.rs recentErrors + idempotency stats now populated (replaced the FR-249 defaults). /analytics/summary returns a well-formed empty admin summary (analytics ingestion worker is a later story). Emitters into request/job handlers are a follow-up (feed is seedable + live-tested)."
+  }
+}

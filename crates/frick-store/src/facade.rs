@@ -671,6 +671,15 @@ impl FrickStore {
         &self.driver
     }
 
+    /// A cloned `Arc` to the shared [`SqlDriver`]. Used by subsystems that hold
+    /// their own driver handle over the same connection — e.g. the SQLite
+    /// platform-events pipeline (FR-275), which reads/writes the migrated
+    /// `platform_events` tables through this driver.
+    #[must_use]
+    pub fn sql_driver_arc(&self) -> Arc<SqlDriver> {
+        Arc::clone(&self.driver)
+    }
+
     // ---- Data-plane store views (lifetime-borrowing, built on demand) ----
 
     /// An [`ObjectStore`] view over this facade's driver + schema.

@@ -16,10 +16,10 @@
 //! plane returns.
 //!
 //! Sub-paths implemented here return the documented shapes for `server`, `apps`,
-//! `migrations`, `metrics`, `projections`, `search`, `db`, and `jobs`. The
-//! DevTools / platform-events / analytics sub-paths are later stories: they
-//! return an empty/"not available" stub with a TODO so the console degrades
-//! gracefully instead of 404-ing.
+//! `migrations`, `metrics`, `projections`, `search`, `db`, `jobs`, the DevTools
+//! feed, and the platform-events pipeline health (FR-275). The analytics summary
+//! sub-path is a later story: it returns an empty admin-scoped summary so the
+//! console degrades gracefully instead of 404-ing.
 //!
 //! Determinism: `snapshotAt` and the request id enter from the system clock /
 //! uuid at the route boundary (`now_ms` / `new_request_id`); the store methods
@@ -66,8 +66,9 @@ pub fn inspect_router(state: AppState) -> axum::Router {
         // until the analytics worker lands (later story), so this reports an
         // empty admin-scoped summary rather than 404-ing.
         .route("/_frick/inspect/analytics/summary", get(analytics_summary))
-        // Platform-events pipeline health stub (later story).
-        .route("/_frick/inspect/platform-events", get(stub_not_available))
+        // Platform-events pipeline health (FR-275): driver id + pending /
+        // processed (claimed / dead-lettered) counts + per-consumer breakdown.
+        .route("/_frick/inspect/platform-events", get(platform_events))
         // Any other `/_frick/inspect/...` path → 404 `{error:"not_found"}`. A
         // prefix-scoped wildcard (NOT a router-wide `.fallback`, which would
         // collide when merged with sibling routers that also set one). Static
@@ -489,17 +490,59 @@ fn decode_query_component(input: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Stub for `platform-events` (later story): authorize like every inspect
-/// route, then return an empty object so the console renders "no data" rather
-/// than failing.
-async fn stub_not_available(State(state): State<AppState>, headers: HeaderMap) -> Response {
+/// `GET /_frick/inspect/platform-events` (`src/server.ts:1265-1268`, FR-275):
+/// the platform-events pipeline health snapshot — the driver id (`adapter`), the
+/// aggregate pending / claimed / dead-lettered counts, the retained / unclaimed
+/// event totals, and the per-consumer breakdown. Serializes
+/// [`frick_store::PlatformEventHealth`] to its camelCase wire shape (matching
+/// the TS `PlatformEventHealth`). A driver read failure degrades to a 500
+/// `server.internal` rather than panicking.
+async fn platform_events(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let request_id = new_request_id();
     if let Err(response) = guard(&state, &headers, &request_id).await {
         return response;
     }
-    // TODO(platform-events): port the pipeline health builder; empty body until
-    // then.
-    axum::Json(json!({})).into_response()
+    match state.platform_events.health().await {
+        Ok(health) => axum::Json(platform_events_health_to_json(&health)).into_response(),
+        Err(error) => {
+            tracing::warn!(
+                target: "frick.inspect.platform_events_health_failed",
+                error = %error,
+                "platform-events health read failed",
+            );
+            respond_error(&ServerError::Internal, &request_id)
+        }
+    }
+}
+
+/// Serialize a [`frick_store::PlatformEventHealth`] to its camelCase wire shape
+/// (the TS `PlatformEventHealth`): `adapter`, `ok`, the aggregate counts, the
+/// retained / unclaimed totals, and the per-consumer rows (`name`, `pending`,
+/// `claimed`, `deadLettered`, `lag`).
+fn platform_events_health_to_json(health: &frick_store::PlatformEventHealth) -> serde_json::Value {
+    let consumers: Vec<serde_json::Value> = health
+        .consumers
+        .iter()
+        .map(|consumer| {
+            json!({
+                "name": consumer.name,
+                "pending": consumer.pending,
+                "claimed": consumer.claimed,
+                "deadLettered": consumer.dead_lettered,
+                "lag": consumer.lag,
+            })
+        })
+        .collect();
+    json!({
+        "adapter": health.adapter.as_str(),
+        "ok": health.ok,
+        "pending": health.pending,
+        "claimed": health.claimed,
+        "deadLettered": health.dead_lettered,
+        "retained": health.retained,
+        "unclaimed": health.unclaimed,
+        "consumers": consumers,
+    })
 }
 
 /// `GET /_frick/inspect/devtools/events` (`src/server.ts:1335-1357`): the
