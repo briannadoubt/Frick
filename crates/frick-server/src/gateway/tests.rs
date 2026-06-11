@@ -565,6 +565,146 @@ async fn ws_handshake_gate_over_socket() {
     serve.abort();
 }
 
+/// FR-256 regression: a client that subscribes to an object type and then —
+/// while the Subscribe is still completing — writes a matching object must still
+/// receive that write's echo Delta.
+///
+/// Before the fix, `handle_subscribe` registered the subscription only AFTER it
+/// awaited `active_principal_for_frame` (per-frame session re-validation). A
+/// write whose store-write fan-out fired in that window saw `subscribers:0` for
+/// the connection and dropped the live Delta. The fix registers the
+/// subscription synchronously, before that await, so a racing fan-out finds the
+/// subscriber.
+///
+/// The bug only manifests while `handle_subscribe` is suspended between its
+/// start and the registration point. The in-memory store never actually
+/// suspends, so the test installs a deterministic suspension seam
+/// ([`super::install_subscribe_pause`]) that parks `handle_subscribe` at exactly
+/// the spot it awaits its async session re-validation in production. With the
+/// fix the subscription is already registered when the handler parks; against
+/// the old ordering it is not. While parked we fire the matching write — the
+/// client's immediate write racing the in-flight Subscribe — then release the
+/// handler. The written object is NOT persisted, so the post-authz Snapshot
+/// cannot backstop a dropped Delta: the live Delta is the only delivery path.
+/// Against the old ordering the parked handler has not registered yet, so the
+/// write sees `subscribers:0` and the Delta is dropped — this test fails.
+#[tokio::test]
+async fn fr256_subscribe_then_immediate_write_delivers_echo_delta() {
+    use frick_protocol::frame::SubscribePayload;
+    use frick_store::stores::session::CreateSessionInput;
+
+    let hub = test_hub().await;
+
+    // A real, active session so the per-frame re-validation
+    // (`active_principal_for_frame`) authenticates the principal.
+    let token = "tok-fr256";
+    hub.state
+        .store
+        .sessions()
+        .create(
+            &CreateSessionInput {
+                session_token: token.into(),
+                tenant_id: DEFAULT_TENANT_ID.into(),
+                user_id: "user-ada".into(),
+                device_id: "device-1".into(),
+                replica_id: "replica-1".into(),
+                expires_at: "2999-01-01T00:00:00.000Z".into(),
+            },
+            now_ms(),
+        )
+        .await
+        .expect("session created");
+    let principal = principal_from_active_session_token(&hub.state.store, token, now_ms())
+        .await
+        .expect("active principal");
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<super::Outbound>();
+    let id = hub.register(super::Connection {
+        principal: Some(principal),
+        session_token: Some(token.to_string()),
+        app_id: DEFAULT_APP_ID.to_string(),
+        handshake_complete: true,
+        subscriptions: std::collections::HashSet::new(),
+        pending_writes: 0,
+        outbound: tx,
+    });
+
+    // Install the suspension seam for this connection BEFORE driving the
+    // Subscribe; the handler parks at it (after the fix's synchronous
+    // registration, before the session-revalidation await).
+    let (arrived, release) = super::install_subscribe_pause(id);
+
+    let hub_sub = std::sync::Arc::clone(&hub);
+    let subscribe = tokio::spawn(async move {
+        super::handle_subscribe(
+            &hub_sub,
+            id,
+            SubscribePayload {
+                subscription_id: "sub-notes".into(),
+                kind: SubscriptionKind::Object,
+                name: "Note".into(),
+                key: None,
+                cursor: None,
+            },
+        )
+        .await
+    });
+
+    // Wait until the handler reaches the suspension point.
+    arrived.notified().await;
+
+    // Sanity-check the fix's ordering guarantee directly: at the suspension
+    // point (production's session-revalidation await) the subscription must
+    // already be registered, so a concurrent fan-out finds it.
+    let registered = hub.inner.lock().is_ok_and(|inner| {
+        inner.connections.get(&id).is_some_and(|connection| {
+            connection
+                .subscriptions
+                .iter()
+                .any(|sub| sub.subscription_id == "sub-notes")
+        })
+    });
+    assert!(
+        registered,
+        "FR-256: the subscription must be registered before handle_subscribe awaits its \
+         session re-validation; a concurrent write here must not see subscribers:0"
+    );
+
+    // Fire the matching write while the Subscribe is parked. `n1` is NOT stored,
+    // so only the live Delta can deliver it; a Snapshot cannot mask a drop.
+    hub.handle_store_write(&FrickStoreWriteEvent::ObjectUpsert {
+        tenant_id: DEFAULT_TENANT_ID.to_string(),
+        app_id: DEFAULT_APP_ID.to_string(),
+        object_type: "Note".into(),
+        object_id: "n1".into(),
+        object: note_value("n1", "raced"),
+    });
+
+    // Release the handler and let it finish (authz passes, snapshot emitted).
+    release.notify_one();
+    subscribe.await.expect("subscribe task");
+
+    // The connection must have received the Delta for n1 (a Snapshot may also
+    // arrive, but it is empty — n1 was never stored).
+    let mut saw_delta = false;
+    while let Ok(out) = rx.try_recv() {
+        let super::Outbound::Frame(bytes) = out else {
+            continue;
+        };
+        if let FrickFrame::Delta(delta) = decode_frame(&bytes).unwrap()
+            && delta.objects.iter().any(|object| object.1 == "n1")
+        {
+            saw_delta = true;
+        }
+    }
+
+    assert!(
+        saw_delta,
+        "the subscriber must receive its own immediate write's echo Delta; got none — \
+         the subscribe-then-write race dropped it (fan-out saw subscribers:0)"
+    );
+}
+
 // ---- helpers ----------------------------------------------------------------
 
 fn test_config() -> FrickConfig {

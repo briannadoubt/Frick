@@ -88,7 +88,12 @@ struct Connection {
     app_id: String,
     /// Whether the Hello handshake has completed (the gate at §6.3).
     handshake_complete: bool,
-    /// Active subscriptions, by key.
+    /// Active subscriptions, by key. FR-256: an entry is inserted
+    /// SYNCHRONOUSLY when the Subscribe frame is handled — before the async
+    /// session re-validation in `handle_subscribe` — so a write that races in
+    /// (e.g. an HTTP upsert on another task while the Subscribe is mid-await)
+    /// cannot fan out to `subscribers:0` and drop the subscription's own echo
+    /// delta. Deny / early-return paths remove the entry.
     subscriptions: HashSet<SubKey>,
     /// Combined Append + ObjectUpsert pending-write budget (deliberately one
     /// counter, §13.12).
@@ -808,12 +813,8 @@ async fn handle_hello(hub: &Arc<GatewayHub>, id: u64, payload: HelloPayload) -> 
 
 #[allow(clippy::too_many_lines)]
 async fn handle_subscribe(hub: &Arc<GatewayHub>, id: u64, payload: SubscribePayload) -> bool {
-    let Some(principal) = active_principal_for_frame(hub, id, &payload.subscription_id).await
-    else {
-        return false;
-    };
-
-    // Subscription cap (re-subscribing the same id is exempt).
+    // Subscription cap (re-subscribing the same id is exempt). Checked before
+    // registration so a capped client never lands a pending entry.
     let (already, count, app_id) = subscription_count(hub, id, &payload.subscription_id);
     if !already && i64::from(count) >= hub.limits().max_subscriptions_per_connection {
         let nack = simple_nack(
@@ -854,26 +855,37 @@ async fn handle_subscribe(hub: &Arc<GatewayHub>, id: u64, payload: SubscribePayl
         return false;
     }
 
-    // assertCanSubscribe: baseline authz for the kind. object/stream/presence/
-    // signal map to their read actions.
-    let decision = decide_baseline(
-        &principal,
-        subscribe_action(payload.kind),
-        &ResourceContext {
-            tenant_id: principal.tenant_id.clone(),
-            owner_user_id: None,
-        },
-    );
-    if let Decision::Deny {
-        reason,
-        public_message,
-    } = decision
+    // assertCanSubscribe: baseline authz for the subscription kind, decided on
+    // the connection's (Hello-authenticated) principal. Delivery is gated on
+    // this BEFORE the subscription is registered, so a denied subscribe never
+    // registers. object/stream/presence/signal map to their read actions.
+    let hello_principal = connection_principal(hub, id);
+    if let Some(hello_principal) = &hello_principal
+        && let Decision::Deny {
+            reason,
+            public_message,
+        } = decide_baseline(
+            hello_principal,
+            subscribe_action(payload.kind),
+            &ResourceContext {
+                tenant_id: hello_principal.tenant_id.clone(),
+                owner_user_id: None,
+            },
+        )
     {
         send_auth_nack(hub, id, &payload.subscription_id, reason, &public_message);
         return false;
     }
 
-    // Record the subscription.
+    // FR-256: register the subscription SYNCHRONOUSLY — before the async
+    // session re-validation below — so a write that races in (e.g. an HTTP
+    // upsert handled on another task while this frame is mid-await) cannot fan
+    // out to `subscribers:0` for this connection and silently drop this
+    // subscription's own echo delta. Fan-out only reaches a connection whose
+    // Hello principal already passes the tenant/app filter and (above) the
+    // baseline authz, so registering here delivers no data the principal isn't
+    // entitled to. Every deny / early-return path after this point removes the
+    // entry, so a rejected subscribe leaves nothing behind.
     add_subscription(
         hub,
         id,
@@ -885,11 +897,45 @@ async fn handle_subscribe(hub: &Arc<GatewayHub>, id: u64, payload: SubscribePayl
         },
     );
 
+    // Test-only deterministic suspension point modeling the production async
+    // boundary (see FR-256 regression test). No-op / compiled out otherwise.
+    #[cfg(test)]
+    subscribe_test_pause(id).await;
+
+    // Per-frame session re-validation (freshness / principal-change / tenant
+    // archived). On denial it sends the Nack/close itself; we just drop the
+    // registration so it can never deliver again.
+    let Some(principal) = active_principal_for_frame(hub, id, &payload.subscription_id).await
+    else {
+        remove_subscription(hub, id, &payload.subscription_id);
+        return false;
+    };
+
+    // Re-check the baseline authz against the freshly re-validated principal
+    // (its tenant/scope is authoritative); a denial removes the entry.
+    if let Decision::Deny {
+        reason,
+        public_message,
+    } = decide_baseline(
+        &principal,
+        subscribe_action(payload.kind),
+        &ResourceContext {
+            tenant_id: principal.tenant_id.clone(),
+            owner_user_id: None,
+        },
+    ) {
+        remove_subscription(hub, id, &payload.subscription_id);
+        send_auth_nack(hub, id, &payload.subscription_id, reason, &public_message);
+        return false;
+    }
+
     let limits = hub.limits().clone();
     match payload.kind {
         SubscriptionKind::Stream => {
             let Some(key) = payload.key.clone() else {
-                // Stream subscribe without a key is a protocol error.
+                // Stream subscribe without a key is a protocol error. Drop the
+                // (now keyless) registration so it never lingers.
+                remove_subscription(hub, id, &payload.subscription_id);
                 let nack = simple_nack(
                     FrickErrorCode::SyncProtocolError,
                     "Stream subscription requires a key",
@@ -2128,6 +2174,20 @@ fn add_subscription(hub: &Arc<GatewayHub>, id: u64, sub: SubKey) {
     }
 }
 
+/// Remove a subscription by id (FR-256: a subscribe whose async session
+/// re-validation or authz denies, or a post-registration protocol error,
+/// must not leave its synchronously-registered entry behind). No-op if the
+/// subscription (or connection) is already gone.
+fn remove_subscription(hub: &Arc<GatewayHub>, id: u64, subscription_id: &str) {
+    if let Ok(mut inner) = hub.inner.lock()
+        && let Some(connection) = inner.connections.get_mut(&id)
+    {
+        connection
+            .subscriptions
+            .retain(|existing| existing.subscription_id != subscription_id);
+    }
+}
+
 fn try_reserve_pending_write(hub: &Arc<GatewayHub>, id: u64) -> bool {
     let cap = hub.limits().max_pending_appends_per_client;
     let Ok(mut inner) = hub.inner.lock() else {
@@ -2477,6 +2537,63 @@ fn encode_value_len(value: &Value) -> usize {
         buffer.len()
     } else {
         0
+    }
+}
+
+// ---- test-only deterministic suspension seam (FR-256) -----------------------
+
+/// A per-connection rendezvous a test can install to deterministically suspend
+/// `handle_subscribe` at the point it would await its async session
+/// re-validation in production. `arrived` fires when the handler reaches the
+/// pause; `release` is awaited there until the test signals it. This lets the
+/// FR-256 regression deterministically interleave a concurrent write at the
+/// exact boundary the fix moves registration across — without depending on the
+/// in-memory store (which never actually suspends). Compiled out of release
+/// builds entirely.
+#[cfg(test)]
+pub(crate) struct SubscribePause {
+    pub(crate) arrived: Arc<tokio::sync::Notify>,
+    pub(crate) release: Arc<tokio::sync::Notify>,
+}
+
+#[cfg(test)]
+static SUBSCRIBE_PAUSES: std::sync::OnceLock<Mutex<HashMap<u64, SubscribePause>>> =
+    std::sync::OnceLock::new();
+
+/// Install a pause for connection `id`, returning the `(arrived, release)`
+/// handles the test drives.
+#[cfg(test)]
+pub(crate) fn install_subscribe_pause(
+    id: u64,
+) -> (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>) {
+    let arrived = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    SUBSCRIBE_PAUSES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap()
+        .insert(
+            id,
+            SubscribePause {
+                arrived: Arc::clone(&arrived),
+                release: Arc::clone(&release),
+            },
+        );
+    (arrived, release)
+}
+
+/// If a pause is installed for `id`, signal `arrived` and await `release`
+/// (consuming the pause so it fires at most once). No-op otherwise.
+#[cfg(test)]
+async fn subscribe_test_pause(id: u64) {
+    let pause = SUBSCRIBE_PAUSES
+        .get()
+        .and_then(|map| map.lock().unwrap().remove(&id));
+    if let Some(pause) = pause {
+        let release = Arc::clone(&pause.release);
+        let release_notified = release.notified();
+        pause.arrived.notify_one();
+        release_notified.await;
     }
 }
 
