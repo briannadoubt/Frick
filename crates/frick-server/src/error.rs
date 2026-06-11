@@ -45,8 +45,17 @@ pub enum ServerError {
     EmailTaken,
     #[error("limit exceeded")]
     Limit { kind: LimitKind, detail: Value },
-    #[error("unsupported content type")]
-    BlobValidationRejected,
+    /// A registered blob processor's `validate(...)` rejected the upload
+    /// (FR-272). → 415 `blob.unsupportedContentType` with
+    /// `details.reason = "blobValidationRejected"`, `details.processorId`, and
+    /// (when the processor gave one) `details.rejectionReason`. Mirrors the TS
+    /// `BlobValidationRejectedError` (`src/server.ts:3091-3107,3311-3318`).
+    #[error("{message}")]
+    BlobValidationRejected {
+        message: String,
+        processor_id: String,
+        rejection_reason: Option<String>,
+    },
     #[error("invalid stream cursor")]
     InvalidStreamCursor,
     #[error("projection not found: {projection}")]
@@ -90,7 +99,7 @@ impl ServerError {
                 LimitKind::MaxSseConnections | LimitKind::MaxAuthAttemptsPerWindow => 429,
                 _ => 413,
             },
-            Self::BlobValidationRejected => 415,
+            Self::BlobValidationRejected { .. } => 415,
             Self::ProjectionNotFound { .. }
             | Self::SearchIndexNotFound { .. }
             | Self::ProviderNotConfigured { .. } => 404,
@@ -119,7 +128,7 @@ impl ServerError {
             Self::Authorization { .. } | Self::CorsOriginRejected | Self::UnknownTenant { .. } => {
                 FrickErrorCode::AuthForbidden
             }
-            Self::BlobValidationRejected => FrickErrorCode::BlobUnsupportedContentType,
+            Self::BlobValidationRejected { .. } => FrickErrorCode::BlobUnsupportedContentType,
             Self::InvalidStreamCursor => FrickErrorCode::StreamInvalidCursor,
             Self::StorageConflict { .. } | Self::EmailTaken => FrickErrorCode::StorageConflict,
             Self::ProjectionNotFound { .. }
@@ -171,6 +180,23 @@ impl ServerError {
             }
             Self::InvalidSearchQuery => {
                 details.push(("reason".to_string(), Value::from("invalidSearchQuery")));
+            }
+            Self::BlobValidationRejected {
+                processor_id,
+                rejection_reason,
+                ..
+            } => {
+                details.push(("reason".to_string(), Value::from("blobValidationRejected")));
+                details.push((
+                    "processorId".to_string(),
+                    Value::from(processor_id.as_str()),
+                ));
+                if let Some(rejection_reason) = rejection_reason {
+                    details.push((
+                        "rejectionReason".to_string(),
+                        Value::from(rejection_reason.as_str()),
+                    ));
+                }
             }
             Self::Limit { detail, .. } | Self::StorageConflict { detail } => {
                 if let Value::Map(entries) = detail {

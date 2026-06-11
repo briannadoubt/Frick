@@ -27,6 +27,7 @@ use std::sync::{Arc, Mutex};
 use frick_protocol::schema::{FrickObjectMergePolicy, resolve_object_merge_policy};
 use frick_protocol::{FrickSchema, Value, foundation_schema, validate_schema};
 use serde_json::{Map, Value as JsonValue};
+use sha2::Digest;
 
 use crate::driver::{SqlDialect, SqlDriver};
 use crate::error::StoreError;
@@ -1588,6 +1589,29 @@ pub struct DerivativeReadResult {
     pub bytes: Vec<u8>,
 }
 
+/// Input for [`FrickStore::record_derivative`] (TS `RecordDerivativeInput`,
+/// blob-derivative-store.ts:60-73). The clock-seam wrapper around
+/// [`BlobStore::record_derivative`](crate::stores::blob::BlobStore::record_derivative):
+/// the `blob.process` job handler persists derivatives through this so the
+/// `created_at` stamp threads the store's clock (no `now_ms` plumbed through the
+/// detached worker → handler boundary). `storage_key` defaults to
+/// [`derivative_storage_key`] when `None`.
+#[derive(Debug, Clone)]
+pub struct DerivativeRecordInput {
+    pub parent_blob_id: String,
+    pub derivative_id: String,
+    pub tenant_id: String,
+    pub processor_id: String,
+    pub mime_type: String,
+    pub content: Vec<u8>,
+    /// Pre-serialized JSON metadata (the caller `serde_json::to_string`s its
+    /// structured metadata); `None` stores SQL NULL.
+    pub metadata_json: Option<String>,
+    /// Logical content key. `None` ⇒
+    /// [`derivative_storage_key`](crate::stores::blob::derivative_storage_key).
+    pub storage_key: Option<String>,
+}
+
 impl FrickStore {
     /// `BlobDerivativeStore.listForParent` (blob-derivative-store.ts:120-128):
     /// every derivative row for a parent, `ORDER BY derivative_id ASC`. NOT
@@ -1640,6 +1664,41 @@ impl FrickStore {
                 bytes,
             }
         }))
+    }
+
+    /// `BlobDerivativeStore.record` (blob-derivative-store.ts:75-118) via the
+    /// store clock seam. Computes `byteLength`/`contentHash` from `content`
+    /// (`"sha256-"+hex(sha256(bytes))`, the same envelope blob content uses),
+    /// defaults the storage key to [`derivative_storage_key`], stamps
+    /// `created_at` from the store clock, and upserts on the
+    /// `(tenant_id, parent_blob_id, derivative_id)` primary key. The
+    /// `blob.process` job handler persists derivatives through this so the
+    /// detached worker never plumbs `now_ms` across the handler boundary.
+    pub async fn record_derivative(&self, input: &DerivativeRecordInput) -> Result<(), StoreError> {
+        let now_ms = self.clock.now_ms();
+        let byte_length = i64::try_from(input.content.len()).unwrap_or(i64::MAX);
+        let content_hash = format!(
+            "sha256-{}",
+            hex::encode(sha2::Sha256::digest(&input.content))
+        );
+        let storage_key = input.storage_key.clone().unwrap_or_else(|| {
+            crate::stores::blob::derivative_storage_key(&input.parent_blob_id, &input.derivative_id)
+        });
+        self.blobs
+            .record_derivative(
+                &input.parent_blob_id,
+                &input.derivative_id,
+                &input.tenant_id,
+                &input.processor_id,
+                &input.mime_type,
+                byte_length,
+                &content_hash,
+                &storage_key,
+                &input.content,
+                input.metadata_json.as_deref(),
+                now_ms,
+            )
+            .await
     }
 }
 

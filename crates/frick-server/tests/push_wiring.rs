@@ -107,6 +107,8 @@ fn recording_seams(apns: Arc<RecordingApnsTransport>) -> BootSeams {
         // FR-269: the provider-verify JWKS seam is unused by these push tests;
         // take the production default.
         jwks_provider: BootSeams::production().jwks_provider,
+        // FR-272: no blob processors for the push wiring tests.
+        blob_processors: Vec::new(),
     }
 }
 

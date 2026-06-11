@@ -19,6 +19,7 @@ use frick_store::FrickStore;
 use serde_json::json;
 
 use crate::apps::FrickAppRegistry;
+use crate::blob_processors::BlobProcessorRegistry;
 use crate::config::FrickConfig;
 use crate::email::EmailRouter;
 use crate::error::ServerError;
@@ -97,6 +98,14 @@ pub struct AppStateInner {
     /// (`routes::multi_app_dataplane_router`) and the WS Hello routing
     /// (`gateway::handle_hello`) resolve the active app from this registry.
     pub apps: Arc<FrickAppRegistry>,
+    /// The blob processor/validator registry (FR-272). Sync validators run on
+    /// `PUT /blobs/:id/content` over the 4 KiB preview (reject → 415); async
+    /// processors run via the `blob.process` job handler. Empty until an app
+    /// registers processors; shared with the [`BlobProcessHandler`] registered
+    /// on the durable-job registry under `blob.process`.
+    ///
+    /// [`BlobProcessHandler`]: crate::blob_processors::BlobProcessHandler
+    pub blob_processors: Arc<BlobProcessorRegistry>,
 }
 
 /// The durable-job worker / recurring scheduler read the store through this

@@ -756,6 +756,7 @@ async fn test_hub() -> std::sync::Arc<GatewayHub> {
         notification_router: push.router,
         email_router: std::sync::Arc::new(crate::email::EmailRouter::noop()),
         apps,
+        blob_processors: std::sync::Arc::new(crate::blob_processors::BlobProcessorRegistry::new()),
     });
     GatewayHub::new(state)
 }
