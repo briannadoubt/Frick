@@ -25,7 +25,9 @@ pub mod session;
 pub mod standalone;
 
 pub use authz::{Action, Decision, DenyReason, ResourceContext, decide_baseline};
-pub use boot::{BootError, FrickServer, create_frick_server};
+pub use boot::{
+    BootError, BootSeams, FrickServer, create_frick_server, create_frick_server_with_seams,
+};
 pub use cluster::{
     ClusterEnvelope, ClusterEnvelopeHandler, FrickClusterBus, MemoryClusterBus,
     MemoryClusterBusOptions, MemoryClusterChannel, NodeId, Unsubscribe, random_node_id,
@@ -41,6 +43,7 @@ pub use http::{AppState, AppStateInner, respond_error};
 pub use principal::{DEFAULT_APP_ID, DEFAULT_TENANT_ID, Principal, PrincipalScope};
 pub use push::{
     FrickNotificationIntent, FrickPushPayload, NotificationRouter, PUSH_DELIVER_JOB_TYPE,
-    PushAdapter, PushRegistry,
+    PushAdapter, PushRegistry, PushSubsystem, PushTransports, ReqwestApnsTransport,
+    ReqwestFcmTransport, ReqwestWebPushTransport, build_push_subsystem,
 };
 pub use standalone::{SCHEMA_PATH_ENV, config_env, load_schema};

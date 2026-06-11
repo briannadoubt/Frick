@@ -53,6 +53,12 @@ rsa = { version = "0.9", features = ["sha2"] }
 # crate's RFC-8291-Appendix-A.2 known-answer suite (`ece::test_cryptographer`)
 # so the backend is provably correct against the published vector.
 ece = { version = "2.3", default-features = false, features = ["backend-test-helper"] }
+# Real push transports (push/transports.rs, FR-265): the live APNs/FCM/Web Push
+# HTTP clients that back the `ApnsTransport`/`FcmTransport`/`WebPushTransport`
+# seams in production. rustls-only (no native TLS), plus `http2` for the APNs
+# HTTP/2 provider API. The request-construction stays in the adapters and is
+# unit-tested without a network; these transports only perform the send.
+reqwest = { workspace = true, features = ["http2"] }
 
 [features]
 # Live Redis cluster-bus smoke test (FR-27). Off by default: CI has no Redis

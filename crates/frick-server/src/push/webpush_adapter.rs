@@ -568,12 +568,11 @@ pub fn validate_web_push_registration_token(token: &str) -> Result<(), String> {
 /// `isSafeWebPushEndpoint` (web-push-adapter.ts:362-374): the endpoint must be a
 /// parseable `https:` URL whose host is not on the SSRF deny-list.
 ///
-/// NOTE: this is the synchronous, literal-host guard (no DNS). The TS
-/// `isSafeWebPushEndpointForSend` additionally resolves the hostname and
-/// re-screens every address — that DNS step is the live transport's
-/// responsibility here (the transport seam owns the network), so this adapter
-/// applies the literal-host guard at both registration and build time. See the
-/// module-level `notes` / the assignment wiring gap.
+/// NOTE: this is the synchronous, literal-host guard (no DNS), applied at both
+/// registration and build time. The matching send-time DNS re-screen (the TS
+/// `isSafeWebPushEndpointForSend`, which resolves the hostname and re-screens
+/// every address) lives in the live transport, which owns the network — see
+/// [`crate::push::transports::ReqwestWebPushTransport`] (`screen_endpoint_host`).
 #[must_use]
 pub fn is_safe_web_push_endpoint(endpoint: &str) -> bool {
     let Some((scheme, host)) = split_scheme_host(endpoint) else {
@@ -583,6 +582,34 @@ pub fn is_safe_web_push_endpoint(endpoint: &str) -> bool {
         return false;
     }
     !is_unsafe_host(&host)
+}
+
+/// The literal host of an `https:` endpoint (normalized: lowercased, brackets /
+/// trailing-dot stripped, port removed), for the send-time SSRF DNS re-screen.
+/// `None` when the endpoint is not a well-formed `https:` URL.
+///
+/// The live [`WebPushTransport`] resolves this host and re-screens every
+/// returned address with [`is_unsafe_resolved_ip`] before connecting — closing
+/// the DNS-rebinding gap the synchronous [`is_safe_web_push_endpoint`] guard
+/// (literal host only) cannot cover.
+#[must_use]
+pub(crate) fn endpoint_host(endpoint: &str) -> Option<String> {
+    let (scheme, host) = split_scheme_host(endpoint)?;
+    if scheme != "https" {
+        return None;
+    }
+    Some(host)
+}
+
+/// Whether a DNS-resolved [`std::net::IpAddr`] is on the SSRF deny-list. Used by
+/// the live transport at send time over every address the endpoint host
+/// resolves to (the synchronous guard only sees literal hosts).
+#[must_use]
+pub(crate) fn is_unsafe_resolved_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => is_unsafe_ipv4(v4.octets()),
+        std::net::IpAddr::V6(v6) => is_unsafe_ipv6(v6),
+    }
 }
 
 /// The origin (`scheme://host[:port]`) of the endpoint — the VAPID `aud` claim.

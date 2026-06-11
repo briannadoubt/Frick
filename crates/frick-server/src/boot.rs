@@ -12,6 +12,8 @@ use tokio::sync::oneshot;
 use crate::config::{DbDriver, FrickConfig};
 use crate::gateway::GatewayHub;
 use crate::http::{AppState, AppStateInner, public_router};
+use crate::jobs::{JobHandlerRegistry, JobWorker, JobWorkerHandle, JobWorkerOptions};
+use crate::push::PUSH_DELIVER_JOB_TYPE;
 
 /// A running (or constructed-but-not-yet-listening) server.
 pub struct FrickServer {
@@ -20,8 +22,15 @@ pub struct FrickServer {
     /// The live WebSocket hub. Held here so it (and the store write-listener
     /// funnel it owns) outlive the server.
     pub gateway: Arc<GatewayHub>,
+    /// The shared durable-job handler registry. Resolves `push.deliver` (FR-265)
+    /// to the notification router, plus any app-provided handlers. Held so the
+    /// worker (and tests) can resolve handlers from the same instance.
+    pub jobs: Arc<JobHandlerRegistry>,
     shutdown: Option<oneshot::Sender<()>>,
     join: Option<tokio::task::JoinHandle<()>>,
+    /// The durable-job worker loop, started in [`FrickServer::listen`] and
+    /// aborted on [`FrickServer::close`] (or drop). `None` before `listen`.
+    worker: Option<JobWorkerHandle>,
     bound_port: u16,
 }
 
@@ -36,11 +45,57 @@ pub enum BootError {
     Io(#[from] std::io::Error),
 }
 
+/// Determinism + transport seams for [`create_frick_server_with_seams`]. The
+/// public [`create_frick_server`] wires [`BootSeams::production`]; the boot-wiring
+/// tests pass recording push transports + a fixed credential env so the whole
+/// `enqueue → worker → router → adapter → transport` path is driven offline.
+pub struct BootSeams {
+    /// Push clock (JWT `iat`/`exp`, `attemptedAt`).
+    pub push_clock: crate::push::SharedPushClock,
+    /// Delivery-telemetry sink.
+    pub push_telemetry: crate::push::SharedPushTelemetry,
+    /// Per-tenant credential env (`FRICK_PUSH_CRED_KEY`).
+    pub credential_env: Arc<dyn crate::push::credentials::CredentialEnv + Send + Sync>,
+    /// The live APNs / FCM / Web Push HTTP transports.
+    pub push_transports: crate::push::PushTransports,
+}
+
+impl BootSeams {
+    /// Production seams: system clock, no-op telemetry, process credential env,
+    /// and the live `reqwest` transports.
+    #[must_use]
+    pub fn production() -> Self {
+        Self {
+            push_clock: Arc::new(crate::push::SystemPushClock),
+            push_telemetry: Arc::new(crate::push::NoopTelemetry),
+            credential_env: Arc::new(crate::push::credentials::ProcessCredentialEnv),
+            push_transports: crate::push::PushTransports::production(),
+        }
+    }
+}
+
 /// Build a server from config + schema (`createFrickServer`). The store is
 /// opened and migrated here; call [`FrickServer::listen`] to bind the socket.
 pub async fn create_frick_server(
     config: FrickConfig,
     schema: FrickSchema,
+) -> Result<FrickServer, BootError> {
+    create_frick_server_with_seams(config, schema, BootSeams::production()).await
+}
+
+/// [`create_frick_server`] with explicit push seams (recording transports + a
+/// fixed credential env for the boot-wiring tests). Production calls
+/// [`create_frick_server`], which passes [`BootSeams::production`].
+///
+/// # Panics
+///
+/// Panics if registering the `push.deliver` handler collides — impossible here
+/// because the registry is freshly constructed and `push.deliver` is the only
+/// handler registered at boot. The `expect` documents that boot invariant.
+pub async fn create_frick_server_with_seams(
+    config: FrickConfig,
+    schema: FrickSchema,
+    seams: BootSeams,
 ) -> Result<FrickServer, BootError> {
     let options = FrickStoreOptions {
         path: config.db_path.clone(),
@@ -54,7 +109,28 @@ pub async fn create_frick_server(
         idempotency_key_retention_ms: Some(config.idempotency_key_retention_ms),
         ..FrickStoreOptions::default()
     };
-    let store = FrickStore::open(options).await?;
+    let store = Arc::new(FrickStore::open(options).await?);
+
+    // Push subsystem (FR-265): build the adapter registry (APNs / FCM / Web Push
+    // over the supplied transports, plus the default `test` adapter) and the
+    // notification router over the shared store. Per-tenant credentials are read
+    // lazily via the `FRICK_PUSH_CRED_KEY` env seam — a tenant with no creds for
+    // a platform simply yields a `skipped` delivery, so this never panics.
+    let push = crate::push::build_push_subsystem(
+        Arc::clone(&store),
+        seams.push_clock,
+        seams.push_telemetry,
+        seams.credential_env,
+        seams.push_transports,
+    );
+
+    // Durable-job handler registry: register the `push.deliver` handler so a
+    // push-deliver job claimed by the worker now resolves a REAL handler (the
+    // notification router) instead of dead-lettering as `jobs.unknownHandler`.
+    let mut jobs = JobHandlerRegistry::new();
+    jobs.register(PUSH_DELIVER_JOB_TYPE, push.router.job_handler())
+        .expect("push.deliver is the only handler registered for that type at boot");
+    let jobs = Arc::new(jobs);
 
     let state = Arc::new(AppStateInner {
         config: config.clone(),
@@ -63,6 +139,8 @@ pub async fn create_frick_server(
         started_at: now_iso(),
         auth_limiter: std::sync::Mutex::new(crate::http::AuthLimiter::default()),
         projections: crate::projections::ProjectionRegistry::new(),
+        push_registry: Arc::clone(&push.registry),
+        notification_router: Arc::clone(&push.router),
     });
 
     // The gateway hub owns the live connections and the fan-out funnel. The
@@ -94,8 +172,10 @@ pub async fn create_frick_server(
         state,
         config,
         gateway,
+        jobs,
         shutdown: None,
         join: None,
+        worker: None,
         bound_port: 0,
     })
 }
@@ -113,6 +193,13 @@ impl FrickServer {
             .merge(crate::auth_routes::auth_router(Arc::clone(&self.state)))
             .merge(crate::routes::dataplane_router(Arc::clone(&self.state)))
             .merge(crate::routes::admin::admin_router(Arc::clone(&self.state)))
+            // Admin push credential + deliver routes (FR-265). Dispatches an
+            // enqueue through the SAME `NotificationRouter` the job worker
+            // resolves under `push.deliver`.
+            .merge(crate::routes::admin_push::admin_push_router(
+                Arc::clone(&self.state.notification_router),
+                Arc::clone(&self.state),
+            ))
             .merge(crate::routes::inspect::inspect_router(Arc::clone(
                 &self.state,
             )))
@@ -123,6 +210,21 @@ impl FrickServer {
             .layer(crate::cors::cors_layer(&self.config.allowed_origins));
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         self.shutdown = Some(shutdown_tx);
+
+        // Start the durable-job worker so enqueued `push.deliver` (and any
+        // app-provided) jobs are actually claimed and dispatched. The worker
+        // reads the store through `AppStateInner`'s `StoreProvider` impl and
+        // resolves handlers from the shared registry; its loop is aborted on
+        // `close` (or drop). Started here (not in `create_frick_server`) so a
+        // constructed-but-not-listening server never spawns a timer.
+        let worker = Arc::new(JobWorker::new(JobWorkerOptions {
+            store: Arc::clone(&self.state) as Arc<dyn crate::jobs::StoreProvider>,
+            registry: Arc::clone(&self.jobs),
+            worker_id: format!("worker-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]),
+            poll_interval_ms: None,
+            claim_batch_size: None,
+        }));
+        self.worker = Some(worker.start());
 
         let join = tokio::spawn(async move {
             let server = axum::serve(listener, router);
@@ -162,12 +264,19 @@ impl FrickServer {
     /// Graceful shutdown (`close`): signal the serve loop and await it.
     /// Idempotent.
     pub async fn close(&mut self) {
+        // Stop the durable-job worker loop first so no new job is claimed during
+        // teardown.
+        if let Some(worker) = self.worker.take() {
+            worker.stop();
+        }
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
         if let Some(join) = self.join.take() {
             let _ = join.await;
         }
+        // Release any adapter-held resources (the APNs HTTP/2 sessions, etc.).
+        self.state.push_registry.close_all().await;
         // Detach the write-listener funnel so the store no longer holds the
         // gateway's closure.
         self.state.store.clear_write_listener();

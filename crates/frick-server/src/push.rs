@@ -59,6 +59,7 @@ pub mod payload;
 pub mod registry;
 pub mod router;
 pub mod test_adapter;
+pub mod transports;
 pub mod types;
 pub mod webpush_adapter;
 
@@ -73,6 +74,7 @@ pub use payload::FrickPushPayload;
 pub use registry::{DuplicatePushAdapterError, PushAdapter, PushRegistry};
 pub use router::{NotificationRouter, PUSH_DELIVER_JOB_TYPE, decode_intent, encode_intent};
 pub use test_adapter::TestPushAdapter;
+pub use transports::{ReqwestApnsTransport, ReqwestFcmTransport, ReqwestWebPushTransport};
 pub use types::{
     FrickNotificationContext, FrickNotificationIntent, FrickPushDelivery, NotificationBody,
     PUSH_REVOCATION_ERROR_CODES, PushDeliveryError, PushDeliveryStatus, is_push_revocation_error,
@@ -85,6 +87,135 @@ pub use frick_store::stores::push_registration::{
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use frick_store::FrickStore;
+
+use crate::push::apns_adapter::{ApnsAdapter, ApnsAdapterOptions, ApnsTransport};
+use crate::push::credentials::CredentialEnv;
+use crate::push::fcm_adapter::{FcmAdapter, FcmAdapterOptions, FcmTransport};
+use crate::push::router::NotificationRouterOptions;
+use crate::push::webpush_adapter::{WebPushAdapter, WebPushAdapterOptions, WebPushTransport};
+
+/// The wired push subsystem returned by [`build_push_subsystem`]: the populated
+/// adapter registry (held so the server can [`close_all`](PushRegistry::close_all)
+/// at shutdown) and the [`NotificationRouter`] (registered on the job registry
+/// under [`PUSH_DELIVER_JOB_TYPE`](router::PUSH_DELIVER_JOB_TYPE) and shared with
+/// the admin-push routes).
+pub struct PushSubsystem {
+    /// The populated adapter registry (APNs, FCM, Web Push, test).
+    pub registry: Arc<PushRegistry>,
+    /// The notification router over the store + registry.
+    pub router: Arc<NotificationRouter>,
+}
+
+/// The transport seams [`build_push_subsystem`] installs into the three live
+/// adapters. Production wires [`production_transports`] (the real `reqwest`
+/// clients); tests pass recording/stub transports so the whole boot path is
+/// driven without touching the network.
+pub struct PushTransports {
+    /// APNs HTTP/2 transport.
+    pub apns: Arc<dyn ApnsTransport>,
+    /// FCM HTTP transport (token exchange + send).
+    pub fcm: Arc<dyn FcmTransport>,
+    /// Web Push HTTPS transport (owns the send-time SSRF DNS re-screen).
+    pub web_push: Arc<dyn WebPushTransport>,
+}
+
+impl PushTransports {
+    /// The live `reqwest`-backed transports (rustls). Wired by [`create_frick_server`].
+    ///
+    /// [`create_frick_server`]: crate::boot::create_frick_server
+    #[must_use]
+    pub fn production() -> Self {
+        Self {
+            apns: Arc::new(ReqwestApnsTransport::new()),
+            fcm: Arc::new(ReqwestFcmTransport::new()),
+            web_push: Arc::new(ReqwestWebPushTransport::new()),
+        }
+    }
+}
+
+/// Build the push subsystem: a [`PushRegistry`] populated with the APNs, FCM, and
+/// Web Push adapters (each over the supplied transport + credential env) plus the
+/// default `test` adapter, and a [`NotificationRouter`] over the store + that
+/// registry.
+///
+/// Per-tenant credentials are read lazily by each adapter via the
+/// [`CredentialEnv`] seam (`FRICK_PUSH_CRED_KEY`): a tenant with no creds for a
+/// platform simply produces a `skipped` delivery — the adapter is always
+/// registered, so this never panics and never blocks boot. The three live
+/// adapters are always registered (single-tenant / `_default` and the
+/// no-credentials case are handled gracefully downstream, not by omitting the
+/// adapter).
+///
+/// `transports` lets a caller swap in recording transports for the boot-wiring
+/// tests; production passes [`PushTransports::production`].
+///
+/// # Panics
+///
+/// Panics if two adapters claim the same platform — impossible here because the
+/// four platforms (APNs, FCM, Web Push, test) are distinct and the registry is
+/// freshly constructed. The `expect`s document that boot invariant.
+#[must_use]
+pub fn build_push_subsystem(
+    store: Arc<FrickStore>,
+    clock: SharedPushClock,
+    telemetry: SharedPushTelemetry,
+    credential_env: Arc<dyn CredentialEnv + Send + Sync>,
+    transports: PushTransports,
+) -> PushSubsystem {
+    let mut registry = PushRegistry::new();
+
+    let apns = ApnsAdapter::new(ApnsAdapterOptions {
+        clock: Arc::clone(&clock),
+        env: Arc::clone(&credential_env),
+        transport: transports.apns,
+        endpoint: None,
+    });
+    let fcm = FcmAdapter::new(FcmAdapterOptions {
+        clock: Arc::clone(&clock),
+        env: Arc::clone(&credential_env),
+        transport: transports.fcm,
+        fcm_base_url: None,
+        token_uri: None,
+    });
+    let web_push = WebPushAdapter::new(WebPushAdapterOptions {
+        clock: Arc::clone(&clock),
+        env: Arc::clone(&credential_env),
+        transport: transports.web_push,
+    });
+
+    // Registering each adapter is infallible here — the registry only errors on a
+    // duplicate platform, and these four platforms are distinct. `expect` documents
+    // that invariant rather than silently dropping an adapter.
+    registry
+        .register_adapter(Arc::new(apns) as Arc<dyn PushAdapter>)
+        .expect("apns adapter is the only apns adapter");
+    registry
+        .register_adapter(Arc::new(fcm) as Arc<dyn PushAdapter>)
+        .expect("fcm adapter is the only fcm adapter");
+    registry
+        .register_adapter(Arc::new(web_push) as Arc<dyn PushAdapter>)
+        .expect("web push adapter is the only web push adapter");
+    // The default `test` adapter (local dev + the conformance suite) unless an
+    // app already claimed `test`.
+    if !registry.contains(PushPlatform::Test) {
+        registry
+            .register_adapter(Arc::new(TestPushAdapter::new()) as Arc<dyn PushAdapter>)
+            .expect("test adapter is the only test adapter");
+    }
+
+    let registry = Arc::new(registry);
+    let router = Arc::new(NotificationRouter::new(NotificationRouterOptions {
+        store,
+        registry: Arc::clone(&registry),
+        clock,
+        telemetry,
+        credential_env,
+    }));
+
+    PushSubsystem { registry, router }
+}
 
 /// Clock seam for the push subsystem (the TS adapters take an injectable
 /// `now: () => number`). `now_ms()` returns epoch milliseconds; the router

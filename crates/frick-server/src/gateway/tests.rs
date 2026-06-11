@@ -717,12 +717,21 @@ fn test_config() -> FrickConfig {
 
 /// A hub over a fresh in-memory `Note`-schema state (no listening socket).
 async fn test_hub() -> std::sync::Arc<GatewayHub> {
-    let store = frick_store::FrickStore::open(frick_store::FrickStoreOptions {
-        schema: Some(note_schema()),
-        ..frick_store::FrickStoreOptions::default()
-    })
-    .await
-    .unwrap();
+    let store = std::sync::Arc::new(
+        frick_store::FrickStore::open(frick_store::FrickStoreOptions {
+            schema: Some(note_schema()),
+            ..frick_store::FrickStoreOptions::default()
+        })
+        .await
+        .unwrap(),
+    );
+    let push = crate::push::build_push_subsystem(
+        std::sync::Arc::clone(&store),
+        std::sync::Arc::new(crate::push::SystemPushClock),
+        std::sync::Arc::new(crate::push::NoopTelemetry),
+        std::sync::Arc::new(crate::push::credentials::ProcessCredentialEnv),
+        push_transports_for_test(),
+    );
     let state = std::sync::Arc::new(AppStateInner {
         config: test_config(),
         store,
@@ -730,8 +739,24 @@ async fn test_hub() -> std::sync::Arc<GatewayHub> {
         started_at: "1970-01-01T00:00:00.000Z".into(),
         auth_limiter: std::sync::Mutex::new(crate::http::AuthLimiter::default()),
         projections: crate::projections::ProjectionRegistry::new(),
+        push_registry: push.registry,
+        notification_router: push.router,
     });
     GatewayHub::new(state)
+}
+
+/// Inert push transports for the gateway tests (these tests never deliver a
+/// push; the wiring just has to construct). The live reqwest transports would
+/// also work but allocate clients needlessly.
+fn push_transports_for_test() -> crate::push::PushTransports {
+    use crate::push::apns_adapter::UnavailableApnsTransport;
+    use crate::push::fcm_adapter::UnavailableFcmTransport;
+    use crate::push::webpush_adapter::UnavailableWebPushTransport;
+    crate::push::PushTransports {
+        apns: std::sync::Arc::new(UnavailableApnsTransport),
+        fcm: std::sync::Arc::new(UnavailableFcmTransport),
+        web_push: std::sync::Arc::new(UnavailableWebPushTransport),
+    }
 }
 
 /// A minimal valid schema with one object type `Note { id, body }`.

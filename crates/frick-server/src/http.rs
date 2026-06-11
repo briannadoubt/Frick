@@ -20,12 +20,18 @@ use serde_json::json;
 
 use crate::config::FrickConfig;
 use crate::error::ServerError;
+use crate::jobs::StoreProvider;
 use crate::projections::ProjectionRegistry;
+use crate::push::{NotificationRouter, PushRegistry};
 
 /// Shared application state handed to every handler.
 pub struct AppStateInner {
     pub config: FrickConfig,
-    pub store: FrickStore,
+    /// The shared store. Held behind an `Arc` so the durable-job worker
+    /// ([`StoreProvider`]) and the [`NotificationRouter`] can borrow it from a
+    /// `'static` task without cloning the (non-`Clone`) store. Handlers keep
+    /// using `state.store.method()` — `Arc<FrickStore>` derefs to `FrickStore`.
+    pub store: Arc<FrickStore>,
     pub schema: FrickSchema,
     /// Wall-clock start, ISO-8601 (stamped at boot by the caller).
     pub started_at: String,
@@ -34,6 +40,24 @@ pub struct AppStateInner {
     /// The shared projection registry (FR-245). Empty until an app registers
     /// projections; the gateway reads snapshots and the routes list/read it.
     pub projections: ProjectionRegistry,
+    /// The wired push-adapter registry (FR-265): APNs / FCM / Web Push + test,
+    /// each over a real transport. Held so the server can close adapters at
+    /// shutdown and so routes can inspect registered platforms.
+    pub push_registry: Arc<PushRegistry>,
+    /// The notification router (FR-265): the same instance registered on the
+    /// durable-job registry under `push.deliver` and handed to the admin-push
+    /// routes so an enqueue + a worker tick share one delivery path.
+    pub notification_router: Arc<NotificationRouter>,
+}
+
+/// The durable-job worker / recurring scheduler read the store through this
+/// seam (FR-265 wiring): the worker holds `Arc<dyn StoreProvider>` and calls
+/// `store()` each tick, so the boot path can hand it the shared `AppStateInner`
+/// without exposing the store's concrete ownership.
+impl StoreProvider for AppStateInner {
+    fn store(&self) -> &FrickStore {
+        &self.store
+    }
 }
 
 /// Fixed-window auth-attempt counter, keyed `route\0tenantId\0identity`
