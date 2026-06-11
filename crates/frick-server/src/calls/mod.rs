@@ -11,6 +11,7 @@
 mod control_plane;
 mod fake_media_plane;
 mod media_plane;
+mod p2p_media_plane;
 pub mod schema;
 
 pub use control_plane::{
@@ -22,4 +23,7 @@ pub use media_plane::{
     AllocateSessionOptions, IssueJoinTokenOptions, MediaJoinGrant, MediaParticipant,
     MediaPlaneAdapter, MediaPlaneCapabilities, MediaPlaneError, MediaPlaneFuture,
     MediaPlaneTransport, MediaSession,
+};
+pub use p2p_media_plane::{
+    P2pIceServer, P2pMediaPlaneAdapter, P2pMediaPlaneOptions, P2pTurnConfig,
 };
