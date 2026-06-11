@@ -36,6 +36,10 @@ use crate::stores::account::AccountStore;
 use crate::stores::admin_audit::AdminAuditStore;
 use crate::stores::blob::BlobStore;
 use crate::stores::blob_bytes::{BlobBytesDriver, FrickBlobDriver, create_blob_bytes_driver};
+use crate::stores::devtools_events::{
+    DEFAULT_DEVTOOLS_EVENTS_MAX_ROWS, DEFAULT_DEVTOOLS_EVENTS_RETENTION_MS,
+    DevToolsEventListFilter, DevToolsEventRow, DevToolsEventStore,
+};
 use crate::stores::grant::GrantStore;
 use crate::stores::idempotency::BoundedIdempotencyCache;
 use crate::stores::invitation::InvitationStore;
@@ -86,6 +90,9 @@ pub const DEFAULT_EXPIRED_SESSION_PRUNE_INTERVAL_MS: i64 = 15 * 60 * 1000;
 pub const DEFAULT_EXPIRED_SESSION_RETENTION_GRACE_MS: i64 = 0;
 /// Default cadence for the opt-in per-stream retention sweep: 15 minutes.
 pub const DEFAULT_STREAM_RETENTION_PRUNE_INTERVAL_MS: i64 = 15 * 60 * 1000;
+/// Default cap on recent error envelopes surfaced by
+/// [`FrickStore::recent_error_events`] (TS `recentErrorLimit ?? 20`).
+pub const DEFAULT_RECENT_ERROR_LIMIT: usize = 20;
 /// Default TTL for an enqueued signal when the caller omits one: 30 s.
 pub const DEFAULT_SIGNAL_TTL_MS: i64 = 30_000;
 /// Default filesystem blob storage path (`config.ts:253`,
@@ -154,6 +161,12 @@ pub struct FrickStoreOptions {
     /// `stream_retention` declares at least one policy (FR-145, deferred until
     /// the retention-policy option lands).
     pub stream_retention_prune_interval_ms: Option<i64>,
+    /// DevTools event-feed retention window (ms). `None` ⇒
+    /// [`crate::stores::devtools_events::DEFAULT_DEVTOOLS_EVENTS_RETENTION_MS`].
+    pub devtools_events_retention_ms: Option<i64>,
+    /// Hard cap on `devtools_events` rows. `None` ⇒
+    /// [`crate::stores::devtools_events::DEFAULT_DEVTOOLS_EVENTS_MAX_ROWS`].
+    pub devtools_events_max_rows: Option<i64>,
 }
 
 impl Default for FrickStoreOptions {
@@ -174,6 +187,8 @@ impl Default for FrickStoreOptions {
             expired_session_retention_grace_ms: None,
             expired_session_prune_interval_ms: None,
             stream_retention_prune_interval_ms: None,
+            devtools_events_retention_ms: None,
+            devtools_events_max_rows: None,
         }
     }
 }
@@ -234,6 +249,39 @@ pub type FrickStoreWriteListener = Box<dyn Fn(&FrickStoreWriteEvent) + Send + Sy
 pub type FrickStoreSearchProjector =
     Box<dyn Fn(&FrickStoreWriteEvent) -> Vec<SearchOp> + Send + Sync>;
 
+/// Snapshot of the in-process idempotency front-cache stats (TS
+/// `store.idempotencyCache.{size,capacity,evictions}`). Surfaced by the inspect
+/// `db` route and the diagnostics `caches` block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct IdempotencyCacheStats {
+    /// Live entry count.
+    pub size: usize,
+    /// Configured (floored) capacity.
+    pub capacity: usize,
+    /// Cumulative entries evicted to stay under capacity.
+    pub evictions: u64,
+}
+
+/// A redacted recent-error envelope derived from the DevTools feed (TS
+/// `DiagnosticsErrorEnvelope`, `packages/protocol/src/diagnostics.ts:94-101`).
+/// Surfaced in the diagnostics snapshot's `recentErrors`. Never carries
+/// secrets — `context` is run through the name-based redaction pass.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DiagnosticsErrorEnvelope {
+    /// Error code (`fields.errorCode`, or `http.<status>`, else the kind).
+    pub code: String,
+    /// Human-readable message (`fields.message`, or `<method> <path>` for
+    /// `http.request`, else the kind).
+    pub message: String,
+    /// ISO timestamp the event occurred (`occurred_at`).
+    pub at: String,
+    /// Tenant the event belonged to; `None` (absent) for global events.
+    pub tenant_id: Option<String>,
+    /// Already-redacted free-form context (the redacted `fields` bag). `None`
+    /// when the source bag was empty/absent.
+    pub context: Option<Map<String, JsonValue>>,
+}
+
 /// Result of [`FrickStore::prune`] (TS `PruneResult`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PruneResult {
@@ -276,6 +324,10 @@ pub struct FrickStore {
     grants: GrantStore,
     admin_audit: AdminAuditStore,
     push_registrations: PushRegistrationStore,
+    /// Durable DevTools event feed (FR-274). The append side is best-effort
+    /// fire-and-forget from emission points; the read side backs the
+    /// `/_frick/inspect/devtools/*` routes and the diagnostics `recentErrors`.
+    devtools_events: DevToolsEventStore,
 
     /// The in-process idempotency front-cache, shared with the data-plane
     /// [`StreamStore`] view that the facade builds on every append. Behind a
@@ -387,6 +439,12 @@ impl FrickStore {
         let expired_session_grace_ms = options
             .expired_session_retention_grace_ms
             .unwrap_or(DEFAULT_EXPIRED_SESSION_RETENTION_GRACE_MS);
+        let devtools_events_retention_ms = options
+            .devtools_events_retention_ms
+            .unwrap_or(DEFAULT_DEVTOOLS_EVENTS_RETENTION_MS);
+        let devtools_events_max_rows = options
+            .devtools_events_max_rows
+            .unwrap_or(DEFAULT_DEVTOOLS_EVENTS_MAX_ROWS);
 
         // 5. Build the shared idempotency front-cache.
         #[allow(clippy::cast_precision_loss)]
@@ -424,6 +482,11 @@ impl FrickStore {
             grants: GrantStore::new(Arc::clone(&driver)),
             admin_audit: AdminAuditStore::new(Arc::clone(&driver)),
             push_registrations: PushRegistrationStore::new(Arc::clone(&driver)),
+            devtools_events: DevToolsEventStore::new(
+                Arc::clone(&driver),
+                devtools_events_retention_ms,
+                devtools_events_max_rows,
+            ),
             driver,
             idempotency_cache: Mutex::new(Some(idempotency_cache)),
             idempotency_cache_capacity,
@@ -562,6 +625,13 @@ impl FrickStore {
     #[must_use]
     pub fn push_registrations(&self) -> &PushRegistrationStore {
         &self.push_registrations
+    }
+    /// Durable DevTools event feed (FR-274). Emission points call
+    /// [`DevToolsEventStore::record`] best-effort; the inspect routes call
+    /// [`list`](DevToolsEventStore::list) / [`summary`](DevToolsEventStore::summary).
+    #[must_use]
+    pub fn devtools_events(&self) -> &DevToolsEventStore {
+        &self.devtools_events
     }
 
     /// Internal escape hatch for the backup/restore subsystem (TS `sqlDriver`
@@ -1096,6 +1166,67 @@ impl FrickStore {
     }
 
     // ---- §7.4 prune ------------------------------------------------------
+
+    /// Snapshot of the in-process idempotency front-cache (TS
+    /// `store.idempotencyCache.{size,capacity,evictions}`). Surfaced by
+    /// `/_frick/inspect/db` and the diagnostics `caches[idempotency]` entry. The
+    /// cache lives behind a `Mutex<Option<…>>` (it is `take`n out for the
+    /// duration of an append); while it is taken the size/evictions are read as
+    /// zero but the `capacity` falls back to the configured capacity so the
+    /// reported shape never shows a zero capacity (TS reads a never-absent
+    /// object). A poisoned lock degrades to the same defaults.
+    #[must_use]
+    pub fn idempotency_cache_stats(&self) -> IdempotencyCacheStats {
+        match self.idempotency_cache.lock() {
+            Ok(slot) => match slot.as_ref() {
+                Some(cache) => IdempotencyCacheStats {
+                    size: cache.size(),
+                    capacity: cache.capacity(),
+                    evictions: cache.evictions(),
+                },
+                None => IdempotencyCacheStats {
+                    size: 0,
+                    capacity: self.idempotency_cache_capacity,
+                    evictions: 0,
+                },
+            },
+            Err(_) => IdempotencyCacheStats {
+                size: 0,
+                capacity: self.idempotency_cache_capacity,
+                evictions: 0,
+            },
+        }
+    }
+
+    /// Recent error envelopes derived from the DevTools event feed (FR-274; TS
+    /// `assembleDiagnosticsSnapshot` `recentErrors`). Over-fetches the feed
+    /// (`limit * 5`, floored at `limit`) and filters to error-shaped events
+    /// (`isErrorEvent`), redacting each `fields` bag before it lands in an
+    /// envelope. Newest first, capped at `limit`. A feed read failure (e.g. the
+    /// table is missing) degrades to an empty list — the snapshot must never
+    /// fail because the console feed hiccupped.
+    pub async fn recent_error_events(&self, limit: usize) -> Vec<DiagnosticsErrorEnvelope> {
+        let over_fetch = limit.saturating_mul(5).max(limit);
+        #[allow(clippy::cast_possible_wrap)]
+        let filter = DevToolsEventListFilter {
+            limit: Some(over_fetch as i64),
+            ..Default::default()
+        };
+        let Ok(rows) = self.devtools_events.list(&filter).await else {
+            return Vec::new();
+        };
+        let mut envelopes = Vec::new();
+        for row in &rows {
+            if envelopes.len() >= limit {
+                break;
+            }
+            if !is_error_event(&row.kind, &row.fields) {
+                continue;
+            }
+            envelopes.push(error_envelope_from_row(row));
+        }
+        envelopes
+    }
 
     /// Current row count of the durable `idempotency_keys` table (TS
     /// `idempotencyKeyRowCount`).
@@ -1683,6 +1814,143 @@ fn event_kind(event: &FrickStoreWriteEvent) -> &'static str {
         FrickStoreWriteEvent::ObjectDelete { .. } => "objectDelete",
         FrickStoreWriteEvent::StreamAppend { .. } => "streamAppend",
     }
+}
+
+/// Suffixes that mark a DevTools event kind as an error (TS `isErrorEvent`
+/// regex `(\.failed|\.dead_lettered|\.error|\.rejected|\.denied|\.refused)$`).
+const ERROR_KIND_SUFFIXES: [&str; 6] = [
+    ".failed",
+    ".dead_lettered",
+    ".error",
+    ".rejected",
+    ".denied",
+    ".refused",
+];
+
+/// `isErrorEvent` (diagnostics.ts:71-78): a kind whose suffix marks it as an
+/// error, or an `http.request` with a `status >= 400`.
+fn is_error_event(kind: &str, fields: &Map<String, JsonValue>) -> bool {
+    if ERROR_KIND_SUFFIXES
+        .iter()
+        .any(|suffix| kind.ends_with(suffix))
+    {
+        return true;
+    }
+    if kind == "http.request" {
+        return field_status(fields).is_some_and(|status| status >= 400);
+    }
+    false
+}
+
+/// `errorCodeFor` (diagnostics.ts:81-88): `fields.errorCode` (string), else
+/// `http.<status>` for an `http.request`, else the kind.
+fn error_code_for(kind: &str, fields: &Map<String, JsonValue>) -> String {
+    if let Some(JsonValue::String(code)) = fields.get("errorCode") {
+        return code.clone();
+    }
+    if kind == "http.request"
+        && let Some(status) = field_status(fields)
+    {
+        return format!("http.{status}");
+    }
+    kind.to_string()
+}
+
+/// `errorMessageFor` (diagnostics.ts:90-97): `fields.message` (string), else
+/// `<method> <path>` (trimmed) for an `http.request`, else the kind.
+fn error_message_for(kind: &str, fields: &Map<String, JsonValue>) -> String {
+    if let Some(JsonValue::String(message)) = fields.get("message") {
+        return message.clone();
+    }
+    if kind == "http.request" {
+        let method = field_str(fields, "method").unwrap_or("");
+        let path = field_str(fields, "path").unwrap_or("");
+        let combined = format!("{method} {path}");
+        let trimmed = combined.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    kind.to_string()
+}
+
+/// Read a numeric `status` field, coercing a JSON number (TS `Number(...)`).
+/// A string status (e.g. `"404"`) also parses, matching JS coercion.
+fn field_status(fields: &Map<String, JsonValue>) -> Option<i64> {
+    match fields.get("status") {
+        Some(JsonValue::Number(number)) => number.as_i64().or_else(|| {
+            #[allow(clippy::cast_possible_truncation)]
+            number.as_f64().map(|f| f as i64)
+        }),
+        Some(JsonValue::String(text)) => text.trim().parse::<i64>().ok(),
+        _ => None,
+    }
+}
+
+/// Read a string-typed field.
+fn field_str<'a>(fields: &'a Map<String, JsonValue>, key: &str) -> Option<&'a str> {
+    match fields.get(key) {
+        Some(JsonValue::String(value)) => Some(value),
+        _ => None,
+    }
+}
+
+/// Build a redacted [`DiagnosticsErrorEnvelope`] from a feed row (the TS
+/// `recentErrors.push({...})` object). `tenant_id` is included only when
+/// truthy; `context` is the redacted `fields` bag, included only when non-empty
+/// (the TS spreads `context !== undefined`, and `redactDiagnosticsContext`
+/// returns the object for a present bag — an empty `fields` map yields an empty
+/// object which the snapshot still spreads, so we keep `Some({})` parity).
+fn error_envelope_from_row(row: &DevToolsEventRow) -> DiagnosticsErrorEnvelope {
+    let context = redact_diagnostics_context(&row.fields);
+    DiagnosticsErrorEnvelope {
+        code: error_code_for(&row.kind, &row.fields),
+        message: error_message_for(&row.kind, &row.fields),
+        at: row.occurred_at.clone(),
+        tenant_id: row.tenant_id.clone().filter(|t| !t.is_empty()),
+        context: Some(context),
+    }
+}
+
+/// `redactDiagnosticsContext` (diagnostics.ts:188-196): mask values under keys
+/// that look like secrets. Returns a NEW map; the input is never mutated. The
+/// key pattern is `(token|password|secret|api[-_]?key|authorization|cookie|
+/// bearer|credential)`, case-insensitive.
+fn redact_diagnostics_context(context: &Map<String, JsonValue>) -> Map<String, JsonValue> {
+    let mut out = Map::with_capacity(context.len());
+    for (key, value) in context {
+        if key_looks_secret(key) {
+            out.insert(key.clone(), JsonValue::String("<redacted>".to_string()));
+        } else {
+            out.insert(key.clone(), value.clone());
+        }
+    }
+    out
+}
+
+/// Secret-key fragments (TS `SECRET_KEY_PATTERN`). The `api[-_]?key` arm is
+/// expanded to `apikey` / `api_key` / `api-key`; `credential` is matched as a
+/// substring so `credentials` also hits.
+const SECRET_KEY_FRAGMENTS: [&str; 10] = [
+    "token",
+    "password",
+    "secret",
+    "apikey",
+    "api_key",
+    "api-key",
+    "authorization",
+    "cookie",
+    "bearer",
+    "credential",
+];
+
+/// `SECRET_KEY_PATTERN.test(key)` (diagnostics.ts:174-175), case-insensitive
+/// substring match over [`SECRET_KEY_FRAGMENTS`].
+fn key_looks_secret(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    SECRET_KEY_FRAGMENTS
+        .iter()
+        .any(|fragment| lower.contains(fragment))
 }
 
 #[cfg(test)]
