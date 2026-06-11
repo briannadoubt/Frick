@@ -24,6 +24,7 @@ use serde_json::json;
 use crate::email::router::PasswordResetEmail;
 use crate::error::{LimitKind, ServerError};
 use crate::extract::session_token_from_headers;
+use crate::gateway::CloseTarget;
 use crate::http::{AppState, no_store_headers, respond_error};
 use crate::principal::DEFAULT_TENANT_ID;
 use crate::session::ensure_tenant_allowed;
@@ -409,7 +410,14 @@ async fn logout(
         );
     };
     let _ = state.store.sessions().delete(&token).await;
-    // TODO(FR-243 gateway): also live-disconnect the WS via gateway.close_session(token).
+    // Live-disconnect any WebSocket connections that authenticated with this
+    // token (FR-278). Best-effort: a server without a wired gateway (or no live
+    // socket on this token) closes nothing, and logout still returns ok. The
+    // session row is already deleted, so even a missed close would be torn down
+    // on the connection's next per-frame session re-validation.
+    if let Some(gateway) = state.gateway() {
+        let _ = gateway.close_session(&CloseTarget::Token(token));
+    }
     Json(json!({ "ok": true })).into_response()
 }
 

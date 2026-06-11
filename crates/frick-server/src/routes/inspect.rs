@@ -8,12 +8,12 @@
 //!
 //! Auth is the TS `inspect` tier (`inspectionPrincipalFromRequest`,
 //! `src/server.ts:3821-3839`): production demands the admin token; non-production
-//! accepts the admin token OR any active session. The Rust port currently has no
-//! admin-token resolution on this seam (that lives in the admin router), so this
-//! module treats **any authenticated session principal as sufficient** for the
-//! inspect tier and notes the gap — TODO(FR-246): admin-token inspect auth +
-//! the production-only tightening. An unauthenticated request gets the same 401
-//! the data plane returns.
+//! accepts the admin token OR any active session. The Rust port resolves the
+//! configured admin bearer (`FRICK_ADMIN_TOKEN`) on this seam (FR-278), matching
+//! how the admin router authenticates: in production the admin token is
+//! **required**; in non-production the admin token OR any active session
+//! principal is accepted. An unauthenticated request gets the same 401 the data
+//! plane returns.
 //!
 //! Sub-paths implemented here return the documented shapes for `server`, `apps`,
 //! `migrations`, `metrics`, `projections`, `search`, `db`, and `jobs`. The
@@ -33,7 +33,7 @@ use serde_json::json;
 
 use super::{new_request_id, now_ms};
 use crate::error::ServerError;
-use crate::extract::require_principal;
+use crate::extract::{require_principal, session_token_from_headers};
 use crate::http::{AppState, respond_error};
 use crate::principal::DEFAULT_APP_ID;
 
@@ -85,23 +85,44 @@ async fn guard(state: &AppState, headers: &HeaderMap, request_id: &str) -> Resul
 }
 
 /// The inspect-tier auth seam (`inspectionPrincipalFromRequest`,
-/// `src/server.ts:3821-3839`). The TS rule is: production → admin token only;
-/// non-production → admin token OR any active session. The Rust port has no
-/// admin-token resolution wired into this module (it lives in the admin
-/// router), so this treats **any authenticated session principal as
-/// sufficient** for the inspect tier in every environment.
+/// `src/server.ts:3821-3839`). Parity with the TS rule (FR-278):
+///   - **production**: the configured admin token is REQUIRED — a bearer equal
+///     to `config.admin_token` authorizes; anything else (including a valid
+///     session token) → 401 `auth.unauthenticated` "Missing or invalid admin
+///     token";
+///   - **non-production**: the admin token authorizes if it matches; otherwise
+///     fall back to any active session principal (the data-plane 401s for a
+///     missing/invalid token).
 ///
-/// TODO(FR-246): resolve the admin bearer here and enforce the
-/// production-only "admin token required" tightening so production parity is
-/// exact. Until then production inspect auth is looser than the TS (it accepts
-/// a session token), which is acceptable for the rewrite milestone because
-/// inspection defaults OFF in production anyway.
+/// The admin-token match mirrors [`crate::routes::admin`]: a plain `==` against
+/// `config.admin_token` (only when admin is enabled, i.e. a token is
+/// configured), deliberately not constant-time.
 async fn authenticate_inspect(
     state: &AppState,
     headers: &HeaderMap,
     now_ms: i64,
 ) -> Result<(), ServerError> {
+    if admin_token_matches(state, headers) {
+        return Ok(());
+    }
+    if state.config.env.is_production() {
+        // Production demands the admin token; a session token is not enough.
+        return Err(ServerError::Authentication {
+            message: "Missing or invalid admin token".into(),
+        });
+    }
+    // Non-production: fall back to any active session principal.
     require_principal(state, headers, now_ms).await.map(|_| ())
+}
+
+/// Whether the request carries a bearer equal to the configured admin token
+/// (`adminPrincipalFromRequest`). `false` when admin is disabled (no token
+/// configured) or the bearer is absent / mismatched.
+fn admin_token_matches(state: &AppState, headers: &HeaderMap) -> bool {
+    let Some(admin_token) = state.config.admin_token.as_deref() else {
+        return false;
+    };
+    session_token_from_headers(headers).as_deref() == Some(admin_token)
 }
 
 /// 404 `{error:"not_found"}` — the inspect "anything else" + disabled-surface

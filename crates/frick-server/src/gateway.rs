@@ -107,6 +107,7 @@ struct Connection {
 }
 
 /// A message for the writer task: either an encoded frame or a close request.
+#[derive(Debug)]
 enum Outbound {
     Frame(Vec<u8>),
     Close(u16, String),
@@ -314,6 +315,80 @@ impl GatewayHub {
             .map(|inner| inner.tenant_subscriber_counts.keys().cloned().collect())
             .unwrap_or_default();
         bus.set_subscribed_tenants(Some(&tenants));
+    }
+
+    /// Live-close every connection matching `target` with a policy-violation
+    /// close (`1008`) and return how many connections were signalled
+    /// (`closeSession` / `closeSessionsForUser`, `src/sync/gateway.ts`). The
+    /// logout route ([`crate::auth_routes`]) and the admin
+    /// `sessions/revoke` route call this AFTER the session rows are deleted, so
+    /// the socket's next per-frame re-validation would fail anyway — this just
+    /// makes the teardown immediate (FR-278).
+    ///
+    /// A queued `Close` ends the writer task, which sends the WS close frame and
+    /// returns; the inbound loop ends when the socket closes and `unregister`
+    /// runs. The connection is NOT removed here — the per-connection task owns
+    /// its own teardown, so a double-removal (and the per-principal / tenant
+    /// refcount underflow it would cause) is avoided.
+    ///
+    /// Matching is by the connection's authenticated `session_token` and/or its
+    /// principal's `user_id` (optionally tenant-scoped), per [`CloseTarget`]. An
+    /// anonymous (no-principal, no-token) connection never matches.
+    #[must_use]
+    pub fn close_session(&self, target: &CloseTarget) -> u64 {
+        let mut count: u64 = 0;
+        let Ok(inner) = self.inner.lock() else {
+            return 0;
+        };
+        for connection in inner.connections.values() {
+            if !connection_matches_target(connection, target) {
+                continue;
+            }
+            if connection
+                .outbound
+                .send(Outbound::Close(
+                    close::POLICY_VIOLATION,
+                    "Session revoked".to_string(),
+                ))
+                .is_ok()
+            {
+                count += 1;
+            }
+        }
+        count
+    }
+}
+
+/// Which live connections a [`GatewayHub::close_session`] call should tear down.
+#[derive(Debug, Clone)]
+pub enum CloseTarget {
+    /// Every connection that authenticated with this exact session token (the
+    /// logout path — a token-scoped revoke).
+    Token(String),
+    /// Every connection whose principal has this `user_id`, optionally narrowed
+    /// to a single tenant (the admin `sessions/revoke` by-user path). `None`
+    /// tenant matches the user across all tenants.
+    User {
+        user_id: String,
+        tenant_id: Option<String>,
+    },
+}
+
+/// Whether a live connection matches a [`CloseTarget`]. Token matches compare
+/// the connection's authenticated `session_token`; user matches compare the
+/// principal's `user_id` (and tenant, when scoped). A connection with neither a
+/// token nor a principal matches nothing.
+fn connection_matches_target(connection: &Connection, target: &CloseTarget) -> bool {
+    match target {
+        CloseTarget::Token(token) => connection.session_token.as_deref() == Some(token.as_str()),
+        CloseTarget::User { user_id, tenant_id } => {
+            connection.principal.as_ref().is_some_and(|principal| {
+                principal.user_id == *user_id
+                    && tenant_id
+                        .as_deref()
+                        .is_none_or(|tenant| principal.tenant_id == tenant)
+            })
+        }
     }
 }
 

@@ -280,6 +280,8 @@ async fn build_server(
         notification_router: Arc::clone(&push.router),
         email_router: Arc::clone(&seams.email_router),
         apps,
+        // Populated by `attach_gateway` once the hub is built below (FR-278).
+        gateway: std::sync::OnceLock::new(),
     });
 
     // The gateway hub owns the live connections and the fan-out funnel. The
@@ -295,6 +297,9 @@ async fn build_server(
     // the `state.projections` / `state.search` handles, so behavior is
     // byte-for-byte identical.
     let gateway = GatewayHub::new(Arc::clone(&state));
+    // Back-reference so the HTTP control plane (logout, admin sessions/revoke)
+    // can live-close WebSocket connections via `state.gateway()` (FR-278).
+    state.attach_gateway(&gateway);
     {
         let gateway_listener = gateway.write_listener();
         let state_for_listener = Arc::clone(&state);

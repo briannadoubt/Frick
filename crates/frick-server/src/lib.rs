@@ -52,7 +52,7 @@ pub use email::{
     RecordingEmailAdapter,
 };
 pub use error::{LimitKind, ServerError};
-pub use gateway::GatewayHub;
+pub use gateway::{CloseTarget, GatewayHub};
 pub use http::{AppState, AppStateInner, respond_error};
 pub use principal::{DEFAULT_APP_ID, DEFAULT_TENANT_ID, Principal, PrincipalScope};
 pub use push::{

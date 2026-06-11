@@ -266,6 +266,177 @@ fn store_write_listener_skips_other_tenant() {
     });
 }
 
+// ---- close_session (FR-278) -------------------------------------------------
+
+/// Register a connection with the given principal + token, returning its id and
+/// the receiver end of its outbound channel.
+fn register_test_connection(
+    hub: &std::sync::Arc<GatewayHub>,
+    principal: Option<Principal>,
+    session_token: Option<&str>,
+) -> (u64, tokio::sync::mpsc::UnboundedReceiver<super::Outbound>) {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<super::Outbound>();
+    let id = hub.register(super::Connection {
+        principal,
+        session_token: session_token.map(str::to_string),
+        app_id: DEFAULT_APP_ID.to_string(),
+        handshake_complete: true,
+        subscriptions: std::collections::HashSet::new(),
+        pending_writes: 0,
+        outbound: tx,
+    });
+    (id, rx)
+}
+
+fn tenant_principal(user_id: &str, tenant_id: &str) -> Principal {
+    Principal {
+        user_id: user_id.into(),
+        device_id: "d".into(),
+        replica_id: "r".into(),
+        tenant_id: tenant_id.into(),
+        scope: crate::principal::PrincipalScope::Tenant,
+        service_scopes: vec![],
+    }
+}
+
+#[test]
+fn close_session_by_token_closes_only_the_matching_connection() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let hub = test_hub().await;
+        let (_id_a, mut rx_a) = register_test_connection(
+            &hub,
+            Some(tenant_principal("user-ada", DEFAULT_TENANT_ID)),
+            Some("tok-ada"),
+        );
+        let (_id_b, mut rx_b) = register_test_connection(
+            &hub,
+            Some(tenant_principal("user-bo", DEFAULT_TENANT_ID)),
+            Some("tok-bo"),
+        );
+
+        let closed = hub.close_session(&super::CloseTarget::Token("tok-ada".into()));
+        assert_eq!(closed, 1, "exactly one connection holds tok-ada");
+
+        // Ada's connection got a policy-violation close; Bo's got nothing.
+        match rx_a.try_recv() {
+            Ok(super::Outbound::Close(code, reason)) => {
+                assert_eq!(code, super::close::POLICY_VIOLATION);
+                assert_eq!(reason, "Session revoked");
+            }
+            other => panic!("expected a close for ada, got {other:?}"),
+        }
+        assert!(rx_b.try_recv().is_err(), "bo must not be closed");
+    });
+}
+
+#[test]
+fn close_session_by_user_is_tenant_scoped() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let hub = test_hub().await;
+        // Same user id in two tenants + a different user in the target tenant.
+        let (_id1, mut rx1) = register_test_connection(
+            &hub,
+            Some(tenant_principal("user-x", "tenant-1")),
+            Some("t1"),
+        );
+        let (_id2, mut rx2) = register_test_connection(
+            &hub,
+            Some(tenant_principal("user-x", "tenant-2")),
+            Some("t2"),
+        );
+        let (_id3, mut rx3) = register_test_connection(
+            &hub,
+            Some(tenant_principal("user-y", "tenant-1")),
+            Some("t3"),
+        );
+
+        // Scoped to tenant-1 → only user-x@tenant-1 closes.
+        let closed = hub.close_session(&super::CloseTarget::User {
+            user_id: "user-x".into(),
+            tenant_id: Some("tenant-1".into()),
+        });
+        assert_eq!(closed, 1, "only user-x in tenant-1 matches");
+        assert!(matches!(rx1.try_recv(), Ok(super::Outbound::Close(_, _))));
+        assert!(rx2.try_recv().is_err(), "user-x@tenant-2 is out of scope");
+        assert!(rx3.try_recv().is_err(), "user-y is a different user");
+    });
+}
+
+#[test]
+fn close_session_by_user_unscoped_spans_tenants() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let hub = test_hub().await;
+        // Hold both receivers alive — a dropped receiver closes the channel, so
+        // the outbound `send` would fail and the connection wouldn't be counted.
+        let (_id1, _rx1) = register_test_connection(
+            &hub,
+            Some(tenant_principal("user-x", "tenant-1")),
+            Some("t1"),
+        );
+        let (_id2, _rx2) = register_test_connection(
+            &hub,
+            Some(tenant_principal("user-x", "tenant-2")),
+            Some("t2"),
+        );
+        let closed = hub.close_session(&super::CloseTarget::User {
+            user_id: "user-x".into(),
+            tenant_id: None,
+        });
+        assert_eq!(closed, 2, "an unscoped revoke spans every tenant");
+    });
+}
+
+#[test]
+fn close_session_ignores_anonymous_connections() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let hub = test_hub().await;
+        // Anonymous: no principal, no token — matches nothing.
+        let (_id, mut rx) = register_test_connection(&hub, None, None);
+        assert_eq!(
+            hub.close_session(&super::CloseTarget::Token("whatever".into())),
+            0
+        );
+        assert_eq!(
+            hub.close_session(&super::CloseTarget::User {
+                user_id: "user-x".into(),
+                tenant_id: None,
+            }),
+            0
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "an anonymous connection is untouched"
+        );
+    });
+}
+
+/// The state's `gateway()` accessor upgrades the wired hub, and `close_session`
+/// reached through it closes the right connection — the path the HTTP control
+/// plane uses (logout / admin revoke).
+#[test]
+fn state_gateway_accessor_reaches_close_session() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let hub = test_hub().await;
+        let (_id, mut rx) = register_test_connection(
+            &hub,
+            Some(tenant_principal("user-ada", DEFAULT_TENANT_ID)),
+            Some("tok-ada"),
+        );
+        // `test_hub` already attached the hub to its state.
+        let reached = hub.state.gateway().expect("gateway is attached");
+        assert_eq!(
+            reached.close_session(&super::CloseTarget::Token("tok-ada".into())),
+            1
+        );
+        assert!(matches!(rx.try_recv(), Ok(super::Outbound::Close(_, _))));
+    });
+}
+
 #[test]
 fn cluster_bus_fans_a_write_on_hub_a_to_a_subscriber_on_hub_b() {
     // Two hubs sharing one MemoryClusterChannel: an object upsert that reaches
@@ -756,8 +927,11 @@ async fn test_hub() -> std::sync::Arc<GatewayHub> {
         notification_router: push.router,
         email_router: std::sync::Arc::new(crate::email::EmailRouter::noop()),
         apps,
+        gateway: std::sync::OnceLock::new(),
     });
-    GatewayHub::new(state)
+    let hub = GatewayHub::new(state);
+    hub.state.attach_gateway(&hub);
+    hub
 }
 
 /// Inert push transports for the gateway tests (these tests never deliver a

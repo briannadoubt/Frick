@@ -7,7 +7,7 @@
 //! on in their own modules.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use axum::Json;
 use axum::extract::State;
@@ -22,6 +22,7 @@ use crate::apps::FrickAppRegistry;
 use crate::config::FrickConfig;
 use crate::email::EmailRouter;
 use crate::error::ServerError;
+use crate::gateway::GatewayHub;
 use crate::jobs::StoreProvider;
 use crate::projections::ProjectionRegistry;
 use crate::push::{NotificationRouter, PushRegistry};
@@ -97,6 +98,34 @@ pub struct AppStateInner {
     /// (`routes::multi_app_dataplane_router`) and the WS Hello routing
     /// (`gateway::handle_hello`) resolve the active app from this registry.
     pub apps: Arc<FrickAppRegistry>,
+    /// A back-reference to the live WebSocket hub (FR-278), populated once at
+    /// boot via [`AppStateInner::attach_gateway`] right after the hub is built
+    /// (the hub holds the `Arc<AppStateInner>`, so this is a `Weak` to avoid a
+    /// reference cycle). Lets the HTTP control plane live-close WebSocket
+    /// connections when a session is revoked: the logout route and the admin
+    /// `sessions/revoke` route resolve the hub via [`AppStateInner::gateway`]
+    /// and call [`GatewayHub::close_session`]. `None` (unattached) when a server
+    /// is constructed without a gateway (e.g. unit tests that never wire one) —
+    /// callers treat that as "no live connections to close".
+    pub gateway: OnceLock<Weak<GatewayHub>>,
+}
+
+impl AppStateInner {
+    /// Attach the live WebSocket hub (FR-278). Called once at boot, immediately
+    /// after the hub is constructed over this same state, so the HTTP control
+    /// plane can reach it. Stores a `Weak` (the hub owns the `Arc` to this
+    /// state); a second call is a no-op (`OnceLock`).
+    pub fn attach_gateway(&self, gateway: &Arc<GatewayHub>) {
+        let _ = self.gateway.set(Arc::downgrade(gateway));
+    }
+
+    /// The attached live WebSocket hub, if one was wired at boot and is still
+    /// alive. Returns `None` on an unattached state (unit tests) or after the
+    /// hub has been dropped — callers treat either as "nothing live to close".
+    #[must_use]
+    pub fn gateway(&self) -> Option<Arc<GatewayHub>> {
+        self.gateway.get().and_then(Weak::upgrade)
+    }
 }
 
 /// The durable-job worker / recurring scheduler read the store through this

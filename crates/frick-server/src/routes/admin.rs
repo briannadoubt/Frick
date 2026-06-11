@@ -80,6 +80,7 @@ use sha2::{Digest, Sha256};
 use super::{map_get, new_request_id, now_ms, parse_body_value};
 use crate::error::ServerError;
 use crate::extract::session_token_from_headers;
+use crate::gateway::CloseTarget;
 use crate::http::{AppState, respond_error};
 use crate::principal::Principal;
 
@@ -302,10 +303,12 @@ async fn audit_log(
 /// single `sessionToken`; 400 `missingTarget` when neither is supplied.
 ///
 /// The Rust port deletes the session rows (`store.sessions().delete_for_user` /
-/// `delete`); the WS live-disconnect is a TODO (the gateway has no
-/// `closeSession`/`closeSessionsForUser` seam yet), so `disconnected` is `0` for
-/// now. Future wiring: thread the gateway into AppState and call its close
-/// methods here.
+/// `delete`), then live-closes the matching WebSocket connections via the wired
+/// gateway ([`crate::gateway::GatewayHub::close_session`], FR-278): a by-user
+/// revoke closes every connection for that `userId` (tenant-scoped when a
+/// `tenantId` is given), and a by-token revoke closes the connections holding
+/// that token. `disconnected` is the real count of connections signalled (`0`
+/// when no gateway is wired or no live socket matched).
 async fn sessions_revoke(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -350,7 +353,11 @@ async fn sessions_revoke(
     }
 
     let mut revoked: u64 = 0;
-    let disconnected: u64 = 0; // TODO(gateway): live WS disconnect.
+    let mut disconnected: u64 = 0;
+    // Resolve the wired gateway once (FR-278). `None` (no hub, e.g. a server
+    // built without one) leaves `disconnected` at 0 — the session rows are
+    // still deleted below, which is the authoritative revoke.
+    let gateway = state.gateway();
 
     if let Some(user_id) = &user_id {
         match state
@@ -362,12 +369,26 @@ async fn sessions_revoke(
             Ok(count) => revoked += count,
             Err(error) => return respond_error(&store_error(&error), &request_id),
         }
+        // Live-close every WS connection for this user (tenant-scoped when a
+        // tenantId is supplied), AFTER the rows are gone so the close races no
+        // re-auth that could re-admit the connection.
+        if let Some(gateway) = &gateway {
+            disconnected += gateway.close_session(&CloseTarget::User {
+                user_id: user_id.clone(),
+                tenant_id: tenant_id.clone(),
+            });
+        }
     }
     if let Some(token) = &session_token {
         match state.store.sessions().delete(token).await {
             Ok(true) => revoked += 1,
             Ok(false) => {}
             Err(error) => return respond_error(&store_error(&error), &request_id),
+        }
+        // Close the live connections holding this token even if the row was
+        // already gone (`Ok(false)`): a stale-but-open socket is still revoked.
+        if let Some(gateway) = &gateway {
+            disconnected += gateway.close_session(&CloseTarget::Token(token.clone()));
         }
     }
 
