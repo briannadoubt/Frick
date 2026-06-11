@@ -929,6 +929,7 @@ async fn test_hub() -> std::sync::Arc<GatewayHub> {
         apps,
         gateway: std::sync::OnceLock::new(),
         blob_processors: std::sync::Arc::new(crate::blob_processors::BlobProcessorRegistry::new()),
+        platform_events: std::sync::Arc::new(frick_store::MemoryPlatformEvents::new()),
     });
     let hub = GatewayHub::new(state);
     hub.state.attach_gateway(&hub);

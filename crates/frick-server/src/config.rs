@@ -73,10 +73,28 @@ pub enum LogLevel {
     Error,
 }
 
+/// Selected platform-events pipeline backend (`FRICK_PLATFORM_EVENTS_DRIVER`,
+/// FR-275). `Memory` (in-process, default for tests/dev) and `Sqlite` (durable,
+/// over the migrated `platform_events` tables) are ported; `Kafka` is a
+/// documented follow-up — the boot wiring returns a clean "not yet ported" error
+/// for it rather than a stub adapter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlatformEventsDriver {
+    Memory,
     Sqlite,
     Kafka,
+}
+
+impl PlatformEventsDriver {
+    /// The wire/log label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Memory => "memory",
+            Self::Sqlite => "sqlite",
+            Self::Kafka => "kafka",
+        }
+    }
 }
 
 /// Outbound-email provider (`FRICK_EMAIL_PROVIDER`, FR-271). `Noop` is the
@@ -674,11 +692,12 @@ pub fn load_frick_config(env: &dyn EnvSource) -> Result<FrickConfig> {
     let platform_events_kafka_brokers =
         parse_comma_list(env, "FRICK_PLATFORM_EVENTS_KAFKA_BROKERS");
     let platform_events_driver = match read(env, "FRICK_PLATFORM_EVENTS_DRIVER").as_deref() {
+        Some("memory") => PlatformEventsDriver::Memory,
         Some("sqlite") => PlatformEventsDriver::Sqlite,
         Some("kafka") => PlatformEventsDriver::Kafka,
         Some(other) => {
             return Err(FrickConfigError::new(format!(
-                "Invalid FRICK_PLATFORM_EVENTS_DRIVER: \"{other}\""
+                "FRICK_PLATFORM_EVENTS_DRIVER must be one of memory, sqlite, kafka (got \"{other}\")"
             )));
         }
         None => {
@@ -1153,5 +1172,34 @@ mod tests {
         .unwrap();
         assert_eq!(config.platform_events_driver, PlatformEventsDriver::Kafka);
         assert_eq!(config.platform_events_kafka_brokers.len(), 2);
+    }
+
+    #[test]
+    fn platform_events_driver_accepts_memory_and_sqlite() {
+        let memory =
+            load_frick_config(&env(&[("FRICK_PLATFORM_EVENTS_DRIVER", "memory")])).unwrap();
+        assert_eq!(memory.platform_events_driver, PlatformEventsDriver::Memory);
+
+        let sqlite =
+            load_frick_config(&env(&[("FRICK_PLATFORM_EVENTS_DRIVER", "sqlite")])).unwrap();
+        assert_eq!(sqlite.platform_events_driver, PlatformEventsDriver::Sqlite);
+    }
+
+    #[test]
+    fn platform_events_driver_defaults_to_sqlite_without_brokers() {
+        let config = load_frick_config(&env(&[])).unwrap();
+        assert_eq!(config.platform_events_driver, PlatformEventsDriver::Sqlite);
+    }
+
+    #[test]
+    fn platform_events_driver_rejects_unknown_value() {
+        let err =
+            load_frick_config(&env(&[("FRICK_PLATFORM_EVENTS_DRIVER", "redis")])).unwrap_err();
+        assert!(
+            err.0
+                .contains("FRICK_PLATFORM_EVENTS_DRIVER must be one of memory, sqlite, kafka"),
+            "{}",
+            err.0
+        );
     }
 }

@@ -8,6 +8,7 @@ pub mod error;
 pub mod facade;
 pub mod migrations;
 pub mod packed;
+pub mod platform_events;
 pub mod stores;
 
 pub use backup::{
@@ -22,6 +23,16 @@ pub use facade::{
     FrickStore, FrickStoreOptions, FrickStoreSearchProjector, FrickStoreWriteEvent,
     FrickStoreWriteListener, IdempotencyCacheStats, MaintenanceHandle, MaintenanceIntervals,
     PruneResult, StoreDriverKind,
+};
+pub use platform_events::{
+    DEFAULT_PLATFORM_EVENTS_CLAIM_TIMEOUT_MS, DEFAULT_PLATFORM_EVENTS_MAX_ROWS,
+    DEFAULT_PLATFORM_EVENTS_PRUNE_INTERVAL_MS, DEFAULT_PLATFORM_EVENTS_RETENTION_MS,
+    MemoryPlatformEvents, PLATFORM_EVENT_FAMILIES, PlatformEventClaimOptions,
+    PlatformEventConsumerHealth, PlatformEventDelivery, PlatformEventDeliveryAttempt,
+    PlatformEventEnvelope, PlatformEventHealth, PlatformEventInput, PlatformEventPublishReceipt,
+    PlatformEventValidationError, PlatformEventsAdapter, PlatformEventsDriver,
+    PlatformEventsPruneResult, SqlitePlatformEvents, is_platform_event_family,
+    normalize_platform_event_input,
 };
 pub use stores::blob::derivative_storage_key;
 pub use stores::blob_bytes::{FrickBlobDriver, S3BlobBytesConfig};

@@ -117,6 +117,13 @@ pub struct AppStateInner {
     ///
     /// [`BlobProcessHandler`]: crate::blob_processors::BlobProcessHandler
     pub blob_processors: Arc<BlobProcessorRegistry>,
+    /// The platform-events pipeline (FR-275): an outbox / event-stream of domain
+    /// events behind a pluggable driver. Selected by
+    /// `FRICK_PLATFORM_EVENTS_DRIVER` — `memory` (in-process) or `sqlite`
+    /// (durable, over the migrated `platform_events` tables); `kafka` is a
+    /// documented follow-up and fails fast at boot. Read by the
+    /// `/_frick/inspect/platform-events` health report.
+    pub platform_events: Arc<dyn frick_store::PlatformEventsDriver>,
 }
 
 impl AppStateInner {

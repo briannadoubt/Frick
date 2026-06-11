@@ -460,6 +460,54 @@ async fn inspect_server_and_migrations_shapes() {
     server.close().await;
 }
 
+/// `GET /_frick/inspect/platform-events` returns the live pipeline health shape
+/// (FR-275). The default driver in `test` env is SQLite (no kafka brokers
+/// configured), so `adapter` is `"sqlite"` and the aggregate counts are present
+/// and zero on a freshly-booted server.
+#[tokio::test]
+async fn inspect_platform_events_health_shape() {
+    let mut server = TestServer::boot(Some(ADMIN_TOKEN)).await;
+    let token = server.login("user-inspector").await;
+
+    let health = server
+        .request(
+            "GET",
+            "/_frick/inspect/platform-events",
+            &[("Authorization", &bearer(&token))],
+            "",
+        )
+        .await;
+    assert_eq!(health.status, 200, "body: {}", health.body);
+    assert!(
+        health.body.contains("\"adapter\":\"sqlite\""),
+        "body: {}",
+        health.body
+    );
+    for key in [
+        "ok",
+        "pending",
+        "claimed",
+        "deadLettered",
+        "retained",
+        "unclaimed",
+        "consumers",
+    ] {
+        assert!(
+            health.body.contains(&format!("\"{key}\"")),
+            "missing {key} in {}",
+            health.body
+        );
+    }
+    // Fresh server: nothing published yet.
+    assert!(
+        health.body.contains("\"retained\":0"),
+        "body: {}",
+        health.body
+    );
+
+    server.close().await;
+}
+
 /// Inspection requires an authenticated principal: no bearer → 401.
 #[tokio::test]
 async fn inspect_requires_auth() {

@@ -290,6 +290,34 @@ fn build_blob_processor_registry(
     Ok(Arc::new(registry))
 }
 
+/// Build the platform-events pipeline (FR-275) from the configured driver. The
+/// `memory` arm is an in-process queue; the `sqlite` arm shares the store's
+/// [`SqlDriver`] (so it reads/writes the migrated `platform_events` tables on
+/// the same connection — works on the Postgres arm too). The `kafka` arm is a
+/// documented follow-up: it needs a Kafka-client dependency decision, so it
+/// fails fast with a clear "not yet ported" [`BootError::Config`] rather than a
+/// stub adapter.
+fn build_platform_events(
+    config: &FrickConfig,
+    store: &Arc<FrickStore>,
+) -> Result<Arc<dyn frick_store::PlatformEventsDriver>, BootError> {
+    use crate::config::PlatformEventsDriver;
+    match config.platform_events_driver {
+        PlatformEventsDriver::Memory => Ok(Arc::new(frick_store::MemoryPlatformEvents::new())),
+        PlatformEventsDriver::Sqlite => Ok(Arc::new(frick_store::SqlitePlatformEvents::new(
+            store.sql_driver_arc(),
+            config.platform_events_retention_ms,
+            config.platform_events_max_rows,
+            frick_store::DEFAULT_PLATFORM_EVENTS_CLAIM_TIMEOUT_MS,
+        ))),
+        PlatformEventsDriver::Kafka => Err(BootError::Config(crate::config::FrickConfigError(
+            "FRICK_PLATFORM_EVENTS_DRIVER=kafka is not yet ported to the Rust backend (FR-275 \
+             follow-up); use memory or sqlite"
+                .to_string(),
+        ))),
+    }
+}
+
 /// The shared server-construction body for both the single-app and multi-app
 /// boot paths. `state_projections` / `state_search` become the top-level
 /// `AppStateInner` fields and MUST be `Arc`-clones of the root app's per-app
@@ -341,6 +369,11 @@ async fn build_server(
 
     let apps = Arc::new(registry);
 
+    // Platform-events pipeline (FR-275): select the driver per
+    // `FRICK_PLATFORM_EVENTS_DRIVER`. The SQLite arm shares the store's driver;
+    // kafka is a documented follow-up and fails fast here.
+    let platform_events = build_platform_events(&config, &store)?;
+
     let state = Arc::new(AppStateInner {
         config: config.clone(),
         store,
@@ -356,6 +389,7 @@ async fn build_server(
         // Populated by `attach_gateway` once the hub is built below (FR-278).
         gateway: std::sync::OnceLock::new(),
         blob_processors,
+        platform_events,
     });
 
     // The gateway hub owns the live connections and the fan-out funnel. The
