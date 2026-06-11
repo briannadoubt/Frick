@@ -19,6 +19,7 @@ use frick_store::FrickStore;
 use serde_json::json;
 
 use crate::config::FrickConfig;
+use crate::email::EmailRouter;
 use crate::error::ServerError;
 use crate::jobs::StoreProvider;
 use crate::projections::ProjectionRegistry;
@@ -54,6 +55,12 @@ pub struct AppStateInner {
     /// durable-job registry under `push.deliver` and handed to the admin-push
     /// routes so an enqueue + a worker tick share one delivery path.
     pub notification_router: Arc<NotificationRouter>,
+    /// The outbound-email router (FR-268). Default is a
+    /// [`crate::email::NoopEmailAdapter`]-backed router that logs + succeeds, so
+    /// `forgot-password` can dispatch unconditionally and still return 200.
+    /// Tests inject a [`crate::email::RecordingEmailAdapter`]; FR-271 plugs a
+    /// Resend adapter here. The injection point is [`crate::boot::BootSeams`].
+    pub email_router: Arc<EmailRouter>,
 }
 
 /// The durable-job worker / recurring scheduler read the store through this

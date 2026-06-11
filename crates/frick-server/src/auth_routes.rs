@@ -14,11 +14,14 @@ use axum::routing::post;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use frick_store::stores::account::CreateAccountInput;
+use frick_store::stores::password_reset::DEFAULT_RESET_TTL_MINUTES;
+use frick_store::stores::refresh_token::DEFAULT_REFRESH_TTL_SECONDS;
 use frick_store::stores::session::CreateSessionInput;
 use rand::RngCore;
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::email::router::PasswordResetEmail;
 use crate::error::{LimitKind, ServerError};
 use crate::extract::session_token_from_headers;
 use crate::http::{AppState, no_store_headers, respond_error};
@@ -32,6 +35,13 @@ pub fn auth_router(state: AppState) -> axum::Router {
         .route("/auth/login", post(login))
         .route("/auth/dev-login", post(dev_login))
         .route("/auth/logout", post(logout))
+        // Email/password identity + refresh-token routes (FR-268, map 02 §4.3).
+        .route("/auth/email/signup", post(email_signup))
+        .route("/auth/email/login", post(email_login))
+        .route("/auth/email/forgot-password", post(email_forgot_password))
+        .route("/auth/email/reset-password", post(email_reset_password))
+        .route("/auth/refresh", post(refresh))
+        .route("/auth/refresh/revoke", post(refresh_revoke))
         .with_state(state)
 }
 
@@ -72,6 +82,47 @@ struct DevLoginBody {
 #[serde(rename_all = "camelCase")]
 struct LogoutBody {
     session_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EmailSignupBody {
+    email: Option<String>,
+    password: Option<String>,
+    display_name: Option<String>,
+    tenant_id: Option<String>,
+    device_id: Option<String>,
+    replica_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EmailLoginBody {
+    email: Option<String>,
+    password: Option<String>,
+    tenant_id: Option<String>,
+    device_id: Option<String>,
+    replica_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ForgotPasswordBody {
+    email: Option<String>,
+    tenant_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResetPasswordBody {
+    token: Option<String>,
+    password: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RefreshBody {
+    refresh_token: Option<String>,
 }
 
 async fn signup(State(state): State<AppState>, Json(body): Json<SignupBody>) -> Response {
@@ -198,12 +249,9 @@ async fn login(State(state): State<AppState>, Json(body): Json<LoginBody>) -> Re
         .unwrap_or(None);
 
     let Some(account) = verified else {
-        // Anti-enumeration constant-work, then a uniform 401.
-        let _ = state
-            .store
-            .accounts()
-            .verify_dummy_password(&body.password)
-            .await;
+        // `verify_password` already spends the constant Argon2 work on a miss
+        // (auth-core-2), so unknown-identity and wrong-password cost the same;
+        // just return a uniform 401.
         return respond_error(
             &ServerError::Authentication {
                 message: "Invalid credentials".into(),
@@ -363,6 +411,454 @@ async fn logout(
     let _ = state.store.sessions().delete(&token).await;
     // TODO(FR-243 gateway): also live-disconnect the WS via gateway.close_session(token).
     Json(json!({ "ok": true })).into_response()
+}
+
+// -- Email / password identity routes (FR-268, map 02 §4.3) -----------------
+//
+// The Rust foundation has no app-owned `userObject`; the email IS the account
+// `handle`, so lookup-by-subject is the indexed `(tenant_id, LOWER(handle))`
+// account lookup (FR-218 — never a linear scan). A duplicate email surfaces a
+// DISTINCT 409 `auth.emailTaken` (FR-219). forgot-password keys its throttle on
+// the normalized email AND the client IP (FR-217) so an attacker IP drains only
+// its own bucket and can't lock out a victim's reset capability.
+
+/// Default minimum password length (TS `minPasswordLength ?? 8`).
+const MIN_EMAIL_PASSWORD_LENGTH: usize = 8;
+
+/// `POST /auth/email/signup`: create an account with the email as its subject
+/// (handle) + an argon2 password hash, then mint a session. A duplicate email
+/// returns a distinct 409 `auth.emailTaken` (FR-219) rather than a generic
+/// error.
+async fn email_signup(
+    State(state): State<AppState>,
+    Json(body): Json<EmailSignupBody>,
+) -> Response {
+    let request_id = new_request_id();
+    let tenant_id = body
+        .tenant_id
+        .unwrap_or_else(|| DEFAULT_TENANT_ID.to_string());
+    let now_ms = now_ms();
+
+    let email = normalize_email(body.email.as_deref());
+    if !is_valid_email(&email) {
+        return respond_error(&bad_request("invalid email"), &request_id);
+    }
+    let password = body.password.unwrap_or_default();
+    if password.chars().count() < MIN_EMAIL_PASSWORD_LENGTH {
+        return respond_error(
+            &bad_request(&format!(
+                "Password must be at least {MIN_EMAIL_PASSWORD_LENGTH} characters."
+            )),
+            &request_id,
+        );
+    }
+
+    // Throttle (shared AuthLimiter, label "email-signup") + tenant pre-check.
+    // Runs before the duplicate lookup so the 409 existence oracle can't be
+    // probed at scale (auth-core-1/6). Keyed on the email subject.
+    if let Err(error) = precheck(&state, "email-signup", &tenant_id, &email, now_ms).await {
+        return respond_error(&error, &request_id);
+    }
+
+    // Duplicate-email check via the indexed account lookup (FR-218): an existing
+    // account under this email (= handle) yields a DISTINCT 409 (FR-219).
+    let existing = state
+        .store
+        .accounts()
+        .read_by_identity(&tenant_id, &email)
+        .await
+        .unwrap_or(None)
+        .is_some();
+    if existing {
+        return respond_error(&email_taken(), &request_id);
+    }
+
+    let display_name = body
+        .display_name
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| email_local_part(&email));
+    let user_id = format!("user-email-{}", random_token(16));
+
+    let created = state
+        .store
+        .accounts()
+        .create(
+            &CreateAccountInput {
+                tenant_id: tenant_id.clone(),
+                user_id: user_id.clone(),
+                handle: email.clone(),
+                display_name: display_name.clone(),
+                password,
+            },
+            now_ms,
+        )
+        .await;
+    if let Err(error) = created {
+        // A constraint race (two concurrent signups) also surfaces emailTaken.
+        if error.to_string().to_lowercase().contains("taken") {
+            return respond_error(&email_taken(), &request_id);
+        }
+        return respond_error(&ServerError::Internal, &request_id);
+    }
+
+    mint_email_session_response(
+        &state,
+        &request_id,
+        &tenant_id,
+        &user_id,
+        &display_name,
+        &email,
+        body.device_id,
+        body.replica_id,
+        now_ms,
+        true,
+    )
+    .await
+}
+
+/// `POST /auth/email/login`: verify the password (constant-time; lazy rehash on
+/// success), then mint a session. Throttled via the shared limiter (label
+/// "email-login"). A bad email OR a bad password both return the identical
+/// generic 401 `auth.invalidCredentials` — no user enumeration.
+async fn email_login(State(state): State<AppState>, Json(body): Json<EmailLoginBody>) -> Response {
+    let request_id = new_request_id();
+    let tenant_id = body
+        .tenant_id
+        .unwrap_or_else(|| DEFAULT_TENANT_ID.to_string());
+    let now_ms = now_ms();
+
+    let email = normalize_email(body.email.as_deref());
+    let password = body.password.unwrap_or_default();
+    if email.is_empty() || password.is_empty() {
+        return respond_error(&bad_request("email and password are required"), &request_id);
+    }
+
+    // auth-core-1: throttle login by email (label "email-login") + tenant
+    // pre-check. The bucket is keyed on the email subject.
+    if let Err(error) = precheck(&state, "email-login", &tenant_id, &email, now_ms).await {
+        return respond_error(&error, &request_id);
+    }
+
+    // The email is the account handle; verify against the indexed row.
+    let verified = state
+        .store
+        .accounts()
+        .verify_password(&tenant_id, &email, &password)
+        .await
+        .unwrap_or(None);
+
+    let Some(account) = verified else {
+        // `verify_password` already spends the constant Argon2 work on a miss
+        // (auth-core-2): unknown-email and wrong-password cost the same, and
+        // both return the identical 401.
+        return respond_error(&invalid_credentials(), &request_id);
+    };
+
+    mint_email_session_response(
+        &state,
+        &request_id,
+        &tenant_id,
+        &account.user_id,
+        &account.display_name,
+        &email,
+        body.device_id,
+        body.replica_id,
+        now_ms,
+        false,
+    )
+    .await
+}
+
+/// `POST /auth/email/forgot-password`: always 200 (no account-existence leak).
+/// If the account exists, mint a reset token and dispatch it through the email
+/// router (best-effort — the response never depends on the send). FR-217: the
+/// throttle is keyed on the normalized email AND the client IP, so one attacker
+/// IP can't exhaust a victim's reset bucket.
+async fn email_forgot_password(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<ForgotPasswordBody>,
+) -> Response {
+    let request_id = new_request_id();
+    let tenant_id = body
+        .tenant_id
+        .unwrap_or_else(|| DEFAULT_TENANT_ID.to_string());
+    let now_ms = now_ms();
+
+    let email = normalize_email(body.email.as_deref());
+    if email.is_empty() {
+        return respond_error(&bad_request("invalid email"), &request_id);
+    }
+
+    // FR-217 / auth-core-4: throttle reset issuance keyed on email AND the
+    // client IP, so an attacker IP drains only its own (email, ip) bucket and
+    // can't lock out the victim's legitimate (email, victim-ip) requests. Runs
+    // before the lookup so unknown emails are capped too (no existence leak).
+    let throttle_key = format!("{email} ip:{}", client_ip(&headers));
+    if let Err(error) = precheck(&state, "forgot-password", &tenant_id, &throttle_key, now_ms).await
+    {
+        return respond_error(&error, &request_id);
+    }
+
+    // Indexed lookup by subject (FR-218). Only issue + send for a real account;
+    // either way the response is an identical 200.
+    if let Ok(Some(account)) = state
+        .store
+        .accounts()
+        .read_by_identity(&tenant_id, &email)
+        .await
+    {
+        let token = random_token(32);
+        if let Ok(issued) = state
+            .store
+            .password_reset_tokens()
+            .issue(
+                &token,
+                &tenant_id,
+                &account.user_id,
+                DEFAULT_RESET_TTL_MINUTES,
+                now_ms,
+            )
+            .await
+        {
+            // Best-effort send through the router seam. A failure is logged by
+            // the router and ignored here — the 200 never depends on it.
+            let _ = state
+                .email_router
+                .send_password_reset_email(PasswordResetEmail {
+                    tenant_id: tenant_id.clone(),
+                    to: email.clone(),
+                    reset_url: reset_url(&issued.token),
+                })
+                .await;
+        }
+    }
+
+    // Uniform 200 for existing AND non-existing accounts.
+    (no_store_headers(), Json(json!({ "ok": true }))).into_response()
+}
+
+/// `POST /auth/email/reset-password`: consume a valid, unexpired, unused reset
+/// token (the store marks it used + rejects reuse/expiry), set the new argon2
+/// hash, then revoke the user's existing sessions + refresh tokens so the reset
+/// fully cuts off prior credentials.
+async fn email_reset_password(
+    State(state): State<AppState>,
+    Json(body): Json<ResetPasswordBody>,
+) -> Response {
+    let request_id = new_request_id();
+    let now_ms = now_ms();
+
+    let token = body.token.unwrap_or_default();
+    let password = body.password.unwrap_or_default();
+    if token.is_empty() {
+        return respond_error(&bad_request("missing token"), &request_id);
+    }
+
+    // FR-29: throttle reset-token guessing by the token value (label
+    // "reset-password"). Tenant pre-check is keyed on the default tenant here
+    // (the token carries the tenant); the limiter bucket is the token.
+    if let Err(error) = precheck(&state, "reset-password", DEFAULT_TENANT_ID, &token, now_ms).await
+    {
+        return respond_error(&error, &request_id);
+    }
+    if password.chars().count() < MIN_EMAIL_PASSWORD_LENGTH {
+        return respond_error(
+            &bad_request(&format!(
+                "Password must be at least {MIN_EMAIL_PASSWORD_LENGTH} characters."
+            )),
+            &request_id,
+        );
+    }
+
+    // Single-use consume: rejects unknown / already-consumed / expired tokens.
+    let consumed = state
+        .store
+        .password_reset_tokens()
+        .consume(&token, now_ms)
+        .await
+        .unwrap_or(None);
+    let Some(consumed) = consumed else {
+        return respond_error(&bad_request("invalid or expired token"), &request_id);
+    };
+
+    let ok = state
+        .store
+        .accounts()
+        .set_password(&consumed.tenant_id, &consumed.user_id, &password)
+        .await
+        .unwrap_or(false);
+    if !ok {
+        // The token validated but the account vanished (race with deletion).
+        return respond_error(&bad_request("account no longer exists"), &request_id);
+    }
+
+    // Kill outstanding sessions + refresh tokens so the reset cuts off any
+    // squirreled-away credentials.
+    let _ = state
+        .store
+        .sessions()
+        .delete_for_user(&consumed.user_id, Some(&consumed.tenant_id))
+        .await;
+    let _ = state
+        .store
+        .refresh_tokens()
+        .revoke_for_user(&consumed.user_id, Some(&consumed.tenant_id), now_ms)
+        .await;
+
+    (no_store_headers(), Json(json!({ "ok": true }))).into_response()
+}
+
+/// `POST /auth/refresh`: rotate a refresh token (reuse-detection burns the
+/// family inside the store) and mint a fresh session bound to the same
+/// `(tenant, user, device, replica)`. The presented token is revoked; a fresh
+/// one is returned.
+async fn refresh(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<RefreshBody>,
+) -> Response {
+    let request_id = new_request_id();
+    let now_ms = now_ms();
+
+    let presented = body.refresh_token.unwrap_or_default();
+    if presented.is_empty() {
+        return respond_error(&bad_request("refreshToken required"), &request_id);
+    }
+
+    // Throttle by IP — the refresh token isn't a stable per-user identifier and
+    // a stolen token is the threat being bounded. Keyed on the client IP.
+    if let Err(error) = precheck(
+        &state,
+        "refresh",
+        DEFAULT_TENANT_ID,
+        &client_ip(&headers),
+        now_ms,
+    )
+    .await
+    {
+        return respond_error(&error, &request_id);
+    }
+
+    // Rotate: revokes the presented token and issues a fresh one atomically, so
+    // a replayed token is rejected (and the family is burned on reuse).
+    let fresh = random_token(32);
+    let rotated = state
+        .store
+        .refresh_tokens()
+        .rotate(&presented, &fresh, DEFAULT_REFRESH_TTL_SECONDS, now_ms)
+        .await
+        .unwrap_or(None);
+    let Some(record) = rotated else {
+        return respond_error(&invalid_refresh_token(), &request_id);
+    };
+
+    // Refuse to mint a session for a user whose account no longer exists.
+    let account_exists = state
+        .store
+        .accounts()
+        .read_by_identity(&record.tenant_id, &record.user_id)
+        .await
+        .unwrap_or(None)
+        .is_some();
+    if !account_exists {
+        return respond_error(&invalid_refresh_token(), &request_id);
+    }
+
+    match mint_session(
+        &state,
+        &record.tenant_id,
+        &record.user_id,
+        &record.device_id,
+        &record.replica_id,
+        now_ms,
+    )
+    .await
+    {
+        Ok(session) => (
+            no_store_headers(),
+            Json(json!({
+                "schemaHash": state.schema.hash,
+                "sessionToken": session.token,
+                "tenantId": record.tenant_id,
+                "userId": record.user_id,
+                "deviceId": record.device_id,
+                "replicaId": record.replica_id,
+                "expiresAt": session.expires_at,
+                "refreshToken": record.token,
+                "refreshTokenExpiresAt": record.expires_at,
+            })),
+        )
+            .into_response(),
+        Err(error) => respond_error(&error, &request_id),
+    }
+}
+
+/// `POST /auth/refresh/revoke`: revoke a refresh token. Idempotent — an unknown
+/// or already-revoked token still returns 200 so a client can't probe which
+/// tokens are live.
+async fn refresh_revoke(State(state): State<AppState>, Json(body): Json<RefreshBody>) -> Response {
+    let request_id = new_request_id();
+    let now_ms = now_ms();
+    let presented = body.refresh_token.unwrap_or_default();
+    if presented.is_empty() {
+        return respond_error(&bad_request("refreshToken required"), &request_id);
+    }
+    let _ = state
+        .store
+        .refresh_tokens()
+        .revoke(&presented, now_ms)
+        .await;
+    (no_store_headers(), Json(json!({ "ok": true }))).into_response()
+}
+
+/// Mint a session for an email signup/login and render the success body. Shared
+/// by [`email_signup`] and [`email_login`] (the `is_new_user` flag mirrors the
+/// TS `isNewUser`).
+#[allow(clippy::too_many_arguments)]
+async fn mint_email_session_response(
+    state: &AppState,
+    request_id: &str,
+    tenant_id: &str,
+    user_id: &str,
+    display_name: &str,
+    email: &str,
+    device_id: Option<String>,
+    replica_id: Option<String>,
+    now_ms: i64,
+    is_new_user: bool,
+) -> Response {
+    let device_id = device_id.unwrap_or_else(|| format!("device-{}", random_token(12)));
+    let replica_id = replica_id.unwrap_or_else(|| format!("replica-{}", random_token(12)));
+    let session =
+        match mint_session(state, tenant_id, user_id, &device_id, &replica_id, now_ms).await {
+            Ok(session) => session,
+            Err(error) => return respond_error(&error, request_id),
+        };
+    let status = if is_new_user {
+        axum::http::StatusCode::CREATED
+    } else {
+        axum::http::StatusCode::OK
+    };
+    (
+        status,
+        no_store_headers(),
+        Json(json!({
+            "schemaHash": state.schema.hash,
+            "sessionToken": session.token,
+            "tenantId": tenant_id,
+            "userId": user_id,
+            "displayName": display_name,
+            "email": email,
+            "handle": email,
+            "deviceId": device_id,
+            "replicaId": replica_id,
+            "expiresAt": session.expires_at,
+            "isNewUser": is_new_user,
+        })),
+    )
+        .into_response()
 }
 
 /// A minted session token + its expiry.
@@ -532,6 +1028,94 @@ fn now_ms() -> i64 {
 
 fn new_request_id() -> String {
     format!("req-{}", uuid::Uuid::new_v4())
+}
+
+// -- Email-route helpers ----------------------------------------------------
+
+/// Normalize an email per the TS (`body.email.trim().toLowerCase()`).
+fn normalize_email(raw: Option<&str>) -> String {
+    raw.map(|value| value.trim().to_lowercase())
+        .unwrap_or_default()
+}
+
+/// `^[^@\s]+@[^@\s]+\.[^@\s]+$` — the TS signup email guard. Requires a single
+/// `@`, a non-empty local part, and a domain with at least one dot, none of the
+/// three segments containing whitespace or `@`.
+fn is_valid_email(email: &str) -> bool {
+    let no_at_or_space = |segment: &str| {
+        !segment.is_empty() && !segment.chars().any(|c| c == '@' || c.is_whitespace())
+    };
+    let Some((local, domain)) = email.split_once('@') else {
+        return false;
+    };
+    if !no_at_or_space(local) {
+        return false;
+    }
+    let Some((host, tld)) = domain.rsplit_once('.') else {
+        return false;
+    };
+    no_at_or_space(host) && no_at_or_space(tld)
+}
+
+/// The email local-part (`email.split("@")[0]`), used as the default display
+/// name when none is submitted.
+fn email_local_part(email: &str) -> String {
+    email.split('@').next().unwrap_or(email).to_string()
+}
+
+/// Build the reset-link URL the email carries. The Rust foundation has no
+/// app-supplied `resetUrl` builder (that is an app seam in the TS); the route
+/// embeds the token in a default `/auth/reset?token=…` path so the link is
+/// well-formed. FR-271 / an app hook can override the formatting at the router.
+fn reset_url(token: &str) -> String {
+    format!("/auth/email/reset?token={token}")
+}
+
+/// The client IP for FR-217 throttle keying. Mirrors the TS
+/// `clientIpFromRequest` (which reads the socket address); behind a proxy the
+/// real client is in `x-forwarded-for` (first hop) or `x-real-ip`. Falls back
+/// to `"unknown"` (the TS fallback) so a missing header still yields a stable,
+/// non-empty bucket suffix.
+fn client_ip(headers: &HeaderMap) -> String {
+    if let Some(forwarded) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        let first = forwarded.split(',').next().unwrap_or("").trim();
+        if !first.is_empty() {
+            return first.to_string();
+        }
+    }
+    if let Some(real) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
+        let real = real.trim();
+        if !real.is_empty() {
+            return real.to_string();
+        }
+    }
+    "unknown".to_string()
+}
+
+/// A 400 `sync.protocolError` with a custom message.
+fn bad_request(message: &str) -> ServerError {
+    ServerError::BadRequest {
+        message: message.to_string(),
+    }
+}
+
+/// The FR-219 distinct 409 for a duplicate signup email.
+fn email_taken() -> ServerError {
+    ServerError::EmailTaken
+}
+
+/// The generic, no-enumeration 401 for a bad email OR password at email-login.
+fn invalid_credentials() -> ServerError {
+    ServerError::Authentication {
+        message: "Invalid credentials".into(),
+    }
+}
+
+/// The generic 401 for an unknown / rotated / expired refresh token.
+fn invalid_refresh_token() -> ServerError {
+    ServerError::Authentication {
+        message: "Invalid refresh token".into(),
+    }
 }
 
 /// ISO-8601 UTC ms string (`Date.toISOString`); shared with `boot::now_iso`.

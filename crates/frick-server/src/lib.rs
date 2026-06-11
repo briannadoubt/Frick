@@ -12,6 +12,7 @@ pub mod cluster;
 pub mod config;
 pub mod cors;
 pub mod diagnostics;
+pub mod email;
 pub mod error;
 pub mod extract;
 pub mod gateway;
@@ -37,6 +38,10 @@ pub use config::{FrickConfig, FrickConfigError, FrickLimits, load_frick_config};
 pub use diagnostics::{
     AssembleDiagnosticsOptions, DIAGNOSTICS_VERSION, DiagnosticsCursorProbe,
     assemble_diagnostics_snapshot,
+};
+pub use email::{
+    EmailError, EmailKind, EmailMessage, EmailRouter, FrickEmailAdapter, NoopEmailAdapter,
+    RecordingEmailAdapter,
 };
 pub use error::{LimitKind, ServerError};
 pub use gateway::GatewayHub;

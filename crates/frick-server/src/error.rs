@@ -36,6 +36,13 @@ pub enum ServerError {
     CorsOriginRejected,
     #[error("unknown tenant: {tenant_id}")]
     UnknownTenant { tenant_id: String },
+    /// A duplicate email at `/auth/email/signup` (FR-219). A DISTINCT 409 with
+    /// `details.reason = "emailTaken"`, never a generic 400 — so the client can
+    /// tell "this address is registered" apart from a malformed request. Maps
+    /// to the `storage.conflict` code (there is no dedicated `auth.emailTaken`
+    /// code in the protocol enum; the `reason` detail carries the signal).
+    #[error("An account with that email already exists")]
+    EmailTaken,
     #[error("limit exceeded")]
     Limit { kind: LimitKind, detail: Value },
     #[error("unsupported content type")]
@@ -80,6 +87,7 @@ impl ServerError {
             Self::BlobValidationRejected => 415,
             Self::ProjectionNotFound { .. } | Self::SearchIndexNotFound { .. } => 404,
             Self::AdminAuditWrite | Self::Internal => 500,
+            Self::EmailTaken => 409,
             Self::InvalidStreamCursor
             | Self::StorageConflict { .. }
             | Self::BadRequest { .. }
@@ -105,7 +113,7 @@ impl ServerError {
             }
             Self::BlobValidationRejected => FrickErrorCode::BlobUnsupportedContentType,
             Self::InvalidStreamCursor => FrickErrorCode::StreamInvalidCursor,
-            Self::StorageConflict { .. } => FrickErrorCode::StorageConflict,
+            Self::StorageConflict { .. } | Self::EmailTaken => FrickErrorCode::StorageConflict,
             Self::ProjectionNotFound { .. } | Self::SearchIndexNotFound { .. } => {
                 FrickErrorCode::StorageNotFound
             }
@@ -138,6 +146,9 @@ impl ServerError {
             Self::UnknownTenant { tenant_id } => {
                 details.push(("reason".to_string(), Value::from("unknownTenant")));
                 details.push(("tenantId".to_string(), Value::from(tenant_id.as_str())));
+            }
+            Self::EmailTaken => {
+                details.push(("reason".to_string(), Value::from("emailTaken")));
             }
             Self::ProjectionNotFound { projection } => {
                 details.push(("projection".to_string(), Value::from(projection.as_str())));

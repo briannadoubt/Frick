@@ -218,6 +218,13 @@ impl AccountStore {
         password: &str,
     ) -> Result<Option<StoredAccount>, StoreError> {
         let Some(row) = self.read_row_by_identity(tenant_id, identity).await? else {
+            // Anti-enumeration constant work (auth-core-2): an unknown account
+            // still spends exactly one verify, so this branch costs the same
+            // Argon2 op as the wrong-password branch below (one real verify).
+            // Without it an unknown email would be measurably cheaper than a
+            // wrong password — a timing oracle. The result is discarded; this
+            // never authenticates.
+            self.verify_dummy_password(password).await;
             return Ok(None);
         };
 

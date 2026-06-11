@@ -58,6 +58,11 @@ pub struct BootSeams {
     pub credential_env: Arc<dyn crate::push::credentials::CredentialEnv + Send + Sync>,
     /// The live APNs / FCM / Web Push HTTP transports.
     pub push_transports: crate::push::PushTransports,
+    /// The outbound-email router (FR-268). Production wires a
+    /// [`crate::email::NoopEmailAdapter`] (logs + succeeds); tests inject a
+    /// [`crate::email::RecordingEmailAdapter`]; FR-271 will plug a Resend
+    /// adapter here. This is the documented email-seam injection point.
+    pub email_router: Arc<crate::email::EmailRouter>,
 }
 
 impl BootSeams {
@@ -70,6 +75,9 @@ impl BootSeams {
             push_telemetry: Arc::new(crate::push::NoopTelemetry),
             credential_env: Arc::new(crate::push::credentials::ProcessCredentialEnv),
             push_transports: crate::push::PushTransports::production(),
+            // Default: a Noop-backed router. `forgot-password` still returns 200
+            // (the Noop adapter logs + succeeds); FR-271 swaps in Resend.
+            email_router: Arc::new(crate::email::EmailRouter::noop()),
         }
     }
 }
@@ -142,6 +150,7 @@ pub async fn create_frick_server_with_seams(
         search: crate::search::SearchRegistry::new(),
         push_registry: Arc::clone(&push.registry),
         notification_router: Arc::clone(&push.router),
+        email_router: Arc::clone(&seams.email_router),
     });
 
     // The gateway hub owns the live connections and the fan-out funnel. The

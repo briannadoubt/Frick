@@ -103,6 +103,7 @@ fn recording_seams(apns: Arc<RecordingApnsTransport>) -> BootSeams {
             fcm: Arc::new(UnavailableFcmTransport),
             web_push: Arc::new(UnavailableWebPushTransport),
         },
+        email_router: Arc::new(frick_server::EmailRouter::noop()),
     }
 }
 

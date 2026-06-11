@@ -742,6 +742,7 @@ async fn test_hub() -> std::sync::Arc<GatewayHub> {
         search: crate::search::SearchRegistry::new(),
         push_registry: push.registry,
         notification_router: push.router,
+        email_router: std::sync::Arc::new(crate::email::EmailRouter::noop()),
     });
     GatewayHub::new(state)
 }
