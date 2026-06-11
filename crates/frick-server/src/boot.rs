@@ -301,19 +301,25 @@ fn build_blob_processor_registry(
 /// (default) brokers no real media; `p2p` issues ICE/TURN for 1:1 calls; `sfu`
 /// brokers a server-side room over the fake SFU backend (a production backend is
 /// FR-288). The call lifecycle is identical across all three.
-fn build_call_media_plane(
-    selection: crate::config::CallsMediaPlane,
-) -> Arc<dyn crate::calls::MediaPlaneAdapter> {
-    match selection {
-        crate::config::CallsMediaPlane::Fake => {
-            Arc::new(crate::calls::FakeMediaPlaneAdapter::sfu())
-        }
-        crate::config::CallsMediaPlane::P2p => {
-            Arc::new(crate::calls::P2pMediaPlaneAdapter::stun_only())
-        }
-        crate::config::CallsMediaPlane::Sfu => {
+fn build_call_media_plane(config: &FrickConfig) -> Arc<dyn crate::calls::MediaPlaneAdapter> {
+    use crate::config::CallsMediaPlane;
+    match config.calls_media_plane {
+        CallsMediaPlane::Fake => Arc::new(crate::calls::FakeMediaPlaneAdapter::sfu()),
+        CallsMediaPlane::P2p => Arc::new(crate::calls::P2pMediaPlaneAdapter::stun_only()),
+        CallsMediaPlane::Sfu => Arc::new(crate::calls::SfuMediaPlaneAdapter::new(Arc::new(
+            crate::calls::FakeSfuBackend::new(crate::calls::FakeSfuBackendOptions::default()),
+        ))),
+        CallsMediaPlane::Livekit => {
+            // Validated at config load: `livekit` requires the LiveKit creds.
+            let lk = config.calls_livekit.as_ref().expect(
+                "FRICK_CALLS_MEDIA_PLANE=livekit is validated at config load to carry credentials",
+            );
             Arc::new(crate::calls::SfuMediaPlaneAdapter::new(Arc::new(
-                crate::calls::FakeSfuBackend::new(crate::calls::FakeSfuBackendOptions::default()),
+                crate::calls::LiveKitSfuBackend::new(
+                    lk.api_key.clone(),
+                    lk.api_secret.clone(),
+                    lk.ws_url.clone(),
+                ),
             )))
         }
     }
@@ -400,7 +406,7 @@ async fn build_server(
     // plane (FR-286 P2P / FR-287 SFU; see `build_call_media_plane`).
     let calls = Arc::new(crate::calls::CallControlPlane::new(
         Arc::clone(&store),
-        build_call_media_plane(config.calls_media_plane),
+        build_call_media_plane(&config),
         Arc::new(crate::calls::SystemCallClock),
     ));
 

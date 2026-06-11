@@ -88,12 +88,25 @@ pub enum PlatformEventsDriver {
 /// Selected realtime-calls media plane (`FRICK_CALLS_MEDIA_PLANE`). `fake`
 /// (deterministic, default) brokers no real media; `p2p` issues ICE/TURN
 /// credentials for one-to-one calls (FR-286); `sfu` brokers a server-side SFU
-/// room over the fake SFU backend (FR-287; a production backend is FR-288).
+/// room over the fake SFU backend (FR-287); `livekit` is the production SFU
+/// backend, minting LiveKit access tokens (FR-288, requires the
+/// `FRICK_CALLS_LIVEKIT_*` credentials).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CallsMediaPlane {
     Fake,
     P2p,
     Sfu,
+    Livekit,
+}
+
+/// LiveKit SFU credentials (FR-288). Required when
+/// `FRICK_CALLS_MEDIA_PLANE=livekit`; the control plane mints LiveKit join
+/// tokens offline (no running LiveKit server needed to issue a token).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveKitConfig {
+    pub api_key: String,
+    pub api_secret: String,
+    pub ws_url: String,
 }
 
 impl PlatformEventsDriver {
@@ -347,6 +360,7 @@ pub struct FrickConfig {
     pub admin_token: Option<String>,
     pub implicit_tenant_creation: bool,
     pub calls_media_plane: CallsMediaPlane,
+    pub calls_livekit: Option<LiveKitConfig>,
     pub platform_events_driver: PlatformEventsDriver,
     pub platform_events_topic: String,
     pub platform_events_kafka_brokers: Vec<String>,
@@ -850,11 +864,32 @@ pub fn load_frick_config(env: &dyn EnvSource) -> Result<FrickConfig> {
         None | Some("fake") => CallsMediaPlane::Fake,
         Some("p2p") => CallsMediaPlane::P2p,
         Some("sfu") => CallsMediaPlane::Sfu,
+        Some("livekit") => CallsMediaPlane::Livekit,
         Some(other) => {
             return Err(FrickConfigError::new(format!(
-                "FRICK_CALLS_MEDIA_PLANE must be one of fake, p2p, sfu (got \"{other}\")"
+                "FRICK_CALLS_MEDIA_PLANE must be one of fake, p2p, sfu, livekit (got \"{other}\")"
             )));
         }
+    };
+
+    let calls_livekit = match (
+        read(env, "FRICK_CALLS_LIVEKIT_API_KEY"),
+        read(env, "FRICK_CALLS_LIVEKIT_API_SECRET"),
+        read(env, "FRICK_CALLS_LIVEKIT_WS_URL"),
+    ) {
+        (Some(api_key), Some(api_secret), Some(ws_url)) => Some(LiveKitConfig {
+            api_key,
+            api_secret,
+            ws_url,
+        }),
+        _ if calls_media_plane == CallsMediaPlane::Livekit => {
+            return Err(FrickConfigError::new(
+                "FRICK_CALLS_MEDIA_PLANE=livekit requires FRICK_CALLS_LIVEKIT_API_KEY, \
+                 FRICK_CALLS_LIVEKIT_API_SECRET, and FRICK_CALLS_LIVEKIT_WS_URL"
+                    .to_string(),
+            ));
+        }
+        _ => None,
     };
 
     let admin_token = read(env, "FRICK_ADMIN_TOKEN");
@@ -895,6 +930,7 @@ pub fn load_frick_config(env: &dyn EnvSource) -> Result<FrickConfig> {
         implicit_tenant_creation: parse_boolean(env, "FRICK_IMPLICIT_TENANT_CREATION")?
             .unwrap_or(!production),
         calls_media_plane,
+        calls_livekit,
         platform_events_driver,
         platform_events_topic: read(env, "FRICK_PLATFORM_EVENTS_TOPIC")
             .unwrap_or_else(|| "frick.platform.events".into()),
