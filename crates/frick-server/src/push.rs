@@ -22,8 +22,10 @@
 //! - [`registry`] — §3.5 the [`PushAdapter`](registry::PushAdapter) trait and
 //!   the duplicate-rejecting [`PushRegistry`](registry::PushRegistry).
 //! - [`test_adapter`] — §3.11 the in-memory always-`delivered` test adapter.
-//! - [`apns_adapter`] / [`fcm_adapter`] — §3.7 / §3.8 the APNs / FCM payload +
-//!   JWT builders (unit-testable) behind a documented network seam.
+//! - [`apns_adapter`] / [`fcm_adapter`] / [`webpush_adapter`] — §3.7 / §3.8 /
+//!   §3.9 the APNs / FCM / Web Push payload + JWT (and, for Web Push, the RFC
+//!   8291 `aes128gcm` content encryption) builders, unit-testable behind a
+//!   documented network seam.
 //! - [`router`] — §3.4 the [`NotificationRouter`](router::NotificationRouter),
 //!   the `push.deliver` [`JobHandler`](crate::jobs::JobHandler), and the
 //!   intent encode/decode.
@@ -58,6 +60,7 @@ pub mod registry;
 pub mod router;
 pub mod test_adapter;
 pub mod types;
+pub mod webpush_adapter;
 
 pub use credentials::{
     APNS_SETTINGS_KEY, ApnsCredentials, FCM_SETTINGS_KEY, FcmCredentials, PushCredentialError,

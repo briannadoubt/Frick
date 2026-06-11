@@ -38,11 +38,21 @@ uuid = { workspace = true }
 # - AES-256-GCM credential envelope (push/credentials.rs, §3.6).
 # - APNs / VAPID ES256 JWTs in IEEE-P1363 r||s form (push/apns_adapter.rs, §3.7).
 # - FCM service-account RS256 JWTs (push/fcm_adapter.rs, §3.8).
-# - HKDF-SHA256 (reserved for Web Push aes128gcm, §3.9).
+# - HKDF-SHA256 + P-256 ECDH + AES-128-GCM for the Web Push aes128gcm content
+#   encoding (push/webpush_adapter.rs, §3.9).
 aes-gcm = "0.10"
 hkdf = "0.12"
-p256 = { version = "0.13", features = ["ecdsa", "pem"] }
+p256 = { version = "0.13", features = ["ecdh", "ecdsa", "pem"] }
 rsa = { version = "0.9", features = ["sha2"] }
+# RFC 8291 (Message Encryption for Web Push) over the RFC 8188 `aes128gcm`
+# content encoding. Mozilla's crate; the content-encryption orchestration and
+# framing are NOT hand-rolled here. The default `backend-openssl` is disabled to
+# keep this crate pure-Rust (no native deps) — instead the adapter plugs a
+# `Cryptographer` backend (push/webpush_adapter.rs) built on the `p256`/`hkdf`/
+# `aes-gcm` crates already vendored above. `backend-test-helper` exposes the
+# crate's RFC-8291-Appendix-A.2 known-answer suite (`ece::test_cryptographer`)
+# so the backend is provably correct against the published vector.
+ece = { version = "2.3", default-features = false, features = ["backend-test-helper"] }
 
 [features]
 # Live Redis cluster-bus smoke test (FR-27). Off by default: CI has no Redis
