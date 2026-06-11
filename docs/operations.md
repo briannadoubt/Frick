@@ -87,6 +87,9 @@ All variables are optional. Defaults match the runtime mode.
 | `FRICK_INSPECTION_ENABLED`  | `true`                      | `false`                               | Gates `/_frick/inspect/*`. Forcing on in prod logs a warning.        |
 | `FRICK_ADMIN_TOKEN`         | unset                       | unset                                 | Enables `/_frick/admin/*` and production inspection auth. Must be at least 32 chars in production. |
 | `FRICK_IMPLICIT_TENANT_CREATION` | `true`                 | `false`                               | Allows auth routes to create unknown tenants automatically.           |
+| `FRICK_EMAIL_PROVIDER`      | `noop`                      | `noop`                                | Outbound-email provider (FR-271). One of `noop` or `resend`. `noop` (the default) drops messages after logging, so `POST /auth/email/forgot-password` still returns `200` without sending. `resend` wires the live Resend HTTP adapter and additionally requires `FRICK_RESEND_API_KEY` and `FRICK_EMAIL_FROM` (both validated at startup). |
+| `FRICK_RESEND_API_KEY`      | unset                       | unset                                 | Resend API key, sent as `Authorization: Bearer <key>` to `https://api.resend.com/emails`. Required when `FRICK_EMAIL_PROVIDER=resend`; inert otherwise. |
+| `FRICK_EMAIL_FROM`          | unset                       | unset                                 | Default `from:` address for framework auth emails (password reset / verification). Required when `FRICK_EMAIL_PROVIDER=resend`; also used as the email router's `defaultFrom`. |
 | `FRICK_PLATFORM_EVENTS_DRIVER` | `sqlite`                  | `sqlite` unless brokers are set       | One of `sqlite` or `kafka`. The Rust runtime recognizes `kafka` as a config value (and the Compose profiles set it), but the platform-event store is SQLite-backed in every mode today — the Kafka/Redpanda runtime adapter is not yet ported (FR-264). |
 | `FRICK_PLATFORM_EVENTS_TOPIC` | `frick.platform.events`    | `frick.platform.events`               | Kafka/Redpanda topic name for platform events.                        |
 | `FRICK_PLATFORM_EVENTS_KAFKA_BROKERS` | unset             | unset                                 | Comma-separated Kafka/Redpanda brokers. When set and no driver is forced, the driver defaults to `kafka`. |
@@ -625,23 +628,41 @@ Plan and execute any data move explicitly, out of band, after the identity move.
 
 ## Outbound email
 
-> **Not yet ported to the Rust server (tracked in FR-264).** Outbound email is
-> **not implemented** in the Rust `frick-server` — there is no email module,
-> adapter registry, or Resend integration in `crates/frick-server/`, and no
-> `RESEND_API_KEY` wiring. Because the email/password identity routes themselves
-> are also unported (see "Identity provider routes"), nothing dispatches reset or
-> welcome mail today.
+Outbound email is a pluggable seam in `crates/frick-server/src/email/`,
+mirroring the push-adapter convention: the framework defines the
+`FrickEmailAdapter` trait, an `EmailRouter` formats the templated
+password-reset / verification messages (subject, plain-text + HTML body, the
+action link), and the email/password identity flows dispatch through the router
+on a **best-effort** basis — a failed delivery is logged but never fails the
+originating auth request (`POST /auth/email/forgot-password` always returns
+`200`). Two adapters ship in-tree: `NoopEmailAdapter` (the default — logs and
+succeeds without sending) and a live `ResendEmailAdapter`.
 
-The intended contract (carried over from the prior TypeScript server) is a
-pluggable outbound-email surface mirroring the push-adapter convention: the
-framework defines an email-adapter interface, apps register an implementation
-(a Resend reference adapter plus an in-memory test adapter, with SES/Postmark/SMTP
-provided out-of-tree), and the email/password identity flows dispatch the
-templated password-reset and welcome messages through it on a best-effort basis
-(a failed delivery is logged and audited but never fails the originating auth
-request). None of this surface exists in the Rust crates yet; treat it as
-follow-up work and do not wire against a `@fricken/server` email import — that
-TypeScript package was removed in the cutover.
+The provider is selected by config (`FRICK_EMAIL_PROVIDER`):
+
+- **`noop` (default).** No provider is wired. The password-reset route still
+  composes the message and calls the router, but the Noop adapter drops it after
+  an INFO log. An unconfigured deployment therefore needs no email credentials
+  and `forgot-password` keeps returning `200`.
+- **`resend`.** Wires the live `ResendEmailAdapter`, which `POST`s each message
+  to `https://api.resend.com/emails` with `Authorization: Bearer
+  $FRICK_RESEND_API_KEY` and a JSON body `{ from, to, subject, html, text }`. It
+  additionally requires `FRICK_RESEND_API_KEY` and `FRICK_EMAIL_FROM` (the
+  default `from:` address); both are validated at startup, so a misconfigured
+  `resend` deployment fails fast rather than silently dropping mail. A non-2xx
+  response (or a transport error) is surfaced as an `EmailError` the router
+  logs — it never aborts the auth flow.
+
+```bash
+FRICK_EMAIL_PROVIDER=resend
+FRICK_RESEND_API_KEY=re_xxxxxxxxxxxxxxxxxxxxxxxx
+FRICK_EMAIL_FROM="Acme <noreply@acme.example>"
+```
+
+SES / Postmark / SMTP can be provided out-of-tree by implementing
+`FrickEmailAdapter` and injecting an `EmailRouter` over it through
+`BootSeams::email_router` (the documented injection point; `tests/email_auth.rs`
+uses a `RecordingEmailAdapter` the same way).
 
 ## Health vs. ready
 
@@ -1297,8 +1318,8 @@ Content-Type: application/json
   included in NDJSON backup/restore or account export payloads, so operators must
   back up the filesystem path separately. Byte export and derivative offloading
   are follow-ups.
-- Outbound email is not yet ported to the Rust server (see "Outbound email";
-  tracked in FR-264). There is no email adapter, Resend integration, or
-  `RESEND_API_KEY` wiring in `crates/frick-server/` today, and the
-  email/password identity routes that would dispatch reset/welcome mail are
-  themselves unported.
+- Outbound email ships a Noop default and a live Resend adapter (FR-271; see
+  "Outbound email"). SES / Postmark / SMTP adapters are provided out-of-tree
+  against the `FrickEmailAdapter` trait, and email-address *verification* (as
+  distinct from password reset) is reserved on the router but not yet wired into
+  a route.

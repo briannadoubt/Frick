@@ -15,16 +15,19 @@
 //!   message for assertions and always succeeds (the Rust port of the TS
 //!   `createFrickTestEmailAdapter`).
 //!
-//! The live Resend HTTP adapter is **out of scope** (FR-271); this module
-//! leaves the trait + the [`EmailRouter`] injection point (boot wires a Noop;
-//! FR-271 swaps in a Resend adapter) so the seam exists without dead HTTP code.
+//! The live Resend HTTP adapter ships in [`resend`] (FR-271): a `reqwest`-backed
+//! [`ResendEmailAdapter`] selected at boot when `FRICK_EMAIL_PROVIDER=resend`
+//! (else the Noop default keeps the seam inert). [`EmailRouter::from_config`] is
+//! the config-driven injection point.
 
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+pub mod resend;
 pub mod router;
 
+pub use resend::ResendEmailAdapter;
 pub use router::EmailRouter;
 
 /// A fully-formed outbound message (`FrickEmailMessage`, email/types.ts:25-37).

@@ -17,7 +17,9 @@
 use std::sync::Arc;
 
 use frick_server::email::RecordingEmailAdapter;
-use frick_server::{BootSeams, FrickConfig, FrickServer, create_frick_server_with_seams};
+use frick_server::{
+    BootSeams, FrickConfig, FrickServer, create_frick_server, create_frick_server_with_seams,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 fn test_config() -> FrickConfig {
@@ -47,6 +49,33 @@ async fn boot() -> (FrickServer, RecordingEmailAdapter) {
             .unwrap();
     server.listen().await.unwrap();
     (server, recorder)
+}
+
+/// FR-271: a deployment with NO email configuration boots through the real
+/// `create_frick_server` config-driven path, keeps the Noop email router (no
+/// provider is wired), and `forgot-password` still returns 200 — the seam never
+/// makes the route depend on a real send. Drives the full boot path (not a
+/// seam-injected recorder) so the config→router selection is exercised.
+#[tokio::test]
+async fn unconfigured_deployment_stays_noop_and_forgot_password_still_200s() {
+    let mut server = create_frick_server(test_config(), frick_protocol::foundation_schema())
+        .await
+        .unwrap();
+    // No FRICK_EMAIL_PROVIDER ⇒ Noop router.
+    assert_eq!(server.state.email_router.provider(), "noop");
+    server.listen().await.unwrap();
+    let port = server.port();
+
+    let (status, body) = post(
+        port,
+        "/auth/email/forgot-password",
+        r#"{"email":"nobody@example.com"}"#,
+    )
+    .await;
+    assert_eq!(status, 200, "forgot-password body: {body}");
+    assert!(body.contains("\"ok\":true"), "forgot-password body: {body}");
+
+    server.close().await;
 }
 
 /// Minimal HTTP POST that returns `(status_line_code, body)`.
