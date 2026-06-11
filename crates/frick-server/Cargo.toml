@@ -52,6 +52,11 @@ uuid = { workspace = true }
 aes-gcm = "0.10"
 hkdf = "0.12"
 p256 = { version = "0.13", features = ["ecdh", "ecdsa", "pem"] }
+# Call E2EE key exchange (FR-289, calls/e2ee.rs). Pure-Rust X25519 ECDH +
+# ChaCha20-Poly1305 AEAD for the per-call media key, per-recipient sealed
+# envelopes, and the sender-key relay envelope. No native/C deps.
+chacha20poly1305 = { workspace = true }
+x25519-dalek = { workspace = true }
 rsa = { version = "0.9", features = ["sha2"] }
 # RFC 8291 (Message Encryption for Web Push) over the RFC 8188 `aes128gcm`
 # content encoding. Mozilla's crate; the content-encryption orchestration and
