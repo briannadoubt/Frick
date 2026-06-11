@@ -239,18 +239,30 @@ async fn projections(State(state): State<AppState>, headers: HeaderMap) -> Respo
 }
 
 /// `GET /_frick/inspect/search` (`src/server.ts:1291-1300`): the search adapter
-/// id + indexes. Search is a later story (TODO search), so the adapter is
-/// reported as `"none"` and the index list is empty.
+/// id + the registered indexes (`{name, source:{kind, type|name}}`) from the
+/// shared search registry on [`AppState`] (FR-245, map 03 §13).
 async fn search(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let request_id = new_request_id();
     if let Err(response) = guard(&state, &headers, &request_id).await {
         return response;
     }
+    let indexes: Vec<serde_json::Value> = state
+        .search
+        .descriptors()
+        .iter()
+        .map(|descriptor| {
+            json!({
+                "name": descriptor.name,
+                "source": {
+                    "kind": descriptor.source.kind_str(),
+                    "type": descriptor.source.type_or_name(),
+                },
+            })
+        })
+        .collect();
     axum::Json(json!({
-        // TODO(search): report the configured adapter id + registered indexes
-        // once the search subsystem (`src/search/*`) is ported.
-        "adapter": "none",
-        "indexes": json!([]),
+        "adapter": state.store.search_adapter_id(),
+        "indexes": indexes,
     }))
     .into_response()
 }

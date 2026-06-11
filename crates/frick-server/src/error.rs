@@ -44,8 +44,15 @@ pub enum ServerError {
     InvalidStreamCursor,
     #[error("projection not found: {projection}")]
     ProjectionNotFound { projection: String },
-    #[error("search index not found: {index}")]
+    #[error("Search index \"{index}\" not found")]
     SearchIndexNotFound { index: String },
+    /// A search query was rejected (q too large, malformed filter, reserved
+    /// filter key, or the adapter rejected the FTS syntax). → 400
+    /// `sync.protocolError` with `details.reason = "invalidSearchQuery"`. The
+    /// wrapped adapter error is deliberately not exposed (TS
+    /// `InvalidSearchQueryError`).
+    #[error("Invalid search query")]
+    InvalidSearchQuery,
     #[error("admin audit write failed")]
     AdminAuditWrite,
     #[error("storage conflict")]
@@ -73,7 +80,10 @@ impl ServerError {
             Self::BlobValidationRejected => 415,
             Self::ProjectionNotFound { .. } | Self::SearchIndexNotFound { .. } => 404,
             Self::AdminAuditWrite | Self::Internal => 500,
-            Self::InvalidStreamCursor | Self::StorageConflict { .. } | Self::BadRequest { .. } => {
+            Self::InvalidStreamCursor
+            | Self::StorageConflict { .. }
+            | Self::BadRequest { .. }
+            | Self::InvalidSearchQuery => {
                 // storage.conflict is 409 in the inline per-route handlers.
                 if matches!(self, Self::StorageConflict { .. }) {
                     409
@@ -106,7 +116,7 @@ impl ServerError {
                 LimitKind::MaxStreamAppendPayloadBytes => FrickErrorCode::StreamAppendRejected,
                 _ => FrickErrorCode::RateLimitExceeded,
             },
-            Self::BadRequest { .. } => FrickErrorCode::SyncProtocolError,
+            Self::BadRequest { .. } | Self::InvalidSearchQuery => FrickErrorCode::SyncProtocolError,
         }
     }
 
@@ -133,7 +143,11 @@ impl ServerError {
                 details.push(("projection".to_string(), Value::from(projection.as_str())));
             }
             Self::SearchIndexNotFound { index } => {
+                details.push(("reason".to_string(), Value::from("searchIndexNotFound")));
                 details.push(("index".to_string(), Value::from(index.as_str())));
+            }
+            Self::InvalidSearchQuery => {
+                details.push(("reason".to_string(), Value::from("invalidSearchQuery")));
             }
             Self::Limit { detail, .. } | Self::StorageConflict { detail } => {
                 if let Value::Map(entries) = detail {

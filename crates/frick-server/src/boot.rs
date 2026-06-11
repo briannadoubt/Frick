@@ -139,6 +139,7 @@ pub async fn create_frick_server_with_seams(
         started_at: now_iso(),
         auth_limiter: std::sync::Mutex::new(crate::http::AuthLimiter::default()),
         projections: crate::projections::ProjectionRegistry::new(),
+        search: crate::search::SearchRegistry::new(),
         push_registry: Arc::clone(&push.registry),
         notification_router: Arc::clone(&push.router),
     });
@@ -155,6 +156,16 @@ pub async fn create_frick_server_with_seams(
             gateway_listener(event);
             crate::projections::drive_projection_write(&projections, event);
         }));
+    }
+    // Search projector (FR-245, map 03 §13): the store applies the SearchOps
+    // this registry derives from each object/stream write to its FTS tables, so
+    // registered indexes stay in sync without the gateway in the loop. The
+    // projector is pure (it never re-enters the store). Detached on close.
+    {
+        let search = state.search.clone();
+        state
+            .store
+            .set_search_projector(Box::new(move |event| search.project_event(event)));
     }
     // Projection deltas fan out over the gateway to projection subscribers.
     {
@@ -280,6 +291,9 @@ impl FrickServer {
         // Detach the write-listener funnel so the store no longer holds the
         // gateway's closure.
         self.state.store.clear_write_listener();
+        // Detach the search projector so the store no longer holds the search
+        // registry's closure.
+        self.state.store.clear_search_projector();
         tracing::info!(target: "frick.server", "frick.server.closed");
     }
 }

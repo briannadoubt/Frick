@@ -19,6 +19,7 @@ pub mod inspect;
 pub mod objects;
 pub mod projections;
 pub mod push;
+pub mod search;
 pub mod share;
 pub mod signals;
 pub mod streams;
@@ -48,6 +49,7 @@ pub fn dataplane_router(state: AppState) -> axum::Router {
         .merge(share::router(state.clone()))
         .merge(push::router(state.clone()))
         .merge(projections::router(state.clone()))
+        .merge(search::router(state.clone()))
         .merge(blobs::blobs_router(state))
 }
 

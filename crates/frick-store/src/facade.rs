@@ -21,12 +21,14 @@
 
 pub mod seam;
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use frick_protocol::schema::{FrickObjectMergePolicy, resolve_object_merge_policy};
 use frick_protocol::{FrickSchema, Value, foundation_schema, validate_schema};
+use serde_json::{Map, Value as JsonValue};
 
-use crate::driver::SqlDriver;
+use crate::driver::{SqlDialect, SqlDriver};
 use crate::error::StoreError;
 use crate::migrations::{self, AppliedMigrationRow};
 use crate::packed::encode_packed;
@@ -44,6 +46,9 @@ use crate::stores::presence::PresenceStore;
 use crate::stores::push_registration::PushRegistrationStore;
 use crate::stores::refresh_token::RefreshTokenStore;
 use crate::stores::saml_assertion::SamlAssertionStore;
+use crate::stores::search::{
+    self, SEARCH_ADAPTER_ID, SearchFilterValue, SearchOp, SearchQueryResult,
+};
 use crate::stores::service_principal::ServicePrincipalStore;
 use crate::stores::session::SessionStore;
 use crate::stores::signal::SignalStore;
@@ -220,6 +225,15 @@ pub enum FrickStoreWriteEvent {
 /// `#writeListener`.
 pub type FrickStoreWriteListener = Box<dyn Fn(&FrickStoreWriteEvent) + Send + Sync>;
 
+/// The search projector (FR-245, map 03 §13): maps one store-write event to the
+/// [`SearchOp`]s the registered indexes want applied. The server installs this
+/// via [`FrickStore::set_search_projector`]; the store applies the returned ops
+/// through its own search SQL so it stays the sole owner of its writes (the
+/// projector must NOT call back into the store). A boxed `Fn` behind a mutex,
+/// the same single-slot shape as [`FrickStoreWriteListener`].
+pub type FrickStoreSearchProjector =
+    Box<dyn Fn(&FrickStoreWriteEvent) -> Vec<SearchOp> + Send + Sync>;
+
 /// Result of [`FrickStore::prune`] (TS `PruneResult`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PruneResult {
@@ -288,6 +302,13 @@ pub struct FrickStore {
     /// [`set_write_listener`](Self::set_write_listener). Behind a mutex so the
     /// gateway can attach/detach at runtime.
     write_listener: Mutex<Option<FrickStoreWriteListener>>,
+
+    /// Single optional search projector (FR-245), set via
+    /// [`set_search_projector`](Self::set_search_projector). Invoked after every
+    /// successful object/stream write to derive the [`SearchOp`]s the store then
+    /// applies to its own indexes. Behind a mutex so the server can
+    /// attach/detach at runtime.
+    search_projector: Mutex<Option<FrickStoreSearchProjector>>,
 }
 
 impl FrickStore {
@@ -413,6 +434,7 @@ impl FrickStore {
             clock,
             id_gen,
             write_listener: Mutex::new(None),
+            search_projector: Mutex::new(None),
         };
 
         // 7. Record the schema identity (§7.5). The TS constructor does this
@@ -605,6 +627,160 @@ impl FrickStore {
         }
     }
 
+    /// Register the single search projector (FR-245, map 03 §13). Passing a new
+    /// projector replaces any existing one. The store calls it after each
+    /// successful object/stream write and applies the returned [`SearchOp`]s
+    /// itself; the projector must be pure (it must NOT re-enter the store).
+    pub fn set_search_projector(&self, projector: FrickStoreSearchProjector) {
+        if let Ok(mut slot) = self.search_projector.lock() {
+            *slot = Some(projector);
+        }
+    }
+
+    /// Detach the search projector (the server does this on close).
+    pub fn clear_search_projector(&self) {
+        if let Ok(mut slot) = self.search_projector.lock() {
+            *slot = None;
+        }
+    }
+
+    /// Apply the projector to a write event and run every returned [`SearchOp`]
+    /// through the facade's own search SQL. Each op is its own driver call — the
+    /// projector lock is released before any op runs, so the store never holds a
+    /// lock across the (synchronous) projector call or the (async) SQL. Any
+    /// failure is logged (`frick.search`) and swallowed: a search hiccup must
+    /// never fail the originating write (map 03 §13).
+    async fn run_search_projector(&self, tenant_id: &str, event: &FrickStoreWriteEvent) {
+        // The SQLite arm is FTS5-backed. The Postgres `tsvector` arm is a
+        // documented FR-242-style follow-up; no-op there rather than failing.
+        if self.driver.dialect() != SqlDialect::Sqlite {
+            // TODO(FR-242): Postgres `tsvector` search projection.
+            return;
+        }
+        let ops = {
+            let Ok(slot) = self.search_projector.lock() else {
+                return;
+            };
+            let Some(projector) = slot.as_ref() else {
+                return;
+            };
+            let Ok(ops) =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| projector(event)))
+            else {
+                tracing::warn!(
+                    target: "frick.search.projector_failed",
+                    kind = event_kind(event),
+                    "search projector panicked",
+                );
+                return;
+            };
+            ops
+        };
+        for op in ops {
+            match op {
+                SearchOp::Upsert {
+                    index,
+                    doc_id,
+                    text,
+                    fields,
+                } => {
+                    if let Err(err) = self
+                        .search_upsert(tenant_id, &index, &doc_id, &text, &fields)
+                        .await
+                    {
+                        tracing::warn!(
+                            target: "frick.search.upsert_failed",
+                            tenant_id,
+                            index = index.as_str(),
+                            doc_id = doc_id.as_str(),
+                            error = %err,
+                            "search upsert failed",
+                        );
+                    }
+                }
+                SearchOp::Delete { index, doc_id } => {
+                    if let Err(err) = self.search_delete(tenant_id, &index, &doc_id).await {
+                        tracing::warn!(
+                            target: "frick.search.delete_failed",
+                            tenant_id,
+                            index = index.as_str(),
+                            doc_id = doc_id.as_str(),
+                            error = %err,
+                            "search delete failed",
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- §13 search adapter SQL (sqlite-fts5) -----------------------------
+    //
+    // The store owns these writes; the projector and the server's search route
+    // call them. They are `now_ms`-free — search rows have no `created_at`.
+
+    /// Insert or replace a document in a search index (map 03 §13). The
+    /// `0009_search_indexes` triggers keep `search_index_fts` in sync.
+    pub async fn search_upsert(
+        &self,
+        tenant_id: &str,
+        index_name: &str,
+        doc_id: &str,
+        text: &str,
+        fields: &Map<String, JsonValue>,
+    ) -> Result<(), StoreError> {
+        search::search_upsert(&self.driver, tenant_id, index_name, doc_id, text, fields).await
+    }
+
+    /// Remove a document from a search index (map 03 §13).
+    pub async fn search_delete(
+        &self,
+        tenant_id: &str,
+        index_name: &str,
+        doc_id: &str,
+    ) -> Result<(), StoreError> {
+        search::search_delete(&self.driver, tenant_id, index_name, doc_id).await
+    }
+
+    /// Clear `(tenant, index)` then re-insert every document (map 03 §13
+    /// `rebuild`). Each `doc` is `(doc_id, text, fields)`.
+    pub async fn search_rebuild(
+        &self,
+        tenant_id: &str,
+        index_name: &str,
+        docs: Vec<(String, String, Map<String, JsonValue>)>,
+    ) -> Result<(), StoreError> {
+        search::search_rebuild(&self.driver, tenant_id, index_name, docs).await
+    }
+
+    /// Query a search index (map 03 §13). Empty/whitespace `q` short-circuits to
+    /// `{hits: [], total: 0}`. Hits carry their persisted `fields` (including the
+    /// reserved `__frickSource*` keys — the server strips those before
+    /// responding); they are ordered by `bm25` ascending (most relevant first),
+    /// and `total` is computed independently of `limit`.
+    pub async fn search_query(
+        &self,
+        tenant_id: &str,
+        index_name: &str,
+        q: &str,
+        filter: &BTreeMap<String, SearchFilterValue>,
+        limit: u32,
+    ) -> Result<SearchQueryResult, StoreError> {
+        search::search_query(&self.driver, tenant_id, index_name, q, filter, limit).await
+    }
+
+    /// Every distinct index name with documents for the tenant (map 03 §13);
+    /// surfaced in the inspect report.
+    pub async fn search_index_names(&self, tenant_id: &str) -> Result<Vec<String>, StoreError> {
+        search::search_index_names(&self.driver, tenant_id).await
+    }
+
+    /// The search adapter id surfaced by the inspect report (map 03 §13).
+    #[must_use]
+    pub const fn search_adapter_id(&self) -> &'static str {
+        SEARCH_ADAPTER_ID
+    }
+
     /// Fire the store-write listener for a successful write. Any listener panic
     /// is caught + logged (`frick.store.write_listener_failed`); a fan-out
     /// hiccup must never tear down the originating write (TS
@@ -657,16 +833,18 @@ impl FrickStore {
             .read(tenant_id, object_type, object_id, app_id)
             .await?
             .unwrap_or_else(|| value.clone());
-        // Projection + search notify hooks: FR-244 / FR-245 extension points.
+        // Projection notify hook: FR-244 extension point (currently no-op).
         self.notify_projection_object_upsert(tenant_id, app_id, object_type, object_id, &stored);
-        self.notify_search_for_object(tenant_id, object_type, object_id, &stored);
-        self.notify_write_listener(&FrickStoreWriteEvent::ObjectUpsert {
+        let event = FrickStoreWriteEvent::ObjectUpsert {
             tenant_id: tenant_id.to_string(),
             app_id: app_id.to_string(),
             object_type: object_type.to_string(),
             object_id: object_id.to_string(),
             object: stored,
-        });
+        };
+        // Search projector (FR-245) runs after the write, before the listener.
+        self.run_search_projector(tenant_id, &event).await;
+        self.notify_write_listener(&event);
         Ok(())
     }
 
@@ -704,14 +882,15 @@ impl FrickStore {
             .await?
             .unwrap_or_else(|| value.clone());
         self.notify_projection_object_upsert(tenant_id, app_id, object_type, object_id, &stored);
-        self.notify_search_for_object(tenant_id, object_type, object_id, &stored);
-        self.notify_write_listener(&FrickStoreWriteEvent::ObjectUpsert {
+        let event = FrickStoreWriteEvent::ObjectUpsert {
             tenant_id: tenant_id.to_string(),
             app_id: app_id.to_string(),
             object_type: object_type.to_string(),
             object_id: object_id.to_string(),
             object: stored,
-        });
+        };
+        self.run_search_projector(tenant_id, &event).await;
+        self.notify_write_listener(&event);
         Ok(result)
     }
 
@@ -735,12 +914,14 @@ impl FrickStore {
             .delete(tenant_id, object_type, object_id, app_id)
             .await?;
         if existed {
-            self.notify_write_listener(&FrickStoreWriteEvent::ObjectDelete {
+            let event = FrickStoreWriteEvent::ObjectDelete {
                 tenant_id: tenant_id.to_string(),
                 app_id: app_id.to_string(),
                 object_type: object_type.to_string(),
                 object_id: object_id.to_string(),
-            });
+            };
+            self.run_search_projector(tenant_id, &event).await;
+            self.notify_write_listener(&event);
         }
         Ok(existed)
     }
@@ -798,11 +979,13 @@ impl FrickStore {
         let result = append?;
         if result.created {
             self.notify_projection_stream_append(&result.event);
-            self.notify_search_for_stream(&result.event);
-            self.notify_write_listener(&FrickStoreWriteEvent::StreamAppend {
-                tenant_id: result.event.tenant_id.clone(),
+            let event_tenant = result.event.tenant_id.clone();
+            let event = FrickStoreWriteEvent::StreamAppend {
+                tenant_id: event_tenant.clone(),
                 event: result.event.clone(),
-            });
+            };
+            self.run_search_projector(&event_tenant, &event).await;
+            self.notify_write_listener(&event);
         }
         Ok(result)
     }
@@ -1172,12 +1355,13 @@ impl FrickStore {
         }
     }
 
-    // ---- projection / search extension points (FR-244 / FR-245) ----------
+    // ---- projection extension points (FR-244) ----------------------------
     //
-    // The TS facade fans every write to the projection registry and the search
-    // adapter before firing the write listener. Both subsystems are later
-    // stories, so these are deliberate no-op seams that preserve the funnel's
-    // shape and call sites. When FR-244 / FR-245 land, fill these in.
+    // The TS facade fans every write to the projection registry before firing
+    // the write listener. That subsystem is a later story, so these are
+    // deliberate no-op seams that preserve the funnel's shape and call sites.
+    // (Search, FR-245, is live — see `run_search_projector`.) When FR-244
+    // lands, fill these in.
 
     /// FR-244 extension point: notify object-sourced projections of an upsert.
     #[allow(clippy::unused_self)]
@@ -1196,24 +1380,6 @@ impl FrickStore {
     #[allow(clippy::unused_self)]
     fn notify_projection_stream_append(&self, _event: &StoredEvent) {
         // TODO(FR-244): route to the (per-app) projection registry.
-    }
-
-    /// FR-245 extension point: notify object-sourced search indexes.
-    #[allow(clippy::unused_self)]
-    fn notify_search_for_object(
-        &self,
-        _tenant_id: &str,
-        _object_type: &str,
-        _object_id: &str,
-        _object: &Value,
-    ) {
-        // TODO(FR-245): project + upsert into the search adapter.
-    }
-
-    /// FR-245 extension point: notify stream-sourced search indexes.
-    #[allow(clippy::unused_self)]
-    fn notify_search_for_stream(&self, _event: &StoredEvent) {
-        // TODO(FR-245): project + upsert into the search adapter.
     }
 }
 

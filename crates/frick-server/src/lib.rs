@@ -21,6 +21,7 @@ pub mod principal;
 pub mod projections;
 pub mod push;
 pub mod routes;
+pub mod search;
 pub mod session;
 pub mod standalone;
 
@@ -45,5 +46,9 @@ pub use push::{
     FrickNotificationIntent, FrickPushPayload, NotificationRouter, PUSH_DELIVER_JOB_TYPE,
     PushAdapter, PushRegistry, PushSubsystem, PushTransports, ReqwestApnsTransport,
     ReqwestFcmTransport, ReqwestWebPushTransport, build_push_subsystem,
+};
+pub use search::{
+    DEFAULT_SEARCH_LIMIT, FrickSearchIndexDefinition, MAX_SEARCH_LIMIT, SearchDoc, SearchRegistry,
+    SearchSource,
 };
 pub use standalone::{SCHEMA_PATH_ENV, config_env, load_schema};

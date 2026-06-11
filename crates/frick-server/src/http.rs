@@ -23,6 +23,7 @@ use crate::error::ServerError;
 use crate::jobs::StoreProvider;
 use crate::projections::ProjectionRegistry;
 use crate::push::{NotificationRouter, PushRegistry};
+use crate::search::SearchRegistry;
 
 /// Shared application state handed to every handler.
 pub struct AppStateInner {
@@ -40,6 +41,11 @@ pub struct AppStateInner {
     /// The shared projection registry (FR-245). Empty until an app registers
     /// projections; the gateway reads snapshots and the routes list/read it.
     pub projections: ProjectionRegistry,
+    /// The shared search index registry (FR-245, map 03 §13). Empty until an
+    /// app registers indexes; installed as the store's search projector at boot
+    /// so object/stream writes flow into the FTS tables, and read by the
+    /// `POST /search` route + the `/_frick/inspect/search` report.
+    pub search: SearchRegistry,
     /// The wired push-adapter registry (FR-265): APNs / FCM / Web Push + test,
     /// each over a real transport. Held so the server can close adapters at
     /// shutdown and so routes can inspect registered platforms.

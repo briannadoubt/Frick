@@ -14,6 +14,7 @@ pub mod presence;
 pub mod push_registration;
 pub mod refresh_token;
 pub mod saml_assertion;
+pub mod search;
 pub mod service_principal;
 pub mod session;
 pub mod signal;

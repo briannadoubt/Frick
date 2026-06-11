@@ -18,6 +18,10 @@ pub use driver::{RunResult, SqlDialect, SqlDriver, SqlExec, SqlRow, SqlValue};
 pub use error::StoreError;
 pub use facade::{
     AppScopedStore, DEFAULT_APP_ID, DEFAULT_TENANT_ID, FrickStore, FrickStoreOptions,
-    FrickStoreWriteEvent, FrickStoreWriteListener, MaintenanceHandle, MaintenanceIntervals,
-    PruneResult, StoreDriverKind,
+    FrickStoreSearchProjector, FrickStoreWriteEvent, FrickStoreWriteListener, MaintenanceHandle,
+    MaintenanceIntervals, PruneResult, StoreDriverKind,
+};
+pub use stores::search::{
+    DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT, SEARCH_ADAPTER_ID, SearchFilterValue, SearchHit,
+    SearchOp, SearchQueryResult,
 };

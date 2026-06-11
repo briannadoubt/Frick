@@ -313,6 +313,222 @@ async fn write_listener_panic_is_swallowed() {
         .expect("write succeeds despite listener panic");
 }
 
+/// A projector that indexes every `ObjectUpsert` into `docs` (text = the
+/// object's `title` field) and removes the doc on `ObjectDelete`. Stream
+/// appends index the event id with its `text` payload. Mirrors the shape the
+/// server's registry will install.
+fn title_projector() -> super::FrickStoreSearchProjector {
+    use super::FrickStoreWriteEvent as Ev;
+    Box::new(|event: &Ev| match event {
+        Ev::ObjectUpsert {
+            object_id, object, ..
+        } => {
+            let title = if let Value::Map(entries) = object {
+                entries
+                    .iter()
+                    .find(|(k, _)| k.as_str() == Some("title"))
+                    .and_then(|(_, v)| v.as_str())
+                    .unwrap_or_default()
+                    .to_string()
+            } else {
+                String::new()
+            };
+            let mut fields = serde_json::Map::new();
+            fields.insert(
+                "__frickSourceId".into(),
+                serde_json::Value::from(object_id.clone()),
+            );
+            vec![super::SearchOp::Upsert {
+                index: "docs".into(),
+                doc_id: object_id.clone(),
+                text: title,
+                fields,
+            }]
+        }
+        Ev::ObjectDelete { object_id, .. } => vec![super::SearchOp::Delete {
+            index: "docs".into(),
+            doc_id: object_id.clone(),
+        }],
+        Ev::StreamAppend { event, .. } => vec![super::SearchOp::Upsert {
+            index: "chat".into(),
+            doc_id: event.event.event_id.clone(),
+            text: "message indexed".into(),
+            fields: serde_json::Map::new(),
+        }],
+    })
+}
+
+#[tokio::test]
+async fn search_projector_indexes_object_upserts() {
+    let (store, _clock) = open_store().await;
+    store.set_search_projector(title_projector());
+
+    store
+        .upsert_object(
+            DEFAULT_TENANT_ID,
+            "Conversation",
+            "c1",
+            &convo("c1", "Quarterly planning notes"),
+            0,
+            DEFAULT_APP_ID,
+        )
+        .await
+        .unwrap();
+
+    let result = store
+        .search_query(
+            DEFAULT_TENANT_ID,
+            "docs",
+            "quarterly",
+            &std::collections::BTreeMap::new(),
+            50,
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.total, 1);
+    assert_eq!(result.hits[0].doc_id, "c1");
+    // The reserved field projected by the projector survives to the hit.
+    assert_eq!(
+        result.hits[0].fields.get("__frickSourceId"),
+        Some(&serde_json::Value::from("c1"))
+    );
+}
+
+#[tokio::test]
+async fn search_projector_delete_removes_the_doc() {
+    let (store, _clock) = open_store().await;
+    store.set_search_projector(title_projector());
+
+    store
+        .upsert_object(
+            DEFAULT_TENANT_ID,
+            "Conversation",
+            "c1",
+            &convo("c1", "Deletable doc here"),
+            0,
+            DEFAULT_APP_ID,
+        )
+        .await
+        .unwrap();
+    store
+        .delete_object(DEFAULT_TENANT_ID, "Conversation", "c1", DEFAULT_APP_ID)
+        .await
+        .unwrap();
+
+    let result = store
+        .search_query(
+            DEFAULT_TENANT_ID,
+            "docs",
+            "deletable",
+            &std::collections::BTreeMap::new(),
+            50,
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.total, 0);
+    assert!(result.hits.is_empty());
+}
+
+#[tokio::test]
+async fn search_projector_indexes_stream_appends() {
+    let (store, _clock) = open_store().await;
+    store.set_search_projector(title_projector());
+
+    store
+        .append_event(
+            DEFAULT_TENANT_ID,
+            "chat",
+            "room-1",
+            "replica-a",
+            "req-1",
+            "message",
+            &message("hello"),
+            DEFAULT_APP_ID,
+        )
+        .await
+        .unwrap();
+
+    let result = store
+        .search_query(
+            DEFAULT_TENANT_ID,
+            "chat",
+            "indexed",
+            &std::collections::BTreeMap::new(),
+            50,
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.total, 1, "the appended event was indexed");
+}
+
+#[tokio::test]
+async fn search_projector_panic_is_swallowed() {
+    let (store, _clock) = open_store().await;
+    store.set_search_projector(Box::new(|_event| panic!("projector boom")));
+    // A panicking projector must not propagate out of the originating write.
+    store
+        .upsert_object(
+            DEFAULT_TENANT_ID,
+            "Conversation",
+            "c1",
+            &convo("c1", "x"),
+            0,
+            DEFAULT_APP_ID,
+        )
+        .await
+        .expect("write succeeds despite projector panic");
+}
+
+#[tokio::test]
+async fn clear_search_projector_stops_indexing() {
+    let (store, _clock) = open_store().await;
+    store.set_search_projector(title_projector());
+    store.clear_search_projector();
+
+    store
+        .upsert_object(
+            DEFAULT_TENANT_ID,
+            "Conversation",
+            "c1",
+            &convo("c1", "Should not be indexed"),
+            0,
+            DEFAULT_APP_ID,
+        )
+        .await
+        .unwrap();
+
+    let names = store.search_index_names(DEFAULT_TENANT_ID).await.unwrap();
+    assert!(names.is_empty(), "no projector → nothing indexed");
+}
+
+#[tokio::test]
+async fn direct_search_methods_and_inspect_metadata() {
+    let (store, _clock) = open_store().await;
+    assert_eq!(store.search_adapter_id(), "sqlite-fts5");
+
+    let mut fields = serde_json::Map::new();
+    fields.insert("kind".into(), serde_json::Value::from("note"));
+    store
+        .search_upsert(DEFAULT_TENANT_ID, "manual", "m1", "hand written", &fields)
+        .await
+        .unwrap();
+
+    let names = store.search_index_names(DEFAULT_TENANT_ID).await.unwrap();
+    assert_eq!(names, vec!["manual".to_string()]);
+
+    let result = store
+        .search_query(
+            DEFAULT_TENANT_ID,
+            "manual",
+            "written",
+            &std::collections::BTreeMap::new(),
+            50,
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.total, 1);
+}
+
 #[tokio::test]
 async fn prune_deletes_aged_rows_and_rebuilds_cache() {
     let (store, clock) = open_store().await;
