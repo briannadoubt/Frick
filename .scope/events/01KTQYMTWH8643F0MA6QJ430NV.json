@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTQYMTWH8643F0MA6QJ430NV",
+  "ts": "2026-06-10T05:03:56.305Z",
+  "actor": "unknown",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTQ7334H9093RJQ7G4D5QEY3",
+    "field": "branch",
+    "value": "fix/fr-235-fr-234-read-scoping"
+  }
+}

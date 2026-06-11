@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTT8NXBRP93XB0DCFDJ73CXH",
+  "ts": "2026-06-11T02:37:46.232Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTT8NXBRP93XB0DCFDJ73CXG",
+    "number": 273,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "S3 blob bytes driver (production object storage)",
+    "description": "facade.rs:378 'stub seam (FR-241 follow-up)': the blob BYTES driver is a stub; only the local/filesystem path exists. Port the S3 bytes driver (TS createS3BlobBytesDriver) behind the bytes-driver seam + FRICK_BLOB_* config. operations.md marks it not-yet-ported.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

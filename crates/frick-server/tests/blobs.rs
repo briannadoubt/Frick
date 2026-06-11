@@ -45,6 +45,9 @@ fn test_schema() -> FrickSchema {
 
 struct TestServer {
     port: u16,
+    /// Retained so a test can inspect the store (e.g. enqueued `blob.process`
+    /// jobs). The router holds its own `Arc`, so this never drops the store.
+    state: AppState,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     join: Option<tokio::task::JoinHandle<()>>,
 }
@@ -56,13 +59,31 @@ impl TestServer {
 
     async fn boot_with(config: FrickConfig) -> Self {
         let server = create_frick_server(config, test_schema()).await.unwrap();
+        Self::serve(server).await
+    }
+
+    /// Boot with app-provided blob processors (FR-272) registered via the boot
+    /// seam, so the sync-validate → 415 and async-enqueue paths run live.
+    async fn boot_with_processors(
+        processors: Vec<frick_server::blob_processors::SharedBlobProcessor>,
+    ) -> Self {
+        let mut seams = frick_server::BootSeams::production();
+        seams.blob_processors = processors;
+        let server =
+            frick_server::create_frick_server_with_seams(test_config(), test_schema(), seams)
+                .await
+                .unwrap();
+        Self::serve(server).await
+    }
+
+    async fn serve(server: frick_server::FrickServer) -> Self {
         let state: AppState = Arc::clone(&server.state);
         // Keep the store alive for the process; the router holds its own Arc.
         std::mem::forget(server);
 
         let router = public_router(Arc::clone(&state))
             .merge(frick_server::auth_routes::auth_router(Arc::clone(&state)))
-            .merge(routes::dataplane_router(state));
+            .merge(routes::dataplane_router(Arc::clone(&state)));
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -77,6 +98,7 @@ impl TestServer {
         });
         Self {
             port,
+            state,
             shutdown: Some(shutdown_tx),
             join: Some(join),
         }
@@ -568,4 +590,171 @@ async fn upload_exceeding_max_blob_bytes_is_413() {
     assert!(upload.text().contains("blob.tooLarge"), "{}", upload.text());
     assert!(upload.text().contains("configuredMax"), "{}", upload.text());
     server.close().await;
+}
+
+// ── blob processors / validators (FR-272) ───────────────────────────────────
+
+/// A sync validator that rejects everything except `text/plain` produces a
+/// `415 blob.unsupportedContentType` with the processor id + rejection reason,
+/// and NO blob row is created.
+#[tokio::test]
+async fn sync_validator_rejects_with_415() {
+    use frick_server::blob_processors::{MimeSizeValidatorOptions, mime_size_validator};
+    let validator = mime_size_validator(MimeSizeValidatorOptions {
+        id: "text-only".to_string(),
+        allowed_mime_types: vec!["text/plain".to_string()],
+        ..Default::default()
+    });
+    let mut server = TestServer::boot_with_processors(vec![validator]).await;
+    let token = server.login("user-ada").await;
+
+    // A PNG upload is rejected by the validator (415).
+    let upload = server
+        .request(
+            "PUT",
+            "/blobs/img-1/content?ownerId=user-ada",
+            &[
+                ("Authorization", &bearer(&token)),
+                ("Content-Type", "image/png"),
+            ],
+            b"\x89PNG\r\n\x1a\n not really",
+        )
+        .await;
+    assert_eq!(upload.status, 415, "body: {}", upload.text());
+    assert!(
+        upload.text().contains("blob.unsupportedContentType"),
+        "{}",
+        upload.text()
+    );
+    assert!(upload.text().contains("text-only"), "{}", upload.text());
+    assert!(
+        upload.text().contains("blobValidationRejected"),
+        "{}",
+        upload.text()
+    );
+
+    // No metadata row was written — a follow-up GET is a 404.
+    let meta = server.get("/blobs/img-1", &token).await;
+    assert_eq!(meta.status, 404, "body: {}", meta.text());
+
+    // An allowed text upload to the SAME validator goes through (201).
+    let ok = server
+        .request(
+            "PUT",
+            "/blobs/txt-1/content?ownerId=user-ada",
+            &[
+                ("Authorization", &bearer(&token)),
+                ("Content-Type", "text/plain"),
+            ],
+            b"hello",
+        )
+        .await;
+    assert_eq!(ok.status, 201, "body: {}", ok.text());
+    server.close().await;
+}
+
+/// An async processor (a `process` hook, no `validate`) enqueues exactly one
+/// `blob.process` job per upload, with the `{blobId, processorId}` payload and
+/// the `<blobId>:<processorId>:<contentHash>` idempotency key (a re-upload of
+/// the same bytes is a no-op enqueue).
+#[tokio::test]
+async fn async_processor_enqueues_blob_process_job() {
+    use std::sync::Arc;
+
+    use frick_server::blob_processors::{
+        BlobProcessContext, BlobProcessOutcome, BlobProcessor, ProcessFuture, ProcessorMatch,
+    };
+    use frick_store::stores::job::ListJobsFilter;
+
+    struct ThumbProcessor;
+    impl BlobProcessor for ThumbProcessor {
+        #[allow(clippy::unnecessary_literal_bound)] // trait sig is `-> &str`
+        fn id(&self) -> &str {
+            "thumb"
+        }
+        fn has_process(&self) -> bool {
+            true
+        }
+        fn process<'a>(&'a self, _ctx: BlobProcessContext<'a>) -> ProcessFuture<'a> {
+            Box::pin(async { Ok(BlobProcessOutcome::default()) })
+        }
+        fn matches(&self) -> ProcessorMatch {
+            ProcessorMatch::default()
+        }
+    }
+
+    let mut server = TestServer::boot_with_processors(vec![Arc::new(ThumbProcessor)]).await;
+    let token = server.login("user-ada").await;
+
+    let upload = server
+        .request(
+            "PUT",
+            "/blobs/pic/content?ownerId=user-ada",
+            &[
+                ("Authorization", &bearer(&token)),
+                ("Content-Type", "image/png"),
+            ],
+            b"pixels",
+        )
+        .await;
+    assert_eq!(upload.status, 201, "body: {}", upload.text());
+
+    // Exactly one blob.process job was enqueued for this tenant.
+    let jobs = server
+        .state
+        .store
+        .jobs()
+        .list(&ListJobsFilter {
+            job_type: Some("blob.process".to_string()),
+            ..ListJobsFilter::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(jobs.len(), 1, "expected one blob.process job, got {jobs:?}");
+
+    // Re-uploading the SAME bytes is idempotent — still exactly one job.
+    let again = server
+        .request(
+            "PUT",
+            "/blobs/pic/content?ownerId=user-ada",
+            &[
+                ("Authorization", &bearer(&token)),
+                ("Content-Type", "image/png"),
+            ],
+            b"pixels",
+        )
+        .await;
+    assert_eq!(again.status, 200, "body: {}", again.text());
+    let jobs = server
+        .state
+        .store
+        .jobs()
+        .list(&ListJobsFilter {
+            job_type: Some("blob.process".to_string()),
+            ..ListJobsFilter::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(jobs.len(), 1, "re-upload should be idempotent: {jobs:?}");
+
+    server.close().await;
+}
+
+/// A duplicate processor id is a boot-time config error (fail loud).
+#[tokio::test]
+async fn duplicate_processor_id_fails_boot() {
+    use frick_server::blob_processors::{MimeSizeValidatorOptions, mime_size_validator};
+    let a = mime_size_validator(MimeSizeValidatorOptions {
+        id: "dupe".to_string(),
+        ..Default::default()
+    });
+    let b = mime_size_validator(MimeSizeValidatorOptions {
+        id: "dupe".to_string(),
+        ..Default::default()
+    });
+    let mut seams = frick_server::BootSeams::production();
+    seams.blob_processors = vec![a, b];
+    let result =
+        frick_server::create_frick_server_with_seams(test_config(), test_schema(), seams).await;
+    assert!(result.is_err(), "duplicate processor id should fail boot");
 }

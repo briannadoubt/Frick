@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTSXJR2YMD3GJKJ0R8YJYWTF",
+  "ts": "2026-06-10T23:23:48.190Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTSXJR2YMD3GJKJ0R8YJYWTE",
+    "number": 260,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[cli] frick init scaffolds the deleted @fricken/server (broken app)",
+    "description": "Post-cutover, frick init's TS scaffold still pins @fricken/server: workspace:* and src/server.ts imports createFrickServer from it, so the scaffolded app cannot install/run. Reworking the template to drop the deleted dep: server.ts becomes a schema+projection-registry module (keeps the projection markers so scaffold projection still works), smoke.test validates the schema instead of booting a server, and a README points at the standalone frick-server binary. In progress via the fix-cutover-bugs workflow.",
+    "status": "in_progress",
+    "priority": "high",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": "https://github.com/briannadoubt/Frick/pull/8",
+    "assignee": null,
+    "labels": []
+  }
+}

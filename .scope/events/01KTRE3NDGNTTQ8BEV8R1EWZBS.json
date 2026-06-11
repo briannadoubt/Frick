@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTRE3NDGNTTQ8BEV8R1EWZBS",
+  "ts": "2026-06-10T09:34:10.864Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGJ",
+    "commentId": "01KTRE3NDGNTTQ8BEV8R1EWZBR",
+    "author": "claude",
+    "body": "Progress: config.rs landed — full FRICK_* env parsing (every var from map §2), FrickLimits defaults, AllowedOrigin matching (exact/wildcard/apex rules), cross-field validation with exact TS FrickConfigError messages, EnvSource trait (ProcessEnv + test map). 13 tests, gate green. Remaining for this story: FrickStore facade (wire the FR-241 stores together), axum HTTP server + route table, WebSocket gateway (handshake/Hello/HelloAck/Schema, NUL-separated connection keys), session lifecycle + dev-login auth, tenancy, graceful shutdown."
+  }
+}

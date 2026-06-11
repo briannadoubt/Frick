@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTQYNCR4MP15Q03V251P23C1",
+  "ts": "2026-06-10T05:04:14.596Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQ7334H9093RJQ7G4D5QEY3",
+    "commentId": "01KTQYNCR4MP15Q03V251P23C0",
+    "author": null,
+    "body": "Fixed in PR #7. Member-macro output is invisible to @Observable's expansion, so emitting working observation plumbing from @FrickModel is not reliably possible — chose the document-and-assert route. Corrected the false 'observed' doc on the generated dto; documented the @Observable incompatibility + two supported patterns (replace the model instance — standard Frick store pattern — or hand-declare dto) on both the macro impl and the public macro decl. Added a regression test (packages/swift/Tests/FrickSwiftTests/FrickModelMacroIntegrationTests.swift) pinning that dto is NOT observation-tracked under @Observable. All 7 Swift macro tests green."
+  }
+}

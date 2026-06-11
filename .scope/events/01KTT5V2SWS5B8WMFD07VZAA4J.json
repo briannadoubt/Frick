@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTT5V2SWS5B8WMFD07VZAA4J",
+  "ts": "2026-06-11T01:48:09.916Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTSXK674ECREEQ1A5E3PPW6X",
+    "commentId": "01KTT5V2SWS5B8WMFD07VZAA4H",
+    "author": "claude",
+    "body": "DONE + on PR #8 (commits dd7ca8d store+cli). All four: frick backup / frick restore (NDJSON dump/restore on the FrickStore facade, 5 refusals, clock-free; CLI wired), frick verify (native frick-codegen drift check, exit 1 on divergence — replaces pnpm verify:generated), and frick inspect diagnostics (DiagnosticsSnapshot v1 + GET /_frick/inspect/diagnostics). All four smoke-tested end to end. Known sub-gaps documented: idempotency-cache stats + recentErrors in diagnostics are defaults pending FrickStore facade getters (FR-249); Postgres dump dialect is the FR-242 follow-up (SQLite path shipped)."
+  }
+}

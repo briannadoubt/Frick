@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTT87GG1HPYAW6DS1DQ5M6RC",
+  "ts": "2026-06-11T02:29:54.305Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTT735T27F7MNP1VCV2G1BY9",
+    "commentId": "01KTT87GG1HPYAW6DS1DQ5M6RB",
+    "author": "claude",
+    "body": "DONE + on PR #8 (commit ee027ab). Push delivery is wired end-to-end: create_frick_server builds the PushRegistry (APNs/FCM/WebPush over real reqwest transports + test adapter) + NotificationRouter, registers the push.deliver handler into the JobHandlerRegistry the durable worker resolves from, starts the JobWorker in listen(), and exposes registry+router on AppState for admin_push. A BootSeams seam injects recording transports so the enqueue->worker->router->adapter->transport path is proven offline (push_wiring.rs: the job Completes, not dead-lettered). Real reqwest transports (APNs HTTP/2+ES256, FCM OAuth2 v1, WebPush ece+VAPID) with request-construction tests; the WebPush send-time SSRF DNS re-screen (FR-264 follow-up) is now closed. Unverifiable here: live network delivery to Apple/Google. Follow-up: config.jobs.* poll/batch knobs not wired (worker uses defaults)."
+  }
+}

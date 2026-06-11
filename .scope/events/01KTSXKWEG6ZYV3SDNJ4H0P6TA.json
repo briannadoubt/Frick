@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTSXKWEG6ZYV3SDNJ4H0P6TA",
+  "ts": "2026-06-10T23:24:25.424Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTR3AAXJRV8NSDCS37B1JC0B",
+    "commentId": "01KTSXKWEG6ZYV3SDNJ4H0P6T9",
+    "author": "claude",
+    "body": "Unblocked: the user gated this behind the Rust migration, which is now complete (cutover landed on PR #8). Re-evaluate against the current code — the original race (subscribeObject resolving before server-side registration) is in the client runtime (packages/core, kept) and/or the protocol, so it likely survives the cutover; confirm whether it still reproduces against the Rust server before fixing. Not part of the this-session bug fixes (it was pre-existing, not found during the rewrite)."
+  }
+}

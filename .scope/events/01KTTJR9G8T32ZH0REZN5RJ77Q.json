@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTTJR9G8T32ZH0REZN5RJ77Q",
+  "ts": "2026-06-11T05:33:49.960Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTT8NXXRYCQFX6BD7GZFDVRC",
+    "commentId": "01KTTJR9G8T32ZH0REZN5RJ77P",
+    "author": "claude",
+    "body": "DONE + on PR #8 (commit a41894a). Multi-app routing: FrickAppRegistry (unique ids/basePaths, longest-prefix resolve_by_path, find_by_schema_id), per-app projection/search registries, storage_app_id pinning _default unless >1 app (single-app byte-identical — all prior tests green). HTTP nests each app under its basePath; WS handle_hello binds the connection to the advertised schemaId app and nacks unregistered schemaIds (appNotAuthorized = tenant-app-isolation-4). GET /_frick/inspect/apps. Carried tenant-app-isolation-2/3/7 (per-app job ctx, per-app projection subscribe, app-scoped listObjects). Adversarial review found one defense-in-depth gap — search FTS storage not app-partitioned (colliding index names co-mingle + defeat admin/stream post-filter); FIXED inline by namespacing the stored index name by app id on multi-app (identity on single-app), at the projector + the /search route, with a unit test. Proven by a real 2-app server (tests/multi_app.rs): HTTP+WS object isolation, store-level cross-app write guard, appNotAuthorized. 785 workspace tests green."
+  }
+}

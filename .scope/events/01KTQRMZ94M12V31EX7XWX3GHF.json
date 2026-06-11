@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTQRMZ94M12V31EX7XWX3GHF",
+  "ts": "2026-06-10T03:19:09.348Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTQRMZ94M12V31EX7XWX3GHE",
+    "number": 254,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Port rangercrm-server to Rust (dogfood app)",
+    "description": "Rewrite apps/rangercrm-server (~200 lines) as the first real consumer of the Rust library-embed API: Rust schema DSL, server wiring, grants usage. Serves as the living example for docs/authoring.md and validates the developer experience end-to-end with the RangerCRM iOS client.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

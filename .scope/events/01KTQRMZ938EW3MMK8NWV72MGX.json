@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTQRMZ938EW3MMK8NWV72MGX",
+  "ts": "2026-06-10T03:19:09.347Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGW",
+    "number": 248,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Push adapters: APNs + FCM, per-tenant credentials, delivery telemetry",
+    "description": "Port the push delivery pipeline per docs/push-adapters.md: APNs (JWT-based, HTTP/2) and FCM adapters, per-tenant credential storage + CLI management, delivery telemetry readback, and the typed FrickPushPayload contract consumed by the client SDKs (docs/push-receive.md — payload shape must not change).",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTT8N67M3KV592N5RADNJYBA",
+  "ts": "2026-06-11T02:37:22.548Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTT8N67M3KV592N5RADNJYB9",
+    "number": 270,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Auth: OIDC + SAML federation routes",
+    "description": "Port /auth/oidc/:id/verify, GET /auth/saml/:id/metadata + POST /auth/saml/:id/acs (SAML signature verification + replay protection via auth_saml_seen_assertions, migrated). TS: auth/oidc.ts, auth/saml.ts. Carry over the FR-214/215/216 SAML audit fixes.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

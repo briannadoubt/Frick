@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTT8NXSBKT3BERY2HZX9P1HK",
+  "ts": "2026-06-11T02:37:46.667Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTT8NXSBKT3BERY2HZX9P1HJ",
+    "number": 276,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "Calls/WebRTC server (Rust port of FR-15)",
+    "description": "Port the realtime calls control plane to Rust: signaling routes + call-session store + SFU adapter + E2EE key exchange (TS FR-15 epic, now done in TS only — calls/* deleted at cutover). Large; the Swift/Kotlin/web call clients already exist. Carry over FR-204/207/210/211 calls/native audit fixes.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

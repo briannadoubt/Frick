@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTQRMZ92BM926JGEHNNSY5ZA",
+  "ts": "2026-06-10T03:19:09.346Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTQRMZ92BM926JGEHNNSY5Z9",
+    "number": 238,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "frick-protocol crate: MessagePack frame protocol + error envelope",
+    "description": "Rust implementation of the wire layer: compact MessagePack frame protocol (rmp-serde), schema identity struct (schemaId/schemaVersion/schemaRevision/schemaHash), and the structured error envelope. These are the stable surfaces clients rely on (per docs/versioning.md and docs/status.md) — byte-for-byte compatibility with packages/protocol is the bar. Extract golden wire fixtures from the TS implementation as the first conformance artifacts.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

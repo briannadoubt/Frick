@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTQZ9SA27R18S3XBD5CJJ5T0",
+  "ts": "2026-06-10T05:15:22.818Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQPZ5D6J6HP35NM8PNKMQ65",
+    "commentId": "01KTQZ9SA27R18S3XBD5CJJ5SZ",
+    "author": null,
+    "body": "Merged to main as squash commit (#7) and released in 0.3.1: @fricken/server + @fricken/protocol live on npm at 0.3.1; bare tag 0.3.1 pushed; Swift + Android publishes green."
+  }
+}

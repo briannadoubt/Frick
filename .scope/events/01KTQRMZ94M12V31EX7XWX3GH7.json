@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTQRMZ94M12V31EX7XWX3GH7",
+  "ts": "2026-06-10T03:19:09.348Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTQRMZ94M12V31EX7XWX3GH6",
+    "number": 250,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Cross-implementation conformance suite",
+    "description": "Language-neutral conformance harness: (1) golden wire fixtures for every frame type, error envelope, and schema-identity case; (2) black-box scenario tests (connect, auth, object sync, stream replay, presence, signals, projections, jobs, blobs, grants, multi-node via cluster bus) runnable against an arbitrary server URL. CI runs it against BOTH the TS and Rust servers until cutover. This is the acceptance gate for the big-bang switch.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

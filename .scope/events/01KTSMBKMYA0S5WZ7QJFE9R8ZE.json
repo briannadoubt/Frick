@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTSMBKMYA0S5WZ7QJFE9R8ZE",
+  "ts": "2026-06-10T20:42:37.086Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ94M12V31EX7XWX3GH8",
+    "commentId": "01KTSMBKMYA0S5WZ7QJFE9R8ZD",
+    "author": "claude",
+    "body": "Partially satisfied + in review (committed 4b468ff). The BEHAVIOR-parity half of SDK acceptance is done: the language-neutral conformance suite passes against both servers in CI, proving the Rust server is observably equivalent to the TS server for the core surface (lifecycle/auth/objects/streams/signals/presence/WS handshake/object+stream+projection deltas). Per map §5.7, the Swift/Kotlin/web SDK UNIT suites are transport-MOCKED (stub transports + checked-in JSON fixtures) — they do not dial a live URL today, so pointing them at the Rust server needs (a) each SDK gaining a live-server test mode + (b) the Xcode/Android/node toolchains in CI. That cross-toolchain harness is the remaining FR-251 work; the wire-decode compat (golden fixtures) + behavior compat (conformance) are the levers that already cover the contract. The frick-mcp live-server tests (FR-253) are an additional independent client exercising the Rust server end-to-end."
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTRBKAZ6PNBESRZVVWZATQ0P",
+  "ts": "2026-06-10T08:50:18.726Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGE",
+    "commentId": "01KTRBKAZ6PNBESRZVVWZATQ0N",
+    "author": "claude",
+    "body": "No blockers — moved to todo. internal/rust-rewrite/maps/03-store-layer.md is the implementation spec."
+  }
+}

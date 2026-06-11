@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTSH6524XH2YNP5M89GGSQR1",
+  "ts": "2026-06-10T19:47:12.580Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ94M12V31EX7XWX3GHE",
+    "commentId": "01KTSH6524XH2YNP5M89GGSQR0",
+    "author": "claude",
+    "body": "Cancelled. rangercrm is a private downstream product, not Frick framework code, and must not live in this repo. apps/rangercrm-server was a stale subset (201-line schema) of the live copy already maintained in the RangerCRM repo at ~/dev/RangerCRM/server (759-line schema, branch feat/frick-0.2-migration) — every entity in Frick verified present there. Removed apps/rangercrm-server from Frick; scrubbed the doc/AGENTS/builder.rs references; regenerated pnpm-lock. Any Rust library-embed port of the RangerCRM server happens in the RangerCRM repo, not here. The framework dogfood/parity burden stays on productTestSchema + the conformance suite (FR-250)."
+  }
+}

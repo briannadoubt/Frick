@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTRG3DYNCNWSSX6Q9KW1CWS5",
+  "ts": "2026-06-10T10:09:00.373Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGJ",
+    "commentId": "01KTRG3DYNCNWSSX6Q9KW1CWS4",
+    "author": "claude",
+    "body": "Bootable server core landed + verified end-to-end. crates/frick-server now has: principal.rs (Principal, scopes, NUL-separated connection key, cheap-active check), authz.rs (Action/DenyReason/Decision + decide_baseline: unauthenticated deny, cross-tenant deny unless admin, owner-scoped object/blob baselines, grant-relaxation hook point), error.rs (ServerError taxonomy → exact http_status + error_code + sendError envelope w/ foundation-schema stamp + routeCode + top-level field duplication), http.rs (axum AppState, /health /ready /schema, respond_error, no_store_headers), boot.rs (create_frick_server → opens+migrates FrickStore, FrickServer::listen binds real TCP socket + graceful shutdown via axum, Postgres rejected w/ FR-242). A tokio test boots the server on an ephemeral port and confirms /health + /ready over a real socket — proves config+facade+axum compose. 25 server tests; workspace 343. Remaining for FR-243: auth routes (signup/login/dev-login/logout + auth-attempt limiter + session minting), session-resolution middleware, the protected data-plane route surface, and the WS gateway (handshake + frame dispatch + fan-out) — the latter two overlap FR-244."
+  }
+}

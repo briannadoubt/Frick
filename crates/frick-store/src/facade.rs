@@ -27,6 +27,7 @@ use std::sync::{Arc, Mutex};
 use frick_protocol::schema::{FrickObjectMergePolicy, resolve_object_merge_policy};
 use frick_protocol::{FrickSchema, Value, foundation_schema, validate_schema};
 use serde_json::{Map, Value as JsonValue};
+use sha2::Digest;
 
 use crate::driver::{SqlDialect, SqlDriver};
 use crate::error::StoreError;
@@ -370,6 +371,46 @@ pub struct FrickStore {
     search_projector: Mutex<Option<FrickStoreSearchProjector>>,
 }
 
+/// Open the SQL driver and run the framework migrations for the configured
+/// dialect (steps 2-3 of [`FrickStore::open_with_seams`]). The SQLite arm sets
+/// pragmas at open then runs the SQLite migration list; the Postgres arm
+/// (FR-242) connects a pool then runs the dialect-translated PG list. Both share
+/// the ledger/checksum semantics in [`migrations`].
+async fn open_and_migrate(
+    db_driver: StoreDriverKind,
+    path: &str,
+    database_url: Option<&str>,
+    schema_revision: i64,
+) -> Result<Arc<SqlDriver>, StoreError> {
+    match db_driver {
+        StoreDriverKind::Sqlite => {
+            let driver = Arc::new(SqlDriver::open_sqlite(path)?);
+            migrations::run_framework_migrations(
+                &driver,
+                schema_revision,
+                migrations::MigrationRunnerOptions::default(),
+            )
+            .await?;
+            Ok(driver)
+        }
+        StoreDriverKind::Postgres => {
+            let url = database_url.ok_or_else(|| {
+                StoreError::store(
+                    "FRICK_DB_DRIVER=postgres requires FRICK_DATABASE_URL (the Postgres connection string).".to_string(),
+                )
+            })?;
+            let driver = Arc::new(SqlDriver::open_postgres(url)?);
+            migrations::run_framework_migrations_postgres(
+                &driver,
+                schema_revision,
+                migrations::MigrationRunnerOptions::default(),
+            )
+            .await?;
+            Ok(driver)
+        }
+    }
+}
+
 impl FrickStore {
     /// Construct a store with production seams ([`SystemClock`] + [`OsIdGen`]).
     /// See [`open_with_seams`](Self::open_with_seams) for the deterministic-test
@@ -394,38 +435,15 @@ impl FrickStore {
         let schema = options.schema.unwrap_or_else(foundation_schema);
         validate_schema(&schema).map_err(|err| StoreError::store(err.message()))?;
 
-        // 2. Open the driver and 3. run the framework migrations. The SQLite
-        // arm sets pragmas at open time then runs the SQLite migration list;
-        // the Postgres arm (FR-242) connects a pool then runs the dialect-
-        // translated PG migration list. Both share the ledger/checksum
-        // semantics in `migrations`.
-        let driver = match options.db_driver {
-            StoreDriverKind::Sqlite => {
-                let driver = Arc::new(SqlDriver::open_sqlite(&options.path)?);
-                migrations::run_framework_migrations(
-                    &driver,
-                    schema.schema_revision,
-                    migrations::MigrationRunnerOptions::default(),
-                )
-                .await?;
-                driver
-            }
-            StoreDriverKind::Postgres => {
-                let url = options.database_url.as_deref().ok_or_else(|| {
-                    StoreError::store(
-                        "FRICK_DB_DRIVER=postgres requires FRICK_DATABASE_URL (the Postgres connection string).".to_string(),
-                    )
-                })?;
-                let driver = Arc::new(SqlDriver::open_postgres(url)?);
-                migrations::run_framework_migrations_postgres(
-                    &driver,
-                    schema.schema_revision,
-                    migrations::MigrationRunnerOptions::default(),
-                )
-                .await?;
-                driver
-            }
-        };
+        // 2. Open the driver and 3. run the framework migrations (extracted to
+        // `open_and_migrate` so this constructor stays under the line cap).
+        let driver = open_and_migrate(
+            options.db_driver,
+            &options.path,
+            options.database_url.as_deref(),
+            schema.schema_revision,
+        )
+        .await?;
 
         // `options.seed` is accepted and ignored (TS `void options.seed`).
         let _ = options.seed;
@@ -1731,6 +1749,29 @@ pub struct DerivativeReadResult {
     pub bytes: Vec<u8>,
 }
 
+/// Input for [`FrickStore::record_derivative`] (TS `RecordDerivativeInput`,
+/// blob-derivative-store.ts:60-73). The clock-seam wrapper around
+/// [`BlobStore::record_derivative`](crate::stores::blob::BlobStore::record_derivative):
+/// the `blob.process` job handler persists derivatives through this so the
+/// `created_at` stamp threads the store's clock (no `now_ms` plumbed through the
+/// detached worker → handler boundary). `storage_key` defaults to
+/// [`derivative_storage_key`] when `None`.
+#[derive(Debug, Clone)]
+pub struct DerivativeRecordInput {
+    pub parent_blob_id: String,
+    pub derivative_id: String,
+    pub tenant_id: String,
+    pub processor_id: String,
+    pub mime_type: String,
+    pub content: Vec<u8>,
+    /// Pre-serialized JSON metadata (the caller `serde_json::to_string`s its
+    /// structured metadata); `None` stores SQL NULL.
+    pub metadata_json: Option<String>,
+    /// Logical content key. `None` ⇒
+    /// [`derivative_storage_key`](crate::stores::blob::derivative_storage_key).
+    pub storage_key: Option<String>,
+}
+
 impl FrickStore {
     /// `BlobDerivativeStore.listForParent` (blob-derivative-store.ts:120-128):
     /// every derivative row for a parent, `ORDER BY derivative_id ASC`. NOT
@@ -1783,6 +1824,41 @@ impl FrickStore {
                 bytes,
             }
         }))
+    }
+
+    /// `BlobDerivativeStore.record` (blob-derivative-store.ts:75-118) via the
+    /// store clock seam. Computes `byteLength`/`contentHash` from `content`
+    /// (`"sha256-"+hex(sha256(bytes))`, the same envelope blob content uses),
+    /// defaults the storage key to [`derivative_storage_key`], stamps
+    /// `created_at` from the store clock, and upserts on the
+    /// `(tenant_id, parent_blob_id, derivative_id)` primary key. The
+    /// `blob.process` job handler persists derivatives through this so the
+    /// detached worker never plumbs `now_ms` across the handler boundary.
+    pub async fn record_derivative(&self, input: &DerivativeRecordInput) -> Result<(), StoreError> {
+        let now_ms = self.clock.now_ms();
+        let byte_length = i64::try_from(input.content.len()).unwrap_or(i64::MAX);
+        let content_hash = format!(
+            "sha256-{}",
+            hex::encode(sha2::Sha256::digest(&input.content))
+        );
+        let storage_key = input.storage_key.clone().unwrap_or_else(|| {
+            crate::stores::blob::derivative_storage_key(&input.parent_blob_id, &input.derivative_id)
+        });
+        self.blobs
+            .record_derivative(
+                &input.parent_blob_id,
+                &input.derivative_id,
+                &input.tenant_id,
+                &input.processor_id,
+                &input.mime_type,
+                byte_length,
+                &content_hash,
+                &storage_key,
+                &input.content,
+                input.metadata_json.as_deref(),
+                now_ms,
+            )
+            .await
     }
 }
 

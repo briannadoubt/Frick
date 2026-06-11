@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTRANVK2AW1SXFD08HDBXKTS",
+  "ts": "2026-06-10T08:34:12.706Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ94M12V31EX7XWX3GH6",
+    "commentId": "01KTRANVK2AW1SXFD08HDBXKTR",
+    "author": "claude",
+    "body": "Wire-fixture layer of the conformance suite is now substantial: 73 golden cases (800K) in conformance/fixtures/wire/, regenerated via pnpm fixtures:wire, consumed by crates/frick-protocol/tests/golden.rs with byte-, semantic-, and typed-layer assertions. Remaining for this story: black-box scenario harness (connect/auth/sync/replay/presence/jobs/blobs/grants/multi-node) runnable against an arbitrary server URL, plus CI wiring to run it against both servers."
+  }
+}

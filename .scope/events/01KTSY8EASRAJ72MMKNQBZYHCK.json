@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTSY8EASRAJ72MMKNQBZYHCK",
+  "ts": "2026-06-10T23:35:39.097Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTSXJQYFE9A6YBBW0PHDE3R2",
+    "commentId": "01KTSY8EASRAJ72MMKNQBZYHCJ",
+    "author": "claude",
+    "body": "Landed + committed ce6c47e (PR #8). Standalone frick-server binary (crates/frick-server/src/main.rs + standalone.rs: config_env + load_schema honoring FRICK_SCHEMA_PATH else foundation; SIGINT/SIGTERM graceful shutdown; 6 unit + 1 boot integration test). ops/deploy/server.Dockerfile multi-stage Rust build (rust:1.95-slim -> debian-slim, ca-certificates+curl, curl /ready HEALTHCHECK) — the path frick deploy image defaults to + the compose frick-server:latest image. Compose healthchecks switched node->curl; .dockerignore rewritten for the Rust build context. Binary smoke-booted + shut down cleanly. The schema.ts->schema.json export an app needs to feed FRICK_SCHEMA_PATH is FR-263."
+  }
+}

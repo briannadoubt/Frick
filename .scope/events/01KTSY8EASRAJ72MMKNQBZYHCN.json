@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTSY8EASRAJ72MMKNQBZYHCN",
+  "ts": "2026-06-10T23:35:39.097Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTSXJR2YMD3GJKJ0R8YJYWTE",
+    "commentId": "01KTSY8EASRAJ72MMKNQBZYHCM",
+    "author": "claude",
+    "body": "Fixed + committed ce6c47e (PR #8). frick init no longer pins the deleted @fricken/server: package.json drops the dep + dev script, src/server.ts is now a schema+projection-registry module (keeps both projection markers so frick scaffold projection still works), smoke.test validates the schema instead of booting, and a README points at the standalone frick-server backend. scaffold.rs projection comment no longer references createFrickServer. cli.rs asserts no scaffold file contains @fricken/server. 42 frick-cli tests green. Full Rust-app authoring redesign tracked as FR-263."
+  }
+}

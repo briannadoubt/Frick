@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTQRMZ94M12V31EX7XWX3GH9",
+  "ts": "2026-06-10T03:19:09.348Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTQRMZ94M12V31EX7XWX3GH8",
+    "number": 251,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "SDK acceptance: Swift, Kotlin, and web suites against the Rust server",
+    "description": "Run the existing Swift SDK, Kotlin SDK, and web client (packages/core integration) test suites against the Rust server with zero client changes. Wire up CI jobs for all three. Any divergence is a Rust server bug by definition (wire compat is the contract).",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

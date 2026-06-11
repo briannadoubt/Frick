@@ -19,6 +19,7 @@ use frick_store::FrickStore;
 use serde_json::json;
 
 use crate::apps::FrickAppRegistry;
+use crate::blob_processors::BlobProcessorRegistry;
 use crate::config::FrickConfig;
 use crate::email::EmailRouter;
 use crate::error::ServerError;
@@ -108,6 +109,14 @@ pub struct AppStateInner {
     /// is constructed without a gateway (e.g. unit tests that never wire one) —
     /// callers treat that as "no live connections to close".
     pub gateway: OnceLock<Weak<GatewayHub>>,
+    /// The blob processor/validator registry (FR-272). Sync validators run on
+    /// `PUT /blobs/:id/content` over the 4 KiB preview (reject → 415); async
+    /// processors run via the `blob.process` job handler. Empty until an app
+    /// registers processors; shared with the [`BlobProcessHandler`] registered
+    /// on the durable-job registry under `blob.process`.
+    ///
+    /// [`BlobProcessHandler`]: crate::blob_processors::BlobProcessHandler
+    pub blob_processors: Arc<BlobProcessorRegistry>,
 }
 
 impl AppStateInner {

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTSF1QJZS6R74F982E4QZ1DP",
+  "ts": "2026-06-10T19:09:50.559Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGT",
+    "commentId": "01KTSF1QJZS6R74F982E4QZ1DN",
+    "author": "claude",
+    "body": "Cluster bus landed + committed 7604aa3. FrickClusterBus trait + 8-variant ClusterEnvelope (msgpack, binary-safe, appId-default), MemoryClusterBus + shared channel (loop guard, handler isolation, 3-state tenant filter w/ snapshot), feature-gated Redis adapter behind a transport seam. Gateway set_cluster_bus: forwards every local publish as an envelope + re-runs local fan-out on inbound (no re-publish) + tenant-refcount→set_subscribed_tenants. Test: write on hub A → Delta to subscriber on hub B over a shared channel. Boot defaults single-node. Deferred: live Redis smoke (needs broker), media-placement/region federation (FR-154/105-107)."
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTSXK62RSFQA34TM6P8PDDV9",
+  "ts": "2026-06-10T23:24:02.520Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTSXK62Q50YAT04DSYTX25TF",
+    "number": 261,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "frick-codegen as the canonical artifact generator (retire pnpm schema:generate)",
+    "description": "frick-codegen produces byte-identical Swift/Kotlin/TS DTOs (snapshot-tested) but pnpm schema:generate (TS, in packages/protocol) is still the canonical generator that writes the tracked artifacts + drives verify:generated. Wire frick-codegen (e.g. via `frick schema generate` writing to the artifact paths) as the source of truth and retire the TS generation pipeline.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

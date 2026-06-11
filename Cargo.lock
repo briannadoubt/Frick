@@ -801,6 +801,7 @@ dependencies = [
  "frick-schema",
  "frick-store",
  "futures-util",
+ "hex",
  "hkdf",
  "indexmap",
  "p256",

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTRFM7NRQ7K8PFDJ9TQ0CQ3P",
+  "ts": "2026-06-10T10:00:42.424Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGJ",
+    "commentId": "01KTRFM7NQKMJ9DADJ8GTBV3CW",
+    "author": "claude",
+    "body": "FrickStore facade landed (crates/frick-store/src/facade.rs): wires all 20 stores in TS construction order, runs migrations + records schema identity, write-notification funnel (FrickStoreWriteEvent objectUpsert/objectDelete/streamAppend, set_write_listener, deletes fire only when a row existed, stream appends only on created==true, listener errors swallowed+logged), prune() (per-tenant retentionMs overrides + global cutoff + cap pass in one tx, rebuilds idempotency cache + StreamStore), for_app proxy, opt-in tokio maintenance loops, Clock+IdGen determinism seams (system/OsRng prod, fixed/seeded test). Projection/search notify are documented no-op seams (FR-244/245). Postgres rejected w/ FR-242 message. 258 store tests, workspace 331. Remaining for FR-243: axum HTTP server + route table + auth/dev-login + WS gateway (handshake/frame dispatch/fan-out) + graceful shutdown."
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTSXK6BMST0ZF8B5M8K34Z6X",
+  "ts": "2026-06-10T23:24:02.804Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTSXK6BMST0ZF8B5M8K34Z6W",
+    "number": 263,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Rust app authoring model: schema export + init/scaffold redesign",
+    "description": "The cutover changed what a Frick app is: the backend is now the Rust frick-server (binary or embedded), not an embedded TS server. Define the authoring loop end to end: a schema.ts -> schema.json export (e.g. `frick schema export`) that feeds the standalone server's FRICK_SCHEMA_PATH, and a coherent frick init/scaffold model for it. FR-260 is the immediate de-breakage; this is the full design.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTQRMZ938EW3MMK8NWV72MGF",
+  "ts": "2026-06-10T03:19:09.347Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGE",
+    "number": 241,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "frick-store: store ports + SQLite backend",
+    "description": "Define the durable + cache store port traits mirroring the current storage seam, and implement the SQLite backend (rusqlite). Cover all runtime stores: objects, streams, sessions, presence, signals, projections, jobs, blob metadata, grants. Local DBs are disposable per docs/status.md — no migration from node:sqlite files required, but keep the schema layout rational for the Postgres port.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

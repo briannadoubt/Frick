@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTQPZ5HMARSQ3CZPWZM2H650",
+  "ts": "2026-06-10T02:49:46.292Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQPZ5D6J6HP35NM8PNKMQ65",
+    "commentId": "01KTQPZ5HMARSQ3CZPWZM2H64Z",
+    "author": "claude",
+    "body": "Found during RangerCRM 0.2.0 migration; affects both REST list and WS snapshot (they share listObjectsForUser + the FR-116 pipeline). Evidence, all against @fricken/server 0.2.0 with RangerCRM's config (single app, default tenant, no policy hooks, per-user data via ownerUserId): (1) Clean DB, full RangerCRM test run: FrickEntityCRUDIntegrationTests::test_Account_CRUD failed 'expected 1 row after writeObject, got 3' — a freshly-signed-up user's fetchObjects(Account) returned other users' rows. At that point NO grants existed -> #perRecordReadAuthzActive false -> snapshot/list is allow-all tenant-wide (gateway comment says 'Skipped entirely (allow-all) when no policy hook or grant is configured'). For any app whose users share the default tenant, that is cross-user data leakage as the DEFAULT posture. (2) Once any grant exists the pipeline activates and behaves owner-scoped for NEW writes (suites pass in isolation), but see FR-234 for the stale-grant/missing-ownership fan-out suppression on migrated DBs. Suggested direction: per-record read authz (ownership-based decide()) should be active whenever the schema/deployment declares per-user data — not gated on 'a grant happens to exist'; the no-grant fast path should still be ownership-scoped. RangerCRM's pre-0.2.0 behavior (0.1.1) was owner-scoped on every query. Relates to FR-234."
+  }
+}

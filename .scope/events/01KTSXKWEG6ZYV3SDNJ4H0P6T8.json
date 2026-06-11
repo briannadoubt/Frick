@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTSXKWEG6ZYV3SDNJ4H0P6T8",
+  "ts": "2026-06-10T23:24:25.424Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ94M12V31EX7XWX3GHG",
+    "commentId": "01KTSXKWEG6ZYV3SDNJ4H0P6T7",
+    "author": "claude",
+    "body": "Reality check: the cutover (code + docs) landed on PR #8 but the v0.4.0 RELEASE in this title was deliberately split out — the user chose code+docs only, no tag/publish. Version bumped to 0.4.0 in files; the actual tag + npm/Swift/Android publish is a separate post-merge step. Post-cutover bugs found + fixed/fixing: FR-257 (object-Delta), FR-258 (CORS+logout), FR-259 (standalone binary/deploy), FR-260 (init). Remaining gaps captured as FR-261..FR-264."
+  }
+}

@@ -72,6 +72,13 @@ pub struct BootSeams {
     /// Production fetches + caches over HTTPS; tests inject a fixed key set so
     /// the whole verification path is exercised without a network.
     pub jwks_provider: crate::auth::SharedJwksProvider,
+    /// App-provided blob processors (FR-272). Registered into the shared
+    /// [`BlobProcessorRegistry`](crate::blob_processors::BlobProcessorRegistry)
+    /// at boot, in order; a duplicate id is a [`BootError::Config`]. Empty for
+    /// the foundation (no stock processors are auto-registered). This is the
+    /// documented insertion point for sync validators / async image / moderation
+    /// processors.
+    pub blob_processors: Vec<crate::blob_processors::SharedBlobProcessor>,
 }
 
 impl BootSeams {
@@ -94,6 +101,8 @@ impl BootSeams {
             // Production JWKS: a cached `reqwest` fetcher hitting Apple/Google's
             // published key sets (refetched on an unknown `kid`).
             jwks_provider: Arc::new(crate::auth::ReqwestJwksProvider::default()),
+            // No stock blob processors auto-register; an app supplies its own.
+            blob_processors: Vec::new(),
         }
     }
 }
@@ -119,9 +128,9 @@ pub async fn create_frick_server(
 ///
 /// # Panics
 ///
-/// Panics if registering the `push.deliver` handler collides — impossible here
-/// because the registry is freshly constructed and `push.deliver` is the only
-/// handler registered at boot. The `expect` documents that boot invariant.
+/// Panics if registering the `push.deliver` or `blob.process` handler collides
+/// — impossible here because the registry is freshly constructed and each is
+/// registered exactly once at boot. The `expect`s document that boot invariant.
 pub async fn create_frick_server_with_seams(
     config: FrickConfig,
     schema: FrickSchema,
@@ -175,8 +184,8 @@ pub async fn create_frick_server_with_seams(
 /// - [`BootError::Store`] / [`BootError::Io`] from store open + migration.
 ///
 /// # Panics
-/// Panics only via the boot `push.deliver` registration invariant (see
-/// [`create_frick_server_with_seams`]).
+/// Panics only via the boot `push.deliver` / `blob.process` registration
+/// invariant (see [`create_frick_server_with_seams`]).
 pub async fn create_frick_server_with_apps(
     config: FrickConfig,
     store_schema: FrickSchema,
@@ -265,6 +274,22 @@ fn store_options(config: &FrickConfig, schema: &FrickSchema) -> FrickStoreOption
     }
 }
 
+/// Build the shared blob-processor/validator registry (FR-272) from the boot
+/// seam. A duplicate processor id fails the boot with a [`BootError::Config`]
+/// (fail loud, mirroring the TS register-throws so a mis-registered processor
+/// surfaces at startup, not at the first upload).
+fn build_blob_processor_registry(
+    processors: Vec<crate::blob_processors::SharedBlobProcessor>,
+) -> Result<Arc<crate::blob_processors::BlobProcessorRegistry>, BootError> {
+    let mut registry = crate::blob_processors::BlobProcessorRegistry::new();
+    for processor in processors {
+        registry
+            .register(processor)
+            .map_err(|err| BootError::Config(crate::config::FrickConfigError(err.to_string())))?;
+    }
+    Ok(Arc::new(registry))
+}
+
 /// The shared server-construction body for both the single-app and multi-app
 /// boot paths. `state_projections` / `state_search` become the top-level
 /// `AppStateInner` fields and MUST be `Arc`-clones of the root app's per-app
@@ -293,12 +318,25 @@ async fn build_server(
         seams.push_transports,
     );
 
-    // Durable-job handler registry: register the `push.deliver` handler so a
-    // push-deliver job claimed by the worker now resolves a REAL handler (the
-    // notification router) instead of dead-lettering as `jobs.unknownHandler`.
+    // Blob processor/validator registry (FR-272). App-provided processors come
+    // in via `seams.blob_processors` (empty for the foundation). The seam wires
+    // the upload pipeline (sync validate → 415, async enqueue) + the
+    // `blob.process` handler without further boot changes.
+    let blob_processors = build_blob_processor_registry(seams.blob_processors)?;
+
+    // Durable-job handler registry: register the `push.deliver` handler (the
+    // notification router) and the `blob.process` handler (the blob processor
+    // pipeline) so a job claimed by the worker resolves a REAL handler instead
+    // of dead-lettering as `jobs.unknownHandler`.
     let mut jobs = JobHandlerRegistry::new();
     jobs.register(PUSH_DELIVER_JOB_TYPE, push.router.job_handler())
         .expect("push.deliver is the only handler registered for that type at boot");
+    jobs.register(
+        crate::blob_processors::BLOB_PROCESS_JOB_TYPE,
+        crate::blob_processors::BlobProcessHandler::new(Arc::clone(&blob_processors))
+            .into_job_handler(),
+    )
+    .expect("blob.process is the only handler registered for that type at boot");
     let jobs = Arc::new(jobs);
 
     let apps = Arc::new(registry);
@@ -317,6 +355,7 @@ async fn build_server(
         apps,
         // Populated by `attach_gateway` once the hub is built below (FR-278).
         gateway: std::sync::OnceLock::new(),
+        blob_processors,
     });
 
     // The gateway hub owns the live connections and the fan-out funnel. The

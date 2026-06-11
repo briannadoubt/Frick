@@ -928,6 +928,7 @@ async fn test_hub() -> std::sync::Arc<GatewayHub> {
         email_router: std::sync::Arc::new(crate::email::EmailRouter::noop()),
         apps,
         gateway: std::sync::OnceLock::new(),
+        blob_processors: std::sync::Arc::new(crate::blob_processors::BlobProcessorRegistry::new()),
     });
     let hub = GatewayHub::new(state);
     hub.state.attach_gateway(&hub);

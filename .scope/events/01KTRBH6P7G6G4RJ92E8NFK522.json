@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTRBH6P7G6G4RJ92E8NFK522",
+  "ts": "2026-06-10T08:49:08.807Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ92BM926JGEHNNSY5ZB",
+    "commentId": "01KTRBH6P7G6G4RJ92E8NFK521",
+    "author": "claude",
+    "body": "DONE. crates/frick-schema ships (1) builder.rs — fluent authoring DSL (SchemaBuilder + nested object/stream/event/presence/signal/blob/job/projection builders, typed field constructors, explicit ids everywhere, scaffold defaults, build() = validate_schema with exact TS messages). Golden-pinned: rebuilds the ENTIRE productTestSchema and asserts struct equality against the decoded schema-product-validated.bin wire fixture, plus foundation_schema parity. Fields default OPTIONAL (field.optional.added is the only non-breaking add) — deliberate API choice. Derive-macro sugar can layer on later if wanted; the builder is the contract FR-254 consumes. (2) lint.rs — rule-for-rule port of lint.ts (lint_schema + lint_schema_change), preserving JS quirks (Map last-wins by-id, Set dedup for events, enum prevTail cursor, ref ?? \"\" equality). Golden: conformance/fixtures/lint/ (pnpm fixtures:lint) — 81 TS-generated cases covering all 53 concrete ruleIds (19 literal + 4 templated x type kinds) + 16 empty-findings pins for deliberate non-rules; Rust output deep-equals TS JSON order-sensitively. Schema identity: hash is carried not computed (see earlier comment) — carried through builder verbatim. Full gate green: 34 workspace tests, clippy -D warnings, fmt, pnpm typecheck."
+  }
+}

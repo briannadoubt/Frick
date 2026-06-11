@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTT8NXMMNEW15WVP1JZM4781",
+  "ts": "2026-06-11T02:37:46.516Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTT8NXMMNEW15WVP1JZM4780",
+    "number": 275,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Platform events pipeline (Kafka/Redpanda + memory/sqlite drivers)",
+    "description": "FRICK_PLATFORM_EVENTS_DRIVER is set in compose (sqlite/kafka) but the Rust platform-events pipeline is unported (inspect/platform-events is a stub). Port the pipeline + the memory/sqlite/kafka drivers (TS platform-events.conformance.ts defines the shared contract). KafkaJS -> a Rust kafka client.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

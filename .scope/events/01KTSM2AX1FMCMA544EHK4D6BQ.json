@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTSM2AX1FMCMA544EHK4D6BQ",
+  "ts": "2026-06-10T20:37:33.217Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGM",
+    "commentId": "01KTSM2AX1FMCMA544EHK4D6BP",
+    "author": "claude",
+    "body": "Wire-parity fix (efc1840): object Delta fan-out + Snapshot packing now strip the record id before pack_object_record, fixing silent drops for schema object types without a declared id field (e.g. productTestSchema User). Caught by the FR-250 conformance suite. The earlier funnel_integration test used note_schema which DOES declare an id field, so it masked the bug; the conformance suite uses the real productTestSchema and exposed it."
+  }
+}

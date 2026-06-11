@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTT8Q1X8Y44YHYCYSNM3CTMA",
+  "ts": "2026-06-11T02:38:23.656Z",
+  "actor": "unknown",
+  "kind": "relation.add",
+  "payload": {
+    "fromId": "01KTT8NY6NQ86ABCV1Z99CTAVE",
+    "toId": "01KTR3AAXJRV8NSDCS37B1JC0B",
+    "type": "relates_to"
+  }
+}

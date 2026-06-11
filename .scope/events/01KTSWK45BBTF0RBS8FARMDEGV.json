@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTSWK45BBTF0RBS8FARMDEGV",
+  "ts": "2026-06-10T23:06:31.979Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ94M12V31EX7XWX3GHG",
+    "commentId": "01KTSWK45A2ZJSP2D1TR45NER9",
+    "author": "claude",
+    "body": "Cutover landed on PR #8 (commits 763e5d2 delete + d9ce1e1 docs/version), code+docs only — NOT released (no tag/publish, per user). DELETED: apps/server→frick-server, apps/cli→frick-cli, packages/mcp→frick-mcp, packages/agent-kit, bench, docker/published-server, ops/deploy/server.Dockerfile, Tiltfile, scripts/e2e-smoke+conformance-ts-server+extract-migrations. KEPT (corrected from epic — packages/protocol CANNOT be deleted, packages/core imports it in 11 files): packages/protocol/core/react/devtools, apps/web, Swift (packages/swift+design-swift), Kotlin (apps/android), apps/ios, design/design-web, apps/dev-dashboard. CI: ts job now web-client-only, ts-postgres removed (Rust rust-postgres covers PG), cross-impl conformance job removed (no TS server to compare against — Rust conformance run stays in cargo test --workspace). package.json/pnpm-workspace/publish-npm/bump scripts pruned; lockfile regenerated. Docs rewritten (README/AGENTS/CONTRIBUTING/docs/*); Cargo workspace 0.4.0-dev→0.4.0; CHANGELOG 0.4.0 entry. Gate GREEN: Rust 602 tests + clippy -D warnings + fmt; TS clients 419 vitest + typecheck. Documented follow-ups: frick-server is library-only (no standalone binary), frick init scaffolds a TS app depending on the now-unpublished @fricken/server, frick-codegen not yet canonical generator, deploy.rs defaults to a deleted Dockerfile, calls/search/web-push/email unported. The actual v0.4.0 release (tag + npm/swift/android publish) is left for the user post-review."
+  }
+}

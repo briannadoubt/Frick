@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTQRMZ938EW3MMK8NWV72MGD",
+  "ts": "2026-06-10T03:19:09.347Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGC",
+    "number": 240,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Rust codegen toolchain: Swift, Kotlin, and TypeScript DTO targets",
+    "description": "Port the DTO generators to Rust, consuming the canonical AST from the Rust schema DSL. Swift and Kotlin output must match the current generators (snapshot-diff against pnpm schema:generate output for the foundation schema). NEW: TypeScript becomes a generated target so the web client (packages/core/react, which stay TS) gets typed DTOs from Rust-authored schemas. Replaces the TS codegen pipeline.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

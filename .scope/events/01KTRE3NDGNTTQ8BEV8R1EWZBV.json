@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTRE3NDGNTTQ8BEV8R1EWZBV",
+  "ts": "2026-06-10T09:34:10.864Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "commentId": "01KTRE3NDGNTTQ8BEV8R1EWZBT",
+    "author": "claude",
+    "body": "Milestone: 5 stories done (FR-237/238/239/240/241), FR-243 config landed. Cargo workspace at 199 tests, clippy -D warnings + fmt clean across frick-protocol/schema/codegen/store/server. Conformance fixtures: 73 wire + 81 lint + codegen snapshots (swift/kotlin/ts) + 24 migrations, all extracted from / verified against the TS source of truth. Nothing committed yet (on main; holding per repo rule)."
+  }
+}

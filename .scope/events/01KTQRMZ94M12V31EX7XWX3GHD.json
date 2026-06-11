@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTQRMZ94M12V31EX7XWX3GHD",
+  "ts": "2026-06-10T03:19:09.348Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTQRMZ94M12V31EX7XWX3GHC",
+    "number": 253,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "MCP server + agent-kit in Rust",
+    "description": "Port packages/mcp (Model Context Protocol surface over Frick) and packages/agent-kit (~1.2k lines combined) to Rust crates using the official Rust MCP SDK. Tool surface and behavior parity with the TS versions.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTR9E3J5EHFEZ4SDMVZW7S5Y",
+  "ts": "2026-06-10T08:12:30.149Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ94M12V31EX7XWX3GH6",
+    "commentId": "01KTR9E3J5EHFEZ4SDMVZW7S5X",
+    "author": "claude",
+    "body": "First conformance artifacts landed as part of FR-238: conformance/fixtures/wire/ golden binary fixtures (38 cases incl. msgpack width-boundary torture values, binary payloads, all CallCommand variants) + the generator script wired as pnpm fixtures:wire. Black-box scenario harness still to come."
+  }
+}

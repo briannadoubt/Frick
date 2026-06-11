@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTT735YH7PJYRB3NWSREFJ6K",
+  "ts": "2026-06-11T02:10:03.857Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTSXK6G6AJFX0VB330T8M5QB",
+    "commentId": "01KTT735YH7PJYRB3NWSREFJ6J",
+    "author": "claude",
+    "body": "Web Push (VAPID) adapter DONE + on PR #8 (commit 6c8db26): RFC 8291 via Mozilla ece (pure-Rust p256/hkdf/aes-gcm backend, pinned to the RFC 8291 A.2 known-answer vector) + RFC 8292 ES256 VAPID, per-tenant FRICK_PUSH_CRED_KEY creds, SSRF guard. 18 webpush tests. Docs (operations.md) also done earlier. REMAINING on this ticket: outbound email (deferred — no consumer yet; password-reset routes are unported), custom search adapter (a store-entangled later story), and OTel export + FRICK_OTEL_* config. Also surfaced: push delivery is blocked for ALL platforms until the PushRegistry is wired at boot (new ticket)."
+  }
+}

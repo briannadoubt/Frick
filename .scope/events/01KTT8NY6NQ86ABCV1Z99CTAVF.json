@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTT8NY6NQ86ABCV1Z99CTAVF",
+  "ts": "2026-06-11T02:37:47.093Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTT8NY6NQ86ABCV1Z99CTAVE",
+    "number": 279,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "FR-256 client halves: subscribeObject resolves on server registration (Swift/Kotlin/web)",
+    "description": "The FR-256 server race is fixed; the defense-in-depth client halves remain: FrickSyncSocket.subscribeObject (Swift packages/swift, Kotlin apps/android, web packages/core) should resolve on server registration (a Subscribe ack), not on frame send. Needs a Subscribe-ack on the wire + client await. Relates to FR-256.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

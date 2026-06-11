@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTR3AAXKRN3DKMB5VZDB2PG8",
+  "ts": "2026-06-10T06:25:35.155Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTR3AAXJRV8NSDCS37B1JC0B",
+    "number": 256,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "subscribeObject resolves before server-side registration — subscribe-then-write loses the echo delta",
+    "description": "## Symptom\nA client that calls `FrickSyncSocket.subscribeObject(type:)` and then immediately writes (HTTP `writeObject`) can permanently miss the write's own echo delta. Intermittent — wins the race on an idle server, loses reliably under load.\n\nObserved in RangerCRM's integration suite on the 0.3.1 stack: `FrickSyncSocketIntegrationTests.test_writeAccount_emitsObjectsDeltaOnSyncSocket` times out (and pre-fix, hung a 48-minute suite run). Server-side probe at `#fanOutObjects` showed `subscribers: 0` at the moment of the write — the subscribe frame had been sent and `subscribeObject` had returned, but the gateway had not yet registered the subscription.\n\n## Root cause (two halves)\n1. **Client** (`packages/swift/Sources/FrickSwift/FrickSyncSocket.swift`, `subscribeObject`): resolves after `sendFrame` — i.e. on frame *send*, not on server *registration*. Byte-identical in 0.2.0; the latent race predates 0.3.1.\n2. **Server** (`apps/server/src/sync/gateway.ts`, `#handleSubscribe`): since FR-116/FR-70, async per-record authz (`assertCanSubscribe`, grant lookups) runs BEFORE `subscriptions.addSubscription`. With any grants present (`perRecordReadAuthzActive`), that window is long enough that an immediate HTTP write consistently beats registration. This is why 0.2.0 rarely lost the race and 0.3.1 loses it under suite load.\n\n## Why it matters beyond tests\nAny subscribe-then-write sequence (e.g. an app creating a record right after opening a screen that subscribes) silently misses its echo. `FrickStore` is partially insulated (the reply snapshot re-delivers state) but the same non-guarantee applies to anything keying off deltas.\n\n## Fix direction\nThe gateway already replies to an object subscribe with a correlated `Snapshot` frame (`subscriptionId`), and registration happens before that send — so the protocol already carries an implicit ack. Make `subscribeObject` (and `subscribe`/`subscribePresence`, same shape) await its correlated reply (Snapshot, or a Nack → throw) before returning, with a timeout. That turns 'returned' into 'registered' for every client, no protocol change needed. Consider the same for the Kotlin/JS clients if they share the pattern.\n\n## Regression test\nServer: subscribe + write back-to-back from one client under a non-empty grants table; assert the echo delta arrives. Swift: subscribeObject returns ⟹ a write fired immediately after must produce a delta (stub source: delay the registration ack and assert subscribeObject doesn't resolve early).\n\n## Downstream workaround (retire when fixed)\nRangerCRM pins its socket test to await the reply snapshot before writing (FrickSyncSocketIntegrationTests, commented FR-236); remove once subscribeObject awaits its ack.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

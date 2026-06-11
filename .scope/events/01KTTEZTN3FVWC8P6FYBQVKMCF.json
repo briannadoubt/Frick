@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTTEZTN3FVWC8P6FYBQVKMCF",
+  "ts": "2026-06-11T04:28:02.595Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTTEZTN3FVWC8P6FYBQVKMCE",
+    "number": 280,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Auth: SAML federation (metadata + ACS + XML signature verification)",
+    "description": "The OIDC half of FR-270 landed (commit 77e90c3). SAML remains and is its own careful effort: GET /auth/saml/:id/metadata + POST /auth/saml/:id/acs, XML signature verification (security-critical — signature-wrapping/XXE/canonicalization hazards; no mature pure-Rust XML-dsig crate, so vet the approach), replay protection via the auth_saml_seen_assertions store (already migrated), and carry over the FR-214/215/216 SAML audit fixes (AudienceRestriction OR-folding, replay TTL skew pad, InResponseTo binding). Recommend strong adversarial review + possibly a vetted dependency.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

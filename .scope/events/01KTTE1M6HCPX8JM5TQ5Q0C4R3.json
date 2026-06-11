@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTTE1M6HCPX8JM5TQ5Q0C4R3",
+  "ts": "2026-06-11T04:11:32.945Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTT8N638TAJQZXVB1QNAP1Q4",
+    "commentId": "01KTTE1M6G39V3A8N0KG8WXRG2",
+    "author": "claude",
+    "body": "DONE + on PR #8 (commit 2d82558). Sign in with Apple + Google: /auth/apple/verify, /auth/google/verify, /auth/apple/notifications. RS256 id-token verifier hand-rolled over the pure-Rust rsa crate (alg pinned to RS256 — alg=none/HS256 rejected before any crypto; no jsonwebtoken/ring), signature verified against the kid-selected JWKS key before claims, iss/aud/exp/nonce/email_verified enforced; injectable JwksProvider seam (cached reqwest in prod, FixedJwksProvider offline in tests). find-or-create keyed by provider:sub (never email), generic 401 on any failure (no oracle), unconfigured provider => 404. Adversarial SECURITY review passed clean (all 8 critical checks, exact-variant negative tests). Verified live: /auth/apple/verify returns providerNotConfigured (route merged + guard works). 25 auth tests; 748 workspace green."
+  }
+}

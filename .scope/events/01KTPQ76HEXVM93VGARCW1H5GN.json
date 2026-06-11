@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTPQ76HEXVM93VGARCW1H5GN",
+  "ts": "2026-06-09T17:34:55.022Z",
+  "actor": "unknown",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTPQ76HEXVM93VGARCW1H5GM",
+    "number": 232,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Documentation refresh automation run",
+    "description": "Automation update-documentation run on 2026-06-09. Inspect current repo docs, guidance, status/planning material, package metadata, tests, and recent history; make documentation-only corrections where evidence supports them.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

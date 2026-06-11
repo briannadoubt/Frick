@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTTBWW6JH3RAK72PMPSETXPN",
+  "ts": "2026-06-11T03:34:00.146Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTT8N5YJQAXNA7PPKJ4W5WRW",
+    "commentId": "01KTTBWW6JH3RAK72PMPSETXPM",
+    "author": "claude",
+    "body": "DONE + on PR #8 (commit bb944f5). Six routes: /auth/email/{signup,login,forgot-password,reset-password}, /auth/refresh, /auth/refresh/revoke — over the already-ported account/password_hasher/password_reset/refresh_token stores, sharing the AuthLimiter. Carried the audit fixes: FR-217 (forgot-password throttle keyed on email+client-IP), FR-218 (keyed account lookup), FR-219 (distinct 409 EmailTaken). Added the email seam (FrickEmailAdapter trait + EmailRouter + Noop/Recording adapters) wired via BootSeams.email_router — the FR-271 plug-point. Adversarial review caught a timing oracle (handlers double-spent Argon2 on wrong-password vs unknown-email); fixed by moving the dummy verify INTO AccountStore::verify_password, which also fixes the pre-existing /auth/login. 8 email_auth integration tests. 723 workspace tests green."
+  }
+}

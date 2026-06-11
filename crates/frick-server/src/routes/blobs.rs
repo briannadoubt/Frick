@@ -342,13 +342,29 @@ async fn put_content(
         status: response_status,
         response_content_hash,
         owner_id: resolved_owner_id,
+        mime_type: resolved_mime_type,
         existing_byte_length,
     } = resolved;
 
-    // TODO(FR-248/processors): sync blob validators (4 KiB preview) → 415
-    // `blob.unsupportedContentType`, then enqueue one `blob.process` job per
-    // matching processor (idempotency key `<blobId>:<processorId>:<hash>`).
-    // The processor pipeline is deferred; everything else here is exact.
+    // 4b. Blob processors (FR-272). Resolve the processors matching the
+    // resolved (mime, size) tuple ONCE — the sync validators run here against
+    // the 4 KiB preview (reject → 415), and the SAME set drives the async
+    // `blob.process` enqueue after the bytes commit (TS `src/server.ts:2315-2403`).
+    let matching_processors = state.blob_processors.matching(
+        &resolved_mime_type,
+        i64::try_from(content.len()).unwrap_or(i64::MAX),
+    );
+    if let Err(error) = run_sync_validators(
+        &state,
+        &matching_processors,
+        &principal,
+        &resolved_owner_id,
+        &resolved_mime_type,
+        &blob_id,
+        content,
+    ) {
+        return respond_error(&error, &request_id);
+    }
 
     // 5. Per-principal quota projection (FR-56), only when a finite cap is set.
     let quota = state.config.limits.max_blob_bytes_per_principal;
@@ -413,6 +429,25 @@ async fn put_content(
         return respond_error(&store_error(&error), &request_id);
     }
 
+    // 8. Enqueue async post-processing jobs (FR-272). Each matching processor
+    // with a `process` hook gets its own `blob.process` job, deduped by the
+    // idempotency key `<blobId>:<processorId>:<contentHash>` (TS
+    // `src/server.ts:2385-2403`). An enqueue failure does NOT fail the upload —
+    // the bytes are already committed; the derivative is recoverable by a
+    // re-upload (same idempotency key).
+    if let Err(error) = enqueue_process_jobs(
+        &state,
+        &matching_processors,
+        &principal.tenant_id,
+        active.app_id(),
+        &blob_id,
+        &content_hash,
+    )
+    .await
+    {
+        return respond_error(&store_error(&error), &request_id);
+    }
+
     (
         response_status,
         axum::Json(json!({
@@ -425,6 +460,88 @@ async fn put_content(
         .into_response()
 }
 
+/// Run the sync blob validators (FR-272) over the 4 KiB preview. Each matching
+/// processor with a `validate` hook is invoked; the first rejection becomes a
+/// `415 blob.unsupportedContentType` carrying `processorId` + `rejectionReason`
+/// (TS `src/server.ts:2315-2338`). No store row is written when a validator
+/// rejects (this runs before the metadata create / byte write).
+#[allow(clippy::too_many_arguments)]
+fn run_sync_validators(
+    state: &AppState,
+    processors: &[crate::blob_processors::SharedBlobProcessor],
+    principal: &Principal,
+    owner_id: &str,
+    mime_type: &str,
+    blob_id: &str,
+    content: &[u8],
+) -> Result<(), ServerError> {
+    // First 4 KiB of the content for sniffing (shorter for tiny blobs).
+    let preview = &content[..content.len().min(4 * 1024)];
+    let byte_length = i64::try_from(content.len()).unwrap_or(i64::MAX);
+    for processor in processors {
+        if !processor.has_validate() {
+            continue;
+        }
+        let verdict = processor.validate(&crate::blob_processors::BlobValidateContext {
+            tenant_id: &principal.tenant_id,
+            blob_id,
+            owner_id,
+            mime_type,
+            byte_length,
+            preview,
+            store: &state.store,
+        });
+        if let crate::blob_processors::BlobValidation::Reject { reason } = verdict {
+            let processor_id = processor.id().to_string();
+            return Err(ServerError::BlobValidationRejected {
+                message: format!("Blob rejected by processor {processor_id}: {reason}"),
+                processor_id,
+                rejection_reason: Some(reason),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Enqueue one `blob.process` job per matching processor with a `process` hook
+/// (FR-272, TS `src/server.ts:2385-2403`). The idempotency key
+/// `<blobId>:<processorId>:<contentHash>` makes a same-content re-upload a
+/// no-op enqueue.
+async fn enqueue_process_jobs(
+    state: &AppState,
+    processors: &[crate::blob_processors::SharedBlobProcessor],
+    tenant_id: &str,
+    app_id: &str,
+    blob_id: &str,
+    content_hash: &str,
+) -> Result<(), StoreError> {
+    for processor in processors {
+        if !processor.has_process() {
+            continue;
+        }
+        let processor_id = processor.id();
+        let payload = crate::blob_processors::encode_blob_process_payload(
+            &crate::blob_processors::BlobProcessPayload {
+                blob_id: blob_id.to_string(),
+                processor_id: processor_id.to_string(),
+            },
+        );
+        state
+            .store
+            .enqueue_job(frick_store::stores::job::EnqueueInput {
+                tenant_id: tenant_id.to_string(),
+                app_id: Some(app_id.to_string()),
+                job_type: crate::blob_processors::BLOB_PROCESS_JOB_TYPE.to_string(),
+                payload,
+                idempotency_key: Some(format!("{blob_id}:{processor_id}:{content_hash}")),
+                available_at: None,
+                max_attempts: None,
+            })
+            .await?;
+    }
+    Ok(())
+}
+
 /// The owner / mime / status resolution for an upload (`put_content` step 3/4).
 struct ResolvedUpload {
     /// 200 for an existing-metadata upload, 201 for a new blob.
@@ -433,6 +550,9 @@ struct ResolvedUpload {
     /// overwrite, the computed hash on create.
     response_content_hash: String,
     owner_id: String,
+    /// The resolved MIME type: the stored metadata mime on overwrite, the
+    /// inferred `Content-Type` on create. Drives processor matching (FR-272).
+    mime_type: String,
     /// Bytes already attributed to this blob (the overwritten blob's declared
     /// length, or 0 for a new blob) — subtracted from the quota projection.
     existing_byte_length: i64,
@@ -466,6 +586,7 @@ fn resolve_upload(
             status: StatusCode::OK,
             response_content_hash: metadata.content_hash.clone(),
             owner_id: metadata.owner_id.clone(),
+            mime_type: metadata.mime_type.clone(),
             existing_byte_length: metadata.byte_length,
         });
     }
@@ -481,6 +602,7 @@ fn resolve_upload(
         status: StatusCode::CREATED,
         response_content_hash: content_hash.to_owned(),
         owner_id,
+        mime_type: infer_mime_type(headers),
         existing_byte_length: 0,
     })
 }

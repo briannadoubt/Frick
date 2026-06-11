@@ -18,10 +18,12 @@ pub use driver::{RunResult, SqlDialect, SqlDriver, SqlExec, SqlRow, SqlValue};
 pub use error::StoreError;
 pub use facade::{
     AppScopedStore, DEFAULT_APP_ID, DEFAULT_RECENT_ERROR_LIMIT, DEFAULT_TENANT_ID,
-    DiagnosticsErrorEnvelope, FrickStore, FrickStoreOptions, FrickStoreSearchProjector,
-    FrickStoreWriteEvent, FrickStoreWriteListener, IdempotencyCacheStats, MaintenanceHandle,
-    MaintenanceIntervals, PruneResult, StoreDriverKind,
+    DerivativeReadResult, DerivativeRecordInput, DerivativeRow, DiagnosticsErrorEnvelope,
+    FrickStore, FrickStoreOptions, FrickStoreSearchProjector, FrickStoreWriteEvent,
+    FrickStoreWriteListener, IdempotencyCacheStats, MaintenanceHandle, MaintenanceIntervals,
+    PruneResult, StoreDriverKind,
 };
+pub use stores::blob::derivative_storage_key;
 pub use stores::blob_bytes::{FrickBlobDriver, S3BlobBytesConfig};
 pub use stores::devtools_events::{
     DEFAULT_DEVTOOLS_EVENTS_MAX_ROWS, DEFAULT_DEVTOOLS_EVENTS_PRUNE_INTERVAL_MS,

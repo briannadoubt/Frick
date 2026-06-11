@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTRANVK2AW1SXFD08HDBXKTQ",
+  "ts": "2026-06-10T08:34:12.706Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGJ",
+    "commentId": "01KTRANVK2AW1SXFD08HDBXKTP",
+    "author": "claude",
+    "body": "Two contracts pinned during FR-238 for the server port: (1) unknown frame kinds — TS gateway silently drops them (decodeFrame blind-casts, switch default ignores); Rust decode_frame errors, so the Rust gateway must pre-read the kind integer and drop unknown kinds before typed decode to preserve observable behavior. (2) call-control-plane.ts builds active/ended rooms via object spread, appending startedAt/endedAt/leftAt after mediaSessionId/transport — byte-parity for call results needs those literals rewritten in TS interface order (wire-invisible to clients); until then the production order is pinned decode-only by the call-command-result-join-production-order fixture. Also note gateway.ts Delta literal was already fixed to cursor-before-removed."
+  }
+}

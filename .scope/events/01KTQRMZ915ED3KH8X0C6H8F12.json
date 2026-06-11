@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTQRMZ915ED3KH8X0C6H8F12",
+  "ts": "2026-06-10T03:19:09.345Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "number": 236,
+    "keyPrefix": "FR",
+    "ticketType": "epic",
+    "title": "Rust rewrite: backend + core framework (v0.4.0)",
+    "description": "Big-bang rewrite of everything server-side and toolchain into Rust. Only the web client (packages/core + packages/react + apps/web), the Swift SDK, and the Kotlin SDK stay in their current languages.\n\n## Decisions (locked with Bri 2026-06-09)\n\n- **Strategy:** big-bang — build the Rust replacement to full parity in a new tree, then cut over and delete the TS backend in one release (v0.4.0).\n- **Wire compatibility:** hard requirement. The Rust server is a drop-in at the protocol layer: same MessagePack frame protocol, schema identity (schemaId/Version/Revision/Hash), and structured error envelope. Existing Swift/Kotlin/web clients must work unchanged.\n- **TS client runtime stays:** packages/core + packages/react are treated as part of the web client and remain TypeScript.\n- **Schema authoring:** moves to a Rust DSL/macros. TypeScript becomes a generated codegen target alongside Swift and Kotlin. Canonical schema AST semantics and hashing must be preserved so schema identity is stable across the rewrite.\n- **App authoring after cutover:** both modes — embed Frick as a Rust library (schema + server wiring in Rust, like today's server.ts) AND a standalone `frick-server` binary that loads compiled schema artifacts + config.\n- **Storage:** SQLite first (same durable+cache store port semantics), and this epic also lands the Postgres runtime store as a first-class backend (finishes the FR-4 direction in Rust). Local SQLite DBs are disposable; no data migration.\n- **Stack:** tokio + axum/hyper (HTTP + WebSocket), rmp-serde (MessagePack), rusqlite + sqlx/tokio-postgres, tracing. Boring and well-supported.\n- **Repo layout:** Cargo workspace (crates/) added to this monorepo alongside the pnpm workspace. TS backend deleted at cutover; web client + generated TS stay.\n- **Acceptance:** a language-neutral conformance suite (wire fixtures + black-box scenario tests) run against BOTH servers until cutover, plus the three client SDK suites passing against the Rust server.\n- **Scope includes:** apps/server, packages/protocol (as Rust crate), schema codegen, apps/cli, packages/mcp + packages/agent-kit, apps/rangercrm-server (dogfood). dev-dashboard/devtools/design stay TS.\n- **Parity bar:** ALL of it — objects, streams, presence, signals, projections, jobs, blobs, sharing grants, cluster bus + Redis adapter, push adapters (APNs/FCM + per-tenant creds + telemetry), admin/inspection routes + dashboard API.\n\n## Sequencing\n\nFoundation (workspace, protocol crate, schema DSL, codegen, storage) → server core → primitives → distributed/ops surfaces → conformance + SDK acceptance → tooling (CLI/MCP/rangercrm) → cutover PR that deletes the TS backend and ships v0.4.0.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

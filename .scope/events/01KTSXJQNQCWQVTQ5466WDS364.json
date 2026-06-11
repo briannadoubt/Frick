@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTSXJQNQCWQVTQ5466WDS364",
+  "ts": "2026-06-10T23:23:47.767Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTSXJQNQCWQVTQ5466WDS363",
+    "number": 257,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[gateway] Object Delta fan-out drops rows for object types without an `id` field",
+    "description": "Found by the FR-250 conformance suite. pack_object_record errored on the injected `id` key for schema object types that declare no id field (e.g. productTestSchema User), so the object Delta was silently dropped — a real wire divergence from the TS server. Fixed by stripping the record id before packing (it rides the packed tuple's id slot), matching TS withoutRecordId, in both fan_out_object_upsert and pack_object_rows. Guarded by a conformance scenario (HTTP upsert -> live object Delta). Commit efc1840.",
+    "status": "done",
+    "priority": "medium",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": "https://github.com/briannadoubt/Frick/pull/8",
+    "assignee": null,
+    "labels": []
+  }
+}

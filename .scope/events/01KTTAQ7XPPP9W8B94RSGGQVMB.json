@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTTAQ7XPPP9W8B94RSGGQVMB",
+  "ts": "2026-06-11T03:13:26.966Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTT8N5P1V6R6B7NTSJ55VXYR",
+    "commentId": "01KTTAQ7XPPP9W8B94RSGGQVMA",
+    "author": "claude",
+    "body": "DONE + on PR #8 (commit 3304ac8). Search subsystem ported: frick-store sqlite-fts5 adapter over the 0009 search_indexes+FTS5 tables (upsert/delete/query/rebuild; bm25 ranking; json_extract filters bound as params; empty-q short-circuit); the facade drives indexing in its write funnel via an installed SearchOp projector (failures swallowed, no store re-entrancy/deadlock). frick-server SearchRegistry (parallel to projections), POST /search route (limits + per-hit visibility post-filter + reserved __frickSource* strip), and GET /_frick/inspect/search report. 37 new tests. Adversarial review found + I fixed one real bug: the store rejected hyphenated filter keys the route accepted, silently dropping the clause (unfiltered results) — now aligned to [A-Za-z0-9_-] and fails loud. SQLite-first; PG tsvector arm is the documented FR-242 follow-up (fails closed on PG)."
+  }
+}

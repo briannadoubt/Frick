@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTQ73DTZHPFDW1ETCN8GQAJC",
+  "ts": "2026-06-09T22:12:28.639Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQ7334H9093RJQ7G4D5QEY3",
+    "commentId": "01KTQ73DTYP3ZC6HYD4JY39WNV",
+    "author": "claude",
+    "body": "Repro: attach @FrickModel(WidgetDTO.self) to an @MainActor @Observable final class. The macro's member expansion adds 'private(set) var dto' (FrickMacros/FrickModelMacro.swift:79-82, comment claims 'Observed so in-place edits re-render cells'), but attached macros each expand against the ORIGINAL source — @Observable's memberAttribute expansion never sees macro-added members, so dto gets no @ObservationTracked / registrar plumbing. Result: apply() mutates dto without firing observation; any view observing a single model (detail screens) silently stops re-rendering on in-place merges. The existing FrickModelMacroIntegrationTests never combine the macro with @Observable, so this is untested. Suggested fix: have the macro emit the observation plumbing itself (an _$observationRegistrar-aware accessor pair like @Observable generates, gated on the attached class also being @Observable), or document that the macro is incompatible with @Observable and models must hand-declare dto. Found while migrating RangerCRM to 0.2.0 — RangerCRM is NOT adopting the macro for now (models keep hand-written, source-visible scaffolding; see RangerCRM RangerObject.swift note)."
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTS7V33T3F119Y9151DZB7JV",
+  "ts": "2026-06-10T17:03:52.954Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGJ",
+    "commentId": "01KTS7V33T3F119Y9151DZB7JT",
+    "author": "claude",
+    "body": "Auth path landed + committed (0876226): session.rs (principal_from_active_session_token + ensure_tenant_allowed — the shared resolver seam) and auth_routes.rs (/auth/signup,login,dev-login,logout + fixed-window NUL-keyed auth limiter + 32-byte base64url session minting + handle/displayName validation + userIdFromHandle/devHandleFromUserId). End-to-end test: dev-login over a real socket mints a session the resolver accepts. 350 workspace tests; gate green. Remaining for FR-243: protected data-plane HTTP route surface (objects/streams/append/signals/share/push/projections) and the WS gateway (handshake + per-frame session re-validation + frame dispatch + store-write-listener fan-out)."
+  }
+}

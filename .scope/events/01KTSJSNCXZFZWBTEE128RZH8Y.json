@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTSJSNCXZFZWBTEE128RZH8Y",
+  "ts": "2026-06-10T20:15:20.477Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ94M12V31EX7XWX3GHC",
+    "commentId": "01KTSJSNCXZFZWBTEE128RZH8X",
+    "author": "claude",
+    "body": "frick-mcp landed + committed ae7867e (in review). New crate crates/frick-mcp: the frick-mcp binary — zero-SDK hand-rolled stdio JSON-RPC 2.0 bridge to a running Frick server (ported from packages/mcp). Faithful: protocol-version echo/default 2025-11-25, all 9 methods + JSON-RPC error codes, 8 read tools + write-gated frick_append_event (allowWrites = --allow-writes && !--readonly), EXACT outgoing headers (accept/authorization/x-frick-tenant/x-frick-user), URL-encoded stream paths + clamped limit, the 9-code error-hint table, 7 resources + stream-page template + non-standard top-level structuredContent, 3 prompts, createMcpClientConfig (command:\"frick\"). Pure dispatch core (FrickMcpServer::handle) over an injectable HttpCall seam → 35 unit tests; 4 live-server integration tests boot a real frick-server and exercise frick_health/ready/inspect/read_stream end-to-end. The Rust server accepting this exact MCP wire surface is also a conformance data point for FR-250/251."
+  }
+}

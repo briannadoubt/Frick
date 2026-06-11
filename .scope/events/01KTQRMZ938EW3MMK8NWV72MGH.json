@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTQRMZ938EW3MMK8NWV72MGH",
+  "ts": "2026-06-10T03:19:09.347Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGG",
+    "number": 242,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Postgres runtime store backend (first-class)",
+    "description": "Land Postgres as a first-class runtime backend in Rust (sqlx or tokio-postgres): every store port implemented, migrations runner (port/replace the standalone TS migration runner), multi-node correctness for durable jobs/projections using Postgres locking (advisory locks / SKIP LOCKED), and CI coverage against a real Postgres service. Completes the FR-4 direction as part of the rewrite.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

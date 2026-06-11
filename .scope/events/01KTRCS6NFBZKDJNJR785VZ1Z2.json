@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTRCS6NFBZKDJNJR785VZ1Z2",
+  "ts": "2026-06-10T09:10:59.503Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGC",
+    "commentId": "01KTRCS6NFBZKDJNJR785VZ1Z1",
+    "author": "claude",
+    "body": "DONE. crates/frick-codegen ports all three generators with BYTE-IDENTICAL output verified two ways: against fresh TS-generated fixtures (conformance/fixtures/codegen/{swift,kotlin,typescript}/, scripts generate-codegen-fixtures-*.ts) for foundationSchema AND productTestSchema, and against the COMMITTED artifacts (FrickGenerated.swift, FrickGenerated.kt, packages/core/src/generated/bindings.ts + errors.ts — only pipeline delta is the driver-appended trailing newline, pinned by tests). All TS quirks preserved: implicit id-0 field injection, Swift keyword backticks + FrickJSONValue gating, Kotlin RTC->Rtc rewrite + mapOf forms, sensitivity/mergePolicy never emitted. TS bindings is the new first-class target for the web client. 26 tests; clippy/fmt clean. Follow-ups noted: wire fixture generation into verify:generated at cutover; error-enum helpers live per-language (swift.rs/kotlin.rs) with only the TS enum in error_enums.rs."
+  }
+}

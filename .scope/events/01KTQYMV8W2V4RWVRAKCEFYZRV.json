@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTQYMV8W2V4RWVRAKCEFYZRV",
+  "ts": "2026-06-10T05:03:56.700Z",
+  "actor": "unknown",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTQ7334H9093RJQ7G4D5QEY3",
+    "field": "prUrl",
+    "value": "https://github.com/briannadoubt/Frick/pull/7"
+  }
+}
