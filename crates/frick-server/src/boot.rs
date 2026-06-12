@@ -721,7 +721,13 @@ impl FrickServer {
         }
 
         let join = tokio::spawn(async move {
-            let server = axum::serve(listener, router);
+            // Serve with connect-info so app routes (FR-297/FR-303) can extract
+            // the socket peer (`ConnectInfo<SocketAddr>`) for trusted client-IP
+            // resolution. Framework handlers that don't ask for it are unaffected.
+            let server = axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            );
             let graceful = server.with_graceful_shutdown(async move {
                 let _ = shutdown_rx.await;
             });

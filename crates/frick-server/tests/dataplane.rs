@@ -67,6 +67,23 @@ async fn note_count(
         .into_response()
 }
 
+/// A command endpoint that returns its trusted client IP (FR-303): the socket
+/// peer (via `ConnectInfo`), with `X-Forwarded-For` honored only from a
+/// configured trusted proxy.
+async fn client_ip_route(
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::State(state): axum::extract::State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let ip = frick_server::client_ip::trusted_client_ip(
+        &headers,
+        peer.ip(),
+        &state.config.trusted_proxies,
+    );
+    axum::Json(serde_json::json!({ "clientIp": ip.to_string() })).into_response()
+}
+
 fn test_config() -> FrickConfig {
     let mut env = std::collections::BTreeMap::new();
     env.insert("FRICK_ENV".to_string(), "test".to_string());
@@ -158,7 +175,10 @@ impl TestServer {
         let port = listener.local_addr().unwrap().port();
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
         let join = tokio::spawn(async move {
-            let serve = axum::serve(listener, router);
+            let serve = axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            );
             let _ = serve
                 .with_graceful_shutdown(async move {
                     let _ = shutdown_rx.await;
@@ -473,6 +493,41 @@ async fn app_route_authenticates_and_reads_the_store() {
         after.body.contains("\"noteCount\":1"),
         "body: {}",
         after.body
+    );
+
+    server.close().await;
+}
+
+/// FR-303: an app route resolves the trusted client IP. With no trusted proxies
+/// configured (the default), a spoofed `X-Forwarded-For` is ignored and the
+/// loopback socket peer is used — the spoofing-resistant rate-limit key.
+#[tokio::test]
+async fn app_route_resolves_trusted_client_ip() {
+    let mut server = TestServer::boot_with_app_router(Box::new(|state| {
+        axum::Router::new()
+            .route("/commands/client-ip", axum::routing::get(client_ip_route))
+            .with_state(state)
+    }))
+    .await;
+
+    let resp = server
+        .request(
+            "GET",
+            "/commands/client-ip",
+            &[("X-Forwarded-For", "203.0.113.9")],
+            "",
+        )
+        .await;
+    assert_eq!(resp.status, 200, "body: {}", resp.body);
+    assert!(
+        resp.body.contains("127.0.0.1"),
+        "the loopback socket peer must be used: {}",
+        resp.body
+    );
+    assert!(
+        !resp.body.contains("203.0.113.9"),
+        "an untrusted X-Forwarded-For must be ignored: {}",
+        resp.body
     );
 
     server.close().await;

@@ -12,6 +12,7 @@ pub mod authz;
 pub mod blob_processors;
 pub mod boot;
 pub mod calls;
+pub mod client_ip;
 pub mod cluster;
 pub mod config;
 pub mod cors;
