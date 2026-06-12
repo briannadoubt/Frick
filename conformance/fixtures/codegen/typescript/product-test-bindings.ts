@@ -33,13 +33,6 @@ export interface RoomMemberDto {
   role: "owner" | "member";
 }
 
-export interface CallRoomDto {
-  id: string;
-  conversationId: string;
-  state: "ringing" | "active" | "ended";
-  createdBy: string;
-}
-
 export interface UserDeviceDto {
   id: string;
   userId: string;
@@ -74,6 +67,42 @@ export interface ScheduledMessageDto {
   status: "pending" | "delivered" | "cancelled";
 }
 
+export interface CallRoomDto {
+  id: string;
+  conversationId: string;
+  state: "ringing" | "active" | "ended";
+  createdBy: string;
+  kind: "audio" | "video";
+  createdAt: string;
+  startedAt?: string;
+  endedAt?: string;
+  mediaSessionId?: string;
+  transport?: string;
+}
+
+export interface CallInviteDto {
+  id: string;
+  callId: string;
+  inviteeUserId: string;
+  status: "ringing" | "accepted" | "declined" | "cancelled";
+  invitedBy: string;
+  invitedAt: string;
+  respondedAt?: string;
+}
+
+export interface CallParticipantDto {
+  id: string;
+  callId: string;
+  userId: string;
+  deviceId: string;
+  state: "joined" | "left";
+  joinedAt: string;
+  leftAt?: string;
+  micEnabled: boolean;
+  cameraEnabled: boolean;
+  screenSharing: boolean;
+}
+
 export interface MessageSentDto {
   messageId: string;
   senderId: string;
@@ -106,20 +135,49 @@ export interface ReceiptAdvancedDto {
 
 export interface CallCreatedDto {
   callId: string;
+  conversationId: string;
   createdBy: string;
+  kind: string;
+  createdAt: string;
+}
+
+export interface CallInviteSentDto {
+  callId: string;
+  inviteeUserId: string;
+  invitedBy: string;
+}
+
+export interface CallInviteAcceptedDto {
+  callId: string;
+  inviteeUserId: string;
 }
 
 export interface CallParticipantJoinedDto {
+  callId: string;
   userId: string;
   deviceId: string;
+  joinedAt: string;
+}
+
+export interface CallParticipantMediaChangedDto {
+  callId: string;
+  userId: string;
+  deviceId: string;
+  micEnabled: boolean;
+  cameraEnabled: boolean;
+  screenSharing: boolean;
 }
 
 export interface CallParticipantLeftDto {
+  callId: string;
   userId: string;
   deviceId: string;
+  leftAt: string;
 }
 
 export interface CallEndedDto {
+  callId: string;
+  endedBy: string;
   endedAt: string;
 }
 
@@ -143,7 +201,10 @@ export type MessageStreamEvent =
 
 export type CallEventStreamEvent =
   | { event: "CallCreated"; payload: CallCreatedDto }
+  | { event: "CallInviteSent"; payload: CallInviteSentDto }
+  | { event: "CallInviteAccepted"; payload: CallInviteAcceptedDto }
   | { event: "CallParticipantJoined"; payload: CallParticipantJoinedDto }
+  | { event: "CallParticipantMediaChanged"; payload: CallParticipantMediaChangedDto }
   | { event: "CallParticipantLeft"; payload: CallParticipantLeftDto }
   | { event: "CallEnded"; payload: CallEndedDto };
 
@@ -156,11 +217,13 @@ export interface FrickBindings {
   User: ObjectBinding<UserDto>;
   Conversation: ObjectBinding<ConversationDto>;
   RoomMember: ObjectBinding<RoomMemberDto>;
-  CallRoom: ObjectBinding<CallRoomDto>;
   UserDevice: ObjectBinding<UserDeviceDto>;
   UserSession: ObjectBinding<UserSessionDto>;
   MessageDraft: ObjectBinding<MessageDraftDto>;
   ScheduledMessage: ObjectBinding<ScheduledMessageDto>;
+  CallRoom: ObjectBinding<CallRoomDto>;
+  CallInvite: ObjectBinding<CallInviteDto>;
+  CallParticipant: ObjectBinding<CallParticipantDto>;
   MessageStream: StreamBinding<MessageStreamEvent>;
   CallEventStream: StreamBinding<CallEventStreamEvent>;
   TypingState: PresenceBinding<TypingStateDto>;
@@ -178,11 +241,13 @@ export const OBJECT_FIELD_INDEX = {
   User: { id: 1, fields: { id: 0, displayName: 1, avatarBlobId: 2 } },
   Conversation: { id: 2, fields: { id: 0, kind: 1, title: 2, createdBy: 3, lastMessageEventId: 4 } },
   RoomMember: { id: 3, fields: { id: 0, conversationId: 1, userId: 2, role: 3 } },
-  CallRoom: { id: 4, fields: { id: 0, conversationId: 1, state: 2, createdBy: 3 } },
   UserDevice: { id: 5, fields: { id: 0, userId: 1, label: 2, platform: 3, lastSeenAt: 4 } },
   UserSession: { id: 6, fields: { id: 0, userId: 1, deviceId: 2, replicaId: 3, expiresAt: 4 } },
   MessageDraft: { id: 7, fields: { id: 0, userId: 1, conversationId: 2, body: 3, updatedAt: 4 } },
   ScheduledMessage: { id: 8, fields: { id: 0, userId: 1, conversationId: 2, body: 3, scheduledFor: 4, attachmentBlobIds: 5, status: 6 } },
+  CallRoom: { id: 9, fields: { id: 0, conversationId: 1, state: 2, createdBy: 3, kind: 4, createdAt: 5, startedAt: 6, endedAt: 7, mediaSessionId: 8, transport: 9 } },
+  CallInvite: { id: 10, fields: { id: 0, callId: 1, inviteeUserId: 2, status: 3, invitedBy: 4, invitedAt: 5, respondedAt: 6 } },
+  CallParticipant: { id: 11, fields: { id: 0, callId: 1, userId: 2, deviceId: 3, state: 4, joinedAt: 5, leftAt: 6, micEnabled: 7, cameraEnabled: 8, screenSharing: 9 } },
 } as const;
 
 /** Per-event field-id index for typed appends. */
@@ -192,8 +257,11 @@ export const EVENT_FIELD_INDEX = {
   MessageRedacted: { id: 3, fields: { messageId: 1, redactedAt: 2 } },
   ReactionAdded: { id: 4, fields: { messageId: 1, userId: 2, emoji: 3 } },
   ReceiptAdvanced: { id: 5, fields: { userId: 1, sequence: 2 } },
-  CallCreated: { id: 6, fields: { callId: 1, createdBy: 2 } },
-  CallParticipantJoined: { id: 7, fields: { userId: 1, deviceId: 2 } },
-  CallParticipantLeft: { id: 8, fields: { userId: 1, deviceId: 2 } },
-  CallEnded: { id: 9, fields: { endedAt: 1 } },
+  CallCreated: { id: 6, fields: { callId: 1, conversationId: 2, createdBy: 3, kind: 4, createdAt: 5 } },
+  CallInviteSent: { id: 7, fields: { callId: 1, inviteeUserId: 2, invitedBy: 3 } },
+  CallInviteAccepted: { id: 8, fields: { callId: 1, inviteeUserId: 2 } },
+  CallParticipantJoined: { id: 9, fields: { callId: 1, userId: 2, deviceId: 3, joinedAt: 4 } },
+  CallParticipantMediaChanged: { id: 10, fields: { callId: 1, userId: 2, deviceId: 3, micEnabled: 4, cameraEnabled: 5, screenSharing: 6 } },
+  CallParticipantLeft: { id: 11, fields: { callId: 1, userId: 2, deviceId: 3, leftAt: 4 } },
+  CallEnded: { id: 12, fields: { callId: 1, endedBy: 2, endedAt: 3 } },
 } as const;

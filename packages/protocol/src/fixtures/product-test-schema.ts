@@ -49,16 +49,6 @@ export const productTestSchema: FrickSchema = {
       indexes: [{ id: 1, name: "byConversation", fields: ["conversationId"] }],
     },
     {
-      id: 4,
-      name: "CallRoom",
-      fields: [
-        { id: 1, name: "conversationId", kind: "ref", ref: "Conversation", required: true },
-        { id: 2, name: "state", kind: "enum", enumValues: ["ringing", "active", "ended"], required: true },
-        { id: 3, name: "createdBy", kind: "ref", ref: "User", required: true },
-      ],
-      indexes: [{ id: 1, name: "byConversation", fields: ["conversationId", "state"] }],
-    },
-    {
       id: 5,
       name: "UserDevice",
       fields: [
@@ -113,6 +103,58 @@ export const productTestSchema: FrickSchema = {
       indexes: [{ id: 1, name: "byDueDate", fields: ["status", "scheduledFor"] }],
       mergePolicy: "versionPrecondition",
     },
+    // Realtime-calls control plane (FR-282). These mirror the canonical Rust
+    // defs in `crates/frick-server/src/calls/schema.rs`
+    // (`call_object_defs`/`call_event_defs`/`call_stream_defs`/`call_signal_defs`)
+    // field-for-field so the product-test fixture carries the *current* call
+    // record shapes a live `CallCommand` writes (e.g. `CallRoom.kind`), not the
+    // older partial shapes. Appended at the next free ids (CallRoom moved from
+    // its old id 4) so the chat types' ids stay stable.
+    {
+      id: 9,
+      name: "CallRoom",
+      fields: [
+        { id: 1, name: "conversationId", kind: "string", required: true },
+        { id: 2, name: "state", kind: "enum", enumValues: ["ringing", "active", "ended"], required: true },
+        { id: 3, name: "createdBy", kind: "string", required: true },
+        { id: 4, name: "kind", kind: "enum", enumValues: ["audio", "video"], required: true },
+        { id: 5, name: "createdAt", kind: "timestamp", required: true },
+        { id: 6, name: "startedAt", kind: "timestamp", required: false },
+        { id: 7, name: "endedAt", kind: "timestamp", required: false },
+        { id: 8, name: "mediaSessionId", kind: "string", required: false },
+        { id: 9, name: "transport", kind: "string", required: false },
+      ],
+      indexes: [{ id: 1, name: "byConversation", fields: ["conversationId", "state"] }],
+    },
+    {
+      id: 10,
+      name: "CallInvite",
+      fields: [
+        { id: 1, name: "callId", kind: "string", required: true },
+        { id: 2, name: "inviteeUserId", kind: "string", required: true },
+        { id: 3, name: "status", kind: "enum", enumValues: ["ringing", "accepted", "declined", "cancelled"], required: true },
+        { id: 4, name: "invitedBy", kind: "string", required: true },
+        { id: 5, name: "invitedAt", kind: "timestamp", required: true },
+        { id: 6, name: "respondedAt", kind: "timestamp", required: false },
+      ],
+      indexes: [{ id: 1, name: "byCall", fields: ["callId", "inviteeUserId"] }],
+    },
+    {
+      id: 11,
+      name: "CallParticipant",
+      fields: [
+        { id: 1, name: "callId", kind: "string", required: true },
+        { id: 2, name: "userId", kind: "string", required: true },
+        { id: 3, name: "deviceId", kind: "string", required: true },
+        { id: 4, name: "state", kind: "enum", enumValues: ["joined", "left"], required: true },
+        { id: 5, name: "joinedAt", kind: "timestamp", required: true },
+        { id: 6, name: "leftAt", kind: "timestamp", required: false },
+        { id: 7, name: "micEnabled", kind: "bool", required: true },
+        { id: 8, name: "cameraEnabled", kind: "bool", required: true },
+        { id: 9, name: "screenSharing", kind: "bool", required: true },
+      ],
+      indexes: [{ id: 1, name: "byCall", fields: ["callId", "userId"] }],
+    },
   ],
   streams: [
     {
@@ -124,8 +166,16 @@ export const productTestSchema: FrickSchema = {
     {
       id: 2,
       name: "CallEventStream",
-      keyFields: [{ id: 1, name: "callId", kind: "ref", ref: "CallRoom", required: true }],
-      events: ["CallCreated", "CallParticipantJoined", "CallParticipantLeft", "CallEnded"],
+      keyFields: [{ id: 1, name: "callId", kind: "string", required: true }],
+      events: [
+        "CallCreated",
+        "CallInviteSent",
+        "CallInviteAccepted",
+        "CallParticipantJoined",
+        "CallParticipantMediaChanged",
+        "CallParticipantLeft",
+        "CallEnded",
+      ],
     },
   ],
   events: [
@@ -178,30 +228,70 @@ export const productTestSchema: FrickSchema = {
       id: 6,
       name: "CallCreated",
       fields: [
-        { id: 1, name: "callId", kind: "ref", ref: "CallRoom", required: true },
-        { id: 2, name: "createdBy", kind: "ref", ref: "User", required: true },
+        { id: 1, name: "callId", kind: "string", required: true },
+        { id: 2, name: "conversationId", kind: "string", required: true },
+        { id: 3, name: "createdBy", kind: "string", required: true },
+        { id: 4, name: "kind", kind: "string", required: true },
+        { id: 5, name: "createdAt", kind: "timestamp", required: true },
       ],
     },
     {
       id: 7,
-      name: "CallParticipantJoined",
+      name: "CallInviteSent",
       fields: [
-        { id: 1, name: "userId", kind: "ref", ref: "User", required: true },
-        { id: 2, name: "deviceId", kind: "string", required: true },
+        { id: 1, name: "callId", kind: "string", required: true },
+        { id: 2, name: "inviteeUserId", kind: "string", required: true },
+        { id: 3, name: "invitedBy", kind: "string", required: true },
       ],
     },
     {
       id: 8,
-      name: "CallParticipantLeft",
+      name: "CallInviteAccepted",
       fields: [
-        { id: 1, name: "userId", kind: "ref", ref: "User", required: true },
-        { id: 2, name: "deviceId", kind: "string", required: true },
+        { id: 1, name: "callId", kind: "string", required: true },
+        { id: 2, name: "inviteeUserId", kind: "string", required: true },
       ],
     },
     {
       id: 9,
+      name: "CallParticipantJoined",
+      fields: [
+        { id: 1, name: "callId", kind: "string", required: true },
+        { id: 2, name: "userId", kind: "string", required: true },
+        { id: 3, name: "deviceId", kind: "string", required: true },
+        { id: 4, name: "joinedAt", kind: "timestamp", required: true },
+      ],
+    },
+    {
+      id: 10,
+      name: "CallParticipantMediaChanged",
+      fields: [
+        { id: 1, name: "callId", kind: "string", required: true },
+        { id: 2, name: "userId", kind: "string", required: true },
+        { id: 3, name: "deviceId", kind: "string", required: true },
+        { id: 4, name: "micEnabled", kind: "bool", required: true },
+        { id: 5, name: "cameraEnabled", kind: "bool", required: true },
+        { id: 6, name: "screenSharing", kind: "bool", required: true },
+      ],
+    },
+    {
+      id: 11,
+      name: "CallParticipantLeft",
+      fields: [
+        { id: 1, name: "callId", kind: "string", required: true },
+        { id: 2, name: "userId", kind: "string", required: true },
+        { id: 3, name: "deviceId", kind: "string", required: true },
+        { id: 4, name: "leftAt", kind: "timestamp", required: true },
+      ],
+    },
+    {
+      id: 12,
       name: "CallEnded",
-      fields: [{ id: 1, name: "endedAt", kind: "timestamp", required: true }],
+      fields: [
+        { id: 1, name: "callId", kind: "string", required: true },
+        { id: 2, name: "endedBy", kind: "string", required: true },
+        { id: 3, name: "endedAt", kind: "timestamp", required: true },
+      ],
     },
   ],
   presences: [
@@ -222,7 +312,7 @@ export const productTestSchema: FrickSchema = {
       id: 1,
       name: "WebRTCSignal",
       ttlMs: 30000,
-      keyFields: [{ id: 1, name: "callId", kind: "ref", ref: "CallRoom", required: true }],
+      keyFields: [{ id: 1, name: "callId", kind: "string", required: true }],
       fields: [
         { id: 1, name: "senderDeviceId", kind: "string", required: true },
         { id: 2, name: "recipientDeviceId", kind: "string", required: false },

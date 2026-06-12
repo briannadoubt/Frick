@@ -120,7 +120,12 @@ impl ServerHandle {
     /// registered (a real product app registers it; the framework does not
     /// auto-register declared projections). The registration lets the
     /// projection-subscribe scenario observe a `ProjectionDelta` snapshot.
-    async fn in_process() -> Self {
+    ///
+    /// The product test schema carries the canonical call control-plane types
+    /// (FR-294), so this is also what the FR-290 calls scenarios boot — no
+    /// schema splice is needed. Public so those scenarios can pin the in-process
+    /// target regardless of `FRICK_CONFORMANCE_URL`.
+    pub async fn in_process() -> Self {
         let server = Self::in_process_with_schema(product_test_schema().clone()).await;
         if let Some(inner) = server.inprocess.as_ref() {
             register_conversation_inbox(inner);
@@ -129,12 +134,14 @@ impl ServerHandle {
     }
 
     /// Boot an in-process Rust server running a **caller-supplied** schema (port
-    /// 0, `:memory:`, dev-auth on). The FR-290 calls scenarios use this to run a
-    /// schema that splices the *current* call control-plane object/stream/signal
-    /// types in — the committed product-test fixture carries an older, partial
-    /// call schema, so the live control-plane record shapes (e.g. `CallRoom.kind`)
-    /// would fail the store's schema-pack. Every [`WsConn`] this handle opens
-    /// hellos with the same schema, so the capability handshake agrees.
+    /// 0, `:memory:`, dev-auth on). A general harness primitive for scenarios
+    /// that need a non-default schema; every [`WsConn`] this handle opens hellos
+    /// with the same schema, so the capability handshake agrees.
+    ///
+    /// The FR-290 calls scenarios used to splice the current call control-plane
+    /// types in here because the committed product-test fixture carried an older,
+    /// partial call schema. The fixture now carries the canonical call types
+    /// (FR-294), so those scenarios boot the default [`Self::in_process`] instead.
     ///
     /// Only valid for the in-process target; ignores `FRICK_CONFORMANCE_URL`.
     pub async fn in_process_with_schema(schema: FrickSchema) -> Self {

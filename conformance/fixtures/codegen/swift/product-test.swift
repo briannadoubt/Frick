@@ -22,11 +22,13 @@ public enum FrickSchemaDescriptor {
     1: "User",
     2: "Conversation",
     3: "RoomMember",
-    4: "CallRoom",
     5: "UserDevice",
     6: "UserSession",
     7: "MessageDraft",
     8: "ScheduledMessage",
+    9: "CallRoom",
+    10: "CallInvite",
+    11: "CallParticipant",
   ]
   public static let streamNames: [Int: String] = [
     1: "MessageStream",
@@ -39,19 +41,24 @@ public enum FrickSchemaDescriptor {
     4: "ReactionAdded",
     5: "ReceiptAdvanced",
     6: "CallCreated",
-    7: "CallParticipantJoined",
-    8: "CallParticipantLeft",
-    9: "CallEnded",
+    7: "CallInviteSent",
+    8: "CallInviteAccepted",
+    9: "CallParticipantJoined",
+    10: "CallParticipantMediaChanged",
+    11: "CallParticipantLeft",
+    12: "CallEnded",
   ]
   public static let objectFields: [Int: [Int: String]] = [
     1: [1: "displayName", 2: "avatarBlobId"],
     2: [1: "kind", 2: "title", 3: "createdBy", 4: "lastMessageEventId"],
     3: [1: "conversationId", 2: "userId", 3: "role"],
-    4: [1: "conversationId", 2: "state", 3: "createdBy"],
     5: [1: "userId", 2: "label", 3: "platform", 4: "lastSeenAt"],
     6: [1: "userId", 2: "deviceId", 3: "replicaId", 4: "expiresAt"],
     7: [1: "userId", 2: "conversationId", 3: "body", 4: "updatedAt"],
     8: [1: "userId", 2: "conversationId", 3: "body", 4: "scheduledFor", 5: "attachmentBlobIds", 6: "status"],
+    9: [1: "conversationId", 2: "state", 3: "createdBy", 4: "kind", 5: "createdAt", 6: "startedAt", 7: "endedAt", 8: "mediaSessionId", 9: "transport"],
+    10: [1: "callId", 2: "inviteeUserId", 3: "status", 4: "invitedBy", 5: "invitedAt", 6: "respondedAt"],
+    11: [1: "callId", 2: "userId", 3: "deviceId", 4: "state", 5: "joinedAt", 6: "leftAt", 7: "micEnabled", 8: "cameraEnabled", 9: "screenSharing"],
   ]
   public static let eventFields: [Int: [Int: String]] = [
     1: [1: "messageId", 2: "senderId", 3: "body", 4: "createdAt", 5: "attachmentBlobIds"],
@@ -59,10 +66,13 @@ public enum FrickSchemaDescriptor {
     3: [1: "messageId", 2: "redactedAt"],
     4: [1: "messageId", 2: "userId", 3: "emoji"],
     5: [1: "userId", 2: "sequence"],
-    6: [1: "callId", 2: "createdBy"],
-    7: [1: "userId", 2: "deviceId"],
-    8: [1: "userId", 2: "deviceId"],
-    9: [1: "endedAt"],
+    6: [1: "callId", 2: "conversationId", 3: "createdBy", 4: "kind", 5: "createdAt"],
+    7: [1: "callId", 2: "inviteeUserId", 3: "invitedBy"],
+    8: [1: "callId", 2: "inviteeUserId"],
+    9: [1: "callId", 2: "userId", 3: "deviceId", 4: "joinedAt"],
+    10: [1: "callId", 2: "userId", 3: "deviceId", 4: "micEnabled", 5: "cameraEnabled", 6: "screenSharing"],
+    11: [1: "callId", 2: "userId", 3: "deviceId", 4: "leftAt"],
+    12: [1: "callId", 2: "endedBy", 3: "endedAt"],
   ]
 }
 
@@ -206,27 +216,6 @@ public struct RoomMemberDTO: Codable, Equatable, Sendable, Identifiable {
   }
 }
 
-public struct CallRoomDTO: Codable, Equatable, Sendable, Identifiable {
-  public static let frickType = "CallRoom"
-
-  public var id: String
-  public var conversationId: String
-  public var state: String
-  public var createdBy: String
-
-  public init(
-    id: String,
-    conversationId: String,
-    state: String,
-    createdBy: String
-  ) {
-    self.id = id
-    self.conversationId = conversationId
-    self.state = state
-    self.createdBy = createdBy
-  }
-}
-
 public struct UserDeviceDTO: Codable, Equatable, Sendable, Identifiable {
   public static let frickType = "UserDevice"
 
@@ -329,6 +318,114 @@ public struct ScheduledMessageDTO: Codable, Equatable, Sendable, Identifiable {
   }
 }
 
+public struct CallRoomDTO: Codable, Equatable, Sendable, Identifiable {
+  public static let frickType = "CallRoom"
+
+  public var id: String
+  public var conversationId: String
+  public var state: String
+  public var createdBy: String
+  public var kind: String
+  public var createdAt: Date
+  public var startedAt: Date?
+  public var endedAt: Date?
+  public var mediaSessionId: String?
+  public var transport: String?
+
+  public init(
+    id: String,
+    conversationId: String,
+    state: String,
+    createdBy: String,
+    kind: String,
+    createdAt: Date,
+    startedAt: Date? = nil,
+    endedAt: Date? = nil,
+    mediaSessionId: String? = nil,
+    transport: String? = nil
+  ) {
+    self.id = id
+    self.conversationId = conversationId
+    self.state = state
+    self.createdBy = createdBy
+    self.kind = kind
+    self.createdAt = createdAt
+    self.startedAt = startedAt
+    self.endedAt = endedAt
+    self.mediaSessionId = mediaSessionId
+    self.transport = transport
+  }
+}
+
+public struct CallInviteDTO: Codable, Equatable, Sendable, Identifiable {
+  public static let frickType = "CallInvite"
+
+  public var id: String
+  public var callId: String
+  public var inviteeUserId: String
+  public var status: String
+  public var invitedBy: String
+  public var invitedAt: Date
+  public var respondedAt: Date?
+
+  public init(
+    id: String,
+    callId: String,
+    inviteeUserId: String,
+    status: String,
+    invitedBy: String,
+    invitedAt: Date,
+    respondedAt: Date? = nil
+  ) {
+    self.id = id
+    self.callId = callId
+    self.inviteeUserId = inviteeUserId
+    self.status = status
+    self.invitedBy = invitedBy
+    self.invitedAt = invitedAt
+    self.respondedAt = respondedAt
+  }
+}
+
+public struct CallParticipantDTO: Codable, Equatable, Sendable, Identifiable {
+  public static let frickType = "CallParticipant"
+
+  public var id: String
+  public var callId: String
+  public var userId: String
+  public var deviceId: String
+  public var state: String
+  public var joinedAt: Date
+  public var leftAt: Date?
+  public var micEnabled: Bool
+  public var cameraEnabled: Bool
+  public var screenSharing: Bool
+
+  public init(
+    id: String,
+    callId: String,
+    userId: String,
+    deviceId: String,
+    state: String,
+    joinedAt: Date,
+    leftAt: Date? = nil,
+    micEnabled: Bool,
+    cameraEnabled: Bool,
+    screenSharing: Bool
+  ) {
+    self.id = id
+    self.callId = callId
+    self.userId = userId
+    self.deviceId = deviceId
+    self.state = state
+    self.joinedAt = joinedAt
+    self.leftAt = leftAt
+    self.micEnabled = micEnabled
+    self.cameraEnabled = cameraEnabled
+    self.screenSharing = screenSharing
+  }
+}
+
 public struct MessageSentDTO: Codable, Equatable, Sendable {
   public var messageId: String
   public var senderId: String
@@ -411,49 +508,130 @@ public struct ReceiptAdvancedDTO: Codable, Equatable, Sendable {
 
 public struct CallCreatedDTO: Codable, Equatable, Sendable {
   public var callId: String
+  public var conversationId: String
   public var createdBy: String
+  public var kind: String
+  public var createdAt: Date
 
   public init(
     callId: String,
-    createdBy: String
+    conversationId: String,
+    createdBy: String,
+    kind: String,
+    createdAt: Date
   ) {
     self.callId = callId
+    self.conversationId = conversationId
     self.createdBy = createdBy
+    self.kind = kind
+    self.createdAt = createdAt
+  }
+}
+
+public struct CallInviteSentDTO: Codable, Equatable, Sendable {
+  public var callId: String
+  public var inviteeUserId: String
+  public var invitedBy: String
+
+  public init(
+    callId: String,
+    inviteeUserId: String,
+    invitedBy: String
+  ) {
+    self.callId = callId
+    self.inviteeUserId = inviteeUserId
+    self.invitedBy = invitedBy
+  }
+}
+
+public struct CallInviteAcceptedDTO: Codable, Equatable, Sendable {
+  public var callId: String
+  public var inviteeUserId: String
+
+  public init(
+    callId: String,
+    inviteeUserId: String
+  ) {
+    self.callId = callId
+    self.inviteeUserId = inviteeUserId
   }
 }
 
 public struct CallParticipantJoinedDTO: Codable, Equatable, Sendable {
+  public var callId: String
   public var userId: String
   public var deviceId: String
+  public var joinedAt: Date
 
   public init(
+    callId: String,
     userId: String,
-    deviceId: String
+    deviceId: String,
+    joinedAt: Date
   ) {
+    self.callId = callId
     self.userId = userId
     self.deviceId = deviceId
+    self.joinedAt = joinedAt
+  }
+}
+
+public struct CallParticipantMediaChangedDTO: Codable, Equatable, Sendable {
+  public var callId: String
+  public var userId: String
+  public var deviceId: String
+  public var micEnabled: Bool
+  public var cameraEnabled: Bool
+  public var screenSharing: Bool
+
+  public init(
+    callId: String,
+    userId: String,
+    deviceId: String,
+    micEnabled: Bool,
+    cameraEnabled: Bool,
+    screenSharing: Bool
+  ) {
+    self.callId = callId
+    self.userId = userId
+    self.deviceId = deviceId
+    self.micEnabled = micEnabled
+    self.cameraEnabled = cameraEnabled
+    self.screenSharing = screenSharing
   }
 }
 
 public struct CallParticipantLeftDTO: Codable, Equatable, Sendable {
+  public var callId: String
   public var userId: String
   public var deviceId: String
+  public var leftAt: Date
 
   public init(
+    callId: String,
     userId: String,
-    deviceId: String
+    deviceId: String,
+    leftAt: Date
   ) {
+    self.callId = callId
     self.userId = userId
     self.deviceId = deviceId
+    self.leftAt = leftAt
   }
 }
 
 public struct CallEndedDTO: Codable, Equatable, Sendable {
+  public var callId: String
+  public var endedBy: String
   public var endedAt: Date
 
   public init(
+    callId: String,
+    endedBy: String,
     endedAt: Date
   ) {
+    self.callId = callId
+    self.endedBy = endedBy
     self.endedAt = endedAt
   }
 }

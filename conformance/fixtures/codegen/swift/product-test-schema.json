@@ -154,16 +154,32 @@
       "fields": [
         {
           "id": 1,
-          "kind": "ref",
+          "kind": "string",
           "name": "callId",
-          "ref": "CallRoom",
           "required": true
         },
         {
           "id": 2,
-          "kind": "ref",
+          "kind": "string",
+          "name": "conversationId",
+          "required": true
+        },
+        {
+          "id": 3,
+          "kind": "string",
           "name": "createdBy",
-          "ref": "User",
+          "required": true
+        },
+        {
+          "id": 4,
+          "kind": "string",
+          "name": "kind",
+          "required": true
+        },
+        {
+          "id": 5,
+          "kind": "timestamp",
+          "name": "createdAt",
           "required": true
         }
       ],
@@ -174,50 +190,168 @@
       "fields": [
         {
           "id": 1,
-          "kind": "ref",
-          "name": "userId",
-          "ref": "User",
+          "kind": "string",
+          "name": "callId",
           "required": true
         },
         {
           "id": 2,
           "kind": "string",
-          "name": "deviceId",
+          "name": "inviteeUserId",
+          "required": true
+        },
+        {
+          "id": 3,
+          "kind": "string",
+          "name": "invitedBy",
           "required": true
         }
       ],
       "id": 7,
+      "name": "CallInviteSent"
+    },
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "string",
+          "name": "callId",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "string",
+          "name": "inviteeUserId",
+          "required": true
+        }
+      ],
+      "id": 8,
+      "name": "CallInviteAccepted"
+    },
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "string",
+          "name": "callId",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "string",
+          "name": "userId",
+          "required": true
+        },
+        {
+          "id": 3,
+          "kind": "string",
+          "name": "deviceId",
+          "required": true
+        },
+        {
+          "id": 4,
+          "kind": "timestamp",
+          "name": "joinedAt",
+          "required": true
+        }
+      ],
+      "id": 9,
       "name": "CallParticipantJoined"
     },
     {
       "fields": [
         {
           "id": 1,
-          "kind": "ref",
-          "name": "userId",
-          "ref": "User",
+          "kind": "string",
+          "name": "callId",
           "required": true
         },
         {
           "id": 2,
           "kind": "string",
+          "name": "userId",
+          "required": true
+        },
+        {
+          "id": 3,
+          "kind": "string",
           "name": "deviceId",
+          "required": true
+        },
+        {
+          "id": 4,
+          "kind": "bool",
+          "name": "micEnabled",
+          "required": true
+        },
+        {
+          "id": 5,
+          "kind": "bool",
+          "name": "cameraEnabled",
+          "required": true
+        },
+        {
+          "id": 6,
+          "kind": "bool",
+          "name": "screenSharing",
           "required": true
         }
       ],
-      "id": 8,
+      "id": 10,
+      "name": "CallParticipantMediaChanged"
+    },
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "string",
+          "name": "callId",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "string",
+          "name": "userId",
+          "required": true
+        },
+        {
+          "id": 3,
+          "kind": "string",
+          "name": "deviceId",
+          "required": true
+        },
+        {
+          "id": 4,
+          "kind": "timestamp",
+          "name": "leftAt",
+          "required": true
+        }
+      ],
+      "id": 11,
       "name": "CallParticipantLeft"
     },
     {
       "fields": [
         {
           "id": 1,
+          "kind": "string",
+          "name": "callId",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "string",
+          "name": "endedBy",
+          "required": true
+        },
+        {
+          "id": 3,
           "kind": "timestamp",
           "name": "endedAt",
           "required": true
         }
       ],
-      "id": 9,
+      "id": 12,
       "name": "CallEnded"
     }
   ],
@@ -364,47 +498,6 @@
         }
       ],
       "name": "RoomMember"
-    },
-    {
-      "fields": [
-        {
-          "id": 1,
-          "kind": "ref",
-          "name": "conversationId",
-          "ref": "Conversation",
-          "required": true
-        },
-        {
-          "enumValues": [
-            "ringing",
-            "active",
-            "ended"
-          ],
-          "id": 2,
-          "kind": "enum",
-          "name": "state",
-          "required": true
-        },
-        {
-          "id": 3,
-          "kind": "ref",
-          "name": "createdBy",
-          "ref": "User",
-          "required": true
-        }
-      ],
-      "id": 4,
-      "indexes": [
-        {
-          "fields": [
-            "conversationId",
-            "state"
-          ],
-          "id": 1,
-          "name": "byConversation"
-        }
-      ],
-      "name": "CallRoom"
     },
     {
       "fields": [
@@ -594,6 +687,217 @@
       ],
       "mergePolicy": "versionPrecondition",
       "name": "ScheduledMessage"
+    },
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "string",
+          "name": "conversationId",
+          "required": true
+        },
+        {
+          "enumValues": [
+            "ringing",
+            "active",
+            "ended"
+          ],
+          "id": 2,
+          "kind": "enum",
+          "name": "state",
+          "required": true
+        },
+        {
+          "id": 3,
+          "kind": "string",
+          "name": "createdBy",
+          "required": true
+        },
+        {
+          "enumValues": [
+            "audio",
+            "video"
+          ],
+          "id": 4,
+          "kind": "enum",
+          "name": "kind",
+          "required": true
+        },
+        {
+          "id": 5,
+          "kind": "timestamp",
+          "name": "createdAt",
+          "required": true
+        },
+        {
+          "id": 6,
+          "kind": "timestamp",
+          "name": "startedAt",
+          "required": false
+        },
+        {
+          "id": 7,
+          "kind": "timestamp",
+          "name": "endedAt",
+          "required": false
+        },
+        {
+          "id": 8,
+          "kind": "string",
+          "name": "mediaSessionId",
+          "required": false
+        },
+        {
+          "id": 9,
+          "kind": "string",
+          "name": "transport",
+          "required": false
+        }
+      ],
+      "id": 9,
+      "indexes": [
+        {
+          "fields": [
+            "conversationId",
+            "state"
+          ],
+          "id": 1,
+          "name": "byConversation"
+        }
+      ],
+      "name": "CallRoom"
+    },
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "string",
+          "name": "callId",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "string",
+          "name": "inviteeUserId",
+          "required": true
+        },
+        {
+          "enumValues": [
+            "ringing",
+            "accepted",
+            "declined",
+            "cancelled"
+          ],
+          "id": 3,
+          "kind": "enum",
+          "name": "status",
+          "required": true
+        },
+        {
+          "id": 4,
+          "kind": "string",
+          "name": "invitedBy",
+          "required": true
+        },
+        {
+          "id": 5,
+          "kind": "timestamp",
+          "name": "invitedAt",
+          "required": true
+        },
+        {
+          "id": 6,
+          "kind": "timestamp",
+          "name": "respondedAt",
+          "required": false
+        }
+      ],
+      "id": 10,
+      "indexes": [
+        {
+          "fields": [
+            "callId",
+            "inviteeUserId"
+          ],
+          "id": 1,
+          "name": "byCall"
+        }
+      ],
+      "name": "CallInvite"
+    },
+    {
+      "fields": [
+        {
+          "id": 1,
+          "kind": "string",
+          "name": "callId",
+          "required": true
+        },
+        {
+          "id": 2,
+          "kind": "string",
+          "name": "userId",
+          "required": true
+        },
+        {
+          "id": 3,
+          "kind": "string",
+          "name": "deviceId",
+          "required": true
+        },
+        {
+          "enumValues": [
+            "joined",
+            "left"
+          ],
+          "id": 4,
+          "kind": "enum",
+          "name": "state",
+          "required": true
+        },
+        {
+          "id": 5,
+          "kind": "timestamp",
+          "name": "joinedAt",
+          "required": true
+        },
+        {
+          "id": 6,
+          "kind": "timestamp",
+          "name": "leftAt",
+          "required": false
+        },
+        {
+          "id": 7,
+          "kind": "bool",
+          "name": "micEnabled",
+          "required": true
+        },
+        {
+          "id": 8,
+          "kind": "bool",
+          "name": "cameraEnabled",
+          "required": true
+        },
+        {
+          "id": 9,
+          "kind": "bool",
+          "name": "screenSharing",
+          "required": true
+        }
+      ],
+      "id": 11,
+      "indexes": [
+        {
+          "fields": [
+            "callId",
+            "userId"
+          ],
+          "id": 1,
+          "name": "byCall"
+        }
+      ],
+      "name": "CallParticipant"
     }
   ],
   "presences": [
@@ -771,9 +1075,8 @@
       "keyFields": [
         {
           "id": 1,
-          "kind": "ref",
+          "kind": "string",
           "name": "callId",
-          "ref": "CallRoom",
           "required": true
         }
       ],
@@ -805,7 +1108,10 @@
     {
       "events": [
         "CallCreated",
+        "CallInviteSent",
+        "CallInviteAccepted",
         "CallParticipantJoined",
+        "CallParticipantMediaChanged",
         "CallParticipantLeft",
         "CallEnded"
       ],
@@ -813,9 +1119,8 @@
       "keyFields": [
         {
           "id": 1,
-          "kind": "ref",
+          "kind": "string",
           "name": "callId",
-          "ref": "CallRoom",
           "required": true
         }
       ],
