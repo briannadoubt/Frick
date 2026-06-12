@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTX9NQYH41YG53ZN6RR72BYC",
+  "ts": "2026-06-12T06:52:52.561Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTX7428AHMETDPDEYNG7Q7QE",
+    "commentId": "01KTX9NQYH41YG53ZN6RR72BYB",
+    "author": "codex",
+    "body": "Crate CR-108 migration plan now treats this as a hard blocker. Rust route injection must cover authenticated principal extraction, store access, CORS/preflight behavior, raw request body access for webhooks, and app-owned OAuth callback routes before Crate can leave the TS appRoutes surface."
+  }
+}

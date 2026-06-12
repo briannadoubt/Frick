@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTX94YGYZAPN2WH7K60ZJ50E",
+  "ts": "2026-06-12T06:43:42.238Z",
+  "actor": "codex",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTX94YGYZAPN2WH7K60ZJ50D",
+    "number": 299,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "TypeScript app extension compatibility for Rust server",
+    "description": "Crate migration audit for Frick 0.4 found the blocker for non-trivial TS consumers: the Rust server has Rust-native traits for jobs, recurring target resolvers, projections, push/blob/search/policy/app-route seams, but Crate's production server is a TypeScript embedder with substantial app code.\n\nCrate currently uses @fricken/server 0.3.1 with createFrickServer({ appRoutes, jobs.handlers, recurring.jobs, push.adapters, identityProviders }) plus post-boot projection registration. Those handlers cover Discogs/Square OAuth, webhooks, composed REST reads, durable marketplace jobs, recurring order polling, inventory/sales projections, outbound-sync projections, and silent push triggers. Rewriting all of that in Rust would be a full product/server port, not a package update.\n\nScope: provide a documented migration path for TypeScript app-owned server extensions on the Rust backend. Candidate designs: a sidecar/RPC protocol for app routes/jobs/projections/recurring target resolution/policy hooks; WASM plugin host; or an officially supported compatibility host that keeps TS handlers in-process/out-of-process while Rust owns the data plane. Include a Crate-sized fixture or conformance example so appRoutes + jobs + projections + recurring all run against frick-server 0.4 without rewriting product logic in Rust.\n\nRelates to FR-296 (policy hooks) and FR-297 (custom app routes). This ticket is the broader adoption bridge for Frick-consuming apps that already invested in the TypeScript server extension surface.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}
