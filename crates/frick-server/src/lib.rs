@@ -12,6 +12,7 @@ pub mod authz;
 pub mod blob_processors;
 pub mod boot;
 pub mod calls;
+pub mod client_ip;
 pub mod cluster;
 pub mod config;
 pub mod cors;
@@ -47,8 +48,8 @@ pub use blob_processors::{
     encode_blob_process_payload, mime_size_validator, moderation_processor,
 };
 pub use boot::{
-    BootError, BootSeams, FrickServer, create_frick_server, create_frick_server_with_apps,
-    create_frick_server_with_seams,
+    AppRouterBuilder, BootError, BootSeams, FrickServer, create_frick_server,
+    create_frick_server_with_apps, create_frick_server_with_seams,
 };
 pub use cluster::{
     ClusterEnvelope, ClusterEnvelopeHandler, FrickClusterBus, MemoryClusterBus,

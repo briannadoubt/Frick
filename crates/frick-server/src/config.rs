@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::client_ip::IpCidr;
 use crate::object_visibility::ObjectVisibilityMode;
 
 /// Configuration load failure (`FrickConfigError` in TS). The message text
@@ -366,6 +367,12 @@ pub struct FrickConfig {
     /// owner on list/snapshot/fan-out (relaxable by sharing grants). Set
     /// `tenantWide` to opt back into legacy allow-all-in-tenant reads.
     pub object_visibility_mode: ObjectVisibilityMode,
+    /// Trusted reverse-proxy CIDRs (`FRICK_TRUSTED_PROXIES`, FR-303). When the
+    /// immediate socket peer is inside one of these, `X-Forwarded-For` is
+    /// trusted for the client IP / rate-limit key; otherwise the raw peer is
+    /// used. Empty ⇒ never trust `X-Forwarded-For`. App routes read this via
+    /// [`crate::client_ip::trusted_client_ip`].
+    pub trusted_proxies: Vec<IpCidr>,
     pub calls_media_plane: CallsMediaPlane,
     pub calls_livekit: Option<LiveKitConfig>,
     pub platform_events_driver: PlatformEventsDriver,
@@ -901,6 +908,19 @@ pub fn load_frick_config(env: &dyn EnvSource) -> Result<FrickConfig> {
 
     let admin_token = read(env, "FRICK_ADMIN_TOKEN");
 
+    let trusted_proxies = match read(env, "FRICK_TRUSTED_PROXIES") {
+        None => Vec::new(),
+        Some(raw) => raw
+            .split(',')
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .map(IpCidr::parse)
+            .collect::<std::result::Result<Vec<_>, String>>()
+            .map_err(|message| {
+                FrickConfigError::new(format!("FRICK_TRUSTED_PROXIES: {message}"))
+            })?,
+    };
+
     let object_visibility_mode = match read(env, "FRICK_OBJECT_VISIBILITY") {
         None => ObjectVisibilityMode::default(),
         Some(raw) => ObjectVisibilityMode::parse(&raw).ok_or_else(|| {
@@ -946,6 +966,7 @@ pub fn load_frick_config(env: &dyn EnvSource) -> Result<FrickConfig> {
         implicit_tenant_creation: parse_boolean(env, "FRICK_IMPLICIT_TENANT_CREATION")?
             .unwrap_or(!production),
         object_visibility_mode,
+        trusted_proxies,
         calls_media_plane,
         calls_livekit,
         platform_events_driver,

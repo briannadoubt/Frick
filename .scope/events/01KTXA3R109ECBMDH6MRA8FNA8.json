@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTXA3R109ECBMDH6MRA8FNA8",
+  "ts": "2026-06-12T07:00:31.392Z",
+  "actor": "unknown",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTXA3R0ZPDDQVDQM1THJ7PRF",
+    "number": 301,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Android FrickTransport should support JSON PUT",
+    "description": "Crate CR-108 migration found Android cannot move app commands to canonical PUT endpoints because FrickTransport exposes post(path, body) and putBytes(path, mimeType, bytes), but no JSON/text PUT. Crate's Square location selection should call PUT /api/square/locations once migrated, but using putBytes for JSON would be semantically wrong and hard for app tests/fakes. Add suspend fun put(path: String, body: String, headers: Map<String,String> = emptyMap()) to the Android SDK transport, implement it in KtorFrickTransport with application/json, and keep source-compatible defaults for existing test fakes.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

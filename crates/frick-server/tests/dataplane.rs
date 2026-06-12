@@ -11,11 +11,78 @@ use std::sync::Arc;
 use frick_protocol::FrickSchema;
 use frick_schema::SchemaBuilder;
 use frick_schema::builder::field;
+use frick_server::authz::{Action, Decision, DenyReason, PolicyHook, PolicyInput};
 use frick_server::config::load_frick_config;
 use frick_server::http::{AppState, public_router};
-use frick_server::{FrickConfig, create_frick_server, routes};
+use frick_server::{
+    BootSeams, FrickConfig, create_frick_server, create_frick_server_with_seams, routes,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+
+/// A policy hook (FR-296) that denies every write to a given object type — the
+/// shape of an RBAC role × type matrix gate.
+struct DenyTypeWrites {
+    object_type: &'static str,
+}
+
+impl PolicyHook for DenyTypeWrites {
+    fn evaluate<'a>(
+        &'a self,
+        input: &'a PolicyInput<'a>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<Decision>> + Send + 'a>> {
+        Box::pin(async move {
+            (input.action == Action::ObjectWrite
+                && input.resource.name.as_deref() == Some(self.object_type))
+            .then(|| Decision::Deny {
+                reason: DenyReason::NotAuthorizedForResource,
+                public_message: format!("writes to {} are gated", self.object_type),
+            })
+        })
+    }
+}
+
+/// A server-authoritative command endpoint (FR-297): authenticates the request
+/// with the public helper and reads the store — the shape of a Rust backend's
+/// `appRoutes`. Returns the caller's id + their tenant's `Note` count.
+async fn note_count(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let Ok((principal, _)) = frick_server::routes::authenticate(&state, &headers).await else {
+        return axum::http::StatusCode::UNAUTHORIZED.into_response();
+    };
+    let notes = state
+        .store
+        .objects()
+        .list(
+            &principal.tenant_id,
+            "Note",
+            frick_server::principal::DEFAULT_APP_ID,
+        )
+        .await
+        .unwrap_or_default();
+    axum::Json(serde_json::json!({ "userId": principal.user_id, "noteCount": notes.len() }))
+        .into_response()
+}
+
+/// A command endpoint that returns its trusted client IP (FR-303): the socket
+/// peer (via `ConnectInfo`), with `X-Forwarded-For` honored only from a
+/// configured trusted proxy.
+async fn client_ip_route(
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::State(state): axum::extract::State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let ip = frick_server::client_ip::trusted_client_ip(
+        &headers,
+        peer.ip(),
+        &state.config.trusted_proxies,
+    );
+    axum::Json(serde_json::json!({ "clientIp": ip.to_string() })).into_response()
+}
 
 fn test_config() -> FrickConfig {
     let mut env = std::collections::BTreeMap::new();
@@ -60,20 +127,58 @@ impl TestServer {
         let server = create_frick_server(test_config(), test_schema())
             .await
             .unwrap();
-        let state: AppState = Arc::clone(&server.state);
+        Self::serve(Arc::clone(&server.state), server).await
+    }
+
+    /// Boot with app policy hooks registered (FR-296), via the seam-injecting
+    /// constructor a Rust backend would use.
+    async fn boot_with_hooks(hooks: Vec<Arc<dyn PolicyHook>>) -> Self {
+        let mut seams = BootSeams::production();
+        seams.policy_hooks = hooks;
+        let server = create_frick_server_with_seams(test_config(), test_schema(), seams)
+            .await
+            .unwrap();
+        Self::serve(Arc::clone(&server.state), server).await
+    }
+
+    /// Boot with an app-registered route builder (FR-297). The harness wires the
+    /// builder the same way [`frick_server::FrickServer::listen`] does
+    /// (`router.merge(build(state))`).
+    async fn boot_with_app_router(build: frick_server::AppRouterBuilder) -> Self {
+        let server = create_frick_server(test_config(), test_schema())
+            .await
+            .unwrap();
+        Self::serve_with(Arc::clone(&server.state), server, Some(build)).await
+    }
+
+    async fn serve(state: AppState, server: frick_server::FrickServer) -> Self {
+        Self::serve_with(state, server, None).await
+    }
+
+    async fn serve_with(
+        state: AppState,
+        server: frick_server::FrickServer,
+        app_router: Option<frick_server::AppRouterBuilder>,
+    ) -> Self {
         // Keep the constructed server's store alive for the process lifetime by
         // leaking the handle — the router holds its own Arc to the state/store.
         std::mem::forget(server);
 
-        let router = public_router(Arc::clone(&state))
+        let mut router = public_router(Arc::clone(&state))
             .merge(frick_server::auth_routes::auth_router(Arc::clone(&state)))
-            .merge(routes::dataplane_router(state));
+            .merge(routes::dataplane_router(Arc::clone(&state)));
+        if let Some(build) = app_router {
+            router = router.merge(build(Arc::clone(&state)));
+        }
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
         let join = tokio::spawn(async move {
-            let serve = axum::serve(listener, router);
+            let serve = axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            );
             let _ = serve
                 .with_graceful_shutdown(async move {
                     let _ = shutdown_rx.await;
@@ -296,6 +401,133 @@ async fn object_list_is_owner_scoped() {
         !bo_list.body.contains("o-ada"),
         "bo must not see ada's owner-scoped row: {}",
         bo_list.body
+    );
+
+    server.close().await;
+}
+
+/// An app policy hook (FR-296) tightens a write the built-in baseline allows —
+/// the shape of an RBAC / entitlement gate a Rust backend registers. The hook
+/// runs after the baseline and before grant relaxation; an ungated type is
+/// unaffected (the hook abstains).
+#[tokio::test]
+async fn policy_hook_denies_a_gated_write() {
+    let mut server = TestServer::boot_with_hooks(vec![Arc::new(DenyTypeWrites {
+        object_type: "Note",
+    })])
+    .await;
+    let token = server.login("user-ada").await;
+
+    let denied = server
+        .request(
+            "PUT",
+            "/objects/Note/n-1",
+            &[("Authorization", &bearer(&token))],
+            r#"{"body":"x"}"#,
+        )
+        .await;
+    assert_eq!(
+        denied.status, 403,
+        "gated write must be denied: {}",
+        denied.body
+    );
+    assert!(
+        denied.body.contains("notAuthorizedForResource"),
+        "body: {}",
+        denied.body
+    );
+
+    // A write to an ungated type still succeeds — the hook abstains.
+    let ok = server
+        .request(
+            "PUT",
+            "/objects/OwnedNote/o-1",
+            &[("Authorization", &bearer(&token))],
+            r#"{"body":"y","ownerUserId":"user-ada"}"#,
+        )
+        .await;
+    assert_eq!(ok.status, 201, "ungated write must succeed: {}", ok.body);
+
+    server.close().await;
+}
+
+/// An app-registered route (FR-297) is reachable on the framework server,
+/// receives the live AppState, authenticates with the public helper, and reads
+/// the store — the server-authoritative command shape a Rust backend needs.
+#[tokio::test]
+async fn app_route_authenticates_and_reads_the_store() {
+    let mut server = TestServer::boot_with_app_router(Box::new(|state| {
+        axum::Router::new()
+            .route("/commands/note-count", axum::routing::get(note_count))
+            .with_state(state)
+    }))
+    .await;
+    let token = server.login("user-ada").await;
+
+    // Unauthenticated → the route's own 401.
+    let anon = server.get("/commands/note-count", "").await;
+    assert_eq!(anon.status, 401, "body: {}", anon.body);
+
+    // Authenticated, no notes yet.
+    let empty = server.get("/commands/note-count", &token).await;
+    assert_eq!(empty.status, 200, "body: {}", empty.body);
+    assert!(
+        empty.body.contains("\"noteCount\":0"),
+        "body: {}",
+        empty.body
+    );
+    assert!(empty.body.contains("user-ada"), "body: {}", empty.body);
+
+    // Write a Note through the framework route, then the command sees it.
+    let put = server
+        .request(
+            "PUT",
+            "/objects/Note/n-1",
+            &[("Authorization", &bearer(&token))],
+            r#"{"body":"hi"}"#,
+        )
+        .await;
+    assert_eq!(put.status, 201, "body: {}", put.body);
+    let after = server.get("/commands/note-count", &token).await;
+    assert!(
+        after.body.contains("\"noteCount\":1"),
+        "body: {}",
+        after.body
+    );
+
+    server.close().await;
+}
+
+/// FR-303: an app route resolves the trusted client IP. With no trusted proxies
+/// configured (the default), a spoofed `X-Forwarded-For` is ignored and the
+/// loopback socket peer is used — the spoofing-resistant rate-limit key.
+#[tokio::test]
+async fn app_route_resolves_trusted_client_ip() {
+    let mut server = TestServer::boot_with_app_router(Box::new(|state| {
+        axum::Router::new()
+            .route("/commands/client-ip", axum::routing::get(client_ip_route))
+            .with_state(state)
+    }))
+    .await;
+
+    let resp = server
+        .request(
+            "GET",
+            "/commands/client-ip",
+            &[("X-Forwarded-For", "203.0.113.9")],
+            "",
+        )
+        .await;
+    assert_eq!(resp.status, 200, "body: {}", resp.body);
+    assert!(
+        resp.body.contains("127.0.0.1"),
+        "the loopback socket peer must be used: {}",
+        resp.body
+    );
+    assert!(
+        !resp.body.contains("203.0.113.9"),
+        "an untrusted X-Forwarded-For must be ignored: {}",
+        resp.body
     );
 
     server.close().await;

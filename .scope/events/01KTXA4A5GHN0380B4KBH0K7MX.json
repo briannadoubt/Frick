@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTXA4A5GHN0380B4KBH0K7MX",
+  "ts": "2026-06-12T07:00:49.968Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTXA3R0ZPDDQVDQM1THJ7PRF",
+    "commentId": "01KTXA4A5GHN0380B4KBH0K7MW",
+    "author": "codex",
+    "body": "Crate acceptance case: apps/android/app/src/main/java/dev/crate/data/CrateApi.kt selectSquareLocation currently must use POST /api/square/location. CR-115 will migrate it to PUT /api/square/locations once this transport method exists. Server-side legacy POST is covered in Crate tests/squareLocations.test.ts only as a temporary compatibility fallback."
+  }
+}

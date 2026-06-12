@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTXC8SGYRTKXJQB8ARBZVCHZ",
+  "ts": "2026-06-12T07:38:13.918Z",
+  "actor": "codex",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTXC8SGYRTKXJQB8ARBZVCHY",
+    "number": 303,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Expose trusted client IP and rate-limit context to Rust app routes",
+    "description": "Crate's Frick 0.4 Rust migration needs custom app routes to apply the same rate-limit key semantics as the TypeScript server: trust X-Forwarded-For only when the immediate peer is inside configured trusted proxy CIDRs, and otherwise key by the raw socket address. BootSeams.app_router currently hands apps an Axum router/AppState but no framework helper or request extension for the validated client IP/rate-limit key, so downstream apps either under-protect endpoints or reimplement proxy parsing ad hoc. Add a reusable Rust server helper/request extension for trusted client IP and per-route limiter keys, or document the intended app-route pattern.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

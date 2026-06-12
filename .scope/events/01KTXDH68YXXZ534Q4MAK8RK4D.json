@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTXDH68YXXZ534Q4MAK8RK4D",
+  "ts": "2026-06-12T08:00:17.694Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTXC8SGYRTKXJQB8ARBZVCHY",
+    "commentId": "01KTXDH68YXXZ534Q4MAK8RK4C",
+    "author": null,
+    "body": "Done. client_ip module (IpCidr v4/v6 + trusted_client_ip), FRICK_TRUSTED_PROXIES config, ConnectInfo wired into the server + test harness so app routes extract the socket peer. Tests: CIDR/parse + trust-from-trusted-peer + e2e app route ignoring spoofed XFF. Documented in operations.md."
+  }
+}

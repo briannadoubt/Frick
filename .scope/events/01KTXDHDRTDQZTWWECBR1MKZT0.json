@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTXDHDRTDQZTWWECBR1MKZT0",
+  "ts": "2026-06-12T08:00:25.370Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTXC8SGYRTKXJQB8ARBZVCHY",
+    "commentId": "01KTXDHDRTDQZTWWECBR1MKZSZ",
+    "author": "codex",
+    "body": "Follow-up from Crate CR-108 verification: the earlier cargo check compile error in frick-server/src/config.rs no longer reproduces in the current worktree; pnpm rust:backend:check now passes from /Users/bri/dev/Crate. The FR-303 product need remains: Crate's Rust scan limiter still needs a Frick-provided trusted client-IP/rate-limit context to exactly preserve CRATE_TRUSTED_PROXY_CIDRS semantics instead of trusting X-Forwarded-For directly."
+  }
+}

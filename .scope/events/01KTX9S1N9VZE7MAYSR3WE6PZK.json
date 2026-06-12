@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTX9S1N9VZE7MAYSR3WE6PZK",
+  "ts": "2026-06-12T06:54:40.809Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTX9RTPWMJYQZRRQKG4F9F0T",
+    "commentId": "01KTX9S1N9VZE7MAYSR3WE6PZJ",
+    "author": "codex",
+    "body": "Downstream acceptance case: Crate Android imports generated dev.crate.generated.CRATED/CRATE_SCHEMA_HASH DTOs and checks CRATE_SCHEMA_HASH on object reads. CR-108 migration needs the SDK to use product schema identity for HTTP headers/cache compatibility and WebSocket Hello, not foundation constants."
+  }
+}

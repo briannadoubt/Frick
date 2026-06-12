@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTX9NQZ34MEZ7R9673ZFA2JN",
+  "ts": "2026-06-12T06:52:52.579Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTX94YGYZAPN2WH7K60ZJ50D",
+    "commentId": "01KTX9NQZ34MEZ7R9673ZFA2JM",
+    "author": "codex",
+    "body": "Crate CR-108 design note: selected bridge-first path. Acceptance should include Crate-sized TS extension compatibility for appRoutes, six job handlers, recurring Discogs target resolution, projection handlers including side-effect projections, push notification intents, OAuth pending/link stores, and legacy REST error envelopes while Rust owns the data plane."
+  }
+}
