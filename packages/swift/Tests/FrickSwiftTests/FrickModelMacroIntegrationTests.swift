@@ -1,3 +1,4 @@
+import Observation
 import XCTest
 
 @testable import FrickSwift
@@ -17,6 +18,21 @@ private struct WidgetDTO {
 @FrickModel(WidgetDTO.self)
 private final class WidgetFrickModel {
     var name: String { dto.name }
+}
+
+/// FR-233 fixture: `@Observable` combined with `@FrickModel`. This compiles,
+/// but the macro-emitted `dto` is invisible to `@Observable`'s expansion, so it
+/// is NOT observation-tracked. The test below pins that documented contract.
+@Observable
+@FrickModel(WidgetDTO.self)
+private final class ObservableWidgetModel {
+    var name: String { dto.name }
+}
+
+/// Reference box so the `@Sendable` `onChange` closure can record whether it
+/// fired without tripping strict-concurrency capture rules.
+private final class ChangeFlag: @unchecked Sendable {
+    var fired = false
 }
 
 // MARK: - Tests
@@ -44,5 +60,27 @@ final class FrickModelMacroIntegrationTests: XCTestCase {
 
         let set: Set<WidgetFrickModel> = [a, b, c]
         XCTAssertEqual(set.count, 2)
+    }
+
+    /// FR-233 contract: the macro-emitted `dto` is NOT observation-tracked, even
+    /// when the class is `@Observable`. An in-place `apply(_:)` must therefore
+    /// fire no `withObservationTracking` change. If this ever starts failing,
+    /// the macro began emitting observation plumbing — update the documented
+    /// `@Observable` incompatibility (and this assertion) deliberately.
+    func testDtoIsNotObservationTrackedUnderObservable() {
+        let model = ObservableWidgetModel(dto: WidgetDTO(id: "w1", name: "Sprocket"))
+        let flag = ChangeFlag()
+        withObservationTracking {
+            _ = model.dto.name
+        } onChange: {
+            flag.fired = true
+        }
+        model.apply(WidgetDTO(id: "w1", name: "Cog"))
+        XCTAssertFalse(
+            flag.fired,
+            "Regression: @FrickModel's dto became observation-tracked; the documented @Observable incompatibility (FR-233) no longer holds."
+        )
+        // The wrapped state still updates — observation is the only thing absent.
+        XCTAssertEqual(model.name, "Cog")
     }
 }

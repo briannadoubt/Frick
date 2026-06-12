@@ -76,8 +76,23 @@ extension FrickModelMacro: MemberMacro {
             public let objectId: String
             """
 
+        // IMPORTANT (FR-233): this is a plain stored property, NOT observation-
+        // tracked. It is emitted by a member macro, and `@Observable`'s own
+        // macro expands against the ORIGINAL source — it never sees members
+        // added by another attached macro, so it installs no
+        // `@ObservationTracked` accessors here. In-place `dto` mutations
+        // (via `apply(_:)`) therefore do NOT trigger SwiftUI re-renders on a
+        // view observing a single model. Drive updates by replacing the model
+        // instance (the standard Frick store pattern — a new snapshot yields a
+        // new object), or hand-declare `dto` with the manual `@ObservationTracked`
+        // pattern if you need per-property observation. See the `@FrickModel`
+        // doc comment for details.
         let dtoProperty: DeclSyntax = """
-            /// The wrapped wire DTO. Observed so in-place edits re-render cells.
+            /// The wrapped wire DTO, replaced wholesale by `apply(_:)`.
+            ///
+            /// Not observation-tracked: a member macro cannot participate in
+            /// `@Observable`'s expansion, so in-place edits do NOT re-render
+            /// observing views. Replace the model instance to drive updates.
             public private(set) var dto: \(raw: dto)
             """
 
