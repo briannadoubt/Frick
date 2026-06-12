@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTX742D10100MYX2DR8PDZYJ",
+  "ts": "2026-06-12T06:08:16.289Z",
+  "actor": "unknown",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTX742D10100MYX2DR8PDZYH",
+    "number": 298,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Language-agnostic server extension model for downstream apps (WASM/sidecar/DSL)",
+    "description": "The Rust rewrite turned the server from an embeddable TS LIBRARY (extend with TS: policy hooks, job handlers, recurring jobs, app routes, blob processors, projections, store-bound seeding) into a turnkey BINARY (schema JSON via FRICK_SCHEMA_PATH + env). Validated against the two real downstream consumers:\n\n- RangerCRM: createFrickServer({ schema, port, email password-reset callback }) — schema-driven + one callback. Migrates config-only (schema already loads + owner-scopes correctly on the Rust server).\n- Zavro (@zavro/backend): passes policyHooks (RBAC + entitlement), jobs.handlers, recurring.jobs, appRoutes, blobProcessors, projections, plus store-bound seeding/entitlements. NO migration path: the binary can't take app code, and porting to the frick-server crate means rewriting ALL app logic in Rust — and policy hooks + app routes don't exist there yet (sibling tickets).\n\nEven with the policy-hook + app-route mechanisms added, those are RUST extension points: an app would rewrite its TS server logic in Rust. That is the real barrier to downstream 0.4.0 adoption.\n\nScope: design + ship a LANGUAGE-AGNOSTIC server extension model so apps supply server-side logic without a TS->Rust rewrite. Candidates: WASM plugins; a sidecar/RPC hook protocol (the Rust server calls out to an app-owned process for hooks/jobs/routes/projections); and/or declarative config/DSL for the common cases (RBAC matrix, entitlement gating, simple projections). Until this exists, FR-236 \"feature parity\" covers wire + client + turnkey server only — NOT server-side extensibility.\n\nAlso verify here: Zavro's customer-portal read scoping (grants + \"FR-116 scopes the portal\") on no-owner-field types — under the Rust convention-only owner-scope, baseline is tenant-visible so grants don't restrict reads. Confirm whether the portal needs per-record READ scoping the Rust model doesn't yet deliver (objectVisibility.ownerFields override is not ported — convention-only).\n",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

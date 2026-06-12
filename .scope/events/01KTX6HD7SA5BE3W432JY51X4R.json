@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTX6HD7SA5BE3W432JY51X4R",
+  "ts": "2026-06-12T05:58:04.793Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTX5VX1P6BGHC9HSMNMKVV51",
+    "commentId": "01KTX6HD7SA5BE3W432JY51X4Q",
+    "author": null,
+    "body": "Validated the owner-scope change against the two real downstream consumers by booting the new Rust 0.4.0 frick-server with each exported schema (FRICK_SCHEMA_PATH). RangerCRM (26 types, all per-user data carries ownerUserId): schema loads + validates; 2-user smoke test on the real Account type confirms owner isolation (each user lists only their own rows); 24 per-user types owner-scoped, User/UserProfile correctly stay tenant-visible. Zavro/aquarius (17 objects + 5 streams, @fricken 0.1.0-era schema): loads cleanly in the 0.4.0 validator; zero ownerUserId types so owner-scoping is a no-op — tenant-wide reads preserved (both users see a shared Customer). Conclusion: the change is safe for both — it restores RangerCRM's intended per-user isolation and leaves Zavro unchanged. Neither consumer's current build is affected (both pin published npm 0.1.x/0.3.x). Forward-compat note: both embed the TS @fricken/server (removed in 0.4.0) and Zavro uses policy-hook RBAC (FR-245, not yet in the Rust server) — both are migration items, independent of this fix."
+  }
+}

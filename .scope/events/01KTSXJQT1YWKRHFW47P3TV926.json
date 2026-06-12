@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTSXJQT1YWKRHFW47P3TV926",
+  "ts": "2026-06-10T23:23:47.905Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTSXJQT1YWKRHFW47P3TV925",
+    "number": 258,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[server] CORS missing on composed router + /auth/logout ignores bearer header",
+    "description": "Found in the PR #8 Codex review. (1) The Rust server parsed FRICK_ALLOWED_ORIGINS but never applied CORS/preflight middleware, so cross-origin browser calls (web client :5173 -> server :4099) failed. Added crates/frick-server/src/cors.rs (tower-http CorsLayer mirroring the TS setCors/handlePreflight contract) applied in boot::listen. (2) /auth/logout only read sessionToken from the JSON body; now reads Authorization: Bearer / x-frick-session-token via extract::session_token_from_headers, body optional. Regression-guarded by crates/frick-server/tests/cors_and_logout.rs. Commit e673406.",
+    "status": "done",
+    "priority": "high",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": "https://github.com/briannadoubt/Frick/pull/8",
+    "assignee": null,
+    "labels": []
+  }
+}

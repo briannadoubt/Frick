@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTQRMZ938EW3MMK8NWV72MGS",
+  "ts": "2026-06-10T03:19:09.347Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGR",
+    "number": 246,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Blobs + sharing grants/invitations/ACL",
+    "description": "Port blob upload/download/metadata handling and the cross-user sharing primitives from FR-1 (invitation tokens, durable grants {recordId, recipientUserId, permission}, receiver-side query semantics: ownerId == me OR matching grant). rangercrm-server depends on grants, so this gates the dogfood port.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

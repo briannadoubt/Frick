@@ -2,10 +2,46 @@
 
 All notable changes to Frick framework packages are recorded here. The format is loosely based on [Keep a Changelog](https://keepachangelog.com/) and the versioning policy lives in [`docs/versioning.md`](docs/versioning.md).
 
-Each package version is independent — a release header documents which packages moved and by how much.
+Frick now ships the published framework stack as one version. A release header
+documents the stack version and the user-visible changes in that cut.
 
 ## Unreleased
 
+### Added
+
+The Rust server reaches feature parity with the former TypeScript server across these surfaces (all wire-compatible with the existing web/Swift/Kotlin clients):
+
+- **Standalone `frick-server` binary + Docker image (FR-259).** A real server binary (env config + `FRICK_SCHEMA_PATH` schema loading, graceful SIGINT/SIGTERM) and a multi-stage `ops/deploy/server.Dockerfile` that the compose profiles + `frick deploy` build into `frick-server:latest`.
+- **Search (FR-266).** A SQLite FTS5 search adapter + a `POST /search` route with per-hit visibility filtering, app-registered indexes, and `/_frick/inspect/search`.
+- **Push delivery, end to end (FR-265) + Web Push (FR-264).** APNs, FCM, and a new RFC 8291/8292 **Web Push (VAPID)** adapter are wired into a live `PushRegistry` at boot with real `reqwest` transports and the `push.deliver` job handler.
+- **Auth providers.** Email/password + password reset + refresh tokens (FR-268), **Sign in with Apple + Google** id-token verification (FR-269), and generic **OIDC** (FR-270) — RS256 verified over the pure-Rust `rsa` crate (alg-pinned; iss/aud/exp/nonce enforced; provider-scoped subjects), behind an injectable JWKS seam. Outbound email via a Resend adapter (FR-271).
+- **Multi-app routing (FR-277).** An app registry with per-app projection/search registries; HTTP base-path + WS schemaId resolution; cross-app isolation. Single-app behavior is byte-for-byte unchanged.
+- **Blobs at scale.** An S3 blob-bytes driver via `object_store` (FR-273) and a blob processor/validator pipeline with the `blob.process` job (FR-272).
+- **Platform-events pipeline (FR-275).** An outbox/event-stream behind a pluggable driver — `memory` + durable `sqlite` (Kafka deferred) — with `/_frick/inspect/platform-events`.
+- **CLI + tooling (FR-261/262).** `frick backup`/`restore` (NDJSON), `frick schema export`, native `frick verify`, `frick inspect diagnostics`, and `frick schema generate` writing the canonical client artifacts (`pnpm schema:generate` is now a shim).
+- **OpenTelemetry trace export (FR-267).** A `tracing-opentelemetry` OTLP HTTP/protobuf exporter (reqwest/rustls — no gRPC/`tonic`) behind `FRICK_OTEL_ENABLED`, off by default. Traces only.
+- **DevTools event feed + diagnostics (FR-274).** A durable devtools-events feed, real `/_frick/inspect/devtools/*`, and populated `recentErrors` + idempotency-cache stats in the diagnostics snapshot.
+- **Gateway session revocation (FR-278).** Logout and admin `sessions/revoke` now live-close the matching WebSocket connections; the inspect tier enforces the admin token in production.
+- **Client subscribe-registration await (FR-256 client half).** Additive opt-in subscribe variants that resolve only once the server has *registered* the subscription (its initial `Snapshot`/`StreamPage`/`ProjectionDelta` reply) instead of on frame-send, so a write issued immediately after can't race ahead of registration and lose its echo: TypeScript `FrickClient.subscribeObject`/`subscribeStream`/`subscribeProjection` (returning `Promise<void>`), and Swift/Kotlin `subscribe{Object,Stream,Projection}Registered`. Each registers its waiter before sending and drains on close/logout so it never strands; the existing non-awaiting accessors are unchanged. See [`docs/cross-platform-client-contract.md`](docs/cross-platform-client-contract.md#subscribe-then-write-registration-fr-256).
+- **Realtime calls control plane (FR-276 → FR-281…FR-290).** Ported from the deleted TypeScript `calls/`: the `CallControlPlane` state machine (create / invite / accept / decline / join / leave / end / set-media-state over the object + stream stores, authz- and capacity-gated, auto-ending on last leave) with the `CallRoom`/`CallInvite`/`CallParticipant` schema + `CallEventStream`; the gateway routes the `CallCommand` frame to it and replies `CallCommandResult` (or a mapped `Nack`); the `WebRTCSignal` relay is gated on call membership; and an incoming-call invite enqueues a ringing push. The media plane is pluggable via `FRICK_CALLS_MEDIA_PLANE` — `fake` (deterministic, default), `p2p` (ICE/TURN for 1:1, FR-286), `sfu` (the SFU adapter over a backend, FR-287), or `livekit` (production LiveKit HS256 access tokens minted offline, FR-288). Call **E2EE** (FR-289) ships pure-Rust (X25519 ECDH + ChaCha20-Poly1305): per-call epoch keys, per-recipient sealed envelopes, and a sender-key relay envelope. Black-box conformance scenarios exercise create → join → media-grant and the signal-membership gate against a running server; native-SDK acceptance is a documented manual checklist (the Swift/Kotlin/web call clients already ship). The wire (`CallCommand`/`CallCommandResult` frames 21/22, the call records, `WebRTCSignal`) is unchanged, so those clients connect without modification.
+
+### Fixed
+
+- An object-Delta wire divergence (id-less object types), missing CORS on the composed router, bearer-token logout, the FR-256 subscribe-then-write gateway race, a password-login timing oracle, and the cutover's broken `frick deploy`/`frick init` defaults.
+
+### Changed
+
+- **Backend rewritten in Rust (FR-236).** The sync server, CLI, MCP bridge, and the schema/codegen/storage pipeline are now Rust crates under `crates/` (`frick-protocol`, `frick-schema`, `frick-codegen`, `frick-store`, `frick-server`, `frick-cli`, `frick-mcp`, `frick-conformance`). The wire protocol, schema identity, error envelope, and HTTP/WebSocket surface are unchanged, so the existing web, Swift, and Kotlin clients connect without modification. Storage runs on SQLite and Postgres. Parity is pinned by the golden wire/lint/codegen/migration fixtures under `conformance/` and the black-box `frick-conformance` scenario suite (which passed against both the Rust and the prior TypeScript server before cutover).
+- **Removed the TypeScript backend (FR-255).** `apps/server` (→ `frick-server`), `apps/cli` (→ the `frick` binary in `frick-cli`), `@fricken/mcp` (→ `frick-mcp`), `@fricken/agent-kit`, and the server benchmarks/orchestration are deleted. The `@fricken/server`, `@fricken/cli`, `@fricken/mcp`, and `@fricken/agent-kit` npm packages are no longer published. The web client's shared protocol library (`@fricken/protocol`), the runtime (`@fricken/core`/`@fricken/react`), DevTools, the design-token packages, and the Swift/Kotlin SDKs are unchanged.
+
+### Known gaps (follow-ups)
+
+- **SAML federation (FR-280)** — by design, Frick does not terminate SAML in-process (it would require OpenSSL + libxml2 and own the high-risk XML-signature path). Enterprise SAML SSO is supported by fronting Frick with a SAML→OIDC broker (Dex/Keycloak/…) and consuming the already-shipped OIDC route — see [`docs/enterprise-sso.md`](docs/enterprise-sso.md).
+- **Platform-events Kafka driver** — the `memory` + `sqlite` drivers ship; `kafka` fails fast at boot.
+- **Blob image derivatives** — the processor pipeline ships; image-derivative generation (the `image` crate) is a follow-up.
+- **App authoring (FR-263)** — the canonical Rust-DSL authoring loop (`frick init` scaffolding) is still being designed; `frick init` currently scaffolds a schema/client project, and the standalone server loads a serialized schema via `FRICK_SCHEMA_PATH`.
+- **Server-side extensibility (FR-296 / FR-297).** Frick is a Rust-backed framework: an end-developer **backend is written in Rust** against the `frick-server` crate, while **clients stay any-language** (TypeScript / Swift / Kotlin) over the unchanged wire, and the `frick` CLI is the operations layer. The standalone binary serves schema-driven backends, and the data-plane extension points already ship — projections, durable jobs, blob processors, and search indexes. Not yet ported: app-supplied **policy hooks** (custom write-authorization such as RBAC or entitlement gating, FR-296) and **custom server-authoritative routes** (FR-297). A backend that needs those (e.g. role/entitlement-gated writes or command endpoints beyond the schema-driven data plane) cannot run on the Rust server until they land. Wire + client + turnkey-server parity is complete today; server-side *extension* parity is these two follow-ups.
+- **Realtime calls — production polish (FR-276 follow-ups)** — the calls control plane is ported (see Added), running over the fake/P2P/SFU media planes + the LiveKit production backend. Remaining: LiveKit deployment infra (a running SFU; the server only mints join tokens), and native-SDK acceptance is a documented **manual** checklist (the Swift/Kotlin/web call clients already ship) — see [`docs/cross-platform-client-contract.md`](docs/cross-platform-client-contract.md).
 ## 0.3.1 — 2026-06-10
 
 All public TypeScript packages and the Android `:frick` SDK move `0.3.0 → 0.3.1`; the Swift SDK is tagged `swift-v0.3.1`. A read-authorization correctness release fixing two object-read regressions found during RangerCRM's 0.2.0 migration, plus a `@FrickModel` macro documentation/contract fix.

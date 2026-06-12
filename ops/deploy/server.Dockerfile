@@ -1,41 +1,54 @@
-FROM node:24-bookworm-slim AS build
+# Canonical monorepo image for the standalone Rust `frick-server` binary.
+#
+# Built via `frick deploy image` (default `--dockerfile`) and consumed by
+# ops/deploy/compose.yaml + ops/deploy/lightweight.compose.yaml as
+# `frick-server:latest`. Build from the repository root (the default
+# `frick deploy image` context):
+#
+#   docker build -f ops/deploy/server.Dockerfile -t frick-server:latest .
+#
+# The server serves the empty foundation schema by default. An app overrides
+# `FRICK_SCHEMA_PATH` (pointing at a serialized FrickSchema JSON file mounted
+# into the container) to serve its own schema instead.
 
-WORKDIR /app
+# ---- Stage 1: build ---------------------------------------------------------
+# Pinned to the toolchain in rust-toolchain.toml (channel 1.95.0). rusqlite is
+# bundled (no system libsqlite needed); the slim image plus a C toolchain for
+# the bundled SQLite amalgamation is enough to build the workspace.
+FROM rust:1.95-slim AS build
+WORKDIR /build
 
-RUN corepack enable && corepack prepare pnpm@10.0.0 --activate
+# Copy the whole workspace and build only the standalone server binary in
+# release mode. (The workspace crates are path-interdependent, so the simplest
+# correct build copies the full source tree.)
+COPY . .
+RUN cargo build --release -p frick-server --bin frick-server
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
-COPY packages/protocol ./packages/protocol
-COPY apps/server ./apps/server
-COPY apps/dev-dashboard ./apps/dev-dashboard
+# ---- Stage 2: runtime -------------------------------------------------------
+FROM debian:bookworm-slim AS runtime
 
-RUN pnpm install --frozen-lockfile
-RUN pnpm exec tsc -b packages/protocol apps/server
+# rusqlite is statically bundled, so there is no libsqlite dependency. We add
+# ca-certificates (outbound TLS) and curl (the container healthcheck below and
+# the compose healthchecks hit /ready with it — the runtime has no Node).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
 
-FROM node:24-bookworm-slim AS runtime
+COPY --from=build /build/target/release/frick-server /usr/local/bin/frick-server
 
-ENV NODE_ENV=production
-ENV FRICK_ENV=production
-ENV FRICK_HOST=0.0.0.0
-ENV FRICK_PORT=4099
-ENV FRICK_DB_PATH=/var/lib/frick/frick.sqlite
-ENV FRICK_BLOB_STORAGE_PATH=/var/lib/frick/blobs
-
-WORKDIR /app
-
-COPY --from=build /app/package.json ./package.json
-COPY --from=build /app/pnpm-workspace.yaml ./pnpm-workspace.yaml
-COPY --from=build /app/pnpm-lock.yaml ./pnpm-lock.yaml
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/packages/protocol ./packages/protocol
-COPY --from=build /app/apps/server ./apps/server
-COPY --from=build /app/apps/dev-dashboard ./apps/dev-dashboard
-
-RUN mkdir -p /var/lib/frick/blobs \
-  && chown -R node:node /app /var/lib/frick
-
-USER node
+# SQLite + blob data live here; compose.yaml mounts a named volume at this path
+# and sets FRICK_DB_PATH=/var/lib/frick/frick.sqlite.
+RUN mkdir -p /var/lib/frick
+VOLUME ["/var/lib/frick"]
 
 EXPOSE 4099
 
-CMD ["node", "apps/server/dist/dev.js"]
+# Defaults match the compose contract; operators override FRICK_* (env,
+# database path, allowed origins, admin token, schema path, …) at runtime.
+ENV FRICK_HOST=0.0.0.0 \
+    FRICK_PORT=4099
+
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=5 \
+    CMD curl -fsS "http://127.0.0.1:${FRICK_PORT}/ready" || exit 1
+
+CMD ["frick-server"]

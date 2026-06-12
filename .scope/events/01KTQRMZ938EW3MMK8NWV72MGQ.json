@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTQRMZ938EW3MMK8NWV72MGQ",
+  "ts": "2026-06-10T03:19:09.347Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGP",
+    "number": 245,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Projections + durable jobs",
+    "description": "Port the projection engine (definitions, deltas, catch-up/replay) and the durable job system (scheduling, retries, workers) to Rust with multi-node safety on both SQLite (single-node) and Postgres (locking). Parity for job/projection admin introspection.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTSDAFQ9A6RAW6TK4207NDJB",
+  "ts": "2026-06-10T18:39:40.265Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGR",
+    "commentId": "01KTSDAFQ9A6RAW6TK4207NDJA",
+    "author": "claude",
+    "body": "Blob content surface landed + committed 3109617. Facade owns a configured BlobBytesDriver (blob_driver+blob_storage_path opts) + write_content/read_content/derivative reads; routes/blobs.rs: GET/POST /blobs, GET /blobs/:id, PUT/GET /blobs/:id/content, derivatives — owner/quota/hash logic, blob.read grant cascade, exact 404/413 shapes+headers. Sharing grants/invitations routes already shipped in FR-244 (routes/share.rs). Deferred: processor validation + blob.process enqueue (FR-248); boot does not yet map config.blob_driver/path into options (sqlite default works, fs/s3 inert until a 4-line plumb)."
+  }
+}

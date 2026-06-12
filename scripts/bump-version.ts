@@ -53,11 +53,7 @@ const TS_PACKAGE_PATHS = [
   "packages/design",
   "packages/design-web",
   "packages/devtools",
-  "packages/agent-kit",
-  "packages/mcp",
-  "apps/server",
   "apps/web",
-  "apps/cli",
 ];
 
 const ANDROID_PACKAGES: Record<string, AndroidTarget> = {

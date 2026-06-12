@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTQYNCKWZ4XZHHRMBE08E153",
+  "ts": "2026-06-10T05:04:14.460Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQPTTY8YAJZDPXWB40PDG2M",
+    "commentId": "01KTQYNCKVH3Z0T8BE03HVSGTJ",
+    "author": null,
+    "body": "Fixed in PR #7, coherently with FR-235's ownership predicate. (a) Fail-open ownership: a row with no/empty owner value is visible, so a DB migrated from 0.1.1 (grants present, no ownership) never hides its rows. (b) Writer-echo guarantee: writes carry the writing principal's userId (FrickStoreWriteEvent.writerUserId, threaded through WS ObjectUpsert + HTTP write paths and the cluster bus), and the fan-out always passes the ownership baseline for that principal's own subscriptions, so a writer always receives its own delta regardless of owner-field state. Regression test (stale grant present + new write -> writer receives echo + snapshot includes row) in apps/server/tests/owner-scoped-reads.test.ts. NOTE: full twice-through RangerCRM E2E not run to completion this session; server-side tests cover the stale-grant path directly."
+  }
+}

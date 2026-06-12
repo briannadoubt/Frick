@@ -32,9 +32,6 @@ const TS_PACKAGE_DIRS = [
   "packages/react",
   "packages/design-web",
   "packages/devtools",
-  "packages/agent-kit",
-  "packages/mcp",
-  "apps/server",
 ];
 
 const ANDROID_GRADLE = "apps/android/frick/build.gradle.kts";

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTTR705QTXCM85DKHYW24CC1",
+  "ts": "2026-06-11T07:09:14.807Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTTEZTN3FVWC8P6FYBQVKMCE",
+    "commentId": "01KTTR705QTXCM85DKHYW24CC0",
+    "author": "claude",
+    "body": "RESOLVED — won't implement in-server (deliberate, per user). Frick does not terminate SAML in-process: it would pull OpenSSL + libxml2 and own the highest-risk auth surface (XML c14n + signature-wrapping). Enterprise SAML SSO is instead supported by fronting Frick with a SAML->OIDC broker (Dex/Keycloak/Auth0/Okta) and consuming the already-shipped, security-reviewed OIDC route (FR-270) — no new server code or native deps. Documented in docs/enterprise-sso.md (+ a pointer from operations.md). Escape hatch if a broker is ever impossible: an optional xmlsec1-backed `saml` cargo feature so the default build stays pure-Rust. Closing as cancelled (superseded by the broker pattern)."
+  }
+}

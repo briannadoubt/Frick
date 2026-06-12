@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTT1ZTTDXNN1NDPV1XGW4T2S",
+  "ts": "2026-06-11T00:40:51.277Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTR3AAXJRV8NSDCS37B1JC0B",
+    "commentId": "01KTT1ZTTDXNN1NDPV1XGW4T2R",
+    "author": "claude",
+    "body": "In progress (Wave 1): fixing the SERVER half — the Rust gateway (crates/frick-server/src/gateway.rs) registered the subscription AFTER async per-record authz, so a write immediately after a returned Subscribe could see subscribers:0. Moving registration ahead of the authz window (delivery still gated on authz). The Swift/Kotlin/web client halves (resolve on server registration, not frame send) remain a follow-up. Note: the TS server half referenced in the ticket is moot (deleted) — the Rust gateway is the live server now."
+  }
+}

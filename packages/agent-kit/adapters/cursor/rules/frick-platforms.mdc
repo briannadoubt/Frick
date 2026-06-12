@@ -1,8 +1,0 @@
----
-description: Use for Frick web, TypeScript, Swift/iOS, Kotlin/Android, push receive, and design-token client work.
-alwaysApply: false
----
-
-Clients consume the generated schema contract. Keep TypeScript, Swift, and Kotlin behavior aligned with `docs/cross-platform-client-contract.md`.
-
-Use `@fricken/react` for React UI, `@fricken/core` for UI-agnostic TypeScript runtime work, generated Swift/Kotlin DTOs for native clients, and generated design packages for platform tokens.

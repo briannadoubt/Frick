@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTW3J7G2B66WR62XV94CE0P0",
+  "ts": "2026-06-11T19:46:51.522Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTVJXRQF38JXVCCNTHK1E9S8",
+    "commentId": "01KTW3J7G2B66WR62XV94CE0NZ",
+    "author": "claude",
+    "body": "DONE + on PR #8. Schema (99e0b79) + routing (605cd0c): gateway handle_call_command routes CallCommand(21)->control plane->CallCommandResult(22), errors mapped to Nacks."
+  }
+}

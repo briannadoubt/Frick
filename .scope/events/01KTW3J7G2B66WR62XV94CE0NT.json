@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTW3J7G2B66WR62XV94CE0NT",
+  "ts": "2026-06-11T19:46:51.522Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTVJXSDNZWR5PFVMKEPQVEZG",
+    "commentId": "01KTW3J7G2B66WR62XV94CE0NS",
+    "author": "claude",
+    "body": "DONE + on PR #8 (merged). SfuBackend trait (ensure_room/mint_access_token/close_room) + deterministic FakeSfuBackend + SfuMediaPlaneAdapter over it. 10 tests. Built by a subagent. Production backend is FR-288."
+  }
+}

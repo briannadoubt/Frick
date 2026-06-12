@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTVYCMN64YXA99PVS2MT9WKZ",
+  "ts": "2026-06-11T18:16:25.510Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTVJXRK3H758Y675XGKF7PBD",
+    "commentId": "01KTVYCMN64YXA99PVS2MT9WKY",
+    "author": "claude",
+    "body": "DONE + on PR #8 (b6d6212). MediaPlaneAdapter trait (object-safe async boxed futures, push-adapter convention) + the deterministic no-networking FakeMediaPlaneAdapter, ported from media-plane.ts + fake-media-plane.ts. issue_join_token takes now_ms (determinism seam). 6 unit tests; clippy -D warnings + fmt clean."
+  }
+}

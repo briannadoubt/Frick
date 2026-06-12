@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTT8Q2FB8AHH5QB379ZFM1GF",
+  "ts": "2026-06-11T02:38:24.235Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGG",
+    "commentId": "01KTT8Q2FB8AHH5QB379ZFM1GE",
+    "author": "claude",
+    "body": "Follow-up surfaced by FR-262: backup/restore ships the SQLite dump/restore dialect only; the Postgres dump dialect (information_schema column probe + PG inserts) is unwired. The core PG store path (FR-242) is done; this dialect gap belongs to the PG follow-up set."
+  }
+}

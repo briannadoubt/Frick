@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTQ7334H9093RJQ7G4D5QEY4",
+  "ts": "2026-06-09T22:12:17.681Z",
+  "actor": "unknown",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTQ7334H9093RJQ7G4D5QEY3",
+    "number": 233,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "@FrickModel macro: generated dto is invisible to @Observable — silently untracked",
+    "description": "",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

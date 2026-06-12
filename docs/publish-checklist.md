@@ -25,9 +25,8 @@ Companion docs:
   - `android:build` is the stricter local Android script and includes the demo
     `:app`; CI and Android publishing gate only the framework modules
     (`:frick`, `:frick-compose`, `:design`) while the demo is being rebuilt.
-- [ ] `pnpm --filter @fricken/cli build && pnpm exec frick verify` exits 0
-  (re-runs the generated-artifact gate through the built CLI bin; useful as a
-  spot check that the CLI still works)
+- [ ] `cargo test --workspace` and `cargo clippy --workspace --all-targets -- -D warnings`
+  exit 0 (the backend gate; the `frick` CLI and sync server are Rust crates)
 - [ ] `pnpm release:dry-run` exits 0
   - Runs `pnpm pack --json` per publishable package with lifecycle scripts
     disabled by config, then flags
@@ -38,36 +37,33 @@ Companion docs:
 
 ## Bump
 
-- [ ] `pnpm exec tsx scripts/bump-version.ts --package @fricken/protocol --release <type>`
-- [ ] Repeat for each affected package (`@fricken/core`, `@fricken/react`,
-  `@fricken/design`, `@fricken/design-web`, `@fricken/devtools`,
-  `@fricken/agent-kit`, `@fricken/mcp`, `@fricken/server`)
-  - `@fricken/cli` is standalone-buildable but still excluded from the npm
-    publish workflow until the CLI release slice deliberately adds it.
+- [ ] `pnpm release:bump X.Y.Z`
+  - This updates every published TypeScript package, the Android `frickVersion`,
+    and the changelog heading in one pass.
+  - The Rust backend crates (`frick-server`, `frick-cli`, `frick-mcp`, …) are
+    not npm-published and are not part of this bump; they share the workspace
+    version in the root `Cargo.toml`.
   - `@fricken/web` remains a private workspace package.
-- [ ] `pnpm changelog --output CHANGELOG.md` — then manually move the
-  `Unreleased` entries under the new version heading
+- [ ] Review `CHANGELOG.md` and fill in any missing user-facing release notes
+  before committing.
 - [ ] Commit: `chore(release): vX.Y.Z`
 
 ## Tag and publish
 
 - [ ] Prefer the auto-tag workflow after the `chore(release): vX.Y.Z` commit
-  lands on `main`; it creates `framework-vX.Y.Z`, `swift-vX.Y.Z`, and
-  `android-vX.Y.Z` when the platform versions are in lockstep.
-- [ ] If tagging manually, push the relevant platform tags:
-  `framework-vX.Y.Z`, `swift-vX.Y.Z`, and/or `android-vX.Y.Z`.
-- [ ] Confirm the `Publish npm Packages` workflow starts for the
-  `framework-vX.Y.Z` tag.
+  lands on `main`; it creates one bare semver tag, `X.Y.Z`, when the platform
+  versions are in lockstep.
+- [ ] If tagging manually, push the bare semver tag `X.Y.Z` with credentials
+  that trigger workflows.
+- [ ] Confirm the `Publish npm Packages` workflow starts for the `X.Y.Z` tag.
   - It must run from `.github/workflows/publish-npm.yml`, verify the tag is
     on `origin/main`, use `id-token: write`, and publish with npm provenance.
-  - The `framework-vX.Y.Z` tag is the release cut marker for automation and
-    changelog ranges; independently versioned npm packages do not have to use
-    `X.Y.Z` unless that package is being bumped to the same version.
+  - The bare `X.Y.Z` tag is the release cut marker for npm, Swift mirror, and
+    Android publishing.
   - Before the first automated npm release, configure npm trusted publishing
     for each public package in npm (`@fricken/protocol`, `@fricken/core`,
     `@fricken/design`, `@fricken/react`, `@fricken/design-web`,
-    `@fricken/devtools`, `@fricken/agent-kit`, `@fricken/mcp`,
-    `@fricken/server`) to trust this repository and workflow filename
+    `@fricken/devtools`) to trust this repository and workflow filename
     (`publish-npm.yml`).
   - Confirm each package's npm metadata uses the repository URL
     `git+https://github.com/<owner>/<repo>.git` for the repository running
@@ -83,18 +79,14 @@ Companion docs:
   @fricken/react
   @fricken/design-web
   @fricken/devtools
-  @fricken/agent-kit
-  @fricken/mcp
-  @fricken/server
   ```
-- [ ] Swift: pushing `swift-vX.Y.Z` mirrors `packages/swift` to the standalone
-  `FrickSwift` repository and creates the plain `X.Y.Z` tag there. SPM
-  consumers depend on `https://github.com/briannadoubt/FrickSwift.git`, not the
-  monorepo tag; there is no separate Swift registry push.
-- [ ] Android: bump `frickVersion` in `apps/android/frick/build.gradle.kts`,
-  commit, push tag `android-vX.Y.Z`. The `Publish Android SDK` workflow
-  verifies generated artifacts, runs Android tests/lint/debug builds, then
-  publishes the AAR to GitHub Packages at
+- [ ] Swift: the same bare `X.Y.Z` tag mirrors `packages/swift` to the
+  standalone `FrickSwift` repository and creates the plain `X.Y.Z` tag there.
+  SPM consumers depend on `https://github.com/briannadoubt/FrickSwift.git`, not
+  the monorepo tag; there is no separate Swift registry push.
+- [ ] Android: the same bare `X.Y.Z` tag triggers the `Publish Android SDK`
+  workflow, which verifies generated artifacts, runs Android tests/lint/debug
+  builds, then publishes the AAR to GitHub Packages at
   `dev.frick:frick-client:X.Y.Z`. Local dry-run:
   `cd apps/android && ./gradlew :frick:publishToMavenLocal`.
 
@@ -107,18 +99,13 @@ Companion docs:
   npm init -y
   pnpm add @fricken/protocol@X.Y.Z @fricken/core@X.Y.Z @fricken/react@X.Y.Z
   pnpm add @fricken/design@X.Y.Z @fricken/design-web@X.Y.Z @fricken/devtools@X.Y.Z
-  pnpm add @fricken/agent-kit@X.Y.Z @fricken/mcp@X.Y.Z @fricken/server@X.Y.Z
   node --input-type=module -e 'await Promise.all([
     import("@fricken/protocol"), import("@fricken/core"), import("@fricken/react"),
-    import("@fricken/design"), import("@fricken/design-web"), import("@fricken/devtools"),
-    import("@fricken/agent-kit"), import("@fricken/mcp"), import("@fricken/server")
+    import("@fricken/design"), import("@fricken/design-web"), import("@fricken/devtools")
   ])'
   ```
   Use the exact versions the workflow published; omit packages that were
   already published and skipped for this release.
-- [ ] If `@fricken/server` was published, bump the pinned version in the
-  Docker recipes (`docker/published-server/package.json`) so the
-  standalone-consumer image tracks the release. See `docs/docker-recipes.md`.
 - [ ] Announce in the team channel with a link to the GitHub Release
 
 ## Rollback

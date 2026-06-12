@@ -1,6 +1,17 @@
+# Build context for ops/deploy/server.Dockerfile (the Rust frick-server image).
+# The Dockerfile copies the tree and builds `-p frick-server`, which only needs
+# the Cargo workspace (crates/, Cargo.*, rust-toolchain.toml). Prune everything
+# else — above all target/, which otherwise bloats the context enormously.
 .git
 .DS_Store
 classes.jar
+*.log
+
+# Rust build output (do NOT ship the local target dir into the build)
+target
+**/target
+
+# Node / TS / native client tooling the server build never touches
 node_modules
 **/node_modules
 **/dist
@@ -9,17 +20,13 @@ node_modules
 **/.vite
 **/.gradle
 **/.swiftpm
-apps/*
-!apps/server
-!apps/server/**
-!apps/dev-dashboard
-!apps/dev-dashboard/**
-packages/*
-!packages/protocol
-!packages/protocol/**
-apps/server/data
-apps/server/*.sqlite
+
+# The TS web client, native SDKs, and demo apps are not part of the server image.
+apps
+packages
+
+# Local databases / blobs / coverage
 frick.sqlite
+**/*.sqlite
 frick-blobs
 coverage
-*.log

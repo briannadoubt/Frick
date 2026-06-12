@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTT8N5YK2Z7N826NQPMTQ74D",
+  "ts": "2026-06-11T02:37:22.259Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTT8N5YJQAXNA7PPKJ4W5WRW",
+    "number": 268,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Auth: email signup/login + forgot/reset password + refresh tokens",
+    "description": "Only /auth/signup,login,dev-login,logout are ported. Missing (src/server.ts:1181+): /auth/email/signup, /auth/email/login, /auth/email/forgot-password, /auth/email/reset-password (auth_password_reset_tokens store, migrated), /auth/refresh + /auth/refresh/revoke (auth_refresh_tokens store, migrated). Shares the auth-attempt limiter. forgot/reset is the consumer making outbound email non-dead-code. Carry over FR-217/218/219 auth-core audit fixes.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

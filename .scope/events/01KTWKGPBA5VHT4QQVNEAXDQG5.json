@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTWKGPBA5VHT4QQVNEAXDQG5",
+  "ts": "2026-06-12T00:25:38.410Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTWKGPB9RMS31Q9V7JHYN4MX",
+    "number": 294,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "Calls — regenerate the stale product-test call-schema fixture",
+    "description": "The committed product-test schema wire fixture (conformance/fixtures/wire/*.bin, loaded by frick_conformance::product_test_schema()) carries a STALE, partial call schema: CallRoom is missing the 'kind' field (and likely other drift) vs. the current frick_server::calls::schema defs. So a live CallCommand Create packed against the bare fixture fails ('Unknown field kind'); the FR-290 conformance scenarios work around it by stripping the stale call types and runtime-splicing the current call_*_defs (see crates/frick-conformance/tests/calls.rs + ServerHandle::in_process_with_schema). Task: regenerate the .bin fixture so its call types match the current call schema, regenerate the cross-language golden codegen fixtures (conformance/fixtures/codegen/{swift,kotlin,typescript}), update any schema-hash assertions, and simplify tests/calls.rs to drop the splice. RISK: schema-hash change ripples into golden fixtures — must keep ALL codegen + conformance + schema-golden tests green; if not safely achievable, leave the working splice + report.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTT8NXSBKT3BERY2HZX9P1HJ",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

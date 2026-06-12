@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTT735T31EK30D0XSVBT62NX",
+  "ts": "2026-06-11T02:10:03.715Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTT735T27F7MNP1VCV2G1BY9",
+    "number": 265,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "[server] Push adapters are never registered into a live PushRegistry at boot",
+    "description": "Found during the web-push port (FR-264): boot.rs constructs no PushRegistry/NotificationRouter and calls register_adapter for NO platform — every register_adapter call in crates/frick-server/src is in #[cfg(test)]. So APNs, FCM, and the new Web Push adapters all exist + are unit-tested but CANNOT deliver a real push: nothing populates the registry at startup with real transports (a reqwest-backed APNs/FCM/WebPush client). The PUSH_DELIVER_JOB_TYPE worker + admin_push routes are wired, but the registry they'd dispatch through is empty. Fix: in boot.rs, build a PushRegistry from per-tenant credentials + inject production transports, and register it on AppState so the deliver-job handler resolves a real adapter. Also: the live WebPushTransport must re-screen DNS-resolved endpoint IPs at send time (SSRF), per the FR-264 note.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": "https://github.com/briannadoubt/Frick/pull/8",
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTSXKWEFJGZ11SBWZQEV66W5",
+  "ts": "2026-06-10T23:24:25.423Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ94M12V31EX7XWX3GHA",
+    "commentId": "01KTSXKWEFJGZ11SBWZQEV66W4",
+    "author": "claude",
+    "body": "Reality check (PR #8): the frick CLI is implemented + in review, with known post-cutover gaps now tracked separately — init scaffold breakage (FR-260, fixing now), deploy default Dockerfile (subsumed by FR-259), and the cli.unsupported commands verify/backup/restore + inspect diagnostics (FR-262). frick mcp stdio mode was wired to the real frick-mcp crate (commit ae7867e). The init/scaffold authoring model needs a redesign for the Rust backend (FR-263)."
+  }
+}

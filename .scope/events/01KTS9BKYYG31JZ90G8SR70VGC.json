@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTS9BKYYG31JZ90G8SR70VGC",
+  "ts": "2026-06-10T17:30:23.070Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGM",
+    "commentId": "01KTS9BKYYG31JZ90G8SR70VGB",
+    "author": "claude",
+    "body": "Core primitives (objects/streams/presence/signals) are dispatched over both the HTTP data-plane routes and the WS gateway, backed by the FR-241 stores via the FrickStore facade, with the write-notification funnel broadcasting deltas to subscribers. In review alongside FR-243. Remaining nuance: per-record read authz on object snapshots/deltas (currently tenant+app scoped only) and policy-hook integration land with FR-245."
+  }
+}

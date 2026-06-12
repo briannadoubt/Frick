@@ -1,9 +1,0 @@
-# Copy this alongside the Dockerfile into your scaffolded app root.
-node_modules
-dist
-npm-debug.log
-*.sqlite
-frick-blobs
-.git
-.DS_Store
-tests

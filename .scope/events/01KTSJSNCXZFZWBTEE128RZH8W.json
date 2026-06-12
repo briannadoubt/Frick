@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTSJSNCXZFZWBTEE128RZH8W",
+  "ts": "2026-06-10T20:15:20.477Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ94M12V31EX7XWX3GHA",
+    "commentId": "01KTSJSNCXZFZWBTEE128RZH8V",
+    "author": "claude",
+    "body": "frick CLI landed + committed ae7867e (in review). crates/frick-cli: the frick binary porting apps/cli to native Rust — JSON-Lines output (+--pretty), exit codes 0/1/2/3, the exact argv grammar, top-level help, cli.unknown_command. Commands schema/lint/migrate/doctor/inspect/reset/tenants/init/scaffold/dev/deploy(plan)/dashboard/mcp call the Rust crates DIRECTLY (frick-codegen for generate, frick-schema for lint, frick-store::migrations for migrate, frick-server push-cred helpers for set-push) instead of shelling to pnpm; run() importable; 42 black-box tests mirror cli.test.ts. frick mcp delegates to the real frick-mcp bridge. Deferred (cli.unsupported, in --help for surface parity): verify (pnpm verify:generated), backup/restore (no dump/restore Rust counterpart), inspect diagnostics (FR-76/77 unported), init --agents (no Rust agent-kit). schema generate writes native artifacts in-process (pnpm→native deviation noted)."
+  }
+}

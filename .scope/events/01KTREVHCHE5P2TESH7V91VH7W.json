@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTREVHCHE5P2TESH7V91VH7W",
+  "ts": "2026-06-10T09:47:13.169Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGE",
+    "commentId": "01KTREVHCHE5P2TESH7V91VH7V",
+    "author": "claude",
+    "body": "Extended: all 9 auth/identity stores landed too (map §9) — PasswordHasher (argon2id PHC byte-compatible w/ @node-rs/argon2 + scrypt + bug-compatible legacy-scrypt, constant-time verify via subtle, injectable salt seam), AccountStore, SessionStore (sha256 digest, write-on-read last_seen bump), Password­Reset + RefreshToken (base64url, family-reuse burn), SamlAssertion, ServicePrincipal (sp_/sk_ keys, constant-time), AdminAudit (hash-chained canonical-JSON log + verifyChain), Tenant/TenantSettings/Invitation/Grant (frickSharingPermissionSatisfies)/PushRegistration. Determinism seam: now_ms + ids/tokens/salts injected, never read clock/RNG in store logic. Store crate now 248 tests; workspace 321. clippy -D warnings + fmt clean."
+  }
+}

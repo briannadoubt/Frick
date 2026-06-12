@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTQRMZ94M12V31EX7XWX3GHH",
+  "ts": "2026-06-10T03:19:09.348Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTQRMZ94M12V31EX7XWX3GHG",
+    "number": 255,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Cutover: delete TS backend, docs overhaul, release v0.4.0",
+    "description": "Once conformance + SDK acceptance are green: delete apps/server, packages/protocol, apps/cli (TS), packages/mcp, packages/agent-kit, and the TS codegen pipeline; rewrite README, docs/onboarding.md, docs/authoring.md, docs/operations.md, docs/schema-author-tutorial.md, CONTRIBUTING.md, AGENTS.md for the Rust stack; update Tiltfile/docker/ops; CHANGELOG + publish checklist; ship v0.3.x → v0.4.0. Web/Swift/Kotlin clients and generated TS remain.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

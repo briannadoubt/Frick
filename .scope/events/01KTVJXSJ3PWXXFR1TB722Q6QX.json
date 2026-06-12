@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTVJXSJ3PWXXFR1TB722Q6QX",
+  "ts": "2026-06-11T14:56:04.675Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTVJXSJ2991MHYDYQGMCE7GX",
+    "number": 288,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Calls G2 — production SFU backend (LiveKit/mediasoup)",
+    "description": "A real SFU backend behind the SfuBackend trait — needs the backend decision (LiveKit REST token minting keeps it pure-Rust vs mediasoup). Group audio/video + TURN. Plan phase G + risks.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTT8NXSBKT3BERY2HZX9P1HJ",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

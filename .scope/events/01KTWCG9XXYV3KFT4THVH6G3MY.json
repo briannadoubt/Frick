@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTWCG9XXYV3KFT4THVH6G3MY",
+  "ts": "2026-06-11T22:23:05.661Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ37",
+    "commentId": "01KTWCG9XXYV3KFT4THVH6G3MX",
+    "author": "claude",
+    "body": "NOTE: this was completed in the TypeScript era (mediasoup SFU adapter). The Rust cutover (FR-276) did NOT port the mediasoup produce/consume path — it shipped a LiveKit token-minting SFU instead, leaving the self-hosted-mediasoup media negotiation stubbed. The Rust re-implementation, if pursued, is tracked in FR-292."
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTVJXRQGPEQVCC1FDP46Z12V",
+  "ts": "2026-06-11T14:56:03.824Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTVJXRQF38JXVCCNTHK1E9S8",
+    "number": 282,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Calls B — call schema + CallCommand/CallCommandResult gateway routing",
+    "description": "Port call-schema.ts (CallRoom/CallInvite/CallParticipant objects, Call* events/streams, WebRTCSignal, build_call_schema()) and route the CallCommand frame (kind 21) through the gateway to a control-plane handler replying CallCommandResult (kind 22). Frames already exist in crates/frick-protocol. Plan phase B.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTT8NXSBKT3BERY2HZX9P1HJ",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

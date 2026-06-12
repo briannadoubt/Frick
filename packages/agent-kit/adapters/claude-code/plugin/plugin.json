@@ -1,7 +1,0 @@
-{
-  "name": "frick-agent-kit",
-  "version": "0.0.0",
-  "description": "Claude Code skills and subagents for building fullstack Frick applications.",
-  "skills": "./skills",
-  "agents": "./agents"
-}

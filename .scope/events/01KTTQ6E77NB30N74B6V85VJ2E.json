@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTTQ6E77NB30N74B6V85VJ2E",
+  "ts": "2026-06-11T06:51:27.847Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTTEZTN3FVWC8P6FYBQVKMCE",
+    "commentId": "01KTTQ6E77NB30N74B6V85VJ2D",
+    "author": "claude",
+    "body": "DECISION (user): pure-Rust only — do NOT add OpenSSL (the samael crate pulls it; the workspace has stayed pure-rustls/no-native-deps). Consequence: SAML is DEFERRED. The blocker is XML canonicalization (c14n11/exclusive-c14n) — there is no mature pure-Rust c14n+XML-dsig library, and hand-rolling c14n + signature-wrapping defenses is an auth-bypass risk not worth taking autonomously. Revisit when a vetted pure-Rust XML-dsig/c14n path exists (or reconsider the OpenSSL trade-off). The auth_saml_seen_assertions store + the FR-214/215/216 audit-fix requirements are already captured here."
+  }
+}

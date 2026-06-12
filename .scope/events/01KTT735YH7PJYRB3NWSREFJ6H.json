@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTT735YH7PJYRB3NWSREFJ6H",
+  "ts": "2026-06-11T02:10:03.857Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTSXK62Q50YAT04DSYTX25TF",
+    "commentId": "01KTT735YH7PJYRB3NWSREFJ6G",
+    "author": "claude",
+    "body": "DONE + on PR #8 (commit 6ced534). frick schema generate now WRITES the 4 tracked native-client artifacts via frick-codegen, byte-identical to the retired pnpm generator (zero-byte git diff, pinned by a cli.rs byte-identity test). pnpm schema:generate is a thin cargo shim; verify:generated runs through it (exit 0, no drift) — frick-codegen is the canonical generator. Combined with native frick verify (FR-261 earlier) + frick schema export, this ticket is complete. generate-native-artifacts.ts deleted; schema signing (gitignored, key-gated) is a noted Rust-seam follow-up."
+  }
+}

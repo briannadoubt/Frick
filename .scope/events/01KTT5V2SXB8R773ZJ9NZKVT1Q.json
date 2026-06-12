@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTT5V2SXB8R773ZJ9NZKVT1Q",
+  "ts": "2026-06-11T01:48:09.917Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTSXK62Q50YAT04DSYTX25TF",
+    "commentId": "01KTT5V2SXB8R773ZJ9NZKVT1P",
+    "author": "claude",
+    "body": "PARTIAL (PR #8): native frick verify (drift check via frick-codegen) + frick schema export landed. REMAINING: make frick schema generate WRITE the tracked artifacts via frick-codegen and retire pnpm schema:generate as the canonical generator (frick schema generate is currently in-process / does not write the artifact paths). That write-path swap is the residual for this ticket."
+  }
+}

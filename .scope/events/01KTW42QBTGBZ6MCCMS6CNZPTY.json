@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTW42QBTGBZ6MCCMS6CNZPTY",
+  "ts": "2026-06-11T19:55:52.058Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTVJXS4VVRSRGGZ9ECGP6VY2",
+    "commentId": "01KTW42QBTGBZ6MCCMS6CNZPTX",
+    "author": "claude",
+    "body": "DONE + on PR #8 (merged 5fc5bf7). handle_call_command enqueues a best-effort ringing push per invitee after a successful Create (call.ringing intent via notification_router.enqueue_intent -> push.deliver job; data carries callId/conversationId/createdBy). Push failure never fails the call. Gateway test asserts one job per invitee. Built by a subagent."
+  }
+}

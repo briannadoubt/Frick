@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTVRDQS6HJBF6V9A57NQKN0S",
+  "ts": "2026-06-11T16:32:10.022Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTVRDQS5YWW6WNR45ZSBZ6XB",
+    "number": 291,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "FR-279 native subscribe-acks (Swift/Kotlin) — additive, with test harness",
+    "description": "The native half of FR-279 was reverted (1252d3d) because making the existing subscribe/subscribeObject/subscribeProjection methods block-until-snapshot deadlocked the Swift suite (every test driving a mock socket that doesn't echo a Snapshot hangs). Redo it ADDITIVELY: add NEW awaitable methods (e.g. subscribeObjectRegistered) that resolve on the initial Snapshot/StreamPage/ProjectionDelta correlated by subscriptionId (objects/streams) / projection name, leaving the existing fire-and-send subscribe methods unchanged. Update the Swift + Android test harness to capture the sent subscriptionId and deliver a correlating Snapshot so the awaitable path is testable. The web half (packages/core) is already done + verified; mirror its design. Relates to FR-279/FR-256.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

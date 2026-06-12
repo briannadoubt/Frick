@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTSGRNMD12HT4V532WYMH4B3",
+  "ts": "2026-06-10T19:39:50.797Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGG",
+    "commentId": "01KTSGRNMD12HT4V532WYMH4B2",
+    "author": "claude",
+    "body": "Postgres backend landed + committed 2140c77 (in review; live path CI-verified-only — no local PG). SqlDriver gains a Postgres arm (driver/pg.rs): pure ?→$n placeholder rewriter (unit-tested, skips quoted literals + '' escape), PostgresDriver over a deadpool pool (NoTls, lazy connect), param binding + PG-type row decoding (int8→i64, bytea→Blob, bool→1/0, NULL), RETURNING-id→last_insert_rowid, pooled-client transaction; SqlExec is now a Sqlite/Postgres enum (SQLite behavior byte-identical, all 268 store tests still green). migrations.rs: FRAMEWORK_MIGRATIONS_PG embedded from conformance/fixtures/migrations/postgres.json (checksums verified) + run_framework_migrations_postgres/list_applied_migrations_postgres + initialize_schema dialect dispatch. Facade + create_frick_server build the PG driver from FRICK_DATABASE_URL; old FR-242 rejection removed. Live frick-store tests gated behind FRICK_DATABASE_URL (skip locally); new rust-postgres CI job runs them against postgres:16. 509 workspace tests; gate green. Multi-node job/projection locking (SKIP LOCKED/advisory) follow-up noted."
+  }
+}

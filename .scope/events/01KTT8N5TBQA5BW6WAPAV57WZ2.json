@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTT8N5TBQA5BW6WAPAV57WZ2",
+  "ts": "2026-06-11T02:37:22.123Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTT8N5TAE3Z7A7W3P0FF9F7F",
+    "number": 267,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "OTel export + FRICK_OTEL_* config parsing",
+    "description": "Compose sets FRICK_OTEL_ENABLED + ops/local/otel-collector.yaml exists, but config.rs doesn't parse FRICK_OTEL_* and there is no OTLP exporter. Add the config surface + a tracing-opentelemetry OTLP layer wired in main.rs/boot, behind FRICK_OTEL_ENABLED. Live export needs a collector; config + layer init are unit-testable.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

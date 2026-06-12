@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTVJXS4VVRSRGGZ9ECGP6VY3",
+  "ts": "2026-06-11T14:56:04.251Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTVJXS4VVRSRGGZ9ECGP6VY2",
+    "number": 285,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Calls E — ringing push on incoming-call invite",
+    "description": "Wire the invite flow to enqueue a ringing push to invitees via the wired push subsystem (FR-265) + CallInvite notification state. Plan phase E.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTT8NXSBKT3BERY2HZX9P1HJ",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

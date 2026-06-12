@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTSABKEZJ17B21N05A5ZD0RD",
+  "ts": "2026-06-10T17:47:51.135Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGP",
+    "commentId": "01KTSABKEZJ17B21N05A5ZD0RC",
+    "author": "claude",
+    "body": "DONE (in review) + committed b946256. Projection engine (registry, registration-order matching, in-memory tenant snapshots, delta listener, rebuild, FrickStoreWriteEvent driver — upsert+streamAppend only, never deletes) and durable job worker (JobHandler registry, poll/claim/run/complete/fail w/ backoff+dead-letter, deterministic poll_once + 500ms loop, recurring scheduler w/ per-window idempotency keys). Integrated: AppStateInner carries the registry; boot drives projections from the store write-listener + wires the delta listener to GatewayHub::publish_projection_delta; gateway projection-subscribe + /projections routes are registry-backed (404 now TS-faithful sync.protocolError). End-to-end test: register projection → HTTP upsert → live ProjectionDelta to a WS subscriber. 407 workspace tests; gate green. Deferred: per-app registries (FR-249), policy-hook authz, framework job types push.deliver/blob.process/blob.gc (FR-248), telemetry/metrics."
+  }
+}

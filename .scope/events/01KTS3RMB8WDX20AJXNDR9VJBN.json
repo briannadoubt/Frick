@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTS3RMB8WDX20AJXNDR9VJBN",
+  "ts": "2026-06-10T15:52:37.992Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "commentId": "01KTS3RMB8WDX20AJXNDR9VJBM",
+    "author": "claude",
+    "body": "Foundation committed to branch rust-rewrite-foundation (e071664): 169 new files — crates/{protocol,schema,codegen,store,server}, conformance fixtures, internal/rust-rewrite maps, Cargo workspace, rust CI. 343 tests green. Deliberately did NOT commit pre-existing modified TS files (CHANGELOG/README/docs/apps-server-src that were modified by other automation before this session) nor my small tweaks to shared already-modified files (AGENTS.md/CONTRIBUTING.md/package.json/.gitignore/gateway.ts Delta reorder) — those carry unrelated edits and can be staged selectively later."
+  }
+}

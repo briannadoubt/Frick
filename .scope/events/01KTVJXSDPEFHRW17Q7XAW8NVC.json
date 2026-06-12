@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTVJXSDPEFHRW17Q7XAW8NVC",
+  "ts": "2026-06-11T14:56:04.534Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTVJXSDNZWR5PFVMKEPQVEZG",
+    "number": 287,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Calls G1 — SFU adapter boundary + fake-SFU backend + media placement",
+    "description": "Port sfu-media-plane.ts + sfu-backend.ts (SfuBackend trait + fake-sfu-backend) + media-placement.ts/cluster-media-placement.ts (region/cluster room allocation). Deterministic via the fake SFU. Plan phase G.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTT8NXSBKT3BERY2HZX9P1HJ",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

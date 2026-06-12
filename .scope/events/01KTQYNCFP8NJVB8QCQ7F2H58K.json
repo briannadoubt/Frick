@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTQYNCFP8NJVB8QCQ7F2H58K",
+  "ts": "2026-06-10T05:04:14.326Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQPZ5D6J6HP35NM8PNKMQ65",
+    "commentId": "01KTQYNCFP8NJVB8QCQ7F2H58J",
+    "author": null,
+    "body": "Fixed in PR #7. Object reads now owner-scoped by default: FrickStore.isObjectVisibleToUser scopes a type to its owner when it declares an owner field (new server-only ObjectDef.ownerField, or the ownerUserId convention). Unified read pipeline (ownership -> policy hooks -> grant relaxation) now shared by WS snapshot, live delta fan-out, HTTP /objects list, and search-hit filtering. Allow-all is explicit opt-in via createFrickServer({ objectVisibility: { mode: 'tenantWide' } }). Grant accept live-pushes the record; revoke/leave live-pushes a removal. New apps/server/tests/owner-scoped-reads.test.ts; full server suite (1653) green incl FR-116/FR-70. Real RangerCRM iOS client: test_Account_CRUD ('got 3') now passes. CHANGELOG 0.3.1 notes the behavioral change (allow-all relied-upon apps must add an owner field, set mode tenantWide, or opt types out via ownerFields)."
+  }
+}

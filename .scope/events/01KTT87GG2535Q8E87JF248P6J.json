@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTT87GG2535Q8E87JF248P6J",
+  "ts": "2026-06-11T02:29:54.306Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTSXK6G6AJFX0VB330T8M5QB",
+    "commentId": "01KTT87GG2535Q8E87JF248P6H",
+    "author": "claude",
+    "body": "Progress: web-push adapter (commit 6c8db26) + push delivery boot-wiring (FR-265, ee027ab) + docs cleanup all DONE. REMAINING on this umbrella: (1) OTel export + FRICK_OTEL_* config parsing (observability; deps fetchable, the actual OTLP export needs a collector to verify); (2) outbound email — DEFERRED, no consumer yet (password-reset routes are unported, so an EmailAdapter would be dead code); (3) custom search adapter — a larger store-entangled story (FTS indexing on object writes + a query route; the inspect search route is already stubbed pending it). Recommend splitting these into discrete tickets."
+  }
+}

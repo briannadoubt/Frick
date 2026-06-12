@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTS9BKYYG31JZ90G8SR70VGA",
+  "ts": "2026-06-10T17:30:23.070Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGJ",
+    "commentId": "01KTS9BKYYG31JZ90G8SR70VG9",
+    "author": "claude",
+    "body": "Live runtime landed + committed (3b70ae0). crates/frick-server now serves auth + data-plane + /_frick/sync WS gateway from one create_frick_server over one store + one fan-out funnel. Gateway: connection/per-principal caps (NUL key), heartbeat, in-order frames, Hello handshake (HelloAck+Schema), per-frame session revalidation, full frame dispatch, GatewayHub as store write-listener. Boot wires it all + detaches on shutdown. End-to-end integration test: HTTP object upsert → Delta over WS subscriber. 380 workspace tests; gate green. Moved to in_review. Deferred to FR-245/247/15: projection registry, policy-hook authz, multi-app Hello routing, per-record read authz on fan-out, cluster-bus/SSE, calls."
+  }
+}

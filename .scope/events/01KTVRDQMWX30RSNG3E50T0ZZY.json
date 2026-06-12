@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTVRDQMWX30RSNG3E50T0ZZY",
+  "ts": "2026-06-11T16:32:09.884Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTT8NY6NQ86ABCV1Z99CTAVE",
+    "commentId": "01KTVRDQMWX30RSNG3E50T0ZZX",
+    "author": "claude",
+    "body": "PARTIAL — web done, native REVERTED. The Swift/Kotlin half (committed in 6e65f27) made the EXISTING subscribe methods block until a Snapshot arrives, which deadlocked the Swift test suite (testSubscribeSendsSubscribeFrame held the SwiftPM lock for ~2h). Reverted the native sockets in 1252d3d — Swift suite is green again (174 tests, 7s; testSubscribeSendsSubscribeFrame 11ms). The WEB half stays: packages/core added NEW subscribeObject/subscribeStream/subscribeProjection methods (additive, alongside the unchanged objects()/stream() accessors), covered by passing vitest (121 core tests). Native follow-up filed as FR-291: do it ADDITIVELY (new awaitable methods, leave existing subscribe semantics intact) + update the test harness to deliver the correlating Snapshot."
+  }
+}

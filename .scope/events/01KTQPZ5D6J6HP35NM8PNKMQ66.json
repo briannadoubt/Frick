@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTQPZ5D6J6HP35NM8PNKMQ66",
+  "ts": "2026-06-10T02:49:46.150Z",
+  "actor": "unknown",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTQPZ5D6J6HP35NM8PNKMQ65",
+    "number": 235,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "Object reads are tenant-wide allow-all until the first grant exists — cross-user leakage for per-user-data apps",
+    "description": "",
+    "status": "backlog",
+    "priority": "urgent",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

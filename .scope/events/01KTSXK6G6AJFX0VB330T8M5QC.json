@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTSXK6G6AJFX0VB330T8M5QC",
+  "ts": "2026-06-10T23:24:02.950Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTSXK6G6AJFX0VB330T8M5QB",
+    "number": 264,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Rust server feature ports: search, web-push, outbound email, OTel export",
+    "description": "Feature surfaces present in the TS server but not yet ported to frick-server: the custom search adapter, the web-push (VAPID) push adapter (APNs+FCM are done), outbound email (EmailAdapter/Resend), and OpenTelemetry export (the FRICK_OTEL_* env vars are documented but not parsed by frick-server config). Calls/WebRTC is tracked separately as FR-15. Some docs/compose still reference these (KafkaJS/jose naming, OTel rows) and should be reconciled as each lands.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

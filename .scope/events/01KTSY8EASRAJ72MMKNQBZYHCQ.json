@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTSY8EASRAJ72MMKNQBZYHCQ",
+  "ts": "2026-06-10T23:35:39.097Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTSXK6G6AJFX0VB330T8M5QB",
+    "commentId": "01KTSY8EASRAJ72MMKNQBZYHCP",
+    "author": "claude",
+    "body": "Docs follow-up found during the binary/init fix: docs/operations.md still contains TS @fricken/server code examples (createFrickServer, createS3BlobBytesDriver, the Resend email adapter, @fricken/server/push/apns-adapter subpaths) that describe the deleted TS server API. The doc agent added a top-of-file caveat but the snippets should be translated to the Rust option surface (or removed) as the corresponding features (S3 blob driver, outbound email, OTel) are ported. The obsolete docker/ TS recipes were already removed + docs/docker-recipes rewritten around ops/deploy/server.Dockerfile."
+  }
+}

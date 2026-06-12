@@ -177,6 +177,7 @@ Pending appends are preserved across compatible reloads. When an incompatible-ca
 | Capability negotiation in handshake | ✓ (WebSocket) | ✓ (WebSocket) | ✓ (WebSocket) |
 | Object delete deltas carry `removed` ids | ✓ (wire type) | Back-compat tombstone/refetch path | Back-compat tombstone/refetch path |
 | Projection subscribe + `ProjectionDelta` apply into observable keyed store | `client.projection(name)` → `Signal<Map>` | `FrickProjectionStore` (`rows: [String: FrickMsgPackValue]`) | `FrickProjectionStore` (`rows: StateFlow<Map>`) |
+| Opt-in subscribe that resolves on server registration (FR-256) | `subscribeObject/Stream/Projection` → `Promise<void>` | `subscribe{Object,Stream,Projection}Registered` | `subscribe{Object,Stream,Projection}Registered` |
 
 ## Product Analytics
 
@@ -246,6 +247,47 @@ path for servers that predate `removed`.
 
 Schema field definitions may also carry an optional `sensitivity` classification — `public | private | pii | secret | content` — that informs how the server treats field values in logs, diagnostics, and admin inspection (and, in future, export/deletion workflows). Like `mergePolicy`, `sensitivity` is **server-only** metadata: it is validated by `validateSchema`, defaults to `private` when omitted, and is intentionally *not* emitted into the generated Swift / Kotlin / TS client artifacts, so adding or changing it is wire-backwards-compatible and requires no artifact regeneration. The server's `redactRecord` helper masks `pii`/`secret`/`content` values by default; see [`docs/operations.md`](operations.md) for where this is applied.
 
+## Subscribe-Then-Write Registration (FR-256)
+
+A write issued **immediately after** a subscribe can race the gateway's
+registration of that subscription and miss the write's own echo `Delta`. The fix
+has two halves; together they make subscribe-then-write reliable.
+
+**Server.** The gateway registers a subscription *synchronously* — before its
+async per-frame session re-validation — so a fan-out that races an in-flight
+`Subscribe` (e.g. an HTTP upsert handled on another task) finds the subscriber
+instead of seeing `subscribers: 0` and dropping the echo. Delivery is still authz
+-gated: registration happens only after the cap check, projection-existence
+check, and baseline authz on the Hello principal, so it exposes no data the
+principal isn't entitled to. This closes the in-server window for every
+subscription kind (object/stream/projection/presence/signal share the same
+registration path).
+
+**Client (opt-in).** The plain subscribe accessors return as soon as the
+`Subscribe` frame is *sent*, which can still race registration over the network.
+Each SDK additionally exposes an **awaitable** subscribe variant that resolves
+only when the server's initial reply for that subscription arrives — the implicit
+registration ack: an object `Snapshot` or stream `StreamPage` (correlated by
+`subscriptionId`), or a projection's initial `ProjectionDelta` (correlated by
+projection name). Await it before a write you must observe on the same
+connection.
+
+| Kind | TS (returns `Promise<void>`) | Swift | Android/Kotlin |
+| --- | --- | --- | --- |
+| Object | `client.subscribeObject(type)` | `subscribeObjectRegistered(type:)` | `subscribeObjectRegistered(type)` |
+| Stream | `client.subscribeStream(stream, key)` | `subscribeStreamRegistered(stream:key:)` | `subscribeStreamRegistered(stream, key)` |
+| Projection | `client.subscribeProjection(name)` | `subscribeProjectionRegistered(name:)` | `subscribeProjectionRegistered(name)` |
+
+The existing non-awaiting accessors (`client.objects/stream/projection`, Swift/
+Kotlin `subscribe`/`subscribeObject`/`subscribeProjection`) are **unchanged** —
+the awaitable variants are additive. The higher-level observable stores keep
+using the non-awaiting form because they reconcile to the reply snapshot, so they
+never lose state; reach for the awaitable variant only when app code keys off the
+live delta of a write issued right after subscribing. Each awaitable also
+resolves (rather than hanging) if the connection closes or the user state is
+cleared before registration — the subscription replays and re-snapshots on
+reconnect.
+
 ## Projections Over Sync
 
 A projection is a server-maintained, keyed view (row key → row value) that the
@@ -292,6 +334,104 @@ grants satisfy only `object.read`.
 ## Presence Authorization
 
 Presence subscriptions and writes over the sync WebSocket require an authenticated, active principal and run through the same structured authz envelope path as streams, objects, and signals. The foundation schema does not ship product-specific presence rows; apps define their own presence types and can tighten access with policy hooks. Failures Nack with `auth.forbidden` and `details.reason` such as `notAuthorizedForResource` or `ownerMismatch`.
+
+## Realtime Calls
+
+Realtime calls (FR-15) ride the **same sync WebSocket** as the rest of the
+protocol. The control plane is a server-authoritative request/response RPC: the
+client sends a `CallCommand` frame (frame kind **21**) and the server replies
+with a `CallCommandResult` frame (frame kind **22**), correlated by
+`requestId`. A command that fails reuses the ordinary `Nack` frame keyed by the
+same `requestId` — there is no separate error frame. The Rust server handles
+`CallCommand` and dispatches to the call control plane; the default media plane
+is the deterministic fake SFU, so the lifecycle is exercisable end to end
+without a live media server.
+
+### Wire surface
+
+`CallCommandPayload` is `{ requestId, command }` where `command` is a tagged
+union keyed by `op`:
+
+| `op` | Request fields | `CallCommandResult` payload |
+| --- | --- | --- |
+| `create` | `conversationId`, `inviteeUserIds[]` (non-empty, excludes the caller), optional `kind` (`audio`\|`video`), optional `regionHint` | `room` (state `ringing`) + `invites[]` |
+| `join` | `callId` | `room` (flips to `active` on first join) + `participant` (state `joined`) + `mediaGrant` |
+| `accept` | `callId` | `invite` (status `accepted`) |
+| `leave` | `callId` | `room` |
+| `end` | `callId` | `room` (state `ended`) |
+| `setMediaState` | `callId`, `media` (partial mic/camera/screen patch) | `participant` |
+
+The actor is the connection's authenticated principal (`userId` + `deviceId`
+from the session token) — never a field in the command — so a second
+participant joins from its **own** authenticated connection. Call records
+(`CallRoom` / `CallInvite` / `CallParticipant`) also sync as ordinary objects,
+and the durable lifecycle log lands on the `CallEventStream`; clients that want
+live call state subscribe to those like any other object/stream.
+
+### Lifecycle
+
+A caller `create`s a call (room `ringing`, one `CallInvite` per invitee). Each
+invitee `join`s (the still-ringing invite is implicitly accepted, the room flips
+to `active` on the first join, and the joiner receives a per-participant
+`mediaGrant` to hand to its media layer) or `accept`s without joining yet. WebRTC
+SDP/ICE is relayed out of band over the `WebRTCSignal` signal (`SignalSend`),
+keyed by the call id. **Membership gate (FR-284):** only a member of a non-ended
+call — its creator, an invitee whose invite is not declined/cancelled, or a
+joined participant — may relay a `WebRTCSignal`; a non-member's `SignalSend` is
+Nacked `auth.forbidden` with `details.reason = "notMember"`. Any participant may
+`leave`; the creator may `end` the call (room `ended`), after which the signal
+gate rejects everyone.
+
+### Native call clients
+
+Each SDK wraps the same `CallCommand` → `CallCommandResult` RPC under
+ergonomic verbs, plus an observable call-state store fed by the synced
+call objects/stream:
+
+| Platform | Low-level RPC | Verb helpers | Observable state |
+| --- | --- | --- | --- |
+| Web (`@fricken/core`) | `client.callCommand(command)` | `createCall` / `joinCall` / `acceptCall` / `leaveCall` / `endCall` / `setCallMediaState` (`packages/core/src/calls.ts`) | `callState(...)` |
+| Swift | `FrickSyncSocket.callCommand(_:)` | `FrickCalls.createCall/joinCall/acceptCall/leaveCall/endCall` | `FrickCallSession` (`@Observable`: `room`, `participants`, `isActive`, `join()`/`accept()`/`leave()`/`end()`/`setMediaState(_:)`) |
+| Android/Kotlin | `FrickSyncSocket.callCommand(command)` | `FrickCallManager.create/join/accept/leave/end/setMediaState` | `FrickCallManager` call state |
+
+All three resolve a verb when the matching `CallCommandResult` arrives and throw
+(or fail the continuation) on a correlated `Nack`. The wire is identical across
+platforms — there are no per-SDK frame variants.
+
+### Native-SDK acceptance (manual checklist)
+
+The control-plane conformance scenarios
+(`crates/frick-conformance/tests/calls.rs`) cover the create → join → signal-gate
+flow over the wire automatically. The following is the **manual** checklist to
+accept a native client end to end against the Rust server (no live media server
+needed — the default fake SFU issues real grants):
+
+1. **Start the Rust server with a call-aware schema.** The app schema must
+   include the call control-plane types (`CallRoom` / `CallInvite` /
+   `CallParticipant` / `CallEventStream` / `WebRTCSignal` and the lifecycle
+   events). Splice them in with
+   `frick_server::calls::schema::{call_object_defs, call_stream_defs, call_event_defs, call_signal_defs}(id_base)`
+   at a free id range, or run a call-only server via
+   `frick_server::calls::schema::build_call_schema()`. Confirm `GET /ready`
+   reports `ready` and `GET /schema` lists the call types.
+2. **Authenticate two clients** (creator + invitee) as distinct users — dev-login
+   in a non-production env, or real signup/login — each holding its own session
+   token and sync connection.
+3. **Create** from the creator (Swift `FrickCalls.createCall` / Kotlin
+   `FrickCallManager.create` / web `createCall`). Verify the verb returns a room
+   in state `ringing` and one invite per invitee, and that the creator's
+   `FrickCallSession` / `FrickCallManager` / `callState` observable reflects the
+   ringing room.
+4. **Join** from the invitee (`joinCall` / `join` / `joinCall`). Verify the verb
+   returns a `participant` (state `joined`) and a non-empty `mediaGrant.token`,
+   that the room flips to `active`, and that both clients' observable stores
+   converge on the active call with both participants.
+5. **Relay a `WebRTCSignal`** (keyed by the call id) from a member and confirm
+   it is accepted; from a non-member (a third, uninvited client) confirm it is
+   Nacked `auth.forbidden` reason `notMember`.
+6. **End** from the creator (`endCall` / `end` / `endCall`); verify the room
+   moves to `ended` on both clients and a subsequent signal from any client is
+   rejected.
 
 ## Versioning
 

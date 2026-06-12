@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTT8Q2FB8AHH5QB379ZFM1GH",
+  "ts": "2026-06-11T02:38:24.235Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTT735T27F7MNP1VCV2G1BY9",
+    "commentId": "01KTT8Q2FB8AHH5QB379ZFM1GG",
+    "author": "claude",
+    "body": "Follow-up: the durable JobWorker uses default poll_interval (500ms) / batch (5); config.jobs.* knobs are not wired (a later story). Push delivery does not need the recurring scheduler, which is also not started in boot (no recurring specs for the foundation schema)."
+  }
+}

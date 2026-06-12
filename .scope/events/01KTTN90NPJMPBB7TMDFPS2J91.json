@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTTN90NPJMPBB7TMDFPS2J91",
+  "ts": "2026-06-11T06:17:55.126Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTT8NXBRP93XB0DCFDJ73CXG",
+    "commentId": "01KTTN90NPJMPBB7TMDFPS2J90",
+    "author": "claude",
+    "body": "DONE + on PR #8 (merged 4a9430a). S3 blob-bytes driver via object_store 0.13 (rustls, no openssl), keyed <prefix>/<app>/<tenant>/<aa>/<blob> (byte-identical to fs/TS). Config-driven (FRICK_BLOB_DRIVER=sqlite|filesystem|s3 + FRICK_BLOB_S3_BUCKET/REGION/ENDPOINT/PREFIX/FORCE_PATH_STYLE; AWS creds via the standard chain). boot::store_options now plumbs blob config (was always sqlite). Key-mapping/config/selection unit-tested + InMemory object_store integration; live S3 gated behind config."
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTVSV5RCAY6C8H7PJ2MWD6TZ",
+  "ts": "2026-06-11T16:56:58.892Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTT8NY6NQ86ABCV1Z99CTAVE",
+    "commentId": "01KTVSV5RCAY6C8H7PJ2MWD6TY",
+    "author": "claude",
+    "body": "COMPLETE — the FR-256 client half now ships across all three SDKs: web (packages/core, additive subscribeObject/Stream/Projection, commit 6e65f27) + native Swift/Kotlin (FR-291, commit 9fcfa68). The botched first native attempt was reverted (1252d3d). Closing as in_review."
+  }
+}

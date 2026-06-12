@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTT8NY2773RKGBJPH12VQVCA",
+  "ts": "2026-06-11T02:37:46.951Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTT8NY261T6ZHR295MB6J0E3",
+    "number": 278,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "Gateway live WS disconnect (logout + admin) + inspect admin-token auth",
+    "description": "Two small TODOs: (1) /auth/logout + admin disconnect do not live-close the WS (auth_routes.rs:364, routes/admin.rs:353 returns disconnected:0) — add gateway.close_session(token). (2) routes/inspect.rs accepts any session for the inspect tier (TODO(FR-246)); add admin-token inspect auth.",
+    "status": "backlog",
+    "priority": "low",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

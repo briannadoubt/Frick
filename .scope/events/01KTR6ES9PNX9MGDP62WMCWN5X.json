@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTR6ES9PNX9MGDP62WMCWN5X",
+  "ts": "2026-06-10T07:20:26.678Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ92BM926JGEHNNSY5Z7",
+    "commentId": "01KTR6ES9PNX9MGDP62WMCWN5W",
+    "author": "claude",
+    "body": "Done. Root Cargo workspace (resolver 3, edition 2024, rust 1.95 pinned via rust-toolchain.toml), crates/frick-{protocol,schema,store,server,cli} skeletons with workspace lints (clippy pedantic, deny unsafe), .github/workflows/rust.yml (fmt/clippy -D warnings/build/test, pinned checkout SHA), target/ gitignored, layout documented in AGENTS.md + CONTRIBUTING.md. Verified: cargo build/test/clippy/fmt all green locally."
+  }
+}

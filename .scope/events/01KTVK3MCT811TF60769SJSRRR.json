@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTVK3MCT811TF60769SJSRRR",
+  "ts": "2026-06-11T14:59:15.994Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTT8NXSBKT3BERY2HZX9P1HJ",
+    "commentId": "01KTVK3MCT811TF60769SJSRRQ",
+    "author": "claude",
+    "body": "PLANNED (user asked to plan, not build). Decomposed into a delivery plan: internal/plans/2026-06-11-calls-epic-rust-port.md + 10 shippable sub-stories FR-281..FR-290 (MediaPlaneAdapter seam + fake; call schema + CallCommand routing; CallControlPlane state machine; WebRTCSignal membership gating; ringing push; P2P adapter; SFU boundary + fake-SFU + placement; production SFU backend; call E2EE; conformance + SDK acceptance). Grounded in the fixed constraints: the CallCommand/CallCommandResult frames already exist in frick-protocol, the native call clients already ship, and the deleted TS calls/ modules are the porting reference. Build is deferred; the seam (phases A-F) ships without choosing an SFU backend."
+  }
+}

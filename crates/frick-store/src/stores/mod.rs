@@ -1,0 +1,23 @@
+//! Store implementations (FR-241), one module per store family.
+pub mod account;
+pub mod admin_audit;
+pub mod blob;
+pub mod blob_bytes;
+pub mod devtools_events;
+pub mod grant;
+pub mod idempotency;
+pub mod invitation;
+pub mod job;
+pub mod object;
+pub mod password_hasher;
+pub mod password_reset;
+pub mod presence;
+pub mod push_registration;
+pub mod refresh_token;
+pub mod saml_assertion;
+pub mod search;
+pub mod service_principal;
+pub mod session;
+pub mod signal;
+pub mod stream;
+pub mod tenant;

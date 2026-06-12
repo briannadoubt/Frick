@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTTBWW6JH3RAK72PMPSETXPQ",
+  "ts": "2026-06-11T03:34:00.146Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTT8N6C32SYGGM8W15QZPWP2",
+    "commentId": "01KTTBWW6JH3RAK72PMPSETXPP",
+    "author": "claude",
+    "body": "Unblocked by FR-268: the email seam now exists (FrickEmailAdapter trait + EmailRouter + BootSeams.email_router, default NoopEmailAdapter). FR-271 is now just: implement a reqwest-backed ResendEmailAdapter (POST https://api.resend.com/emails with the API key) behind FRICK_* config, and have BootSeams::production() wire it when configured (else keep Noop). Request construction is unit-testable; live send is not CI-testable. Small, self-contained."
+  }
+}

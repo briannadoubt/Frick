@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTTPZ5QM50477FG9FMPTNMJ0",
+  "ts": "2026-06-11T06:47:29.780Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTSXK6G6AJFX0VB330T8M5QB",
+    "commentId": "01KTTPZ5QM50477FG9FMPTNMHZ",
+    "author": "claude",
+    "body": "COMPLETE — the feature-ports umbrella is fully decomposed + delivered: search (FR-266), web-push (commit 6c8db26), outbound email Resend (FR-271), and OTel (FR-267) all landed on PR #8. Closing as in_review; the discrete tickets carry the detail."
+  }
+}

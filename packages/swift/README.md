@@ -45,15 +45,17 @@ In an Xcode project, add it as a remote Swift Package
 
 ## Releasing
 
-The mirror is publish-only — never edit it by hand. To cut a release, tag a
-commit on `main` and push the tag:
+The mirror is publish-only — never edit it by hand. To cut a release, use the
+monorepo release flow:
 
 ```sh
-git tag swift-v0.2.0
-git push origin swift-v0.2.0
+pnpm release:bump 0.3.0
+git commit -am "chore(release): v0.3.0"
+git push origin HEAD:main
 ```
 
-`.github/workflows/publish-swift.yml` then builds the package and mirrors this
-subtree to `FrickSwift` (`main` + a matching `0.2.0` tag) via
-`scripts/publish-swift.sh`. This parallels the npm (`framework-v*`) and Android
-(`android-v*`) release flows.
+`release-autotag.yml` then pushes the bare `0.3.0` tag. The
+`.github/workflows/publish-swift.yml` workflow builds the package and mirrors
+this subtree to `FrickSwift` (`main` + a matching `0.3.0` tag) via
+`scripts/publish-swift.sh`. The same bare tag also triggers npm and Android
+publishing.

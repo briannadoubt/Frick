@@ -1,0 +1,102 @@
+[package]
+name = "frick-server"
+description = "Frick sync server: tokio + axum runtime speaking the Frick frame protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# The standalone server entry point. The crate is still embeddable as a
+# library (`lib.rs`); this binary is the turnkey launcher consumed by
+# `frick deploy image` / `ops/deploy/server.Dockerfile`.
+[[bin]]
+name = "frick-server"
+path = "src/main.rs"
+
+[dependencies]
+axum = { workspace = true }
+base64 = { workspace = true }
+frick-protocol = { workspace = true }
+frick-schema = { workspace = true }
+frick-store = { workspace = true }
+futures-util = { workspace = true }
+# Ephemeral coturn-REST TURN credentials for the P2P media plane (FR-286):
+# `credential = base64(HMAC-SHA1(sharedSecret, username))`. Pure-Rust RustCrypto
+# crates sharing the `digest 0.10` core `sha2` already pulls in — no native deps.
+hmac = "0.12"
+indexmap = { workspace = true }
+rand = { workspace = true }
+rmpv = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha1 = "0.10"
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+# OpenTelemetry OTLP export (FR-267). The `telemetry` module installs a
+# tracing-opentelemetry layer when `FRICK_OTEL_ENABLED=true`; otherwise these
+# stay dormant and the runtime behaves exactly as before. HTTP/protobuf
+# transport only (no gRPC/`tonic` transport) — see the workspace manifest.
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+tracing-opentelemetry = { workspace = true }
+uuid = { workspace = true }
+# Push subsystem (map 06 §3). Pure-Rust crypto, no `ring`/native deps, no
+# network client (the live APNs/FCM send sits behind a documented trait seam):
+# - AES-256-GCM credential envelope (push/credentials.rs, §3.6).
+# - APNs / VAPID ES256 JWTs in IEEE-P1363 r||s form (push/apns_adapter.rs, §3.7).
+# - FCM service-account RS256 JWTs (push/fcm_adapter.rs, §3.8).
+# - HKDF-SHA256 + P-256 ECDH + AES-128-GCM for the Web Push aes128gcm content
+#   encoding (push/webpush_adapter.rs, §3.9).
+aes-gcm = "0.10"
+hkdf = "0.12"
+p256 = { version = "0.13", features = ["ecdh", "ecdsa", "pem"] }
+# Call E2EE key exchange (FR-289, calls/e2ee.rs). Pure-Rust X25519 ECDH +
+# ChaCha20-Poly1305 AEAD for the per-call media key, per-recipient sealed
+# envelopes, and the sender-key relay envelope. No native/C deps.
+chacha20poly1305 = { workspace = true }
+x25519-dalek = { workspace = true }
+rsa = { version = "0.9", features = ["sha2"] }
+# RFC 8291 (Message Encryption for Web Push) over the RFC 8188 `aes128gcm`
+# content encoding. Mozilla's crate; the content-encryption orchestration and
+# framing are NOT hand-rolled here. The default `backend-openssl` is disabled to
+# keep this crate pure-Rust (no native deps) — instead the adapter plugs a
+# `Cryptographer` backend (push/webpush_adapter.rs) built on the `p256`/`hkdf`/
+# `aes-gcm` crates already vendored above. `backend-test-helper` exposes the
+# crate's RFC-8291-Appendix-A.2 known-answer suite (`ece::test_cryptographer`)
+# so the backend is provably correct against the published vector.
+ece = { version = "2.3", default-features = false, features = ["backend-test-helper"] }
+# Real push transports (push/transports.rs, FR-265): the live APNs/FCM/Web Push
+# HTTP clients that back the `ApnsTransport`/`FcmTransport`/`WebPushTransport`
+# seams in production. rustls-only (no native TLS), plus `http2` for the APNs
+# HTTP/2 provider API. The request-construction stays in the adapters and is
+# unit-tested without a network; these transports only perform the send.
+reqwest = { workspace = true, features = ["http2"] }
+
+[features]
+# Live Redis cluster-bus smoke test (FR-27). Off by default: CI has no Redis
+# broker, so the transport-agnostic `fake_redis` tests cover the adapter's
+# encode/decode/guard logic. A concrete Redis client is the integrator's choice
+# and is intentionally not a dependency of this crate.
+redis-live = []
+
+[dev-dependencies]
+anyhow = { workspace = true }
+# Hex-encode a SHA-256 digest to pin the derivative content-hash envelope in the
+# blob-processor tests (the prod hashing lives in `frick-store`). Dev-only.
+hex = { workspace = true }
+tempfile = { workspace = true }
+tower = { workspace = true }
+# Real WebSocket client for the gateway round-trip tests. Pinned to the
+# version axum 0.7 already resolves (transitively in the lockfile), so this
+# adds no new transitive tree. Dev-only.
+tokio-tungstenite = "0.24"
+
+[lints]
+workspace = true

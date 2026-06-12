@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTSXKWEFJGZ11SBWZQEV66W7",
+  "ts": "2026-06-10T23:24:25.423Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ94M12V31EX7XWX3GHC",
+    "commentId": "01KTSXKWEFJGZ11SBWZQEV66W6",
+    "author": "claude",
+    "body": "Scope correction: the MCP server (frick-mcp) is done + in review. The agent-kit half of this title was NOT ported to Rust — packages/agent-kit was DELETED in the cutover (FR-255) because only the TS CLI consumed it. If an agent-kit equivalent is wanted for the Rust toolchain it needs a fresh ticket; otherwise this story is really just the MCP server."
+  }
+}

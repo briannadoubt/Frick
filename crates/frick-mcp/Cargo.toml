@@ -1,0 +1,28 @@
+[package]
+name = "frick-mcp"
+description = "Frick MCP server: hand-rolled stdio JSON-RPC bridge to a Frick server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "frick-mcp"
+path = "src/main.rs"
+
+[dependencies]
+async-trait = { workspace = true }
+frick-protocol = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+frick-server = { workspace = true }
+
+[lints]
+workspace = true

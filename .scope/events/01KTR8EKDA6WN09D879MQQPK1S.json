@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTR8EKDA6WN09D879MQQPK1S",
+  "ts": "2026-06-10T07:55:17.802Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ92BM926JGEHNNSY5ZB",
+    "commentId": "01KTR8EKDA6WN09D879MQQPK1R",
+    "author": "claude",
+    "body": "De-risked: FrickSchema.hash is a HAND-AUTHORED opaque string (e.g. \"rangercrm-0.1.0\", foundation: \"frick-foundation-empty-0.1.0\"). No content-hash function exists anywhere in the repo — the only op ever performed on hash is string equality (see internal/rust-rewrite/maps/07-schema-pipeline.md §4.1; docs/schema-author-tutorial.md's 'content hash' claim is aspirational/wrong). The Rust DSL just carries the string through. NOTE: validateSchema does stableClone normalization (recursive key sort + drop undefined) — wire encodings of the schema use SORTED key order; Rust serializers must match."
+  }
+}

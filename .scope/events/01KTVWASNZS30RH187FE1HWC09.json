@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTVWASNZS30RH187FE1HWC09",
+  "ts": "2026-06-11T17:40:27.967Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTVRDQS5YWW6WNR45ZSBZ6XB",
+    "commentId": "01KTVWASNZS30RH187FE1HWC08",
+    "author": "claude",
+    "body": "DONE (1833142 + close-drain test parity in 45b25f4). The FR-256 audit confirmed register-before-send closes the race and drain-on-close works. Swift 178; Android :frick green across repeated full runs."
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTWMY1S0XKF0JX9BBYWTCYCY",
+  "ts": "2026-06-12T00:50:24.672Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTWCFME4G3Q2TNJS9G2K81X0",
+    "commentId": "01KTWMY1S0XKF0JX9BBYWTCYCX",
+    "author": "claude",
+    "body": "DONE + on PR #8 (merged 746cf8b). SFU media-negotiation control plane + fake-backend produce/consume + the security logic. SfuMediaOperations companion on FakeSfuBackend (per-(call,user,device) ownership of transports/producers/consumers); control-plane sfu_connect_transport/produce/consume (require live room + active participant, verify token + ownership, delegate); gateway un-stubbed (token/ownership fail -> auth.forbidden, non-SFU plane -> mediaUnsupported); leave reclaims SFU media. Carries the FR-166/170/171/172 audit fixes: HMAC-SHA256 token verify (constant-time) + expiry, cross-participant hijack prevention, leak-free leave. 6 security tests (forged/expired token rejected, anti-hijack, produce->consume round-trip, leave reclaims, non-SFU nacks, requires-active-participant). NO native/mediasoup dep (FakeSfuBackend exercises it). The real media-routing backend (mediasoup-C++/str0m) remains the deliberate architecture decision; this is the security-critical control-plane parity. Built by a subagent."
+  }
+}

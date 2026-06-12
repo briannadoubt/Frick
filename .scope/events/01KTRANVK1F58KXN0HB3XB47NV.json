@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTRANVK1F58KXN0HB3XB47NV",
+  "ts": "2026-06-10T08:34:12.705Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ92BM926JGEHNNSY5Z9",
+    "commentId": "01KTRANVK1F58KXN0HB3XB47NT",
+    "author": "claude",
+    "body": "DONE + adversarially verified. 4-reviewer parity workflow produced 24 findings; fixed in Rust: unpack duplicate-key now mirrors JS last-write-wins (schemas may declare their own id field), pack_fields stringifies integer msgpack keys + accepts scalar inputs as zero fields, FieldDef.sensitivity decodes as raw string and validate_schema rejects unknowns with the exact TS message, empty-string ref skips the unknown-target check (TS truthiness), is_envelope_value mirrors TS typeof/Number.isInteger guards incl. Binary/Ext details and integral-f64 revisions + last-wins duplicate keys, UTF-16 sort-edge unit test. Fixed in TS: gateway.ts Delta literal reordered to cursor-before-removed (interface order; wire-invisible; sync vitest 15/15 green). Fixture set grown 38→73 (all 9 CallCommand ops + 7 result shapes incl. production spread-order decode-only case, all 5 subscribe kinds, all 16 error codes, hello-ack incompatible arm, sensitivity-annotated schema, explicit-undefined lossy case, str32/bin32 edges, -0, JS numeric-key hoisting). golden.rs strengthened: exact counts, protocolVersion assert, orphan-bin check, typed-value preservation for non-lossy decode-only cases. 8 deliberate deviations documented in internal/rust-rewrite/maps/01-protocol-wire.md appendix. Full gate green: cargo fmt/clippy -D warnings/test (15 tests), pnpm typecheck."
+  }
+}

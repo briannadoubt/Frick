@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTSMBKMYA0S5WZ7QJFE9R8ZC",
+  "ts": "2026-06-10T20:42:37.086Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ94M12V31EX7XWX3GH6",
+    "commentId": "01KTSMBKMYA0S5WZ7QJFE9R8ZB",
+    "author": "claude",
+    "body": "DONE + committed 4b468ff. Cross-impl conformance loop closed: scripts/conformance-ts-server.ts boots the TS server with productTestSchema; the frick-conformance suite (12 black-box scenarios) now PASSES against BOTH the in-process Rust server (default) AND the live TS server (FRICK_CONFORMANCE_URL). New CI job conformance-cross-impl runs it against the TS server; the Rust-server run is in the workspace test job. The run found + I fixed one real wire-parity bug (object-Delta id-strip, efc1840) and surfaced one expected divergence (WebRTCSignal call gate — FR-15 deferred in Rust, scenario tolerates both). Acceptance layer is comprehensive: 73 golden wire fixtures + 81 lint + codegen + migrations fixtures + 12 cross-impl black-box scenarios, all gated in CI."
+  }
+}

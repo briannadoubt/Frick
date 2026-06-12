@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTVWASNZS30RH187FE1HWC05",
+  "ts": "2026-06-11T17:40:27.967Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTR3AAXJRV8NSDCS37B1JC0B",
+    "commentId": "01KTVWASNZS30RH187FE1HWC04",
+    "author": "claude",
+    "body": "DONE (commit 45b25f4, PR #8). Both halves verified across all 4 surfaces by an adversarial audit (6 auditors + gap verifiers). SERVER: handle_subscribe registers synchronously (kind-agnostic add_subscription) before the async session re-validation; deterministic regression test via install_subscribe_pause. WEB (FR-279): additive subscribeObject/Stream/Projection resolve on the registration reply (subscriptionId/name derived so await-key==resolve-key). The audit CAUGHT a real bug: clearUserState did not drain pending registration awaiters, so a logout mid-await stranded the promise — now fixed + vitest (122 core tests). SWIFT/KOTLIN (FR-291): additive Registered methods that register-before-send (closes the actor-reentrancy / socket-thread resolve-and-drop race) and drain on close; added a Kotlin close-drain test for parity. Docs: cross-platform-client-contract.md section + invariant row; CHANGELOG client-half bullet. Gates: Rust fr256 + fmt; TS typecheck + 122 vitest; Swift 178; Android :frick green."
+  }
+}

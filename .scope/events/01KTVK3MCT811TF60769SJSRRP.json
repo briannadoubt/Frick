@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTVK3MCT811TF60769SJSRRP",
+  "ts": "2026-06-11T14:59:15.994Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTT8NY6NQ86ABCV1Z99CTAVE",
+    "commentId": "01KTVK3MCT811TF60769SJSRRN",
+    "author": "claude",
+    "body": "DONE + on PR #8 (commit 6e65f27). FR-256 client half across all 3 SDKs: subscribeObject/subscribe(stream)/subscribeProjection resolve on the server-registration reply (the gateway sends Snapshot/StreamPage/ProjectionDelta AFTER registering — verified server behavior) instead of on frame send, closing the write-after-subscribe race from the client side. Pure client change (no wire/server change). packages/core (web) verified by a new vitest (121 core tests). Swift + Android :frick both COMPILE; resolvers added with the existing CheckedContinuation/CompletableDeferred patterns + drain-on-disconnect; new StreamPage handlers added (streams were undispatched). Presence/Signal still resolve on send (no initial-state race)."
+  }
+}

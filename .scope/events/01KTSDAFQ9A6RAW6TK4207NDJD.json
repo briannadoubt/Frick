@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTSDAFQ9A6RAW6TK4207NDJD",
+  "ts": "2026-06-10T18:39:40.265Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ94M12V31EX7XWX3GH4",
+    "commentId": "01KTSDAFQ9A6RAW6TK4207NDJC",
+    "author": "claude",
+    "body": "Admin + inspection routes landed + committed 3109617. /_frick/admin/* behind admin bearer (disabled→404), hash-chained audit on mutations: audit-log, sessions/revoke, tenants CRUD+archive, settings. /_frick/inspect/* gated by inspection_enabled: server/apps/migrations/projections/db/jobs TS-faithful shapes. Both merged into boot. Deferred: live WS disconnect on sessions/revoke (gateway close_session seam), production inspect-tier tightening, metrics/search/devtools real values + the static dashboard mount."
+  }
+}

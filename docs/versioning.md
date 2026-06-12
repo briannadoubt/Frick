@@ -1,6 +1,10 @@
 # Versioning Policy
 
-Frick is a multi-language framework. Each language package has its own version stream and its own source-of-truth file. The repository root carries no version — `package.json` at the root is private and exists only to host workspace scripts.
+Frick is a multi-language framework that ships as one stack version. The
+published TypeScript packages, Swift mirror, and Android SDK are bumped together
+with `pnpm release:bump X.Y.Z`; one bare semver tag (`X.Y.Z`) fans out to npm,
+the `FrickSwift` mirror, and GitHub Packages for Android. The repository root
+`package.json` remains private and exists only to host workspace scripts.
 
 ## Semantic Versioning
 
@@ -14,7 +18,7 @@ Framework packages follow [SemVer 2.0.0](https://semver.org/) with the following
 
 A new framework version **does not** imply a new schema revision. A release that only fixes a server-side bug or adds a new TypeScript helper keeps `schemaRevision: 1` and bumps the package patch/minor only.
 
-## Source of truth per package
+## Version Sources
 
 | Package | Language | Version source |
 | --- | --- | --- |
@@ -24,19 +28,22 @@ A new framework version **does not** imply a new schema revision. A release that
 | `@fricken/design` | TypeScript | `packages/design/package.json` |
 | `@fricken/design-web` | TypeScript | `packages/design-web/package.json` |
 | `@fricken/devtools` | TypeScript | `packages/devtools/package.json` |
-| `@fricken/agent-kit` | TypeScript | `packages/agent-kit/package.json` |
-| `@fricken/mcp` | TypeScript | `packages/mcp/package.json` |
-| `@fricken/server` | TypeScript | `apps/server/package.json` |
-| `@fricken/web` | TypeScript | `apps/web/package.json` |
-| `@fricken/cli` | TypeScript | `apps/cli/package.json` |
-| `Frick` (Swift) | Swift | git tag (`swift-vX.Y.Z`) — `Package.swift` has no version field |
-| `FrickDesign` (Swift) | Swift | git tag (`swift-design-vX.Y.Z`) |
+| `Frick` (Swift) | Swift | bare git tag (`X.Y.Z`) mirrored to `briannadoubt/FrickSwift`; `Package.swift` has no version field |
+| `FrickDesign` (Swift) | Swift | same Swift mirror/tag flow as the SDK package when included in release |
 | `dev.frick:frick` | Android (Kotlin) | `apps/android/frick/build.gradle.kts` (`version = "X.Y.Z"`) |
 | `dev.frick:design` | Android (Kotlin) | `apps/android/design/build.gradle.kts` |
 
-Future Rust crates would carry their version in `Cargo.toml` under `[package].version`. The root `package.json` never declares a framework version — the field is pinned to `0.0.0` and is private.
+The backend now ships as the Rust crates under `crates/` (the sync server, the
+`frick` CLI, and the `frick-mcp` bridge). They share the workspace version from
+the root `Cargo.toml` and are **not** npm-published — they are not part of the
+npm publish set above. The npm publish set therefore no longer includes the
+former `@fricken/server`, `@fricken/cli`, `@fricken/mcp`, or `@fricken/agent-kit`
+packages. The root `package.json` never declares a framework version — the field
+is pinned to `0.0.0` and is private.
 
-Packages are independent. A patch release of `@fricken/server` does not force a release of `@fricken/protocol`.
+`@fricken/web` remains a private workspace package and does not publish. Older
+per-package and platform-prefixed tag flows are historical; current releases use
+the unified bare semver tag described in [`release.md`](release.md).
 
 ## Wire compatibility
 
@@ -47,7 +54,7 @@ The wire contract is governed by `schemaRevision` in `@fricken/protocol`, not by
 
 ## Compatibility windows
 
-The server tolerates clients from the **last two minor versions** of the same major. For example, with `@fricken/server@1.4.x`:
+The server tolerates clients from the **last two minor versions** of the same major. For example, with a `1.4.x` server (`frick-server`):
 
 - `@fricken/core@1.4.*` — fully supported (current).
 - `@fricken/core@1.3.*` — fully supported (previous minor).
@@ -90,25 +97,25 @@ These are the exports an application author may depend on. Breaking changes requ
   - exported React design primitives and generated CSS token contract
 - `@fricken/devtools`:
   - `FrickDevtools` React component and documented props
-- `@fricken/agent-kit`:
-  - installer CLI, package manifest, Frick skills, subagent profiles, adapter manifests, and Cursor rules
-- `@fricken/mcp`:
-  - stdio MCP server, read-only runtime tools/resources/prompts, client config helper, and CLI launch helpers
-- `@fricken/server`:
-  - `createServer`, `FrickStore` constructor, runtime config types
-  - HTTP route mounts under `/_frick/*` (admin routes excluded from compat — see below)
-  - registered handler/projection/job/policy/blob/notification interfaces
-- `@fricken/cli`:
-  - documented commands (`init`, `schema`, `migrate`, `doctor`, `inspect`, `reset`, `tenants`, `verify`, `lint`, `backup`, `restore`, `dashboard`, `mcp`, scaffolders)
+- Rust backend (`crates/`, not npm-published):
+  - `frick-server` — the documented server option surface, HTTP route mounts
+    under `/_frick/*`, `/_frick/inspect/*`, and `/_frick/dashboard/api/*` (admin
+    routes excluded from compat — see below), and the registered
+    handler/projection/job/policy/search/blob/push/email interfaces
+  - `frick-cli` — documented `frick` commands (`init`, `schema`, `migrate`,
+    `doctor`, `inspect`, `reset`, `tenants`, `lint`, `dashboard`, `mcp`,
+    scaffolders; `verify`/`backup`/`restore` are listed but currently return
+    `cli.unsupported`)
+  - `frick-mcp` — the stdio MCP bridge and its read-only runtime tools/resources
 
 ### Unstable / internal
 
 Anything under these paths may change in any release, including patches. Do not import from these paths in application code.
 
-- `@fricken/server`:
-  - `apps/server/src/storage/*` — SQLite adapters and migration internals
-  - `apps/server/src/sync/*` internals other than the documented gateway entry point
-  - `apps/server/src/devtools/*` — DevTools event stream is for the inspector, not authoring
+- Rust backend (`crates/`):
+  - `crates/frick-store/src/*` — SQLite/Postgres adapters and migration internals
+  - `crates/frick-server/src/*` internals other than the documented option,
+    route, and extension surfaces
   - all admin routes under `/_frick/admin/*` — versioned independently and gated behind `FRICK_ADMIN_TOKEN`
 - `@fricken/protocol`:
   - `packages/protocol/scripts/*` — generator scripts and fixture tooling

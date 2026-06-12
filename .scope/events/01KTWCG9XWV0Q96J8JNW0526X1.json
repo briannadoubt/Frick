@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTWCG9XWV0Q96J8JNW0526X1",
+  "ts": "2026-06-11T22:23:05.660Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTVJXSDNZWR5PFVMKEPQVEZG",
+    "commentId": "01KTWCG9XWV0Q96J8JNW0526X0",
+    "author": "claude",
+    "body": "CORRECTION (board audit): this delivered the SfuBackend trait + deterministic FakeSfuBackend + SfuMediaPlaneAdapter only. The ticket title mentions media placement, but media-placement.ts / cluster-media-placement.ts were NOT ported — SfuMediaPlaneAdapter has no placement seam (region hardcodes to the hint or local). That parity gap is now tracked in FR-293."
+  }
+}

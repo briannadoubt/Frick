@@ -247,6 +247,165 @@ describe("foundation runtime", () => {
     expect(conversations.value.map((c) => c.id)).not.toContain("conversation-doomed");
   });
 
+  // FR-256 (client half) / FR-279: subscribeObject/Stream/Projection resolve on
+  // the INITIAL snapshot correlated to the subscription, NOT when the Subscribe
+  // frame is sent. This closes the window where a write issued right after the
+  // returned Promise could race ahead of the gateway registering the
+  // subscription. The server sends the snapshot AFTER registering (FR-256), so
+  // its arrival is the registration confirmation the client waits on.
+  describe("subscribe resolves on registration (FR-256)", () => {
+    it("subscribeObject resolves only AFTER a Snapshot for its subscriptionId", async () => {
+      const socket = TestWebSocket.prepare();
+      const client = new FrickClient({
+        endpoint: "ws://test",
+        schema: productTestSchema,
+        WebSocketImpl: TestWebSocket as never,
+      });
+
+      client.connect();
+      socket.emit("open", {});
+
+      // The Subscribe frame was already sent on open, but the promise must NOT
+      // resolve yet — registration is only confirmed by the Snapshot.
+      const pending = client.subscribeObject("Conversation");
+      let resolved = false;
+      void pending.then(() => {
+        resolved = true;
+      });
+
+      // Let any already-scheduled microtasks drain. Still no Snapshot → still
+      // unresolved.
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+
+      // A Snapshot for a DIFFERENT subscriptionId must not resolve this waiter.
+      socket.emit("message", {
+        data: encodeFrame([
+          FrameKind.Snapshot,
+          { subscriptionId: "User", objects: [], cursor: 0 },
+        ]),
+      });
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+
+      // The Snapshot correlated to THIS subscription resolves the promise and
+      // still populates the local store.
+      socket.emit("message", {
+        data: encodeFrame([
+          FrameKind.Snapshot,
+          {
+            subscriptionId: "Conversation",
+            objects: [
+              packObjectRecord(productTestSchema, "Conversation", "conversation-general", {
+                kind: "group",
+                title: "General",
+                createdBy: "user-ada",
+              }),
+            ],
+            cursor: 7,
+          },
+        ]),
+      });
+
+      await expect(pending).resolves.toBeUndefined();
+      // Snapshot-application behavior is preserved: the row landed in the store.
+      expect(client.object("Conversation", "conversation-general")?.title).toBe("General");
+    });
+
+    it("subscribeStream resolves on a StreamPage for its subscriptionId", async () => {
+      const socket = TestWebSocket.prepare();
+      const client = new FrickClient({
+        endpoint: "ws://test",
+        schema: productTestSchema,
+        WebSocketImpl: TestWebSocket as never,
+      });
+
+      client.connect();
+      socket.emit("open", {});
+
+      const pending = client.subscribeStream("MessageStream", "conversation-general");
+      let resolved = false;
+      void pending.then(() => {
+        resolved = true;
+      });
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+
+      socket.emit("message", {
+        data: encodeFrame([
+          FrameKind.StreamPage,
+          {
+            subscriptionId: "MessageStream:conversation-general",
+            events: [],
+            cursor: 0,
+            hasMore: false,
+          },
+        ]),
+      });
+
+      await expect(pending).resolves.toBeUndefined();
+    });
+
+    it("subscribeProjection resolves on the ProjectionDelta snapshot keyed by name", async () => {
+      const socket = TestWebSocket.prepare();
+      const client = new FrickClient({
+        endpoint: "ws://test",
+        schema: productTestSchema,
+        WebSocketImpl: TestWebSocket as never,
+      });
+
+      client.connect();
+      socket.emit("open", {});
+
+      const pending = client.subscribeProjection("conversation-inbox");
+      let resolved = false;
+      void pending.then(() => {
+        resolved = true;
+      });
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+
+      // An empty initial snapshot (no rows yet) must still resolve — the server
+      // sends it unconditionally after registering.
+      socket.emit("message", {
+        data: encodeFrame([
+          FrameKind.ProjectionDelta,
+          { projection: "conversation-inbox", changes: [] },
+        ]),
+      });
+
+      await expect(pending).resolves.toBeUndefined();
+    });
+
+    it("drains a parked registration awaiter on user-state clear (no strand)", async () => {
+      const socket = TestWebSocket.prepare();
+      const client = new FrickClient({
+        endpoint: "ws://test",
+        schema: productTestSchema,
+        WebSocketImpl: TestWebSocket as never,
+      });
+
+      client.connect();
+      socket.emit("open", {});
+
+      // Park an awaiter — no Snapshot will ever arrive for it.
+      const pending = client.subscribeObject("Conversation");
+      let resolved = false;
+      void pending.then(() => {
+        resolved = true;
+      });
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+
+      // A logout / user swap clears user state. The parked awaiter must resolve
+      // rather than hang forever (the subscription won't replay under the
+      // cleared session) — mirrors the Swift/Kotlin drain-on-close behavior.
+      client.clearUserState();
+
+      await expect(pending).resolves.toBeUndefined();
+    });
+  });
+
   it("merges projection deltas into the projection signal", () => {
     const socket = TestWebSocket.prepare();
     const client = new FrickClient({

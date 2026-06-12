@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTT5V2SXB8R773ZJ9NZKVT1S",
+  "ts": "2026-06-11T01:48:09.917Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTSXK6BMST0ZF8B5M8K34Z6W",
+    "commentId": "01KTT5V2SXB8R773ZJ9NZKVT1R",
+    "author": "claude",
+    "body": "PARTIAL (PR #8): frick schema export ([--out]) serializes the active schema to the schema.json the standalone frick-server loads via FRICK_SCHEMA_PATH — closes the export half noted in the frick init README. REMAINING: the full Rust-app authoring redesign (schema.ts -> schema.json bridge in the scaffold, init/scaffold model) per the ticket body."
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTTN90NPJMPBB7TMDFPS2J8Z",
+  "ts": "2026-06-11T06:17:55.126Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTT8NX7D1JJBXG1VHA068C3G",
+    "commentId": "01KTTN90NPJMPBB7TMDFPS2J8Y",
+    "author": "claude",
+    "body": "DONE + on PR #8 (merged 4a9430a). Blob processor/validator registry: sync validators on PUT /blobs/:id/content over the 4 KiB preview (reject->415 with processorId/reason), async processors via a blob.process job handler registered at boot beside push.deliver; stock mime/size validator + moderation processor; FrickStore::record_derivative. Image-derivative generation (image crate) deferred — the processor seam is the drop-in point."
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTTN90NPJMPBB7TMDFPS2J95",
+  "ts": "2026-06-11T06:17:55.126Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTT8NY261T6ZHR295MB6J0E3",
+    "commentId": "01KTTN90NPJMPBB7TMDFPS2J94",
+    "author": "claude",
+    "body": "DONE + on PR #8 (merged 4a9430a). GatewayHub::close_session live-closes WS connections (1008) + returns the count; AppStateInner.gateway (Weak, attach_gateway at boot); /auth/logout best-effort closes the token socket; admin sessions/revoke returns the real disconnected count. inspect tier now resolves FRICK_ADMIN_TOKEN: production REQUIRES the admin token, non-production accepts admin token OR any session (TODO(FR-246) closed). Live WS round-trip + auth tests."
+  }
+}

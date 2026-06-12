@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTW4FST1ES1X61X7GRVF6NWY",
+  "ts": "2026-06-11T20:03:00.545Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTVJXSTXTAW2YYYGA9D0QYWH",
+    "commentId": "01KTW4FST1ES1X61X7GRVF6NWX",
+    "author": "claude",
+    "body": "DONE + on PR #8 (merged 2033e57). 3 black-box conformance scenarios against a real running server: create->ringing room+invite; invitee join (2nd connection)->participant+media_grant, room active; non-member WebRTCSignal Nacked auth.forbidden notMember (FR-284) while the creator is Acked. ServerHandle::in_process_with_schema + WsConn::call_command/signal_send helpers added. Realtime Calls section + a 6-step manual native-SDK acceptance checklist added to docs/cross-platform-client-contract.md. 15/15 conformance tests green, deterministic across reruns. Built by a subagent. NOTE: the agent found the committed product-test schema fixture carries a STALE partial call schema (CallRoom lacks kind) — it worked around it by splicing the current call_*_defs; regenerating that fixture is a small follow-up."
+  }
+}

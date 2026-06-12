@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTQPTV2Y24XEEXV8RYNMZJS3",
+  "ts": "2026-06-10T02:47:24.510Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQPTTY8YAJZDPXWB40PDG2M",
+    "commentId": "01KTQPTV2Y24XEEXV8RYNMZJS2",
+    "author": "claude",
+    "body": "Found migrating RangerCRM to 0.2.0. Repro: a dev frick.sqlite carried grants created under 0.1.1 (sharing tests). With any grant present, the gateway's per-record read authz activates (FR-116 #perRecordReadAuthzActive). Object upsert/delete deltas for the affected record types (Account, Company, Profile, Initiative, the association joins) then never fan out to the WRITER's own subscription — RangerCRM's FrickStoreIntegrationTests timed out waiting for their echo (16/24 types fine, 8 affected). Wiping the DB -> 24/24 green. Hypothesis: rows written post-0.2.0 lack the ownership records decide() consults, so canSubscriberReadObjectRecord denies the delta even for the owner/writer. A deployment migrating an existing 0.1.1 DB (grants but no ownership backfill) would silently lose realtime updates for exactly its shared record types. Suggested fix: backfill ownership on migration, or have decide() treat a missing ownership row as owner-visible-to-writer (fail-open for the writing principal), plus a regression test: old-style grant + new write + assert writer receives its own delta."
+  }
+}

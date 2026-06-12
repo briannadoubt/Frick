@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTREVHCJX2C2ESM74GQVHBRH",
+  "ts": "2026-06-10T09:47:13.170Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGR",
+    "commentId": "01KTREVHCJX2C2ESM74GQVHBRG",
+    "author": "claude",
+    "body": "GrantStore + InvitationStore (the FR-1 sharing primitives) already landed as part of the store layer: grants {recordId,recipientUserId,permission}, owner-OR-grantee list, hasActiveGrantFor(+ForRecordId record-id cascade), permission satisfaction (read>=read, write>=read+write) ported from packages/protocol/src/sharing.ts. Remaining for this story: wire receiver-side query semantics (ownerId==me OR matching grant) into the object read pipeline + the invitation/grant HTTP routes."
+  }
+}

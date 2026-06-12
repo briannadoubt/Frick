@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTVJXRK4THNVSRDHHDJNKDXS",
+  "ts": "2026-06-11T14:56:03.684Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTVJXRK3H758Y675XGKF7PBD",
+    "number": 281,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Calls A — MediaPlaneAdapter seam + FakeMediaPlaneAdapter (port FR-78)",
+    "description": "Port apps/server/src/calls/media-plane.ts + fake-media-plane.ts: a MediaPlaneAdapter trait (describe/allocate_session/issue_join_token/release_session, idempotent per call id) + a deterministic no-network fake. The seam the control plane consumes; clock/RNG-free. See internal/plans/2026-06-11-calls-epic-rust-port.md phase A.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTT8NXSBKT3BERY2HZX9P1HJ",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

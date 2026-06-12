@@ -47,9 +47,11 @@ services:
       FRICK_ALLOWED_ORIGINS: ${FRICK_ALLOWED_ORIGINS:-}
       FRICK_ADMIN_TOKEN: ${FRICK_ADMIN_TOKEN:-}
       FRICK_PUBLIC_URL: ${FRICK_PUBLIC_URL:-}
-      FRICK_PLATFORM_EVENTS_DRIVER: kafka
-      FRICK_PLATFORM_EVENTS_KAFKA_BROKERS: redpanda:9092
-      FRICK_PLATFORM_EVENTS_TOPIC: ${FRICK_PLATFORM_EVENTS_TOPIC:-frick.platform.events}
+      # The Kafka platform-events driver is not yet ported to the Rust server
+      # (FR-275 ships memory + sqlite; kafka fails fast at boot). Use sqlite
+      # until the Kafka driver lands; the redpanda service below stays for when
+      # it does. Switch back to `kafka` + the broker/topic vars then.
+      FRICK_PLATFORM_EVENTS_DRIVER: sqlite
       FRICK_OTEL_ENABLED: "true"
       FRICK_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       FRICK_OTEL_SERVICE_NAME: frick-server
@@ -58,11 +60,7 @@ services:
     volumes:
       - frick-data:/var/lib/frick
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "node -e \"fetch('http://127.0.0.1:4099/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"",
-        ]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:4099/ready"]
       interval: 10s
       timeout: 5s
       retries: 12

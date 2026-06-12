@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTT8NXG539Y7ASXGDVWDASZQ",
+  "ts": "2026-06-11T02:37:46.373Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTT8NXG539Y7ASXGDVWDASZP",
+    "number": 274,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "DevTools event feed + inspect devtools/analytics/platform-events routes (FR-249 finish)",
+    "description": "inspect.rs stubs /_frick/inspect/{devtools/events,devtools/summary,analytics/summary,platform-events} as not-available. Port store.devtoolsEvents (durable feed) + the analytics summary + the inspect routes. This also unblocks diagnostics.rs recentErrors (currently empty array) and the idempotency-cache stats (currently defaults) — add the FrickStore facade getters those need.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

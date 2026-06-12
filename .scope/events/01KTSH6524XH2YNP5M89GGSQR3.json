@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTSH6524XH2YNP5M89GGSQR3",
+  "ts": "2026-06-10T19:47:12.580Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "commentId": "01KTSH6524XH2YNP5M89GGSQR2",
+    "author": "claude",
+    "body": "Scope correction: rangercrm-server removed from the Frick repo (it is private product code; the live copy lives in the RangerCRM repo). FR-254 cancelled. The epic is now framework-only: remaining work is tooling (CLI FR-252, MCP FR-253), the acceptance gate (conformance FR-250, SDK acceptance FR-251), and the cutover (FR-255)."
+  }
+}

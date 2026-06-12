@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTT8NX7D1JJBXG1VHA068C3H",
+  "ts": "2026-06-11T02:37:46.093Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTT8NX7D1JJBXG1VHA068C3G",
+    "number": 272,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Blob processors/validators pipeline (image/mime/moderation)",
+    "description": "TODO(FR-248/processors) at routes/blobs.rs:351: sync blob validators (4 KiB preview -> 415) + the async blob.process job pipeline (image derivatives, mime/size validation, moderation) are unported. Port the processor/validator registry + the blob.process job handler (the job type is referenced in jobs.rs).",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

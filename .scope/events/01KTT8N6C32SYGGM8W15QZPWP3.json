@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTT8N6C32SYGGM8W15QZPWP3",
+  "ts": "2026-06-11T02:37:22.691Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTT8N6C32SYGGM8W15QZPWP2",
+    "number": 271,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Outbound email adapter (Resend/test) + email router",
+    "description": "Port the EmailAdapter contract + router (verification/password-reset emails) + Resend and test adapters (TS email/*). Consumer is the email/password auth flow. operations.md marks this not-yet-ported. Per-tenant config + FRICK_* env.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

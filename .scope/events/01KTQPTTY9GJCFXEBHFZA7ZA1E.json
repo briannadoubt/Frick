@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTQPTTY9GJCFXEBHFZA7ZA1E",
+  "ts": "2026-06-10T02:47:24.361Z",
+  "actor": "unknown",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTQPTTY8YAJZDPXWB40PDG2M",
+    "number": 234,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "Sync fan-out suppressed for record types with pre-0.2.0 grants but no ownership rows",
+    "description": "",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

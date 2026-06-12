@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTWCG9XXYV3KFT4THVH6G3MW",
+  "ts": "2026-06-11T22:23:05.661Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTT8NXSBKT3BERY2HZX9P1HJ",
+    "commentId": "01KTWCG9XXYV3KFT4THVH6G3MV",
+    "author": "claude",
+    "body": "PARITY NOTE (board audit): the calls epic is CONTROL-PLANE complete (lifecycle, authz, CallCommand routing, WebRTCSignal gating, ringing push, P2P + E2EE, LiveKit token SFU), but the self-hosted SFU MEDIA PLANE is NOT at TS parity: SFU media negotiation (mediasoup produce/consume) is stubbed and multi-box/region media placement is not ported. Filed as FR-292 (SFU media negotiation) + FR-293 (SFU media placement). These are only needed for self-hosted-mediasoup group calls; the LiveKit path ships without them. See the mediasoup-vs-LiveKit decision."
+  }
+}

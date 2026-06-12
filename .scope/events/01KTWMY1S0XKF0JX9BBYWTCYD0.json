@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTWMY1S0XKF0JX9BBYWTCYD0",
+  "ts": "2026-06-12T00:50:24.672Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTWKGPB9RMS31Q9V7JHYN4MX",
+    "commentId": "01KTWMY1S0XKF0JX9BBYWTCYCZ",
+    "author": "claude",
+    "body": "DONE + on PR #8 (merged). Fixed the stale fixture at its SOURCE: packages/protocol/src/fixtures/product-test-schema.ts (the .bin + codegen goldens are generated from it). Updated the call types to mirror frick_server::calls::schema field-for-field (CallRoom now carries kind + all 9 fields; added CallInvite/CallParticipant + the 7 events + WebRTCSignal), regenerated the wire + Swift/Kotlin/TS codegen goldens + builder_golden, kept the opaque schema hash to minimize blast radius, and DROPPED the runtime strip-and-splice (calls.rs now uses the canonical fixture; calls.test.ts uses productTestSchema directly). Every gate green: cargo test --workspace (975), clippy, fmt, pnpm verify:generated, typecheck, vitest. Built by a subagent under a strict do-not-commit-red guard."
+  }
+}

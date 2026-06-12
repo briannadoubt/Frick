@@ -1,0 +1,32 @@
+[package]
+name = "frick-cli"
+description = "The frick CLI: schema/lint/migrate/doctor/inspect/tenants/init/scaffold/dev/deploy/dashboard/mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "frick"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+frick-protocol = { workspace = true }
+frick-schema = { workspace = true }
+frick-codegen = { workspace = true }
+frick-store = { workspace = true }
+frick-server = { workspace = true }
+frick-mcp = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+base64 = { workspace = true }
+
+[lints]
+workspace = true

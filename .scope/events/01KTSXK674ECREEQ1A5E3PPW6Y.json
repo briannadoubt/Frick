@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTSXK674ECREEQ1A5E3PPW6Y",
+  "ts": "2026-06-10T23:24:02.660Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTSXK674ECREEQ1A5E3PPW6X",
+    "number": 262,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "frick CLI parity: verify / backup / restore + inspect diagnostics",
+    "description": "These frick CLI subcommands return cli.unsupported after the cutover: verify (was pnpm verify:generated), backup/restore (need dumpFrickDatabase/restoreFrickDatabase Rust counterparts), and inspect diagnostics (assembleDiagnosticsSnapshot, FR-76/FR-77, unported). They are listed in --help for surface parity. Port the underlying capabilities in frick-store/frick-server and wire the commands.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

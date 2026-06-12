@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTT8Q2FB8AHH5QB379ZFM1GD",
+  "ts": "2026-06-11T02:38:24.235Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTSXK6G6AJFX0VB330T8M5QB",
+    "commentId": "01KTT8Q2FB8AHH5QB379ZFM1GC",
+    "author": "claude",
+    "body": "Split into discrete tickets so the migration can be tracked to completion: web-push (DONE, 6c8db26) + push boot-wiring (FR-265) + docs cleanup are done; search -> FR-266, OTel -> FR-267, outbound email -> FR-271. This umbrella is now fully decomposed — close it once FR-266/267/271 land."
+  }
+}

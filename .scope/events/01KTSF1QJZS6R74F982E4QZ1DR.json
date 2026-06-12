@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTSF1QJZS6R74F982E4QZ1DR",
+  "ts": "2026-06-10T19:09:50.559Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGW",
+    "commentId": "01KTSF1QJZS6R74F982E4QZ1DQ",
+    "author": "claude",
+    "body": "Push subsystem modules landed + committed 7604aa3 (in review). Frozen FrickPushPayload contract, AES-256-GCM per-tenant credential seal/open w/ key rotation (FRICK_PUSH_CRED_KEY), adapter registry+trait, APNs ES256 + FCM RS256 JWT/payload builders behind a network transport seam, notification router + push.deliver JobHandler, TestAdapter, admin push routes. 34 push unit tests + 6 admin tests. NOT YET boot-wired: registering the push.deliver handler + merging admin_push router needs AppStateInner.store to be Arc<FrickStore> (currently owned) so the router can share it — small refactor. Live APNs/FCM HTTP sends behind the trait, not CI-exercised. Web Push (FR-60) credential path stubbed, adapter not implemented."
+  }
+}

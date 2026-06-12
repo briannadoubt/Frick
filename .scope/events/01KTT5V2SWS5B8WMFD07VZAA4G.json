@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTT5V2SWS5B8WMFD07VZAA4G",
+  "ts": "2026-06-11T01:48:09.916Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTR3AAXJRV8NSDCS37B1JC0B",
+    "commentId": "01KTT5V2SWS5B8WMFD07VZAA4F",
+    "author": "claude",
+    "body": "Server half FIXED + on PR #8 (commit f53958e). handle_subscribe now registers the subscription synchronously BEFORE the async session re-validation await (delivery still gated on the synchronous baseline authz — reviewer confirmed no pre-authz leak), closing the window where a write-after-subscribe saw subscribers:0 and dropped the echo Delta. Deterministic regression test fails against the old ordering. REMAINING (follow-up): the client halves — Swift/Kotlin/web subscribeObject should resolve on server registration (a Subscribe ack), not on frame send. The observable bug (missing echo delta under load/grants) is closed by the server fix."
+  }
+}

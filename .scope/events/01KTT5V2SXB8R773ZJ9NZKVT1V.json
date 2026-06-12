@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTT5V2SXB8R773ZJ9NZKVT1V",
+  "ts": "2026-06-11T01:48:09.917Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTSXK6G6AJFX0VB330T8M5QB",
+    "commentId": "01KTT5V2SXB8R773ZJ9NZKVT1T",
+    "author": "claude",
+    "body": "PARTIAL (PR #8, commit dd7ca8d): docs/operations.md purged of dead @fricken/server import examples (ported push translated to real Rust wiring; unported S3-blob-driver/email/identity/Kafka honestly marked). REMAINING (Wave 2): the actual feature ports — custom search adapter, web-push (VAPID) adapter, outbound email, and OTel export + FRICK_OTEL_* config parsing."
+  }
+}

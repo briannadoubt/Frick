@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTVJXSPE00Y17C7S7QHQ33TD",
+  "ts": "2026-06-11T14:56:04.814Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTVJXSPE00Y17C7S7QHQ33TC",
+    "number": 289,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Calls H — call E2EE key exchange (pure-Rust)",
+    "description": "Port the call E2EE per docs/e2ee-calls.md (per-call key distribution + sender-key relay), pure-Rust (x25519-dalek + chacha20poly1305), carrying the FR-210 senderId fix. Plan phase H.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTT8NXSBKT3BERY2HZX9P1HJ",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

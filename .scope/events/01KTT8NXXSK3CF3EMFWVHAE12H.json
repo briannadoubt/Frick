@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTT8NXXSK3CF3EMFWVHAE12H",
+  "ts": "2026-06-11T02:37:46.809Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTT8NXXRYCQFX6BD7GZFDVRC",
+    "number": 277,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Multi-app routing + per-app projection/job registries",
+    "description": "The Rust port runs a single _default app (inspect.rs note). Port appRegistry.resolveByPath (basePath stripping + activeAppId), per-app projection registries (jobs/worker.rs + gateway projection subscribe), and per-app job handler registries (worker.rs 'later story'). Carry over the FR-200 + tenant-app-isolation audit fixes.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

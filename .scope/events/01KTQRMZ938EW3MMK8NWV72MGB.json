@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTQRMZ938EW3MMK8NWV72MGB",
+  "ts": "2026-06-10T03:19:09.347Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTQRMZ92BM926JGEHNNSY5ZB",
+    "number": 239,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Rust schema DSL/macros + canonical AST parity",
+    "description": "Design and implement schema authoring in Rust (derive macros / builder DSL) that produces the same canonical schema AST as today's schema.ts pipeline. Schema identity hashing must be bit-identical so existing schemaHash values are reproducible from equivalent Rust schemas. Include the breaking-change linter semantics (docs/versioning.md, schema-author-tutorial.md). This is the foundation for codegen and for app authoring.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

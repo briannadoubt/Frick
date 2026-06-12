@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTT8N638TAJQZXVB1QNAP1Q5",
+  "ts": "2026-06-11T02:37:22.408Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTT8N638TAJQZXVB1QNAP1Q4",
+    "number": 269,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Auth: Apple + Google id-token verification routes",
+    "description": "Port /auth/apple/verify (+ /auth/apple/notifications) and /auth/google/verify — id-token verification vs the provider JWKS (TS auth/apple.ts, auth/google.ts). Mints a session/account; shares the attempt limiter.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

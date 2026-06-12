@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTT8N5P2MR8SRAXE1PWRABAM",
+  "ts": "2026-06-11T02:37:21.986Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTT8N5P1V6R6B7NTSJ55VXYR",
+    "number": 266,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Search adapter (Rust): FTS index on writes + query route + inspect report",
+    "description": "Port the search subsystem (TS src/search/*). FrickStore facade has the seam (TODO(FR-245) at facade.rs:1210 'project + upsert into the search adapter' on object upsert/delete). Needs: per-schema searchable-field projection, SQLite FTS5 index maintained on every object write/delete (Postgres tsvector for the PG arm), a search query route, and the GET /_frick/inspect/search adapter-health report (currently stub_not_available). Parity ref: deleted apps/server/src/search + TS FR-24.",
+    "status": "in_progress",
+    "priority": "high",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

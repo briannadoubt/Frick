@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTTEZTS9P0BVV26WZW7KB1EY",
+  "ts": "2026-06-11T04:28:02.729Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTT8N67M3KV592N5RADNJYB9",
+    "commentId": "01KTTEZTS9P0BVV26WZW7KB1EX",
+    "author": "claude",
+    "body": "OIDC half DONE + on PR #8 (commit 77e90c3): POST /auth/oidc/:id/verify reusing the FR-269 RS256 verifier; per-provider iss/aud/jwks pinning (cross-provider replay rejected — regression-tested), required nonce, provider-id-scoped subject (oidc:<id>:<sub>, same-sub-distinct-accounts regression-tested), FRICK_OIDC_PROVIDERS config with fatal-on-malformed parsing. Adversarial security review passed clean. SAML split out to FR-280 (XML-dsig is a distinct, higher-risk effort)."
+  }
+}

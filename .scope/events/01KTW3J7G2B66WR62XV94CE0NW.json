@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTW3J7G2B66WR62XV94CE0NW",
+  "ts": "2026-06-11T19:46:51.522Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTVJXSPE00Y17C7S7QHQ33TC",
+    "commentId": "01KTW3J7G2B66WR62XV94CE0NV",
+    "author": "claude",
+    "body": "DONE + on PR #8 (merged). Pure-Rust call E2EE (x25519-dalek ECDH + chacha20poly1305 AEAD + HKDF): per-call epoch MediaKey, CallKeyManager (rotate on membership change, 1 previous epoch), per-recipient sealed key envelopes, sender-key relay envelope. FR-210 carried (senderId never truncated). 5 tests; verified no native crypto deps added. Built by a subagent."
+  }
+}

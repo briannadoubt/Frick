@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTSX1GTVW196QZVPRAANE0EF",
+  "ts": "2026-06-10T23:14:23.707Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGM",
+    "commentId": "01KTSX1GTVW196QZVPRAANE0EE",
+    "author": "claude",
+    "body": "PR #8 review (Codex) fixes, committed e673406: (1) CORS P1 — the composed router never applied CORS despite parsing FRICK_ALLOWED_ORIGINS, so cross-origin browser calls (web client :5173 → server :4099) failed; added crates/frick-server/src/cors.rs (tower-http CorsLayer mirroring the TS setCors/preflight contract: methods GET/POST/PUT/DELETE/OPTIONS, the documented allow/expose header sets, allowlist-driven origin echo) applied in boot::listen. (2) Logout P2 — /auth/logout only read sessionToken from the JSON body; now reads Authorization: Bearer / x-frick-session-token via extract::session_token_from_headers, body optional. Regression-guarded by cors_and_logout.rs (3 integration tests) + cors.rs unit tests. 609 workspace tests green."
+  }
+}

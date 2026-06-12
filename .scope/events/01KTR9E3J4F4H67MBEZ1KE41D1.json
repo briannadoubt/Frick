@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTR9E3J4F4H67MBEZ1KE41D1",
+  "ts": "2026-06-10T08:12:30.148Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ92BM926JGEHNNSY5Z9",
+    "commentId": "01KTR9E3J4F4H67MBEZ1KE41D0",
+    "author": "claude",
+    "body": "Implementation complete, pending adversarial review. crates/frick-protocol ports frame.ts (all 23 FrameKinds, custom [kind,payload] serde), codec.ts (packed tuples), schema.ts (AST + validateSchema with exact TS error messages), errors.ts (16 codes + envelope), compatibility.ts, capabilities.ts, calls.ts (internally-tagged CallCommandOp). Golden fixtures: packages/protocol/scripts/generate-wire-fixtures.ts (pnpm fixtures:wire) emits 38 binary cases to conformance/fixtures/wire/; Rust harness asserts rmpv byte round-trip + manifest semantic match + typed decode + byte-identical typed re-encode (37/38; 1 case decode-only by design). All green: cargo fmt/clippy -D warnings/test. Key encoding facts: payload key order = TS interface declaration order; Schema frames serialize key-sorted (validateSchema stableClone); minimal-width ints match @msgpack/msgpack defaults."
+  }
+}

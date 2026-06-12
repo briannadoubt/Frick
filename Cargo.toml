@@ -1,0 +1,97 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/frick-protocol",
+  "crates/frick-schema",
+  "crates/frick-codegen",
+  "crates/frick-store",
+  "crates/frick-server",
+  "crates/frick-mcp",
+  "crates/frick-cli",
+  "crates/frick-conformance",
+]
+
+[workspace.package]
+version = "0.4.0"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/briannadoubt/Frick"
+rust-version = "1.95"
+
+[workspace.dependencies]
+frick-protocol = { path = "crates/frick-protocol" }
+frick-schema = { path = "crates/frick-schema" }
+frick-codegen = { path = "crates/frick-codegen" }
+frick-store = { path = "crates/frick-store" }
+frick-server = { path = "crates/frick-server" }
+frick-mcp = { path = "crates/frick-mcp" }
+
+hex = "0.4"
+tempfile = "3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+anyhow = "1"
+argon2 = "0.5"
+async-trait = "0.1"
+axum = { version = "0.7", features = ["ws"] }
+base64 = "0.22"
+# Call E2EE (FR-289). Pure-Rust crypto only — no `ring`, OpenSSL, or C/asm
+# defaults — preserving the workspace no-native-deps invariant:
+# - x25519-dalek: X25519 ECDH key agreement for per-recipient key wrapping.
+# - chacha20poly1305: ChaCha20-Poly1305 AEAD for the sealed envelopes + media
+#   frames. Both pair with `rand_core 0.6` (matching `rand = "0.8"` above).
+chacha20poly1305 = "0.10"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+bytes = "1"
+clap = { version = "4", features = ["derive"] }
+deadpool-postgres = "0.14"
+futures-util = "0.3"
+indexmap = { version = "2", features = ["serde"] }
+# S3 blob-bytes driver (FR-273). The `aws` feature gives rustls-backed
+# (ring/reqwest) S3 support — no openssl. default-features-off so the
+# azure/gcp/http-server arms never compile in.
+object_store = { version = "0.13", default-features = false, features = ["aws"] }
+rand = "0.8"
+rmp = "0.8"
+rmp-serde = "1"
+rmpv = { version = "1", features = ["with-serde"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+scrypt = "0.11"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-postgres = "0.7"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# OpenTelemetry OTLP export (FR-267). HTTP/protobuf transport only: the
+# `http-proto` feature pairs with reqwest (rustls), so the gRPC/`tonic`
+# transport is NEVER activated and the dep tree stays rustls-only. `tonic` the
+# crate still compiles for the generated protobuf message types, but its
+# transport/channel layer is dormant (no hyper-server, no native-tls).
+opentelemetry = "0.30"
+opentelemetry_sdk = { version = "0.30", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.30", default-features = false, features = [
+  "trace",
+  "http-proto",
+  "reqwest-rustls",
+] }
+tracing-opentelemetry = "0.31"
+uuid = { version = "1", features = ["v4"] }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Pedantic exceptions that fight readability more than they help.
+# doc_markdown flags domain proper nouns (MessagePack, SQLite, schemaHash).
+doc_markdown = "allow"
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+must_use_candidate = "allow"

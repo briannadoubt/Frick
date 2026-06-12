@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTRDWEJHZWPZEAPWQJDX61HW",
+  "ts": "2026-06-10T09:30:14.481Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ938EW3MMK8NWV72MGE",
+    "commentId": "01KTRDWEJHZWPZEAPWQJDX61HV",
+    "author": "claude",
+    "body": "DONE. crates/frick-store ports the full storage layer: SqlDriver async seam (rusqlite, ?-placeholder, BEGIN IMMEDIATE tx with nested-reuse, bindParams bool->1/0; opens with production pragmas WAL+synchronous=NORMAL and foreign_keys=OFF to match TS where the blob_content FK is documentary), framework migration runner (run_framework_migrations with exact ledger/checksum/revision semantics + error strings; migration list embedded from conformance/fixtures/migrations/sqlite.json extracted verbatim from TS via scripts/extract-migrations.ts / pnpm fixtures:migrations — 24 migrations, sha256 checksums byte-verified), packed-BLOB codec (encode/decode/without_record_id), and ALL core stores: ObjectStore (lastWriteWins + versionPrecondition w/ ObjectVersionConflict, cross-app guard), StreamStore (idempotent append, shared sequence space, replay window, retention prune), BoundedIdempotencyCache (LRU), PresenceStore + SignalStore (TTL leases/outbox), JobStore (4-status lifecycle, SKIP-LOCKED-shaped claim, backoff, recurring windows), BlobStore metadata (PK blob_id alone, cross-app pre-check, derivatives) + bytes drivers (SQL + filesystem with byte-identical encode_segment path layout; S3 stubbed loud). 126 store tests (ported from the matching vitest suites), clippy -D warnings + fmt clean. Adversarial parity review in progress. Postgres arm is FR-242."
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTVJXRVWXDPVBKK9BARSCG7X",
+  "ts": "2026-06-11T14:56:03.964Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTVJXRVVTQAC7ZN2VRV3V33T",
+    "number": 283,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Calls C — CallControlPlane state machine (port FR-79)",
+    "description": "Port call-control-plane.ts: create/invite/accept/decline/join/leave/end/set-media-state over the object+stream stores using the fake media plane; validated transitions, tenant scoping, authz (creator invites+ends; invitees join; own media state; auto-end on last leave); durable Call* events. Native clients' create/join/.../end must resolve correctly. Plan phase C.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTT8NXSBKT3BERY2HZX9P1HJ",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

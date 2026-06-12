@@ -210,6 +210,20 @@ export class FrickClient {
     string,
     { resolve: (result: CallCommandResultPayload) => void; reject: (err: unknown) => void }
   >();
+  /**
+   * FR-256 (client half) — registration-pending resolvers, keyed by the
+   * subscription identity the server echoes back in the initial snapshot
+   * frame: the `subscriptionId` for object/stream subscriptions, the
+   * projection name for projection subscriptions. `subscribeObject` /
+   * `subscribeStream` / `subscribeProjection` register a resolver here and
+   * settle it from the matching Snapshot / StreamPage / ProjectionDelta
+   * handler, so the returned Promise resolves only once the server has
+   * REGISTERED the subscription (the gateway sends the snapshot AFTER
+   * registering — see FR-256). A write issued after that Promise can no
+   * longer race ahead of registration. Presence/Signal get no snapshot, so
+   * they do not register here (no initial-state race to defend against).
+   */
+  #subscriptionRegistrations = new Map<string, Array<() => void>>();
   /** Optimistic overlay merged into stream + object signals at publish time. */
   readonly #overlay = new OptimisticOverlay();
   /**
@@ -281,6 +295,17 @@ export class FrickClient {
     for (const resolver of this.#callCommandResolvers.values()) {
       resolver.reject(clearedError);
     }
+    // FR-256: drain parked subscribe-registration awaiters so a logout / user
+    // swap mid-`subscribeObject`/`subscribeStream`/`subscribeProjection` can't
+    // strand the promise — the subscription won't replay under the cleared
+    // session. Resolve (rather than reject) to match the Swift/Kotlin
+    // resolve-on-drain behavior; the caller's screen is being torn down anyway.
+    for (const resolvers of this.#subscriptionRegistrations.values()) {
+      for (const resolve of resolvers) {
+        resolve();
+      }
+    }
+    this.#subscriptionRegistrations.clear();
     this.#callCommandResolvers.clear();
     this.#appendResolvers.clear();
     this.#pendingUpserts.clear();
@@ -401,6 +426,26 @@ export class FrickClient {
     return signal;
   }
 
+  /**
+   * Subscribe to all objects of `type` and resolve once the server has
+   * REGISTERED the subscription — i.e. when the initial `Snapshot` frame
+   * correlated by this subscription's id arrives (FR-256 client half). Use
+   * this before issuing a write you want to observe in the same connection:
+   * `objects(type)` returns its Signal synchronously and only sends the
+   * Subscribe frame, so a write right after it can race the gateway's
+   * registration. Awaiting this method closes that window.
+   *
+   * The Snapshot still populates the local store exactly as before — only the
+   * resolution timing changes. If the runtime is offline when called, the
+   * Subscribe is held and replays on reconnect, and the promise resolves when
+   * the post-registration snapshot then arrives; it also resolves if the user
+   * state is cleared (logout / user swap) so a torn-down caller never strands.
+   */
+  subscribeObject(type: string): Promise<void> {
+    this.objects(type);
+    return this.#awaitRegistration(type);
+  }
+
   stream(stream: string, key: string): Signal<StreamEventInput[]> {
     const id = streamKey(stream, key);
     const existing = this.#streamSignals.get(id);
@@ -418,6 +463,19 @@ export class FrickClient {
       this.#sendSubscribe({ kind: "stream", name: stream, key });
     }
     return signal;
+  }
+
+  /**
+   * Subscribe to a `(stream, key)` tail and resolve once the server has
+   * REGISTERED the subscription — i.e. when the initial `StreamPage` frame
+   * correlated by this subscription's id arrives (FR-256 client half). The
+   * awaitable analogue of `stream(...)`, which returns its Signal
+   * synchronously and only sends the Subscribe frame. See {@link
+   * subscribeObject} for the race this defends against.
+   */
+  subscribeStream(stream: string, key: string): Promise<void> {
+    this.stream(stream, key);
+    return this.#awaitRegistration(streamKey(stream, key));
   }
 
   /** Merge cached objects with optimistic upserts for a given type. */
@@ -478,6 +536,19 @@ export class FrickClient {
       this.#sendSubscribe({ kind: "projection", name });
     }
     return signal as unknown as Signal<Map<string, T>>;
+  }
+
+  /**
+   * Subscribe to a projection and resolve once the server has REGISTERED the
+   * subscription — i.e. when the initial `ProjectionDelta` snapshot keyed by
+   * this projection `name` arrives (FR-256 client half). The awaitable
+   * analogue of `projection(...)`, which returns its Signal synchronously and
+   * only sends the Subscribe frame. Projections correlate by name (not a
+   * subscriptionId) because that is what the `ProjectionDelta` frame carries.
+   */
+  subscribeProjection<T extends PlainObject = PlainObject>(name: string): Promise<void> {
+    this.projection<T>(name);
+    return this.#awaitRegistration(name);
   }
 
   signalChannel(name: string, key: string): Signal<PlainObject[]> {
@@ -711,12 +782,19 @@ export class FrickClient {
           this.#storeObject(unpacked.type, unpacked.id, unpacked.value, frame[1].cursor);
         }
         this.#saveCursor(frame[1].subscriptionId, frame[1].cursor);
+        // FR-256: the gateway sends this snapshot AFTER registering the
+        // subscription, so its arrival confirms registration — resolve any
+        // `subscribeObject(...)` awaiter parked on this subscriptionId.
+        this.#resolveRegistration(frame[1].subscriptionId);
         return;
       case FrameKind.StreamPage:
         for (const packed of frame[1].events) {
           this.#storeStreamEvent(unpackStreamEvent(this.schema, packed));
         }
         this.#saveCursor(frame[1].subscriptionId, frame[1].cursor);
+        // FR-256: confirms a stream subscription was registered — resolve any
+        // `subscribeStream(...)` awaiter parked on this subscriptionId.
+        this.#resolveRegistration(frame[1].subscriptionId);
         return;
       case FrameKind.Delta:
         for (const packed of frame[1].objects) {
@@ -760,6 +838,11 @@ export class FrickClient {
         this.#projectionRows.set(projection, rows);
         // Replace the Map reference so listeners observe the change.
         this.#projectionSignals.get(projection)?.set(new Map(rows));
+        // FR-256: the projection subscribe reply is the initial ProjectionDelta
+        // snapshot keyed by projection name, sent AFTER registration — resolve
+        // any `subscribeProjection(...)` awaiter parked on this name. (Live
+        // deltas after the snapshot find no parked awaiter and are a no-op.)
+        this.#resolveRegistration(projection);
         return;
       }
       case FrameKind.SignalDeliver: {
@@ -965,6 +1048,38 @@ export class FrickClient {
       ...(input.key ? { key: input.key } : {}),
     };
     this.#send([FrameKind.Subscribe, payload]);
+  }
+
+  /**
+   * Return a Promise that resolves when the initial snapshot for `key` (a
+   * subscriptionId for objects/streams, the projection name for projections)
+   * arrives — see {@link #subscriptionRegistrations}. The snapshot handler
+   * calls {@link #resolveRegistration} with the same key. Multiple awaiters of
+   * the same key share the keyed bucket and all resolve on the first snapshot.
+   */
+  #awaitRegistration(key: string): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const existing = this.#subscriptionRegistrations.get(key);
+      if (existing) {
+        existing.push(resolve);
+      } else {
+        this.#subscriptionRegistrations.set(key, [resolve]);
+      }
+    });
+  }
+
+  /**
+   * Resolve every awaiter parked on `key` (if any) and clear the bucket. Called
+   * by the Snapshot / StreamPage / ProjectionDelta handlers once the server's
+   * post-registration snapshot for that subscription lands.
+   */
+  #resolveRegistration(key: string): void {
+    const resolvers = this.#subscriptionRegistrations.get(key);
+    if (!resolvers) return;
+    this.#subscriptionRegistrations.delete(key);
+    for (const resolve of resolvers) {
+      resolve();
+    }
   }
 
   #send(frame: FrickFrame): void {
