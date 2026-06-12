@@ -19,10 +19,10 @@ contract stays byte/wire-compatible with the TypeScript client runtime under
 - Schema identity fields (`schemaId`, `schemaVersion`, `schemaRevision`, `schemaHash`) and generated Swift/Kotlin/TypeScript artifacts.
 - Shared structured error envelopes across HTTP, WebSocket nacks, and SDK error types.
 - MessagePack WebSocket frames for Hello/HelloAck, subscribe, append, signal, presence, object upsert, snapshot, delta, projection delta, ack, and nack.
-- SQLite-backed server persistence, migrations, health/ready/inspect/admin
+- SQLite- and Postgres-backed server persistence, migrations, health/ready/inspect/admin
   routes, metrics, request logging, CORS enforcement, and admin bearer auth.
-  `frick-store` ships both SQLite and Postgres backends. (The CLI's
-  `backup`/`restore` commands are not yet ported and return `cli.unsupported`.)
+  `frick-store` ships both SQLite and Postgres backends, and the CLI ships
+  `backup`/`restore` as NDJSON dump/restore commands.
 - Documented server extension points for app-owned HTTP routes, durable job
   handlers, recurring job schedules, search indexes, blob processors, push
   adapters, policy hooks, multi-app URL/schema routing, and cluster-bus fan-out.
@@ -53,13 +53,13 @@ contract stays byte/wire-compatible with the TypeScript client runtime under
   and authenticated product analytics ingestion through TypeScript, Swift, and
   Android/Kotlin clients. React route analytics is enabled by default after a
   session is available, and product analytics summaries are materialized by a
-  built-in platform-event consumer so SQLite and Kafka/Redpanda deployments
-  share the same dashboard read model.
-- Server-side OpenTelemetry export for HTTP request spans, WebSocket
-  connection/frame telemetry, job-run spans, and request/WebSocket/job metrics
-  with bounded WebSocket labels and sanitized close telemetry, enabled by OTLP
-  env vars and included in the Redpanda local profile through the checked-in
-  collector config.
+  built-in platform-event consumer so the SQLite platform-events deployment has
+  the dashboard read model; the Kafka/Redpanda platform-events driver is still
+  a follow-up and fails fast if selected.
+- Server-side OpenTelemetry trace export through OTLP HTTP/protobuf, enabled by
+  OTLP env vars and included in the Redpanda local profile through the checked-in
+  collector config. The in-process metrics snapshot remains available at
+  `/_frick/inspect/metrics`; OTLP metrics export is still pending.
 - Docker Compose deployment profiles are available through
   `frick deploy --profile compose|lightweight`, and `frick deploy image` prints
   the image-build plan. The compose profile wires Redpanda/Kafka platform
@@ -78,8 +78,8 @@ contract stays byte/wire-compatible with the TypeScript client runtime under
 
 - The CLI is the `frick-cli` crate (the `frick` binary). Repository development
   runs it with `cargo run -p frick-cli -- <command>`; packaging a standalone
-  distributable binary remains release work. `verify`/`backup`/`restore` are
-  listed for surface parity but return `cli.unsupported`.
+  distributable binary remains release work. `verify`, `backup`, and `restore`
+  are implemented in Rust.
 - The `frick init` scaffold produces a TypeScript schema + client project (no
   embedded server — the backend is the Rust `frick-server` binary). The
   canonical server image lives at `ops/deploy/server.Dockerfile` with a
@@ -91,9 +91,9 @@ contract stays byte/wire-compatible with the TypeScript client runtime under
   `create_frick_server(...)` and call `.listen()`. Its route/storage internals
   are not public API unless documented in `docs/framework-boundaries.md` or
   re-exported from the crate's `lib.rs`.
-- `frick-codegen` is the Rust DTO generator, but `pnpm schema:generate` is still
-  the canonical artifact generator wired into `verify:generated`; making
-  `frick-codegen` the byte-identical canonical generator is a follow-up.
+- `frick-codegen` is the Rust DTO generator, and
+  `cargo run -p frick-cli -- schema generate` is the canonical DTO artifact
+  generator. `pnpm schema:generate` remains as the workspace wrapper.
 - Multi-app servers route by URL prefix and WebSocket Hello schema id. Runtime
   rows for objects, streams, presence, signals, blobs, jobs, sessions, accounts,
   and tenant settings carry `app_id` partitions, and per-app projection/job
@@ -107,26 +107,29 @@ contract stays byte/wire-compatible with the TypeScript client runtime under
 - Identity-provider sessions honor the single configured
   `FRICK_SESSION_TTL_SECONDS` lifetime, and Apple/Google/OIDC verify routes plus
   email password-reset routes share the built-in auth-attempt limiter. Apple,
-  Google, generic OIDC issuers (`identityProviders.oidc`, with direct
-  `jwksUri` or discovery-resolved key sets), SAML 2.0 Service Providers
-  (`identityProviders.saml`, with signature-verified assertions + replay
-  protection), and email/password are supported; arbitrary non-OIDC OAuth
-  provider routing remains unimplemented.
+  Google, generic OIDC issuers (`FRICK_OIDC_PROVIDERS`, with pinned issuer,
+  audiences, and JWKS URI), and email/password are supported. Frick does not
+  terminate SAML in-process; enterprise SAML SSO is supported by fronting Frick
+  with a SAML-to-OIDC broker and consuming the OIDC route. Arbitrary non-OIDC
+  OAuth provider routing remains unimplemented.
 - Blob bytes default to SQLite but can use the local filesystem with
   `FRICK_BLOB_DRIVER=filesystem` and a writable `FRICK_BLOB_STORAGE_PATH`, or an
   S3-compatible object store with `FRICK_BLOB_DRIVER=s3` and
   `FRICK_BLOB_S3_BUCKET`. Blob metadata remains in SQLite. External blob byte
   stores are not yet part of NDJSON backup/restore or account export payloads,
   so operators must back up the filesystem path or bucket separately.
-  Derivative offloading and richer lifecycle policies remain follow-up work.
+  The blob processor/validator pipeline and `blob.process` job are ported;
+  image-derivative generation and richer lifecycle policies remain follow-up
+  work.
 - APNs, FCM, and Web Push all have documented push-adapter exports and
   `frick tenants set-push` credential workflows. Web Push encrypts payloads per
-  RFC 8291 when browser subscription keys are present; multi-key credential
-  rotation remains follow-up work.
-- Outbound email (the `FrickEmailAdapter` interface, an email router, a Resend
-  reference adapter, and an in-memory test adapter wired into the password-reset
-  and welcome flows) existed in the prior TypeScript server but is **not yet
-  ported** to the Rust `frick-server`; treat it as follow-up work.
+  RFC 8291 when browser subscription keys are present. Push credential key
+  rotation supports a primary `FRICK_PUSH_CRED_KEY` plus overlap reads through
+  `FRICK_PUSH_CRED_KEY_PREVIOUS`.
+- Outbound email ships as a Rust `FrickEmailAdapter` trait, email router,
+  Noop default, in-memory test adapter, and live Resend adapter. SES, Postmark,
+  SMTP, and email-address verification routes remain follow-up or out-of-tree
+  adapter work.
 - Swift and Android package publication is configured in source, but local verification still depends on the host having Xcode or Android SDK/JDK paths installed.
 - CI and Android publishing gate the framework Android modules
   (`:frick`, `:frick-compose`, `:design`). The old demo `:app` remains in the

@@ -20,21 +20,24 @@ The `frick` CLI is the `frick-cli` crate; run it through Cargo:
 
 ```bash
 cargo run -p frick-cli -- schema check        # validate the foundation schema, print its identity
+cargo run -p frick-cli -- schema generate     # regenerate tracked client DTO artifacts
+cargo run -p frick-cli -- schema export --out schema.json  # write the active schema for FRICK_SCHEMA_PATH
 cargo run -p frick-cli -- init my-app         # scaffold a TypeScript app project
 cargo run -p frick-cli -- dashboard           # serve Fricken Dashboard at http://127.0.0.1:4299
 cargo run -p frick-cli -- dev --profile redpanda --dry-run  # print the Redpanda/Kafka local profile
 ```
 
-The sync server runtime (`frick-server`) is an embeddable library — there is no
-standalone server binary; a host wires it in with `create_frick_server(...)` and
-calls `.listen()`. The MCP stdio bridge runs via `cargo run -p frick-mcp` (or
-`cargo run -p frick-cli -- mcp`).
+The sync server runtime (`frick-server`) is both an embeddable library and a
+standalone binary. Run `cargo run -p frick-server` to serve `FRICK_SCHEMA_PATH`
+or the foundation schema, or wire the library into a host with
+`create_frick_server(...)` and call `.listen()`. The MCP stdio bridge runs via
+`cargo run -p frick-mcp` (or `cargo run -p frick-cli -- mcp`).
 
 The web client still runs on the TypeScript toolchain:
 
 ```bash
 pnpm install
-pnpm schema:generate          # regenerate Swift + Kotlin DTOs from the foundation schema
+pnpm schema:generate          # wrapper around `frick schema generate`
 pnpm web                      # http://127.0.0.1:5173
 ```
 

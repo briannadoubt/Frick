@@ -36,7 +36,8 @@ Run from the repo root; the toolchain is pinned by `rust-toolchain.toml`.
 - Install: `pnpm install`
 - Web-client tests: `pnpm test`
 - Typecheck: `pnpm typecheck`
-- Regenerate protocol artifacts: `pnpm schema:generate`
+- Regenerate protocol artifacts: `cargo run -p frick-cli -- schema generate`
+  (or the `pnpm schema:generate` wrapper)
 - Regenerate design artifacts: `pnpm design:generate`
 - Generated drift check: `pnpm verify:generated`
 - Web demo: `pnpm web` (`http://127.0.0.1:5173`)
@@ -58,16 +59,17 @@ FR-255). The Cargo workspace lives at the repo root with crates under
 - `crates/frick-schema` — Rust schema DSL, canonical AST, identity hashing,
   breaking-change lint.
 - `crates/frick-codegen` — Swift, Kotlin, and TypeScript DTO generators for
-  the Rust schema pipeline. Not yet wired as the canonical artifact generator —
-  `pnpm schema:generate` is still the source of truth for regenerated DTOs.
+  the Rust schema pipeline. `cargo run -p frick-cli -- schema generate` is the
+  canonical DTO artifact generator; `pnpm schema:generate` is a package-script
+  wrapper around it.
 - `crates/frick-store` — store port traits + SQLite/Postgres backends.
 - `crates/frick-server` — tokio/axum sync server runtime (embeddable library
   plus a standalone `frick-server` binary; `cargo run -p frick-server` or the
   `ops/deploy/server.Dockerfile` image serves `FRICK_SCHEMA_PATH` or the
   foundation schema).
 - `crates/frick-cli` — the `frick` binary (schema/lint/migrate/doctor/inspect/
-  tenants/init/scaffold/dev/deploy/dashboard/mcp). `verify`/`backup`/`restore`
-  are listed for parity but currently return `cli.unsupported`.
+  tenants/init/scaffold/dev/deploy/dashboard/mcp), plus native `verify`,
+  `backup`, and `restore` commands.
 - `crates/frick-mcp` — the `frick-mcp` stdio JSON-RPC bridge.
 - `crates/frick-conformance` — black-box scenario harness over the in-process
   server.
@@ -79,7 +81,9 @@ live in `internal/rust-rewrite/maps/`.
 
 ## Project Constraints
 
-- Do not hand-edit generated artifacts. Regenerate protocol outputs with `pnpm schema:generate` and design outputs with `pnpm design:generate`.
+- Do not hand-edit generated artifacts. Regenerate protocol outputs with
+  `cargo run -p frick-cli -- schema generate` (or the `pnpm schema:generate`
+  wrapper) and design outputs with `pnpm design:generate`.
 - Keep demo app logic thin. If a real app would need to copy behavior from `apps/web`, `apps/ios/FrickDemo`, or `apps/android/app`, promote it to a framework package or document an extension point.
 - Downstream product apps that consume Frick (e.g. RangerCRM) live in their own repositories, not here. Do not add product-schema servers or app code to this repo; keep it framework-only.
 - **The Swift SDK lives at `packages/swift` (and `packages/design-swift`) — develop there.** `briannadoubt/FrickSwift` is generated, publish-only release output (SwiftPM needs a root-level `Package.swift`, so releases mirror the subtree there). **Never clone, edit, or open the FrickSwift mirror** — it has no source of truth, only published tags.

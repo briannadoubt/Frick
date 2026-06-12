@@ -28,7 +28,7 @@ The primitives the schema defines are:
 - **Jobs** and **Blobs** — durable background work and content-addressed binary storage, both with the same schema-driven shape.
 - **Sharing grants** — same-tenant read/write grants for individual object records, issued through single-use invitation tokens.
 
-Two properties tie it together. First, protocol artifacts (server tables, client cache, generated DTOs, fixtures) are derived from the same schema AST, and tracked design-token outputs are generated from the canonical design definition. `pnpm verify:generated` regenerates both families and fails CI if anything moved. Second, the schema carries an identity (`schemaId`, `schemaVersion`, `schemaRevision`, `schemaHash`) that clients send on every connection, so the server can reject incompatible clients before a single bad write hits storage.
+Two properties tie it together. First, protocol artifacts (server tables, client cache, generated DTOs, fixtures) are derived from the same schema AST, and tracked design-token outputs are generated from the canonical design definition. `frick schema generate` writes the DTO artifacts, `pnpm schema:generate` wraps that command for the TypeScript workspace, and `pnpm verify:generated` catches generated drift across schema fixtures and design tokens. Second, the schema carries an identity (`schemaId`, `schemaVersion`, `schemaRevision`, `schemaHash`) that clients send on every connection, so the server can reject incompatible clients before a single bad write hits storage.
 
 ## 15-minute tutorial
 
@@ -42,7 +42,7 @@ git clone <this-repo> frick && cd frick
 cargo build --workspace
 cargo test --workspace          # the backend quality gate
 pnpm install
-pnpm schema:generate            # regenerate native DTOs from the foundation schema
+pnpm schema:generate            # wrapper around `frick schema generate`
 ```
 
 Drive the backend with the `frick` CLI from the `frick-cli` crate. Output is
@@ -50,6 +50,8 @@ JSON Lines, one record per command:
 
 ```bash
 cargo run -p frick-cli -- schema check      # validate the foundation schema, print its identity
+cargo run -p frick-cli -- schema generate   # regenerate tracked Swift/Kotlin/TS DTO artifacts
+cargo run -p frick-cli -- schema export --out schema.json  # write a loadable schema JSON
 cargo run -p frick-cli -- doctor            # environment / config diagnostics
 cargo run -p frick-cli -- inspect server    # read server-shaped info from the local store
 ```
@@ -102,7 +104,7 @@ product-specific flows.
 
 Most day-to-day work is one of these. Each links to the canonical reference.
 
-- **Add a new object type.** Edit `packages/protocol/src/foundation.ts` (or your app's `src/schema.ts`), add the `objects[]` entry with a stable id and stable field ids, run `pnpm schema:generate`, then add server handlers if you need custom mutation logic. See [Schema author tutorial](./schema-author-tutorial.md).
+- **Add a new object type.** Edit the schema source (`crates/frick-protocol` for the foundation schema, or your app's generated schema module), add the `objects[]` entry with a stable id and stable field ids, run `cargo run -p frick-cli -- schema generate` or `pnpm schema:generate`, then add server handlers if you need custom mutation logic. See [Schema author tutorial](./schema-author-tutorial.md).
 - **Add a new stream event.** Add an entry to `events[]` and reference it from the relevant `streams[].events` array. Events are immutable — once shipped, never change a field id or type.
 - **Add a projection.** Run `cargo run -p frick-cli -- scaffold projection <name>` inside a scaffolded app, using a kebab-case projection name. It creates the projection source and wires it into the app's server entrypoint via the marker comments. See [`docs/authoring.md`](./authoring.md).
 - **Add a search index.** Declare an `indexes[]` entry on the object. Indexes are framework-managed; you don't write the migration. Custom app-source search indexes require a `search.query` policy hook allow before tenant users can query them.
