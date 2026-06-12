@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTVWASNZS30RH187FE1HWC07",
+  "ts": "2026-06-11T17:40:27.967Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTT8NY6NQ86ABCV1Z99CTAVE",
+    "commentId": "01KTVWASNZS30RH187FE1HWC06",
+    "author": "claude",
+    "body": "DONE — web half landed; native half superseded by FR-291 (the first native attempt was reverted for the subscribe-blocking hang). The clearUserState drain bug found in the FR-256 audit is fixed in 45b25f4."
+  }
+}

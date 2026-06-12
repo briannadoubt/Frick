@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTTPZ5QM50477FG9FMPTNMHY",
+  "ts": "2026-06-11T06:47:29.780Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTT8NXMMNEW15WVP1JZM4780",
+    "commentId": "01KTTPZ5QM50477FG9FMPTNMHX",
+    "author": "claude",
+    "body": "DONE + on PR #8 (merged f092810). frick-store::platform_events: PlatformEventsDriver trait (publish/claim/ack/retry/dead_letter/health/prune) + MemoryPlatformEvents + durable SqlitePlatformEvents over the migrated platform_events tables. now_ms + event_id injected. FRICK_PLATFORM_EVENTS_DRIVER=memory|sqlite (kafka fails fast not-yet-ported); /_frick/inspect/platform-events health report wired (replaced the stub). Shared conformance contract ported as Rust tests against BOTH drivers (publish->claim->ack ordering, visibility-timeout reclaim, prune). compose.yaml switched off kafka -> sqlite. Kafka driver is the remaining follow-up."
+  }
+}

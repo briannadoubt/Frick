@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTVSV5RCAY6C8H7PJ2MWD6TX",
+  "ts": "2026-06-11T16:56:58.892Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTVRDQS5YWW6WNR45ZSBZ6XB",
+    "commentId": "01KTVSV5RCAY6C8H7PJ2MWD6TW",
+    "author": "claude",
+    "body": "DONE + on PR #8 (commit 9fcfa68). Native FR-256 client half redone ADDITIVELY: the existing Swift/Kotlin subscribe/subscribeObject/subscribeProjection are UNCHANGED (no test breakage). New opt-in variants subscribeObjectRegistered / subscribeStreamRegistered / subscribeProjectionRegistered send the Subscribe then resolve on the server post-registration reply (Snapshot/StreamPage by subscriptionId; ProjectionDelta by name), draining all waiters on close/disconnect. Swift gained a StreamPage dispatch case. VERIFIED by running the FULL suites this time (the lesson from the revert): Swift 177 tests 0 failures (3 new); Android :frick full testDebugUnitTest green (2 new, bounded withTimeout so a regression fails fast, never hangs). The 2h SwiftPM deadlock is impossible now — existing methods never block."
+  }
+}

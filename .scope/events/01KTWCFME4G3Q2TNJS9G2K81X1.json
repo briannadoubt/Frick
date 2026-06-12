@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTWCFME4G3Q2TNJS9G2K81X1",
+  "ts": "2026-06-11T22:22:43.652Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTWCFME4G3Q2TNJS9G2K81X0",
+    "number": 292,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Calls — SFU media negotiation in Rust (mediasoup produce/consume path)",
+    "description": "PARITY GAP from the calls cutover (surfaced by the board-vs-reality audit). The Rust gateway STUBS the SFU media negotiation ops — handle: SfuConnectTransport/SfuProduce/SfuConsume are Nacked 'mediaUnsupported' (crates/frick-server/src/gateway.rs ~line 1753). The TS sfu-media-plane.ts had the full SfuMediaOperations surface: verifyJoinToken (coturn-REST HMAC: sign callId:userId:deviceId:expiry, timing-safe compare, expiry check), connectTransport/produce/consume (token-verified, transport/producer ownership tracked to prevent hijack — carries the old FR-166/170/171/172 audit fixes), and leaveParticipant cleanup (FR-172, transports/producers/consumers reclaimed on leave). NONE of this is in Rust. Scope: add an SfuMediaOperations companion trait, un-stub the 3 gateway ops + thread the token, implement verify_join_token + per-participant ownership + leave cleanup, and a mediasoup-backed SfuBackend (the pure-control-plane 'mediasoup' Rust crate v0.20 — note: this is the self-hosted-mediasoup design; the shipped LiveKit-token path does NOT use these ops, so this ticket is only needed if pursuing self-hosted SFU — see the mediasoup-vs-LiveKit decision). ~400 lines. Ref: deleted sfu-media-plane.ts / call-control-plane.ts SfuMediaOperations.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTT8NXSBKT3BERY2HZX9P1HJ",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

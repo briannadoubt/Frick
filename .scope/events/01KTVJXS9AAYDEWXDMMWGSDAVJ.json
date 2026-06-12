@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTVJXS9AAYDEWXDMMWGSDAVJ",
+  "ts": "2026-06-11T14:56:04.394Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTVJXS9AAYDEWXDMMWGSDAVH",
+    "number": 286,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Calls F — P2P media-plane adapter (1:1 calls)",
+    "description": "Port p2p-media-plane.ts: one-to-one calls (grant carries ICE/TURN; peer-to-peer media over the gated relay). FRICK_CALLS_MEDIA_PLANE=fake|p2p|sfu selection. Plan phase F.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTT8NXSBKT3BERY2HZX9P1HJ",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTWCG9XXYV3KFT4THVH6G3N0",
+  "ts": "2026-06-11T22:23:05.661Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTJVY7DBQ4YFEQ8B0VM5Z623",
+    "commentId": "01KTWCG9XXYV3KFT4THVH6G3MZ",
+    "author": "claude",
+    "body": "NOTE: completed in the TypeScript era (multi-box SFU home-node placement via the cluster bus). The Rust cutover (FR-276) did NOT port media-placement/cluster-media-placement — the cluster MediaPlacementClaim/Release envelopes exist but the gateway ignores them. The Rust re-implementation is tracked in FR-293."
+  }
+}

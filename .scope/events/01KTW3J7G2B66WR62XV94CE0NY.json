@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTW3J7G2B66WR62XV94CE0NY",
+  "ts": "2026-06-11T19:46:51.522Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTVJXS0CDYCPMPRPKD77MQ5B",
+    "commentId": "01KTW3J7G2B66WR62XV94CE0NX",
+    "author": "claude",
+    "body": "DONE + on PR #8 (605cd0c). WebRTCSignal relay gated on call membership via CallControlPlane::is_signal_member (keyed by the signal call id); non-member → Nack auth.forbidden notMember."
+  }
+}

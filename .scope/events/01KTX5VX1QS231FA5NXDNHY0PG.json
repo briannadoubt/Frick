@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTX5VX1QS231FA5NXDNHY0PG",
+  "ts": "2026-06-12T05:46:20.087Z",
+  "actor": "unknown",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTX5VX1P6BGHC9HSMNMKVV51",
+    "number": 295,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "Rust rewrite shipped object reads tenant-wide — per-record owner scoping (FR-116/234/235) not ported",
+    "description": "The TS backend owner-scoped object reads (list, subscription snapshot, live\ndelta fan-out) per reader, relaxed by sharing grants (FR-116/FR-235), with the\nwriter's own echo never suppressed (FR-234). The Rust rewrite (FR-236) shipped\nall three read paths as tenant-wide pass-throughs — `objects().list()` returned\nevery tenant row and `broadcast_to_subscribers` sent identical bytes to every\nmatching subscriber, with no ownership baseline or grant relaxation.\n\nImpact: any app using object-record sharing (or per-user data) leaked\nnon-owned, non-granted rows to every tenant subscriber/lister over both\n`GET /objects?type=` and the WS subscription. The conformance suite only\nexercised the happy-path snapshot, so the gap stayed green. Discovered during\npre-merge parity review of the Rust cutover.\n\nFix (commit 38fd3e6): new `object_visibility` module ports the unified read\npipeline — ownership baseline (`ownerUserId` convention, fail-open for rows\nwith no owner value), admin bypass, writer echo, and per-record sharing-grant\nrelaxation gated on a cheap \"any grant exists\" probe. Wired into the REST list,\nthe WS snapshot, and the live fan-out (baseline-visible inline to preserve\nsynchronous delivery; owner-mismatch grantees resolved off the hot path).\nRevoking/leaving a grant fans out a removal (FR-235 visibility-revoked).\n`FRICK_OBJECT_VISIBILITY` (ownerScoped default | tenantWide) is the opt-out.\n\nTests: 6 unit + cross-user isolation on the WS snapshot, REST list, and live\nfan-out, plus grant relaxation, writer echo, and visibility-revocation.\n",
+    "status": "done",
+    "priority": "high",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": "rust-rewrite-foundation",
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

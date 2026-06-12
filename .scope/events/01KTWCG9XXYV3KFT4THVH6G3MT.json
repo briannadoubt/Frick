@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTWCG9XXYV3KFT4THVH6G3MT",
+  "ts": "2026-06-11T22:23:05.661Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTVJXSJ2991MHYDYQGMCE7GX",
+    "commentId": "01KTWCG9XXYV3KFT4THVH6G3MS",
+    "author": "claude",
+    "body": "CORRECTION (board audit): this shipped the LiveKit token-minting SfuBackend (offline HS256 JWT) ONLY. The server-side SFU MEDIA NEGOTIATION (SfuConnectTransport/SfuProduce/SfuConsume) remains STUBBED in the gateway (Nack mediaUnsupported) — i.e. self-hosted mediasoup-style produce/consume is NOT implemented. That gap is tracked in FR-292. LiveKit is wired into boot via FRICK_CALLS_MEDIA_PLANE=livekit; the LiveKit client model does not use those ops (clients connect to LiveKit directly)."
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTW2HTJN5YT17R1451Y18F0M",
+  "ts": "2026-06-11T19:29:09.717Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTVJXRVVTQAC7ZN2VRV3V33T",
+    "commentId": "01KTW2HTJN5YT17R1451Y18F0K",
+    "author": "claude",
+    "body": "DONE + on PR #8 (220ab93). CallControlPlane state machine ported from call-control-plane.ts: create/accept/decline/join/leave/end/set_media_state over the object+stream stores, brokering the MediaPlaneAdapter (allocate on create, issue grant on join, release on end). Authz + state invariants enforced (creator-only invite/end, invitee-only join, no-action-on-ended, own-media-state, distinct-active-user capacity). Records persist via to_value+upsert_object_with_policy and read via rmpv from_value; events append to CallEventStream. Injectable CallClock (determinism seam). is_signal_member backs the FR-284 gate. 8 lifecycle/authz/capacity tests vs a real in-memory FrickStore + fake media plane; clippy -D warnings + fmt clean. SFU media negotiation deferred to FR-287/288. REMAINING for full wire functionality: the CallCommand frame (21)->control plane->CallCommandResult (22) routing (the FR-282 routing half)."
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTVJXSTXTAW2YYYGA9D0QYWJ",
+  "ts": "2026-06-11T14:56:04.957Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTVJXSTXTAW2YYYGA9D0QYWH",
+    "number": 290,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Calls I — calls conformance + native SDK acceptance vs the Rust server",
+    "description": "Add the calls scenarios to frick-conformance + run the Swift/Kotlin/web call clients against the Rust server end-to-end (start a call on one client, join from another). Plan phase I.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTT8NXSBKT3BERY2HZX9P1HJ",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

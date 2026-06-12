@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KTX5W48FNR1KER15CYJTMXSS",
+  "ts": "2026-06-12T05:46:27.471Z",
+  "actor": "unknown",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "field": "status",
+    "value": "done"
+  }
+}

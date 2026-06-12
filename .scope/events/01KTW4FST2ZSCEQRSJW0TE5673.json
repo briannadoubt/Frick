@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTW4FST2ZSCEQRSJW0TE5673",
+  "ts": "2026-06-11T20:03:00.546Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTT8NXSBKT3BERY2HZX9P1HJ",
+    "commentId": "01KTW4FST2ZSCEQRSJW0TE5672",
+    "author": "claude",
+    "body": "BUILD COMPLETE — all 10 sub-stories (FR-281..FR-290) done + merged to PR #8, gated green (962 workspace Rust tests, clippy -D warnings, fmt; the 3 calls conformance scenarios pass end-to-end against a real server). The realtime calls control plane is ported: MediaPlaneAdapter seam + fake/P2P/SFU(+LiveKit) adapters, call schema, CallControlPlane state machine, CallCommand routing, WebRTCSignal membership gating, ringing push, and pure-Rust E2EE — selectable via FRICK_CALLS_MEDIA_PLANE. Built across 6 parallel subagents + direct gateway integration. Remaining polish (not blocking): LiveKit boot wiring via env, the stale product-test call-schema fixture, and manual native-SDK acceptance (web/Swift/Kotlin call clients already ship)."
+  }
+}

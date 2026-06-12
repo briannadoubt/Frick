@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTW3J7G1A2RTJY6MJBTXZ3G2",
+  "ts": "2026-06-11T19:46:51.521Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTVJXS9AAYDEWXDMMWGSDAVH",
+    "commentId": "01KTW3J7G1A2RTJY6MJBTXZ3G1",
+    "author": "claude",
+    "body": "DONE + on PR #8 (merged efbbabe). P2pMediaPlaneAdapter: transport P2p, max 2, ICE/TURN config in the grant (coturn-REST HMAC-SHA1 TURN creds), configurable STUN/TURN. 9 tests, pure-Rust (hmac/sha1). Built in parallel by a subagent."
+  }
+}

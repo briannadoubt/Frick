@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTVYCMN64YXA99PVS2MT9WM1",
+  "ts": "2026-06-11T18:16:25.510Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTVJXRQF38JXVCCNTHK1E9S8",
+    "commentId": "01KTVYCMN64YXA99PVS2MT9WM0",
+    "author": "claude",
+    "body": "Schema half DONE + on PR #8 (99e0b79): crates/frick-server/src/calls/schema.rs ports call-schema.ts — CallRoom/CallInvite/CallParticipant object defs, the 7 CallEventStream events, the stream, and the WebRTCSignal signal; call_*_defs(id_base) for splicing + build_call_schema(). 3 tests (validates, id_base offsets, id-less CallRoom). REMAINING: the CallCommand frame (21) -> control-plane handler -> CallCommandResult (22) routing, which pairs with the FR-283 control plane."
+  }
+}

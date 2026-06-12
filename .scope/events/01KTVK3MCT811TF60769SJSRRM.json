@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTVK3MCT811TF60769SJSRRM",
+  "ts": "2026-06-11T14:59:15.994Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTSXK6BMST0ZF8B5M8K34Z6W",
+    "commentId": "01KTVK3MCT811TF60769SJSRRK",
+    "author": "claude",
+    "body": "DONE + on PR #8 (commit e3c026d). frick init now scaffolds the Rust-DSL authoring loop: a buildable binary crate whose src/main.rs defines the schema via frick-schema SchemaBuilder (between frick:schema markers) and, on cargo run, writes schema.json (for the standalone frick-server via FRICK_SCHEMA_PATH) + regenerates the Swift/Kotlin/TS SDKs through frick-codegen. Cargo.toml deps selectable via --crate-deps path|version|git (path-into-repo default so the loop is real in-monorepo). A TS schema/client surface remains as an optional secondary surface (no @fricken/server dep). Salvaged from the stalled worktree agent + fixed the dep-pin test. frick-cli tests green."
+  }
+}

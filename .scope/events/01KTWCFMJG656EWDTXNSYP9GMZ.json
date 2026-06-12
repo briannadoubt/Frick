@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTWCFMJG656EWDTXNSYP9GMZ",
+  "ts": "2026-06-11T22:22:43.792Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTWCFMJFZ0ACADBHT987CSPC",
+    "number": 293,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Calls — SFU media placement in Rust (Local + Cluster home-node registry)",
+    "description": "PARITY GAP from the calls cutover (board audit). The TS sfu-media-plane.ts injected a MediaPlacement seam (placeFor(callId) -> MediaHome); the Rust SfuMediaPlaneAdapter::new() takes only a backend Arc, has NO placement field, and allocate_session hardcodes region from the hint or 'local' — so multi-region/multi-box SFU is impossible. The cluster bus envelopes (MediaPlacementClaim/Release) already exist in crates/frick-server/src/cluster (envelope), but the gateway IGNORES them (~line 2151). Port cluster-media-placement.ts (239 lines, deleted in 763e5d2): a MediaPlacement trait, LocalMediaPlacement (single-box default, always local), and ClusterMediaPlacement (bus-coordinated home-node registry via the existing MediaPlacementClaim/Release envelopes, lowest-nodeId tie-break, TTL self-heal). Inject into SfuMediaPlaneAdapter::new(placement). This is the Rust re-implementation of FR-154 (multi-box SFU placement, which is 'done' in the TS era only). Depends on the SFU media-negotiation ticket.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTT8NXSBKT3BERY2HZX9P1HJ",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

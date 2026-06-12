@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTW42QBTGBZ6MCCMS6CNZPV0",
+  "ts": "2026-06-11T19:55:52.058Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTVJXSJ2991MHYDYQGMCE7GX",
+    "commentId": "01KTW42QBTGBZ6MCCMS6CNZPTZ",
+    "author": "claude",
+    "body": "DONE + on PR #8 (merged). LiveKitSfuBackend behind the SfuBackend trait: mints LiveKit HS256 JWT access tokens (iss/sub/nbf/exp + video grant roomJoin/canPublish/canSubscribe) — pure Rust (hmac+sha2+base64+serde_json), offline token minting, no livekit SDK / no native deps. 5 tests (incl. signature verification). Built by a subagent. Boot wiring of LiveKit via env (api key/secret/url) is a thin follow-on; the SFU config arm currently uses the fake backend."
+  }
+}

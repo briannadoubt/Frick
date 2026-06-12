@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTVV2EYBP61312QTYR94748Q",
+  "ts": "2026-06-11T17:18:26.251Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTVRDQS5YWW6WNR45ZSBZ6XB",
+    "commentId": "01KTVV2EYBP61312QTYR94748P",
+    "author": "claude",
+    "body": "Race fix landed (commit 1833142). The subscribe…Registered methods had a register-AFTER-send race: they sent the Subscribe then parked the waiter, so the server reply (socket thread on Android; actor reentrancy during sendFrame on Swift) could resolve-and-drop before the waiter existed → caller parked till timeout. Showed up as a flaky Android projection test under full-suite load (real MockWebServer exposes it; Swift manual-delivery test did not). Fixed by registering the waiter BEFORE sending (Android: sync registerRegistrationWaiter + await; Swift: registerThenSend appends the continuation then detaches the send). Added the missing stream-variant tests too. Verified by FULL suites run repeatedly: Swift 178/0; Android :frick green across 3 back-to-back full runs + 3 isolated reruns (was ~50% flaky before). FR-291 done."
+  }
+}

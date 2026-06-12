@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTW6D1KNF6QB71YSEY6BGP07",
+  "ts": "2026-06-11T20:36:27.381Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "commentId": "01KTW6D1KNF6QB71YSEY6BGP06",
+    "author": "claude",
+    "body": "Epic build COMPLETE — all direct children done/in_review/cancelled (none open), all on PR #8. The full TypeScript->Rust backend migration plus the realtime calls control plane (FR-276: FR-281..FR-290) are merged on rust-rewrite-foundation and gated green (962 workspace Rust tests + 420 TS + Swift 178 + Android :frick; clippy -D warnings + fmt clean; the 3 calls conformance scenarios pass end-to-end). Moving to in_review pending the rust-rewrite-foundation -> main review/merge. Residual non-blocking polish is tracked: a stale product-test call-schema fixture (spawned task), LiveKit deployment infra (ops), and manual native-SDK call acceptance (documented checklist)."
+  }
+}

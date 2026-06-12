@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTTPZ5QM50477FG9FMPTNMHW",
+  "ts": "2026-06-11T06:47:29.780Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTT8N5TAE3Z7A7W3P0FF9F7F",
+    "commentId": "01KTTPZ5QM50477FG9FMPTNMHV",
+    "author": "claude",
+    "body": "DONE + on PR #8 (merged f092810). OtelConfig from FRICK_OTEL_* (enabled/endpoint/service_name/headers/sample_ratio; honors FRICK_OTEL_ENDPOINT + the spec/Compose FRICK_OTEL_EXPORTER_OTLP_ENDPOINT + OTEL_* fallback). crate::telemetry::install_tracing wires the tracing-subscriber registry (fmt+EnvFilter) + an OTLP HTTP/protobuf layer when enabled, returning a guard that flushes on drop; wired in main.rs behind FRICK_OTEL_ENABLED (off by default). OTLP via opentelemetry-otlp http-proto + reqwest-rustls (no gRPC transport / openssl). Config + layer-construction unit-tested; live push needs a collector. Traces-only (per-request spans + metrics are a follow-up)."
+  }
+}

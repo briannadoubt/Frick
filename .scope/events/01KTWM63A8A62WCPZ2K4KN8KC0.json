@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTWM63A8A62WCPZ2K4KN8KC0",
+  "ts": "2026-06-12T00:37:19.816Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTWCFMJFZ0ACADBHT987CSPC",
+    "commentId": "01KTWM63A7P9S2NJN2J50G4G65",
+    "author": "claude",
+    "body": "DONE + on PR #8 (merged 4f21c43). Ports the media-placement seam: MediaHome{node_id,region,announced_ip}, the MediaPlacement trait, LocalMediaPlacement (single-box default), and ClusterMediaPlacement (bus-coordinated registry over the existing MediaPlacementClaim/Release envelopes — claim, lowest-nodeId tie-break, TTL self-heal, release-on-end). Injected into SfuMediaPlaneAdapter::new(backend, placement); allocate_session resolves region/announced-ip via placement (region_hint still wins) + stamps homeNodeId/announcedIp. Boot SFU/LiveKit arms default to LocalMediaPlacement::loopback(). 7 new tests (+ cluster suite green). Built by a subagent. The Rust re-implementation of FR-154."
+  }
+}
