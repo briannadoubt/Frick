@@ -11,6 +11,7 @@
 mod control_plane;
 mod e2ee;
 mod fake_media_plane;
+mod media_placement;
 mod media_plane;
 mod p2p_media_plane;
 pub mod schema;
@@ -28,6 +29,11 @@ pub use e2ee::{
     SealedKeyEnvelope, X25519_PUBLIC_BYTES, seal_epoch_for_recipients,
 };
 pub use fake_media_plane::{FakeMediaPlaneAdapter, FakeMediaPlaneOptions};
+pub use media_placement::{
+    ClusterMediaPlacement, ClusterMediaPlacementOptions, DEFAULT_PLACEMENT_TTL_MS,
+    LocalMediaPlacement, MEDIA_PLACEMENT_TENANT, MediaHome, MediaPlacement, MediaPlacementFuture,
+    PlacementClock,
+};
 pub use media_plane::{
     AllocateSessionOptions, IssueJoinTokenOptions, MediaJoinGrant, MediaParticipant,
     MediaPlaneAdapter, MediaPlaneCapabilities, MediaPlaneError, MediaPlaneFuture,
