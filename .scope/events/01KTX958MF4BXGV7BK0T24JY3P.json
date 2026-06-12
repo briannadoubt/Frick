@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTX958MF4BXGV7BK0T24JY3P",
+  "ts": "2026-06-12T06:43:52.591Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTX7428AHMETDPDEYNG7Q7QE",
+    "commentId": "01KTX958MF4BXGV7BK0T24JY3N",
+    "author": "codex",
+    "body": "Crate 0.4 migration audit: custom app routes are a hard blocker, not just a convenience. Crate mounts /api/* composed reads/commands, /auth/discogs/*, /auth/square/*, /square/webhook, invite redemption, and provider-link return flows through TypeScript appRoutes today. The Rust listen path currently builds only built-in routers; no app route injection is visible in boot.rs/http.rs despite docs still describing the TS createFrickServer({ appRoutes }) shape. Please include authenticated principal extraction, raw webhook body/signature handling, CORS/preflight control, and store access in the route seam, or point Crate at FR-299 if routes are handled by a TS sidecar."
+  }
+}

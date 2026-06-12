@@ -13,7 +13,10 @@ use crate::apps::AppDefinition;
 use crate::config::{BlobDriver, DbDriver, FrickConfig};
 use crate::gateway::GatewayHub;
 use crate::http::{AppState, AppStateInner, public_router};
-use crate::jobs::{JobHandlerRegistry, JobWorker, JobWorkerHandle, JobWorkerOptions};
+use crate::jobs::{
+    JobHandlerRegistry, JobWorker, JobWorkerHandle, JobWorkerOptions, RecurringJob,
+    RecurringRegistry, RecurringScheduler, RecurringSchedulerHandle, RecurringSchedulerOptions,
+};
 use crate::push::PUSH_DELIVER_JOB_TYPE;
 
 /// A running (or constructed-but-not-yet-listening) server.
@@ -37,7 +40,23 @@ pub struct FrickServer {
     /// Production wires a cached `reqwest` fetcher; tests inject a fixed key set
     /// so the provider-verify path runs offline.
     jwks_provider: crate::auth::SharedJwksProvider,
+    /// App-registered route builder (FR-297). Consumed in [`FrickServer::listen`].
+    app_router: Option<AppRouterBuilder>,
+    /// App-registered recurring job specs (FR-302). Consumed in
+    /// [`FrickServer::listen`] to start the scheduler.
+    recurring_jobs: Vec<RecurringJob>,
+    /// The running recurring-job scheduler (FR-302), started in
+    /// [`FrickServer::listen`] when there are specs and aborted on
+    /// [`FrickServer::close`]. `None` before `listen` / when no specs.
+    recurring: Option<RecurringSchedulerHandle>,
 }
+
+/// Builds a Rust backend's server-authoritative routes (FR-297) once at boot,
+/// given the live [`AppState`] (so handlers can reach the store and the public
+/// [`authenticate`](crate::routes::authenticate) helper). Returns a fully-built
+/// router that is merged into the framework router. Registered via
+/// [`BootSeams::app_router`].
+pub type AppRouterBuilder = Box<dyn FnOnce(AppState) -> axum::Router + Send>;
 
 /// Construction failure.
 #[derive(Debug, thiserror::Error)]
@@ -79,6 +98,30 @@ pub struct BootSeams {
     /// documented insertion point for sync validators / async image / moderation
     /// processors.
     pub blob_processors: Vec<crate::blob_processors::SharedBlobProcessor>,
+    /// App-registered authorization hooks (FR-296). Run after the built-in
+    /// baseline, in order, on every authorized action; tightening-only (a hook
+    /// may deny, never grant). Empty for the foundation/standalone binary — the
+    /// documented insertion point for a Rust backend's custom write-authz (RBAC,
+    /// entitlement gating, …). See [`crate::authz::PolicyHook`].
+    pub policy_hooks: Vec<std::sync::Arc<dyn crate::authz::PolicyHook>>,
+    /// App-registered routes (FR-297): a builder that, given the live
+    /// [`AppState`], returns a router of server-authoritative endpoints merged
+    /// into the framework router. `None` for the foundation/standalone binary —
+    /// the documented insertion point for a Rust backend's command endpoints
+    /// (they reach the store via `State<AppState>` and authenticate via the
+    /// public [`authenticate`](crate::routes::authenticate) helper).
+    pub app_router: Option<AppRouterBuilder>,
+    /// App-registered durable job handlers (FR-302), keyed by job type. Merged
+    /// into the job registry at boot after the framework built-ins
+    /// (`push.deliver`, `blob.process`); a duplicate job type fails boot with a
+    /// [`BootError::Config`]. Each handler runs with an app-scoped store view via
+    /// [`crate::jobs::JobContext`]. Empty for the foundation/standalone binary.
+    pub job_handlers: Vec<(String, crate::jobs::SharedJobHandler)>,
+    /// App-registered recurring jobs (FR-302). A non-empty set starts a
+    /// [`crate::jobs::RecurringScheduler`] alongside the durable-job worker in
+    /// [`FrickServer::listen`], re-enqueueing each spec's resolved targets once
+    /// per interval. Empty for the foundation/standalone binary.
+    pub recurring_jobs: Vec<crate::jobs::RecurringJob>,
 }
 
 impl BootSeams {
@@ -103,6 +146,13 @@ impl BootSeams {
             jwks_provider: Arc::new(crate::auth::ReqwestJwksProvider::default()),
             // No stock blob processors auto-register; an app supplies its own.
             blob_processors: Vec::new(),
+            // No built-in policy hooks; a Rust backend registers its own.
+            policy_hooks: Vec::new(),
+            // No built-in app routes; a Rust backend registers its own.
+            app_router: None,
+            // No built-in app job handlers / recurring jobs.
+            job_handlers: Vec::new(),
+            recurring_jobs: Vec::new(),
         }
     }
 }
@@ -404,6 +454,7 @@ fn build_platform_events(
 /// `AppStateInner` fields and MUST be `Arc`-clones of the root app's per-app
 /// registries (so the store write funnel + the gateway drive the same interiors
 /// the registry exposes for the root app).
+#[allow(clippy::too_many_lines)] // one linear server-construction wiring sequence
 async fn build_server(
     config: FrickConfig,
     schema: FrickSchema,
@@ -446,6 +497,17 @@ async fn build_server(
             .into_job_handler(),
     )
     .expect("blob.process is the only handler registered for that type at boot");
+    // App-registered durable job handlers (FR-302), after the framework
+    // built-ins. A duplicate job type (including shadowing a built-in) fails
+    // boot.
+    for (job_type, handler) in seams.job_handlers {
+        jobs.register(job_type, handler).map_err(|err| {
+            BootError::Config(crate::config::FrickConfigError(format!(
+                "duplicate job handler for type \"{}\"",
+                err.job_type
+            )))
+        })?;
+    }
     let jobs = Arc::new(jobs);
 
     let apps = Arc::new(registry);
@@ -476,6 +538,7 @@ async fn build_server(
         calls,
         blob_processors,
         platform_events,
+        policy_hooks: Arc::new(seams.policy_hooks),
     });
 
     // The gateway hub owns the live connections and the fan-out funnel. The
@@ -560,6 +623,9 @@ async fn build_server(
         worker: None,
         bound_port: 0,
         jwks_provider: seams.jwks_provider,
+        app_router: seams.app_router,
+        recurring_jobs: seams.recurring_jobs,
+        recurring: None,
     })
 }
 
@@ -585,7 +651,7 @@ impl FrickServer {
         } else {
             crate::routes::dataplane_router(Arc::clone(&self.state))
         };
-        let router = public_router(Arc::clone(&self.state))
+        let mut router = public_router(Arc::clone(&self.state))
             .merge(crate::auth_routes::auth_router(Arc::clone(&self.state)))
             // Sign in with Apple / Google id-token verify routes (FR-269). The
             // JWKS resolver is the injected seam (cached `reqwest` in prod).
@@ -605,11 +671,18 @@ impl FrickServer {
             .merge(crate::routes::inspect::inspect_router(Arc::clone(
                 &self.state,
             )))
-            .merge(self.gateway.router())
-            // CORS mirrors the TS `setCors`/preflight contract so browser
-            // clients on a separate origin get the allowlist-driven
-            // `Access-Control-*` headers (FR-255 review).
-            .layer(crate::cors::cors_layer(&self.config.allowed_origins));
+            .merge(self.gateway.router());
+        // App-registered routes (FR-297): a Rust backend's server-authoritative
+        // command endpoints, built once with the live [`AppState`] (store +
+        // `authenticate`). Merged after the framework routes so an app can't
+        // shadow them, and before CORS so the allowlist covers them too.
+        if let Some(build) = self.app_router.take() {
+            router = router.merge(build(Arc::clone(&self.state)));
+        }
+        // CORS mirrors the TS `setCors`/preflight contract so browser
+        // clients on a separate origin get the allowlist-driven
+        // `Access-Control-*` headers (FR-255 review).
+        let router = router.layer(crate::cors::cors_layer(&self.config.allowed_origins));
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         self.shutdown = Some(shutdown_tx);
 
@@ -628,8 +701,33 @@ impl FrickServer {
         }));
         self.worker = Some(worker.start());
 
+        // Start the recurring-job scheduler (FR-302) when an app registered
+        // specs: it re-enqueues each spec's resolved targets once per interval,
+        // which the worker above then claims. Aborted on `close` (or drop).
+        if !self.recurring_jobs.is_empty() {
+            let registry = RecurringRegistry::new(std::mem::take(&mut self.recurring_jobs))
+                .map_err(|err| {
+                    BootError::Config(crate::config::FrickConfigError(format!(
+                        "recurring job \"{}\" interval {}ms is below the {}ms minimum",
+                        err.name, err.got, err.minimum
+                    )))
+                })?;
+            let scheduler = Arc::new(RecurringScheduler::new(RecurringSchedulerOptions {
+                store: Arc::clone(&self.state) as Arc<dyn crate::jobs::StoreProvider>,
+                registry: Arc::new(registry),
+                tick_interval_ms: None,
+            }));
+            self.recurring = Some(scheduler.start());
+        }
+
         let join = tokio::spawn(async move {
-            let server = axum::serve(listener, router);
+            // Serve with connect-info so app routes (FR-297/FR-303) can extract
+            // the socket peer (`ConnectInfo<SocketAddr>`) for trusted client-IP
+            // resolution. Framework handlers that don't ask for it are unaffected.
+            let server = axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            );
             let graceful = server.with_graceful_shutdown(async move {
                 let _ = shutdown_rx.await;
             });
@@ -670,6 +768,10 @@ impl FrickServer {
         // teardown.
         if let Some(worker) = self.worker.take() {
             worker.stop();
+        }
+        // Stop the recurring-job scheduler (FR-302) so it stops re-enqueueing.
+        if let Some(recurring) = self.recurring.take() {
+            recurring.stop();
         }
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());

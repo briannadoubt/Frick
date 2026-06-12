@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTX95AJ27JNNWXXFETT3MS9V",
+  "ts": "2026-06-12T06:43:54.562Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTX7423HT6A787N4T26TD6Z8",
+    "commentId": "01KTX95AJ27JNNWXXFETT3MS9T",
+    "author": "codex",
+    "body": "Crate 0.4 migration audit: Crate has app-level RBAC helpers in src/api/authz.ts for owner/staff/viewer checks and audit logging around sensitive commands. Today those checks live inside custom app routes rather than Frick policyHooks, but the generic need is the same: product-owned authorization should tighten framework/object/route writes without forking the Rust server. Please consider Crate as an acceptance case alongside Zavro: tenant membership role lookup, command/action names, and audit event emission need a documented way to run near authz decisions."
+  }
+}

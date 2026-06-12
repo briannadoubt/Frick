@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTX9RTPX3QEN37D2M4KT526E",
+  "ts": "2026-06-12T06:54:33.693Z",
+  "actor": "unknown",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTX9RTPWMJYQZRRQKG4F9F0T",
+    "number": 300,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Android SDK should accept product schema identity for cache and sync",
+    "description": "Crate CR-108 migration audit found the Android SDK still hard-codes foundation schema constants in cache/header/sync paths, so product-schema apps cannot reliably run against a Rust 0.4 backend using generated CRATE_SCHEMA_HASH/descriptor values. Make the Android client accept injectable schema id/revision/hash/descriptor like Swift/web, and thread that identity through object reads/writes, cache compatibility, and FrickSyncSocket Hello/headers. Relevant audit paths: apps/android/frick/src/main/java/dev/frick/client/FrickClient.kt and FrickSyncSocket.kt.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

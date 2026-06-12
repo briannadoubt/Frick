@@ -570,7 +570,7 @@ async fn apply_migration_pg(
                 let duration_ms = elapsed_ms(start);
                 tx.run(
                     "INSERT INTO frick_migrations (id, schema_revision, applied_at, checksum, duration_ms)
-        VALUES (?, ?, ?, ?, ?)",
+        VALUES (?, ?, to_timestamp(?, 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"'), ?, ?)",
                     &[
                         SqlValue::from(ledger_id),
                         SqlValue::from(ledger_revision),

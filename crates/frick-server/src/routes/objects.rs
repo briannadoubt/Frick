@@ -15,7 +15,10 @@ use serde_json::json;
 use super::{
     ActiveApp, authenticate, new_request_id, parse_body_value, value_to_json, without_envelope_id,
 };
-use crate::authz::{Action, Decision, DenyReason, ResourceContext, decide_baseline};
+use crate::authz::{
+    Action, Decision, DenyReason, PolicyInput, PolicyResource, ResourceContext, apply_policy_hooks,
+    decide_baseline,
+};
 use crate::error::ServerError;
 use crate::http::{AppState, respond_error};
 use crate::object_visibility::{
@@ -131,7 +134,9 @@ async fn write_object(
         Err(error) => return respond_error(&error, &request_id),
     };
 
-    if let Err(error) = write_decision(&state, &principal, &object_type, &object_id).await {
+    if let Err(error) =
+        write_decision(&state, &principal, &object_type, &object_id, Some(&value)).await
+    {
         return respond_error(&error, &request_id);
     }
 
@@ -209,7 +214,7 @@ async fn delete_object(
         Err(error) => return respond_error(&error, &request_id),
     };
 
-    if let Err(error) = write_decision(&state, &principal, &object_type, &object_id).await {
+    if let Err(error) = write_decision(&state, &principal, &object_type, &object_id, None).await {
         return respond_error(&error, &request_id);
     }
 
@@ -242,12 +247,34 @@ async fn write_decision(
     principal: &Principal,
     object_type: &str,
     object_id: &str,
+    value: Option<&Value>,
 ) -> Result<(), ServerError> {
     let resource = ResourceContext {
         tenant_id: principal.tenant_id.clone(),
         owner_user_id: None,
     };
+    // Pipeline (FR-296, mirroring the TS): baseline → app policy hooks → sharing
+    // grant relaxation. A hook may tighten (e.g. an RBAC role × type matrix, or
+    // a company-entitlement gate); `value` is the write payload, so a hook can
+    // also gate on field values.
     let decision = decide_baseline(principal, Action::ObjectWrite, &resource);
+    let decision = apply_policy_hooks(
+        decision,
+        &PolicyInput {
+            principal,
+            action: Action::ObjectWrite,
+            resource: PolicyResource {
+                kind: "object",
+                name: Some(object_type.to_string()),
+                key: Some(object_id.to_string()),
+                owner_id: None,
+                tenant_id: principal.tenant_id.clone(),
+            },
+            context: value,
+        },
+        &state.policy_hooks,
+    )
+    .await;
     let decision =
         relax_object_write_with_grants(state, principal, object_type, object_id, decision).await?;
     decision_to_result(decision)

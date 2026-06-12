@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTXAFDPP1P6BKVPE16D8AMED",
+  "ts": "2026-06-12T07:06:54.038Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTX7428AHMETDPDEYNG7Q7QE",
+    "commentId": "01KTXAFDPP1P6BKVPE16D8AMEC",
+    "author": null,
+    "body": "Done. BootSeams.app_router (FnOnce(AppState)->axum::Router) merged in FrickServer::listen after framework routes + before CORS; routes::authenticate exposed (pub) for app handlers; store reached via State<AppState>. E2e test: a registered command route authenticates + reads the store on the real server."
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTXB0FN7G0G98112JEVF88F7",
+  "ts": "2026-06-12T07:16:13.095Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTX94YGYZAPN2WH7K60ZJ50D",
+    "commentId": "01KTXB0FN7G0G98112JEVF88F6",
+    "author": null,
+    "body": "Tension flag: this re-raises the language-agnostic/TS-server-compat idea that was cancelled as FR-298 per bri's explicit direction — 'end developers' backends should be in rust when leveraging Frick; clients can be other languages.' codex's Crate CR-108 audit gives strong counter-evidence (Crate's production server has substantial TS app code: Discogs/Square OAuth, webhooks, 6 job handlers, recurring resolvers, projections, push intents — a full port, not a package bump). So this is a genuine strategic decision for bri: either (a) Crate rewrites its backend in Rust (the stated direction; big effort) / stays pinned to @fricken/server 0.3.x, or (b) reopen a TS-extension bridge (reversing the FR-298 decision). Left in backlog pending that call rather than auto-cancelled, since it concerns a real shipping product's adoption."
+  }
+}

@@ -25,6 +25,11 @@ jobs:
       - name: Install pinned toolchain
         run: rustup show active-toolchain || rustup toolchain install
 
+      # The push-adapter tests include_str! gitignored throwaway signing keys;
+      # generate them on a fresh checkout (no-op locally where they exist).
+      - name: Generate push test keys
+        run: bash scripts/gen-test-keys.sh
+
       - name: Format
         run: cargo fmt --all --check
 
@@ -68,4 +73,6 @@ jobs:
       - name: Postgres integration tests
         env:
           FRICK_DATABASE_URL: postgres://postgres:postgres@localhost:5432/frick_test
-        run: cargo test -p frick-store --test postgres_live
+        # Serial: every test resets + re-migrates the one shared database, so
+        # they must not run concurrently (parallel DROP/CREATE race each other).
+        run: cargo test -p frick-store --test postgres_live -- --test-threads=1

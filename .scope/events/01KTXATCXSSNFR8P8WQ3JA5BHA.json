@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTXATCXSSNFR8P8WQ3JA5BHA",
+  "ts": "2026-06-12T07:12:53.689Z",
+  "actor": "codex",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTXATCXR4CT7MGGQ25J4QAEW",
+    "number": 302,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Expose Rust app job handlers and recurring jobs through BootSeams",
+    "description": "Crate CR-108 migration audit found that Frick 0.4 has Rust JobHandlerRegistry/JobHandler and RecurringJob/RecurringScheduler types, but FrickServer::listen constructs its own job registry and only registers built-ins such as push.deliver/blob.process, and the boot path starts the durable worker without an app recurring scheduler seam. Downstream apps cannot register product job handlers or recurring target resolvers on the Rust backend without forking boot. Add BootSeams or AppDefinition support for app job handlers and recurring jobs, with access to AppState/store, typed payload/result/error mapping, idempotency/retry semantics, and tests proving app-registered jobs plus recurring target resolution run on the real server. Crate acceptance cases: LookupReleaseByBarcode, ImportDiscogsCollection, CreateDiscogsListing, PublishToSquare, PollDiscogsOrders, CancelDiscogsListing, and recurring discogs.poll-orders.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

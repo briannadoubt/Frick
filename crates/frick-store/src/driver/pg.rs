@@ -19,7 +19,7 @@
 
 use deadpool_postgres::{Config, Object, Pool, Runtime};
 use tokio_postgres::NoTls;
-use tokio_postgres::types::{ToSql, Type};
+use tokio_postgres::types::{IsNull, ToSql, Type, to_sql_checked};
 
 use crate::error::StoreError;
 
@@ -317,7 +317,7 @@ fn decode_value(
 /// boolean case here.
 enum Bound {
     Null,
-    Integer(i64),
+    Integer(PgInt),
     Real(f64),
     Text(String),
     Blob(Vec<u8>),
@@ -328,12 +328,57 @@ fn bind_params(params: &[SqlValue]) -> Vec<Bound> {
         .iter()
         .map(|value| match value {
             SqlValue::Null => Bound::Null,
-            SqlValue::Integer(v) => Bound::Integer(*v),
+            SqlValue::Integer(v) => Bound::Integer(PgInt(*v)),
             SqlValue::Real(v) => Bound::Real(*v),
             SqlValue::Text(v) => Bound::Text(v.clone()),
             SqlValue::Blob(v) => Bound::Blob(v.clone()),
         })
         .collect()
+}
+
+/// An integer parameter that serializes to whatever width the target column
+/// expects (`int2`/`int4`/`int8`). `tokio_postgres` binds each parameter with
+/// the column's inferred type and is strict about the Rust↔SQL width — unlike
+/// node-postgres, which sent params as text for the server to coerce — so a
+/// bare `i64` is rejected by an `INTEGER` (`int4`) column with "error
+/// serializing parameter". The store binds every integer as `i64` (its only
+/// integer kind); this wrapper narrows it to the column's width at bind time so
+/// it works against the framework migrations' `INTEGER` columns unchanged.
+#[derive(Debug)]
+struct PgInt(i64);
+
+impl ToSql for PgInt {
+    fn to_sql(
+        &self,
+        ty: &Type,
+        out: &mut bytes::BytesMut,
+    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        match *ty {
+            Type::INT8 => self.0.to_sql(ty, out),
+            Type::INT4 => i32::try_from(self.0)
+                .map_err(|_| pg_int_range_error(self.0, "int4"))?
+                .to_sql(ty, out),
+            Type::INT2 => i16::try_from(self.0)
+                .map_err(|_| pg_int_range_error(self.0, "int2"))?
+                .to_sql(ty, out),
+            ref other => Err(format!(
+                "integer parameter {} cannot bind to Postgres type {}",
+                self.0,
+                other.name()
+            )
+            .into()),
+        }
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(*ty, Type::INT2 | Type::INT4 | Type::INT8)
+    }
+
+    to_sql_checked!();
+}
+
+fn pg_int_range_error(value: i64, target: &str) -> Box<dyn std::error::Error + Sync + Send> {
+    format!("integer {value} out of range for Postgres {target}").into()
 }
 
 fn bound_refs(bound: &[Bound]) -> Vec<&(dyn ToSql + Sync)> {
@@ -351,11 +396,32 @@ fn bound_refs(bound: &[Bound]) -> Vec<&(dyn ToSql + Sync)> {
         .collect()
 }
 
-/// A shared typed NULL (`Option::<i64>::None`). Binding `None::<i64>` sends a
-/// NULL with the int8 type oid; Postgres coerces NULLs to the target column
-/// type regardless of the sent type, so a single shared instance suffices for
-/// every `Null` parameter.
-static NULL_PARAM: Option<i64> = None;
+/// An untyped SQL NULL that binds to a column of any type. `tokio_postgres`
+/// checks `ToSql::accepts` client-side before sending, so a *typed* NULL (e.g.
+/// `Option::<i64>::None`, which only accepts `int8`) is rejected for a TEXT or
+/// BYTEA column with "error serializing parameter". This NULL accepts every
+/// type and serializes as SQL NULL, so a single shared instance suffices for
+/// every `Null` parameter regardless of the target column.
+#[derive(Debug)]
+struct PgNull;
+
+impl ToSql for PgNull {
+    fn to_sql(
+        &self,
+        _ty: &Type,
+        _out: &mut bytes::BytesMut,
+    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(IsNull::Yes)
+    }
+
+    fn accepts(_ty: &Type) -> bool {
+        true
+    }
+
+    to_sql_checked!();
+}
+
+static NULL_PARAM: PgNull = PgNull;
 
 // Takes the error by value so it can be used directly as `.map_err(pg_error)`,
 // matching the `StoreError::sqlite` pattern.

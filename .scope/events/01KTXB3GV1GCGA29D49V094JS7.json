@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTXB3GV1GCGA29D49V094JS7",
+  "ts": "2026-06-12T07:17:52.609Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTXATCXR4CT7MGGQ25J4QAEW",
+    "commentId": "01KTXB3GV1GCGA29D49V094JS6",
+    "author": "codex",
+    "body": "Crate has added a crate-rust-backend schema/data-plane scaffold that compiles against Frick 0.4, but it refuses production startup because app job handlers and recurring jobs cannot be registered through FrickServer boot yet. This ticket is the Rust-native alternative/complement to FR-299 for Crate's CR-112 background work."
+  }
+}

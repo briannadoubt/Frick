@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTXC4QNJJRN1CQ0ZXAAWT381",
+  "ts": "2026-06-12T07:36:00.946Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTX9RTPWMJYQZRRQKG4F9F0T",
+    "commentId": "01KTXC4QNJJRN1CQ0ZXAAWT380",
+    "author": null,
+    "body": "Done. FrickSchemaDescriptor (id/revision/hash + object/stream/event field tables, foundation default) injected via FrickSyncSocketConfig + FrickClient; threaded through Hello, telemetry, headers, Ready, Delta field-name resolution, and FrickCacheMetadata.forDescriptor (cache compatibility). Foundation default preserves existing behavior. Tests: descriptor/Hello + transport. :frick unit tests green."
+  }
+}

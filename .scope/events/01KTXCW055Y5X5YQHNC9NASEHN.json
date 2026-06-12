@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTXCW055Y5X5YQHNC9NASEHN",
+  "ts": "2026-06-12T07:48:43.301Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTXATCXR4CT7MGGQ25J4QAEW",
+    "commentId": "01KTXCW055Y5X5YQHNC9NASEHM",
+    "author": null,
+    "body": "Done. BootSeams.job_handlers (registered after built-ins; duplicate fails boot) + BootSeams.recurring_jobs (RecurringScheduler started in listen, validated + aborted on close). Handlers get the app-scoped store via JobContext. Tests: app handler runs on a worker tick; recurring spec boots the scheduler. frick-server suite green."
+  }
+}

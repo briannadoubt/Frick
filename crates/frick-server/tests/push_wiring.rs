@@ -109,6 +109,13 @@ fn recording_seams(apns: Arc<RecordingApnsTransport>) -> BootSeams {
         jwks_provider: BootSeams::production().jwks_provider,
         // FR-272: no blob processors for the push wiring tests.
         blob_processors: Vec::new(),
+        // FR-296: no policy hooks for the push wiring tests.
+        policy_hooks: Vec::new(),
+        // FR-297: no app routes for the push wiring tests.
+        app_router: None,
+        // FR-302: no app job handlers / recurring jobs for the push wiring tests.
+        job_handlers: Vec::new(),
+        recurring_jobs: Vec::new(),
     }
 }
 

@@ -129,6 +129,12 @@ pub struct AppStateInner {
     /// state machine the gateway routes `CallCommand` frames to, brokering a
     /// pluggable media plane (`FRICK_CALLS_MEDIA_PLANE`).
     pub calls: Arc<crate::calls::CallControlPlane>,
+
+    /// App-registered authorization hooks (FR-296), run after the built-in
+    /// authz baseline on every authorized action (tightening-only). Empty on the
+    /// standalone binary; a Rust backend supplies its own via
+    /// [`crate::boot::BootSeams`]. See [`crate::authz::PolicyHook`].
+    pub policy_hooks: crate::authz::PolicyHooks,
 }
 
 impl AppStateInner {
