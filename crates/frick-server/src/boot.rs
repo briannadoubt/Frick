@@ -306,21 +306,28 @@ fn build_call_media_plane(config: &FrickConfig) -> Arc<dyn crate::calls::MediaPl
     match config.calls_media_plane {
         CallsMediaPlane::Fake => Arc::new(crate::calls::FakeMediaPlaneAdapter::sfu()),
         CallsMediaPlane::P2p => Arc::new(crate::calls::P2pMediaPlaneAdapter::stun_only()),
-        CallsMediaPlane::Sfu => Arc::new(crate::calls::SfuMediaPlaneAdapter::new(Arc::new(
-            crate::calls::FakeSfuBackend::new(crate::calls::FakeSfuBackendOptions::default()),
-        ))),
+        CallsMediaPlane::Sfu => Arc::new(crate::calls::SfuMediaPlaneAdapter::new(
+            Arc::new(crate::calls::FakeSfuBackend::new(
+                crate::calls::FakeSfuBackendOptions::default(),
+            )),
+            // FR-293: single-box default. A bus-coordinated ClusterMediaPlacement
+            // is wired only when a cluster bus is configured (a follow-up that
+            // threads the bus + announced IP through here).
+            Arc::new(crate::calls::LocalMediaPlacement::loopback()),
+        )),
         CallsMediaPlane::Livekit => {
             // Validated at config load: `livekit` requires the LiveKit creds.
             let lk = config.calls_livekit.as_ref().expect(
                 "FRICK_CALLS_MEDIA_PLANE=livekit is validated at config load to carry credentials",
             );
-            Arc::new(crate::calls::SfuMediaPlaneAdapter::new(Arc::new(
-                crate::calls::LiveKitSfuBackend::new(
+            Arc::new(crate::calls::SfuMediaPlaneAdapter::new(
+                Arc::new(crate::calls::LiveKitSfuBackend::new(
                     lk.api_key.clone(),
                     lk.api_secret.clone(),
                     lk.ws_url.clone(),
-                ),
-            )))
+                )),
+                Arc::new(crate::calls::LocalMediaPlacement::loopback()),
+            ))
         }
     }
 }

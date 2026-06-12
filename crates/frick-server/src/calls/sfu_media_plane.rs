@@ -12,18 +12,29 @@
 //!
 //! Capability surface: transport [`Sfu`], `max_participants: None` (an SFU is
 //! bounded only by capacity), `supports_region_hint: true`. The four seam
-//! methods delegate to the backend:
-//!  - `allocate_session` ensures the room (idempotent), caching the public
-//!    session so the bootstrap connection metadata is stable;
+//! methods delegate to the backend (and, for placement, to an injected
+//! [`MediaPlacement`], FR-293):
+//!  - `allocate_session` ensures the room (idempotent), resolves the call's home
+//!    node / region / announced media address via the placement, and caches the
+//!    public session so the bootstrap connection metadata is stable;
 //!  - `issue_join_token` mints a backend access token for the participant;
-//!  - `release_session` closes the room (idempotent).
+//!  - `release_session` closes the room and frees the placement (idempotent).
+//!
+//! The injected [`MediaPlacement`] is the FR-293 seam that lets the SFU adapter
+//! stay single-box ([`LocalMediaPlacement`]) or grow into a bus-coordinated
+//! multi-box deployment ([`ClusterMediaPlacement`]) without the adapter changing
+//! shape.
 //!
 //! [`FakeMediaPlaneAdapter`]: super::fake_media_plane::FakeMediaPlaneAdapter
 //! [`Sfu`]: super::media_plane::MediaPlaneTransport::Sfu
+//! [`MediaPlacement`]: super::media_placement::MediaPlacement
+//! [`LocalMediaPlacement`]: super::media_placement::LocalMediaPlacement
+//! [`ClusterMediaPlacement`]: super::media_placement::ClusterMediaPlacement
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use super::media_placement::{LocalMediaPlacement, MediaPlacement};
 use super::media_plane::{
     AllocateSessionOptions, IssueJoinTokenOptions, MediaJoinGrant, MediaParticipant,
     MediaPlaneAdapter, MediaPlaneCapabilities, MediaPlaneError, MediaPlaneFuture,
@@ -44,27 +55,41 @@ struct AdapterState {
     sessions: HashMap<String, AllocatedSession>,
 }
 
-/// FR-287 — the SFU [`MediaPlaneAdapter`]. Holds an `Arc<dyn SfuBackend>` and
-/// delegates the room/token lifecycle to it. See the module docs.
+/// FR-287 / FR-293 — the SFU [`MediaPlaneAdapter`]. Holds an `Arc<dyn SfuBackend>`
+/// for the room/token lifecycle and an injected `Arc<dyn MediaPlacement>` (FR-293)
+/// that resolves each call's home node / region / announced media address. See
+/// the module docs.
 pub struct SfuMediaPlaneAdapter {
     backend: Arc<dyn SfuBackend>,
+    placement: Arc<dyn MediaPlacement>,
     state: Mutex<AdapterState>,
 }
 
 impl SfuMediaPlaneAdapter {
-    /// Build an adapter over an arbitrary [`SfuBackend`].
+    /// Build an adapter over an arbitrary [`SfuBackend`] + media [`MediaPlacement`].
+    /// The placement resolves where each call's media lives; pass a
+    /// [`LocalMediaPlacement`] for single-box, a [`ClusterMediaPlacement`] for
+    /// the bus-coordinated multi-box registry.
+    ///
+    /// [`ClusterMediaPlacement`]: super::media_placement::ClusterMediaPlacement
     #[must_use]
-    pub fn new(backend: Arc<dyn SfuBackend>) -> Self {
+    pub fn new(backend: Arc<dyn SfuBackend>, placement: Arc<dyn MediaPlacement>) -> Self {
         Self {
             backend,
+            placement,
             state: Mutex::new(AdapterState::default()),
         }
     }
 
-    /// Convenience constructor wiring a fresh deterministic [`FakeSfuBackend`].
+    /// Convenience constructor wiring a fresh deterministic [`FakeSfuBackend`]
+    /// and a single-box loopback [`LocalMediaPlacement`] (`node "local"`, region
+    /// `"local"`, announced IP `127.0.0.1`).
     #[must_use]
     pub fn with_fake_backend() -> Self {
-        Self::new(Arc::new(FakeSfuBackend::default()))
+        Self::new(
+            Arc::new(FakeSfuBackend::default()),
+            Arc::new(LocalMediaPlacement::loopback()),
+        )
     }
 
     /// Test/inspection helper: is a session currently allocated for this call?
@@ -108,9 +133,17 @@ impl MediaPlaneAdapter for SfuMediaPlaneAdapter {
                 .ensure_room(call_id)
                 .await
                 .map_err(|e| MediaPlaneError(e.0))?;
-            let region = options.region_hint.unwrap_or_else(|| "local".to_string());
+            // FR-293: resolve where this call's media lives (home node / region /
+            // announced media address) via the injected placement instead of
+            // hardcoding "local". A caller-supplied `region_hint` still takes
+            // precedence over the home's region when present (the adapter
+            // advertises `supports_region_hint`).
+            let home = self.placement.place_for(call_id).await;
+            let region = options.region_hint.unwrap_or(home.region);
             let mut connection = room.connection;
             connection.insert("region".to_string(), region.clone());
+            connection.insert("homeNodeId".to_string(), home.node_id);
+            connection.insert("announcedIp".to_string(), home.announced_ip);
             let session = MediaSession {
                 call_id: call_id.to_string(),
                 media_session_id: room.room_id,
@@ -175,6 +208,10 @@ impl MediaPlaneAdapter for SfuMediaPlaneAdapter {
             // dropping the cache entry twice is harmless.
             self.backend.close_room(call_id).await;
             self.lock().sessions.remove(call_id);
+            // FR-293: free the call's media placement so a bus-coordinated
+            // registry releases the home (and peers evict it). A no-op on a
+            // single-box LocalMediaPlacement.
+            self.placement.release(call_id).await;
         })
     }
 }
@@ -265,6 +302,61 @@ mod tests {
             .await
             .expect("allocate default");
         assert_eq!(default.region.as_deref(), Some("local"));
+    }
+
+    #[tokio::test]
+    async fn allocate_session_resolves_region_and_announced_ip_via_placement() {
+        // FR-293: with no region hint, the session's region + announced IP come
+        // from the injected placement, not the hardcoded "local".
+        let placement = Arc::new(LocalMediaPlacement::new(
+            Some("node-east".into()),
+            Some("us-east".into()),
+            "203.0.113.7",
+        ));
+        let adapter = SfuMediaPlaneAdapter::new(
+            Arc::new(FakeSfuBackend::default()),
+            placement as Arc<dyn MediaPlacement>,
+        );
+        let session = adapter
+            .allocate_session("call-1", AllocateSessionOptions::default())
+            .await
+            .expect("allocate");
+        assert_eq!(session.region.as_deref(), Some("us-east"));
+        let connection = session.connection.as_ref().expect("connection");
+        assert_eq!(
+            connection.get("region").map(String::as_str),
+            Some("us-east")
+        );
+        assert_eq!(
+            connection.get("homeNodeId").map(String::as_str),
+            Some("node-east")
+        );
+        assert_eq!(
+            connection.get("announcedIp").map(String::as_str),
+            Some("203.0.113.7")
+        );
+
+        // A region hint still wins over the placement's home region.
+        let hinted = adapter
+            .allocate_session(
+                "call-2",
+                AllocateSessionOptions {
+                    region_hint: Some("eu-west".into()),
+                    ..AllocateSessionOptions::default()
+                },
+            )
+            .await
+            .expect("allocate hinted");
+        assert_eq!(hinted.region.as_deref(), Some("eu-west"));
+        // The announced IP is still the placement's (the hint only steers region).
+        assert_eq!(
+            hinted
+                .connection
+                .as_ref()
+                .and_then(|c| c.get("announcedIp"))
+                .map(String::as_str),
+            Some("203.0.113.7")
+        );
     }
 
     #[tokio::test]

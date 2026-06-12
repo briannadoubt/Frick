@@ -2145,9 +2145,11 @@ impl GatewayHub {
                     cleared,
                 );
             }
-            // Media-placement kinds: ignored by the gateway (no `default` arm in
-            // the TS switch — only a ClusterMediaPlacement subscriber handles
-            // them).
+            // Media-placement kinds (FR-293): ignored by the gateway. They are
+            // handled by the `ClusterMediaPlacement` registry, which subscribes
+            // to the bus directly (its own handler maintains the call→home map),
+            // exactly as the TS `cluster-media-placement.ts` does — the gateway
+            // never routes these. See `calls::media_placement`.
             ClusterEnvelope::MediaPlacementClaim { .. }
             | ClusterEnvelope::MediaPlacementRelease { .. } => {}
         }
