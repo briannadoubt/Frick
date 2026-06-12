@@ -173,6 +173,7 @@ fn driver_routes_object_upsert_but_not_object_delete() {
         object_type: "widget".to_string(),
         object_id: "w-1".to_string(),
         object: Value::Map(vec![(Value::from("id"), Value::from("w-1"))]),
+        writer_user_id: None,
     };
     drive_projection_write(&registry, &upsert);
     assert_eq!(registry.snapshot("widget-counter", "tenant-1").len(), 1);

@@ -58,6 +58,7 @@ fn widget_upsert(id: &str, body: &str) -> FrickStoreWriteEvent {
             (Value::from("body"), Value::from(body)),
             (Value::from("room"), Value::from("r1")),
         ]),
+        writer_user_id: None,
     }
 }
 
@@ -159,6 +160,7 @@ fn non_matching_type_emits_nothing() {
         object_type: "gadget".to_string(),
         object_id: "g1".to_string(),
         object: Value::Map(vec![(Value::from("body"), Value::from("x"))]),
+        writer_user_id: None,
     };
     assert!(registry.project_event(&event).is_empty());
 }

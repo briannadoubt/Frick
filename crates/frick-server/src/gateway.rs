@@ -59,6 +59,10 @@ use crate::cluster::{ClusterEnvelope, FrickClusterBus, PresenceRecord, Projectio
 use crate::config::FrickLimits;
 use crate::error::ServerError;
 use crate::http::AppState;
+use crate::object_visibility::{
+    is_object_visible_to_user, owner_field_for_type, per_record_read_authz_active,
+    subscriber_can_read_object,
+};
 use crate::principal::{DEFAULT_APP_ID, Principal};
 use crate::projections::ProjectionRegistry;
 use crate::session::principal_from_active_session_token;
@@ -1107,6 +1111,11 @@ async fn handle_subscribe(hub: &Arc<GatewayHub>, id: u64, payload: SubscribePayl
             );
         }
         SubscriptionKind::Object => {
+            // Tenant+type rows, then per-record read scoping for THIS subscriber
+            // (FR-235/FR-116): own rows, unowned-type rows, rows with no owner
+            // value (migrated data), and rows they hold a grant on. Listing the
+            // full tenant set here (not an owner-filtered list) is what lets
+            // grant relaxation surface shared rows in the snapshot.
             let rows = hub
                 .state
                 .store
@@ -1114,7 +1123,27 @@ async fn handle_subscribe(hub: &Arc<GatewayHub>, id: u64, payload: SubscribePayl
                 .list(&principal.tenant_id, &payload.name, &app_id)
                 .await
                 .unwrap_or_default();
-            let objects = pack_object_rows(&hub.state.schema, &payload.name, &rows);
+            let mode = hub.state.config.object_visibility_mode;
+            let owner_field = owner_field_for_type(&hub.state.schema, &payload.name);
+            let per_record_active = per_record_read_authz_active(&hub.state.store).await;
+            let mut visible = Vec::with_capacity(rows.len());
+            for row in rows {
+                if subscriber_can_read_object(
+                    &hub.state.store,
+                    mode,
+                    owner_field,
+                    &principal,
+                    &payload.name,
+                    &row,
+                    per_record_active,
+                    None,
+                )
+                .await
+                {
+                    visible.push(row);
+                }
+            }
+            let objects = pack_object_rows(&hub.state.schema, &payload.name, &visible);
             send_frame(
                 hub,
                 id,
@@ -1324,6 +1353,7 @@ async fn handle_object_upsert(
             &payload.object_id,
             &payload.value,
             payload.expected_version,
+            Some(&principal.user_id),
         )
         .await;
     release_pending_write(hub, id);
@@ -1898,7 +1928,7 @@ impl GatewayHub {
     /// nodes fan it to their own subscribers (FR-114, map 06 §1.4). The inbound
     /// path ([`Self::handle_cluster_envelope`]) reuses the same `fan_out_*`
     /// helpers but never re-publishes.
-    fn handle_store_write(&self, event: &FrickStoreWriteEvent) {
+    fn handle_store_write(self: &Arc<Self>, event: &FrickStoreWriteEvent) {
         match event {
             FrickStoreWriteEvent::ObjectUpsert {
                 tenant_id,
@@ -1906,8 +1936,16 @@ impl GatewayHub {
                 object_type,
                 object_id,
                 object,
+                writer_user_id,
             } => {
-                self.fan_out_object_upsert(tenant_id, app_id, object_type, object_id, object);
+                self.fan_out_object_upsert(
+                    tenant_id,
+                    app_id,
+                    object_type,
+                    object_id,
+                    object,
+                    writer_user_id.as_deref(),
+                );
                 if let Some(bus) = self.cluster_bus() {
                     bus.publish(&ClusterEnvelope::Objects {
                         origin_node_id: bus.node_id().to_string(),
@@ -1955,19 +1993,21 @@ impl GatewayHub {
     }
 
     fn fan_out_object_upsert(
-        &self,
+        self: &Arc<Self>,
         tenant_id: &str,
         app_id: &str,
         object_type: &str,
         object_id: &str,
         object: &Value,
+        writer_user_id: Option<&str>,
     ) {
         // The record id rides the packed tuple's id slot, so the packed
         // *fields* must not include `id` — schema object types do not declare
         // an `id` field, and `pack_object_record` errors on an unknown field.
         // Strip it first, matching the TS `withoutRecordId` before packing.
+        let schema = self.schema();
         let value = without_record_id(object);
-        let Ok(packed) = pack_object_record(&self.schema(), object_type, object_id, &value) else {
+        let Ok(packed) = pack_object_record(&schema, object_type, object_id, &value) else {
             return;
         };
         let frame = FrickFrame::Delta(DeltaPayload {
@@ -1979,14 +2019,82 @@ impl GatewayHub {
         let Ok(bytes) = encode_frame(&frame) else {
             return;
         };
-        self.broadcast_to_subscribers(
-            SubscriptionKind::Object,
-            object_type,
-            None,
-            tenant_id,
-            app_id,
-            &bytes,
-        );
+
+        // Per-record read scoping (FR-235/FR-116). The ownership baseline is a
+        // synchronous field compare, so baseline-visible subscribers (owners,
+        // the writer, admins, unowned-type rows, migrated rows) are delivered
+        // to inline — preserving ordering and the synchronous-delivery contract
+        // the funnel tests rely on. Subscribers who fail the baseline (owner
+        // mismatch) may still hold a sharing grant; those are resolved
+        // asynchronously below, since grant lookups hit the store.
+        let mode = self.state.config.object_visibility_mode;
+        let owner_field = owner_field_for_type(&schema, object_type);
+        let mut grant_candidates: Vec<(Principal, mpsc::UnboundedSender<Outbound>)> = Vec::new();
+        {
+            let Ok(inner) = self.inner.lock() else { return };
+            for connection in inner.connections.values() {
+                let Some(principal) = &connection.principal else {
+                    continue;
+                };
+                if !principal.is_active_cheap() || principal.tenant_id != tenant_id {
+                    continue;
+                }
+                if connection.app_id != app_id {
+                    continue;
+                }
+                let matches = connection
+                    .subscriptions
+                    .iter()
+                    .any(|sub| sub.kind == SubscriptionKind::Object && sub.name == object_type);
+                if !matches {
+                    continue;
+                }
+                let baseline_visible = writer_user_id == Some(principal.user_id.as_str())
+                    || principal.is_admin()
+                    || is_object_visible_to_user(mode, owner_field, object, &principal.user_id);
+                if baseline_visible {
+                    let _ = connection.outbound.send(Outbound::Frame(bytes.clone()));
+                } else {
+                    grant_candidates.push((principal.clone(), connection.outbound.clone()));
+                }
+            }
+        }
+
+        if grant_candidates.is_empty() {
+            return;
+        }
+        // Owner-mismatch subscribers: an active read grant on this exact record
+        // flips the deny to allow (`relaxWithGrants`). Resolve off the hot path
+        // — grant-based visibility tolerates the brief asynchronous delay, and
+        // skipping it entirely when no grant has ever been issued keeps the
+        // common (grant-free) deployment fully synchronous.
+        let hub = Arc::clone(self);
+        let tenant_id = tenant_id.to_string();
+        let object_type = object_type.to_string();
+        let object_id = object_id.to_string();
+        tokio::spawn(async move {
+            if !per_record_read_authz_active(&hub.state.store).await {
+                return;
+            }
+            for (principal, outbound) in grant_candidates {
+                if hub
+                    .state
+                    .store
+                    .grants()
+                    .has_active_grant_for(
+                        &tenant_id,
+                        &principal.user_id,
+                        &object_type,
+                        &object_id,
+                        "read",
+                    )
+                    .await
+                    .unwrap_or(false)
+                {
+                    let _ = outbound.send(Outbound::Frame(bytes.clone()));
+                }
+            }
+        });
     }
 
     fn fan_out_object_delete(
@@ -2022,6 +2130,98 @@ impl GatewayHub {
             app_id,
             &bytes,
         );
+    }
+
+    /// A record's read visibility was REVOKED for some principals (a sharing
+    /// grant was revoked or left, FR-235). For each object subscriber in the
+    /// tenant/app partition, the row's read pipeline is re-evaluated against
+    /// current grant state: a subscriber who can no longer read it receives a
+    /// removal Delta (the same tombstone + `removed` shape a delete uses) so
+    /// the row disappears live; the owner and any remaining grantees receive
+    /// nothing. A removal for a row a subscriber never held is harmless — the
+    /// client drops ids it does not have — so no per-subscriber bookkeeping is
+    /// needed. Async (it reads the row + probes grants); callers `await` it.
+    pub async fn fan_out_object_visibility_revoked(
+        self: &Arc<Self>,
+        tenant_id: &str,
+        app_id: &str,
+        object_type: &str,
+        object_id: &str,
+    ) {
+        // If the row is gone, the delete fan-out already handles dropping it.
+        let Ok(Some(object)) = self
+            .state
+            .store
+            .objects()
+            .read(tenant_id, object_type, object_id, app_id)
+            .await
+        else {
+            return;
+        };
+        let schema = self.schema();
+        let Ok(tombstone) =
+            pack_object_record(&schema, object_type, object_id, &Value::Map(vec![]))
+        else {
+            return;
+        };
+        let frame = FrickFrame::Delta(DeltaPayload {
+            objects: vec![tombstone],
+            events: vec![],
+            cursor: now_ms(),
+            removed: Some(vec![ObjectRemoval {
+                object_type: object_type.to_string(),
+                id: object_id.to_string(),
+            }]),
+        });
+        let Ok(bytes) = encode_frame(&frame) else {
+            return;
+        };
+
+        let mode = self.state.config.object_visibility_mode;
+        let owner_field = owner_field_for_type(&schema, object_type);
+        let per_record_active = per_record_read_authz_active(&self.state.store).await;
+
+        let mut subscribers: Vec<(Principal, mpsc::UnboundedSender<Outbound>)> = Vec::new();
+        {
+            let Ok(inner) = self.inner.lock() else { return };
+            for connection in inner.connections.values() {
+                let Some(principal) = &connection.principal else {
+                    continue;
+                };
+                if !principal.is_active_cheap() || principal.tenant_id != tenant_id {
+                    continue;
+                }
+                if connection.app_id != app_id {
+                    continue;
+                }
+                let matches = connection
+                    .subscriptions
+                    .iter()
+                    .any(|sub| sub.kind == SubscriptionKind::Object && sub.name == object_type);
+                if matches {
+                    subscribers.push((principal.clone(), connection.outbound.clone()));
+                }
+            }
+        }
+
+        for (principal, outbound) in subscribers {
+            if subscriber_can_read_object(
+                &self.state.store,
+                mode,
+                owner_field,
+                &principal,
+                object_type,
+                &object,
+                per_record_active,
+                None,
+            )
+            .await
+            {
+                // Still readable (owner / remaining grantees / unowned type).
+                continue;
+            }
+            let _ = outbound.send(Outbound::Frame(bytes.clone()));
+        }
     }
 
     fn fan_out_stream_append(&self, tenant_id: &str, event: &StoredEvent) {
@@ -2140,7 +2340,8 @@ impl GatewayHub {
     /// has no `default` arm; only a media-placement subscriber handles them).
     /// Envelopes from older peers with `app_id == None` default to
     /// [`DEFAULT_APP_ID`].
-    pub fn handle_cluster_envelope(&self, envelope: &ClusterEnvelope) {
+    #[allow(clippy::too_many_lines)] // one linear dispatch over every envelope kind
+    pub fn handle_cluster_envelope(self: &Arc<Self>, envelope: &ClusterEnvelope) {
         match envelope {
             ClusterEnvelope::StreamEvent {
                 tenant_id,
@@ -2164,7 +2365,15 @@ impl GatewayHub {
                 let app_id = app_id_or_default(app_id.as_deref());
                 for object in objects {
                     let object_id = object_id_of(object);
-                    self.fan_out_object_upsert(tenant_id, app_id, object_type, &object_id, object);
+                    // A peer write carries no local writer identity.
+                    self.fan_out_object_upsert(
+                        tenant_id,
+                        app_id,
+                        object_type,
+                        &object_id,
+                        object,
+                        None,
+                    );
                 }
             }
             ClusterEnvelope::ObjectDeletes {

@@ -22,6 +22,7 @@ pub mod extract;
 pub mod gateway;
 pub mod http;
 pub mod jobs;
+pub mod object_visibility;
 pub mod principal;
 pub mod projections;
 pub mod push;

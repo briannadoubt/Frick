@@ -66,9 +66,9 @@ All variables are optional. Defaults match the runtime mode.
 | `FRICK_PORT`                | `4099`                      | `4099`                                | Integer in `[0, 65535]`. `0` asks the kernel to allocate a port.     |
 | `FRICK_PUBLIC_URL`          | unset                       | unset                                 | Externally-reachable URL; surfaced in the startup log when set.      |
 | `FRICK_ALLOWED_ORIGINS`     | `["*"]`                     | `[]`                                  | Comma-separated allowlist. Entries may be `*` (allow all), an exact origin (`https://app.example.com`), or a subdomain wildcard (`https://*.example.com`, which matches any subdomain but not the apex `example.com`). Enforced for HTTP preflight and WebSocket upgrades; same-origin/server-to-server requests omit `Origin`. Malformed patterns are rejected at startup. |
-| `FRICK_DB_DRIVER`           | `sqlite`                    | `sqlite`                              | Durable-storage driver selector. One of `sqlite` or `postgres`. `postgres` requires `FRICK_DATABASE_URL`, but the server runtime still constructs the SQLite-backed stores; Postgres currently covers the standalone migration/schema runner while runtime store ports are in progress. |
+| `FRICK_DB_DRIVER`           | `sqlite`                    | `sqlite`                              | Durable-storage driver selector. One of `sqlite` or `postgres`. `postgres` requires `FRICK_DATABASE_URL` and runs the server against the Postgres-backed `frick-store` driver. |
 | `FRICK_DB_PATH`             | `./frick.sqlite`            | `./frick.sqlite`                      | SQLite path (used by the `sqlite` driver). `":memory:"` is rejected in production. |
-| `FRICK_DATABASE_URL`        | unset                       | unset                                 | Postgres connection string for the standalone Postgres migration/schema runner. Required when `FRICK_DB_DRIVER=postgres`; ignored by the `sqlite` runtime store. |
+| `FRICK_DATABASE_URL`        | unset                       | unset                                 | Postgres connection string. Required when `FRICK_DB_DRIVER=postgres`; ignored by the `sqlite` runtime store. |
 | `FRICK_BLOB_DRIVER`         | `sqlite`                    | `sqlite`                              | Blob-bytes storage driver. One of `sqlite`, `filesystem`, or `s3`. `sqlite` keeps blob bytes in the SQLite `blob_content` table; `filesystem` stores them under `FRICK_BLOB_STORAGE_PATH` in tenant-isolated, id-keyed files; `s3` stores them in an S3-compatible object store under a tenant-isolated key prefix (see "Object-storage blob driver" below). Blob metadata always stays in SQLite. Selecting `filesystem` without a writable `FRICK_BLOB_STORAGE_PATH`, or `s3` without `FRICK_BLOB_S3_BUCKET`, fails fast at startup. |
 | `FRICK_BLOB_STORAGE_PATH`   | `./frick-blobs/`            | `./frick-blobs/`                      | Filesystem root for blob bytes. Used by the `filesystem` blob driver; inert under the default `sqlite` driver. Must be a writable directory when `FRICK_BLOB_DRIVER=filesystem`. |
 | `FRICK_BLOB_S3_BUCKET`      | unset                       | unset                                 | Target bucket for the `s3` blob driver. Required when `FRICK_BLOB_DRIVER=s3`; inert otherwise. |
@@ -88,6 +88,7 @@ All variables are optional. Defaults match the runtime mode.
 | `FRICK_INSPECTION_ENABLED`  | `true`                      | `false`                               | Gates `/_frick/inspect/*`. Forcing on in prod logs a warning.        |
 | `FRICK_ADMIN_TOKEN`         | unset                       | unset                                 | Enables `/_frick/admin/*` and production inspection auth. Must be at least 32 chars in production. |
 | `FRICK_IMPLICIT_TENANT_CREATION` | `true`                 | `false`                               | Allows auth routes to create unknown tenants automatically.           |
+| `FRICK_OBJECT_VISIBILITY`   | `ownerScoped`               | `ownerScoped`                         | Object read scoping (FR-235). `ownerScoped` (default): a type with an `ownerUserId` string field is readable only by the owner on list / subscription snapshot / live fan-out, relaxed per-record by sharing grants; types without that field stay tenant-visible. `tenantWide` opts back into legacy allow-all-in-tenant reads. |
 | `FRICK_EMAIL_PROVIDER`      | `noop`                      | `noop`                                | Outbound-email provider (FR-271). One of `noop` or `resend`. `noop` (the default) drops messages after logging, so `POST /auth/email/forgot-password` still returns `200` without sending. `resend` wires the live Resend HTTP adapter and additionally requires `FRICK_RESEND_API_KEY` and `FRICK_EMAIL_FROM` (both validated at startup). |
 | `FRICK_RESEND_API_KEY`      | unset                       | unset                                 | Resend API key, sent as `Authorization: Bearer <key>` to `https://api.resend.com/emails`. Required when `FRICK_EMAIL_PROVIDER=resend`; inert otherwise. |
 | `FRICK_EMAIL_FROM`          | unset                       | unset                                 | Default `from:` address for framework auth emails (password reset / verification). Required when `FRICK_EMAIL_PROVIDER=resend`; also used as the email router's `defaultFrom`. |
@@ -146,26 +147,16 @@ Blob processors hook the upload pipeline in two phases: a synchronous
 `validate(...)` that runs before any row is written (rejected uploads
 short-circuit with `blob.unsupportedContentType`), and an asynchronous
 `process(...)` that runs as a `blob.process` job after the upload commits and
-persists any returned derivatives. The prior TypeScript server shipped three
-stock processor factories (FR-55, FR-130) — a MIME/size validator, an image
-derivative extractor, and a moderation hook — registered through a
-`blobProcessors` option.
-
-> **Not yet ported to the Rust server (tracked in FR-264).** The Rust
-> `frick-server` does **not** yet expose a blob-processor registry: there is no
-> `blobProcessors` config surface and no `mimeSizeValidator` / `imageBlobProcessor`
-> / `moderationProcessor` factory, so uploads are not validated or transformed
-> by framework processors today. The underlying derivative *storage* primitives
-> and read routes are in place — see below — but nothing writes derivatives
-> through a processor pipeline yet. Until this ports, enforce MIME/size limits
-> at the reverse proxy or in an app-owned upload route.
+persists any returned derivatives. The Rust server exposes the processor
+registry and the `blob.process` job pipeline. The stock MIME/size validator and
+moderation-hook shape are ported; image-derivative generation remains a
+follow-up until the image-processing dependency is selected.
 
 The derivative **read** routes are mounted today
 (`GET /blobs/:id/derivatives` and
 `GET /blobs/:id/derivatives/:derivativeId/content`, in
-`crates/frick-server/src/routes/blobs.rs`), so any derivatives produced once the
-processor pipeline ports — keyed on `(tenant, parent, derivative)` — are already
-retrievable through the stable API.
+`crates/frick-server/src/routes/blobs.rs`), so derivatives keyed on
+`(tenant, parent, derivative)` are retrievable through the stable API.
 
 ## Local runtime profiles
 
@@ -334,19 +325,14 @@ shutdown.
 
 ## Identity provider routes
 
-> **Not yet ported to the Rust server (tracked in FR-264).** The Rust
-> `frick-server` mounts the core auth routes `/auth/signup`, `/auth/login`,
-> `/auth/dev-login`, and `/auth/logout` (`crates/frick-server/src/auth_routes.rs`).
-> The provider-owned identity routes described below — Apple, Google, generic
-> OIDC, email/password reset, and SAML — are **not yet implemented** in the Rust
-> server, and there is no `identityProviders` configuration surface. The contract
-> below is retained as the target behavior; treat it as follow-up work and do not
-> rely on these routes being live today.
-
-Provider-owned auth routes are intended to mount alongside the built-in
-`/auth/signup`, `/auth/login`, and `/auth/dev-login` routes. The target
-contract supports Apple, Google ID tokens, generic OpenID Connect issuers, and
-email/password accounts with single-use password reset tokens:
+The Rust `frick-server` mounts the core auth routes `/auth/signup`,
+`/auth/login`, `/auth/dev-login`, and `/auth/logout`, plus provider-owned routes
+for Apple, Google, generic OpenID Connect issuers, and email/password accounts
+with single-use password reset tokens. Provider configuration is environment
+driven (`FRICK_APPLE_AUDIENCES`, `FRICK_GOOGLE_CLIENT_IDS`,
+`FRICK_OIDC_PROVIDERS`, `FRICK_EMAIL_PROVIDER`, and related email variables);
+the TypeScript-era `identityProviders` object remains useful as design context
+for embedders but is not the Rust binary's configuration surface.
 
 - `POST /auth/apple/verify` verifies an Apple `identityToken` against Apple's
   JWKS with the configured audience, creates or finds the mapped app-owned User
@@ -361,19 +347,13 @@ email/password accounts with single-use password reset tokens:
 - `POST /auth/oidc/:providerId/verify` verifies a generic OpenID Connect
   `idToken` for a configured provider (Okta, Auth0, Microsoft Entra, Keycloak,
   any standards-compliant issuer). Apps declare providers via
-  `identityProviders.oidc: [{ id, issuer, clientId, audience?, jwksUri? |
-  discovery, claimMappings? }]`. Each provider resolves its signing keys
-  either from a directly-configured `jwksUri` or by fetching the issuer's
-  discovery document at `<issuer>/.well-known/openid-configuration` and reading
-  its `jwks_uri` (when `discovery: true`). Verification checks the
-  signature against the resolved JWKS, the `iss` claim against the configured
-  `issuer`, the `aud` claim against `audience` (defaulting to `clientId`), and
-  expiry; the optional request `nonce` is checked when supplied in the body.
-  Standard claims `sub`, `email`, `name`, and `preferred_username` plus any
-  configured `claimMappings.extra` (`{ "<UserField>": "<claim>" }`) populate the
-  mapped User object. The verified `sub` is stored on `oidcSubjectField` as a
-  per-provider composite `"<providerId>:<sub>"`, so two issuers that reuse the
-  same subject value never alias onto one account. Returns
+  `FRICK_OIDC_PROVIDERS` as a JSON array of `{ id, issuer, audiences, jwksUri }`.
+  Verification checks the signature against the configured JWKS, the `iss` claim
+  against the configured issuer, the `aud` claim against the configured
+  audiences, expiry, and the optional request `nonce` when supplied in the body.
+  The verified `sub` is stored as a per-provider composite
+  `"<providerId>:<sub>"`, so two issuers that reuse the same subject value never
+  alias onto one account. Returns
   `{ session, user, isNewUser }`. An unconfigured `:providerId` returns `404`,
   and verification failures return `401 { error: "oidc_token_invalid", code }`.
   **Enterprise SAML SSO** is supported through this OIDC route by fronting Frick
@@ -417,12 +397,11 @@ per-(route, identity/IP) auth-attempt limiter, returning `429
 once `maxAuthAttemptsPerWindow` is exceeded; verify routes bucket by client IP,
 `forgot-password` by email, and `reset-password` by token.
 
-The framework now supports generic OpenID Connect issuers (above) and SAML 2.0
-Service Providers via `identityProviders.saml` (each provider mounts
-`GET /auth/saml/:id/metadata` and `POST /auth/saml/:id/acs`; inbound assertions
-are signature-verified against the configured IdP certificate with audience /
-validity-window / recipient / InResponseTo checks and assertion-replay
-protection). Arbitrary non-OIDC OAuth provider routing remains unimplemented.
+The framework supports generic OpenID Connect issuers (above). Frick does not
+terminate SAML assertions in-process; enterprise SAML SSO is supported by
+fronting Frick with a SAML-to-OIDC broker and consuming the OIDC route. See
+[`enterprise-sso.md`](enterprise-sso.md). Arbitrary non-OIDC OAuth provider
+routing remains unimplemented.
 
 ## Sharing routes
 
@@ -720,20 +699,15 @@ server exposes these GET endpoints under `/_frick/inspect/`:
 - `/_frick/inspect/search` — active search adapter id plus registered
   index names and sources.
 - `/_frick/inspect/metrics` — `{ snapshotAt, uptimeSeconds, counters, gauges }`.
-  Returns a JSON snapshot of in-process counters and gauges. Counter names
-  include `frick.http.requests.total{method,status}`,
-  `frick.http.errors.total{code}`, and `frick.ws.frames.total{kind}`. Gauges
-  include `frick.ws.connections.current`. No retention or historical
-  aggregation — scrape periodically to integrate with a metrics backend. When
-  OTel is enabled (`FRICK_OTEL_ENABLED=true`, FR-267), the standalone
-  `frick-server` binary also installs a `tracing-opentelemetry` OTLP
-  **HTTP/protobuf** exporter so the server's `tracing` spans are exported to the
-  configured collector over OTLP (reqwest/rustls — no gRPC). Trace export is the
-  ported surface today; OTLP **metrics** export and the per-request/WebSocket/
-  job instrument set listed for the TypeScript runtime are not yet ported, so
-  use the in-process `/_frick/inspect/metrics` snapshot for counters and gauges
-  in the meantime. This snapshot remains available for local dashboard panels
-  and simple health checks regardless of OTel.
+  Returns the current snapshot timestamp and server uptime. `counters` and
+  `gauges` are empty maps until the Rust in-process metrics registry ports, so
+  do not treat this as an operational metrics feed yet. When OTel is enabled
+  (`FRICK_OTEL_ENABLED=true`, FR-267), the standalone `frick-server` binary also
+  installs a `tracing-opentelemetry` OTLP **HTTP/protobuf** exporter so the
+  server's `tracing` spans are exported to the configured collector over OTLP
+  (reqwest/rustls — no gRPC). Trace export is the ported surface today; OTLP
+  **metrics** export and the per-request/WebSocket/job instrument set listed
+  for the TypeScript runtime are not yet ported.
 - `/_frick/inspect/platform-events` — platform event pipeline health:
   `{ adapter, ok, pending, claimed, deadLettered, retained, unclaimed,
   consumers }`. The driver is selected by `FRICK_PLATFORM_EVENTS_DRIVER`:
@@ -786,8 +760,8 @@ top event names, top viewed routes, and recent event metadata. Tenant session
 principals only see their session tenant; production admin bearers see the
 project-wide summary. The server's analytics aggregate consumer materializes
 those events into local analytics read-model tables, so the summary endpoint
-works with both the default SQLite platform-event adapter and the Kafka/Redpanda
-adapter.
+works with the default SQLite platform-event adapter. The Kafka/Redpanda adapter
+is recognized in config but remains a follow-up and fails fast if selected.
 
 `/_frick/dashboard/api/data/objects/:type?limit=50&tenantId=_default` returns
 read-only schema object rows for the mounted dashboard data browser. Tenant
@@ -845,15 +819,16 @@ per-tenant `limits`, optional `retentionMs`, push credential configured/not
 configured flags for APNs, FCM, and Web Push, plus stored setting key names.
 Encrypted push credential values and unknown setting values are never returned.
 
-The platform event pipeline is SQLite-backed in the Rust server today. The
-`FRICK_PLATFORM_EVENTS_DRIVER=kafka` setting (with
+The platform event pipeline is `memory` or SQLite-backed in the Rust server
+today. The `FRICK_PLATFORM_EVENTS_DRIVER=kafka` setting (with
 `FRICK_PLATFORM_EVENTS_KAFKA_BROKERS=host:9092`) is recognized as config and is
 set by the Compose profiles, but the Kafka/Redpanda runtime adapter is **not yet
-ported to the Rust server (tracked in FR-264)** — the store falls back to SQLite
-regardless, so a broker is not actually contacted. The target Kafka adapter
-would connect lazily on first publish or claim, commit only contiguous terminal
-offsets on `ack`, republish retried events to the broker, and publish poison
-messages to `<topic>.dlq`. The SQLite pipeline described next is what runs.
+ported to the Rust server**. Selecting `kafka` fails boot with a clear
+"not yet ported" error rather than silently falling back to SQLite. The target
+Kafka adapter would connect lazily on first publish or claim, commit only
+contiguous terminal offsets on `ack`, republish retried events to the broker,
+and publish poison messages to `<topic>.dlq`. The SQLite pipeline described
+next is what runs for durable local/self-hosted deployments.
 The job worker publishes initial `jobs.lifecycle` events for completed,
 retryable failed, and dead-lettered jobs; downstream consumers can claim those
 events from the same pipeline as analytics and telemetry events. SQLite claims
@@ -1047,10 +1022,8 @@ pending write), so ordering is not contractual and convergence is unaffected.
 
 The framework ships a portable dump/restore format. Use it for offline
 migrations, pre-deploy snapshots, and copying data between environments.
-The format is independent of the underlying driver. SQLite is the active
-runtime store today; the standalone Postgres schema/migration runner is in
-place, and the Postgres store adapter will produce dumps in the same shape once
-the runtime store port lands.
+The format is independent of the underlying driver and works with the active
+SQLite or Postgres `frick-store` driver.
 
 ### Format
 
@@ -1314,19 +1287,15 @@ Content-Type: application/json
 - The CLI is the `frick-cli` crate; run it in the monorepo with
   `cargo run -p frick-cli -- <command>`. Packaging and distributing a
   standalone `frick` binary is a release-surface follow-up. The CLI's
-  `verify`/`backup`/`restore` commands are listed for parity but currently
-  return `cli.unsupported`.
+  `verify`, `backup`, and `restore` commands are implemented in Rust.
 - Blob bytes default to SQLite (`FRICK_BLOB_DRIVER=sqlite`, the `blob_content`
   table). Set `FRICK_BLOB_DRIVER=filesystem` with a writable
-  `FRICK_BLOB_STORAGE_PATH` to store bytes on the local filesystem — both the
-  SQLite and filesystem drivers are fully ported. `FRICK_BLOB_DRIVER=s3` (with
-  `FRICK_BLOB_S3_BUCKET`) is config-recognized but the S3 byte driver is not yet
-  ported (reserved seam in `crates/frick-store/src/stores/blob_bytes.rs`; tracked
-  in FR-264 / FR-241) — see "Object-storage blob driver". Blob metadata stays in
-  SQLite under every driver. External (filesystem) blob byte stores are not yet
-  included in NDJSON backup/restore or account export payloads, so operators must
-  back up the filesystem path separately. Byte export and derivative offloading
-  are follow-ups.
+  `FRICK_BLOB_STORAGE_PATH`, or `FRICK_BLOB_DRIVER=s3` with
+  `FRICK_BLOB_S3_BUCKET`, to store bytes outside the SQL database. Blob metadata
+  stays in SQLite/Postgres under every driver. External filesystem/S3 blob byte
+  stores are not yet included in NDJSON backup/restore or account export
+  payloads, so operators must back up the path or bucket separately. Byte export
+  and image-derivative generation are follow-ups.
 - Outbound email ships a Noop default and a live Resend adapter (FR-271; see
   "Outbound email"). SES / Postmark / SMTP adapters are provided out-of-tree
   against the `FrickEmailAdapter` trait, and email-address *verification* (as

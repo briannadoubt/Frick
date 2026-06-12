@@ -207,6 +207,7 @@ fn store_write_listener_fans_out_object_upsert_to_subscriber() {
             object_type: "Note".into(),
             object_id: "n1".into(),
             object: note_value("n1", "hi"),
+            writer_user_id: None,
         });
 
         let super::Outbound::Frame(bytes) = rx.try_recv().expect("a delta") else {
@@ -258,6 +259,7 @@ fn store_write_listener_skips_other_tenant() {
             object_type: "Note".into(),
             object_id: "n1".into(),
             object: note_value("n1", "hi"),
+            writer_user_id: None,
         });
         assert!(
             rx.try_recv().is_err(),
@@ -494,6 +496,7 @@ fn cluster_bus_fans_a_write_on_hub_a_to_a_subscriber_on_hub_b() {
             object_type: "Note".into(),
             object_id: "n1".into(),
             object: note_value("n1", "cross-node"),
+            writer_user_id: None,
         });
 
         // The Delta arrives at hub B's subscriber over the cluster bus.
@@ -556,6 +559,7 @@ fn cluster_bus_loop_guard_skips_origin_node_own_subscribers() {
             object_type: "Note".into(),
             object_id: "n1".into(),
             object: note_value("n1", "local"),
+            writer_user_id: None,
         });
 
         // Exactly one Delta (the local fan-out); no echo from the bus.
@@ -857,6 +861,7 @@ async fn fr256_subscribe_then_immediate_write_delivers_echo_delta() {
         object_type: "Note".into(),
         object_id: "n1".into(),
         object: note_value("n1", "raced"),
+        writer_user_id: None,
     });
 
     // Release the handler and let it finish (authz passes, snapshot emitted).
@@ -985,9 +990,13 @@ fn test_config() -> FrickConfig {
 
 /// A hub over a fresh in-memory `Note`-schema state (no listening socket).
 async fn test_hub() -> std::sync::Arc<GatewayHub> {
+    test_hub_with_schema(note_schema()).await
+}
+
+async fn test_hub_with_schema(schema: FrickSchema) -> std::sync::Arc<GatewayHub> {
     let store = std::sync::Arc::new(
         frick_store::FrickStore::open(frick_store::FrickStoreOptions {
-            schema: Some(note_schema()),
+            schema: Some(schema.clone()),
             ..frick_store::FrickStoreOptions::default()
         })
         .await
@@ -1006,7 +1015,7 @@ async fn test_hub() -> std::sync::Arc<GatewayHub> {
         crate::apps::FrickAppRegistry::new(vec![crate::apps::AppEntry {
             id: crate::principal::DEFAULT_APP_ID.to_string(),
             base_path: String::new(),
-            schema: note_schema(),
+            schema: schema.clone(),
             projections: projections.clone(),
             search: search.clone(),
         }])
@@ -1020,7 +1029,7 @@ async fn test_hub() -> std::sync::Arc<GatewayHub> {
     let state = std::sync::Arc::new(AppStateInner {
         config: test_config(),
         store,
-        schema: note_schema(),
+        schema,
         started_at: "1970-01-01T00:00:00.000Z".into(),
         auth_limiter: std::sync::Mutex::new(crate::http::AuthLimiter::default()),
         projections,
@@ -1107,6 +1116,358 @@ fn note_value(id: &str, body: &str) -> Value {
         ("id".into(), Value::from(id)),
         ("body".into(), Value::from(body)),
     ])
+}
+
+// ---- per-record object read scoping (FR-235/FR-116/FR-234) -------------------
+
+/// A schema whose `OwnedNote` type declares the `ownerUserId` owner-field
+/// convention, so reads are owner-scoped (relaxable by sharing grants).
+fn owned_note_schema() -> FrickSchema {
+    let mut schema = note_schema();
+    schema.objects = vec![ObjectDef {
+        id: 1,
+        name: "OwnedNote".into(),
+        fields: vec![
+            FieldDef {
+                id: 1,
+                name: "id".into(),
+                kind: FieldKind::Id,
+                required: true,
+                ref_: None,
+                enum_values: None,
+                sensitivity: None,
+            },
+            FieldDef {
+                id: 2,
+                name: "body".into(),
+                kind: FieldKind::String,
+                required: false,
+                ref_: None,
+                enum_values: None,
+                sensitivity: None,
+            },
+            FieldDef {
+                id: 3,
+                name: "ownerUserId".into(),
+                kind: FieldKind::String,
+                required: false,
+                ref_: None,
+                enum_values: None,
+                sensitivity: None,
+            },
+        ],
+        indexes: vec![],
+        merge_policy: None,
+    }];
+    schema
+}
+
+fn owned_note_value(id: &str, body: &str, owner: &str) -> Value {
+    Value::Map(vec![
+        ("id".into(), Value::from(id)),
+        ("body".into(), Value::from(body)),
+        ("ownerUserId".into(), Value::from(owner)),
+    ])
+}
+
+/// Register a connection for `user` subscribed to `OwnedNote`.
+fn register_owned_note_sub(
+    hub: &std::sync::Arc<GatewayHub>,
+    user: &str,
+) -> (u64, tokio::sync::mpsc::UnboundedReceiver<super::Outbound>) {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<super::Outbound>();
+    let id = hub.register(super::Connection {
+        principal: Some(tenant_principal(user, DEFAULT_TENANT_ID)),
+        session_token: None,
+        app_id: DEFAULT_APP_ID.to_string(),
+        handshake_complete: true,
+        subscriptions: [super::SubKey {
+            subscription_id: format!("sub-{user}"),
+            kind: SubscriptionKind::Object,
+            name: "OwnedNote".into(),
+            key: None,
+        }]
+        .into_iter()
+        .collect(),
+        pending_writes: 0,
+        outbound: tx,
+    });
+    (id, rx)
+}
+
+async fn create_read_grant(
+    hub: &std::sync::Arc<GatewayHub>,
+    owner: &str,
+    grantee: &str,
+    record_type: &str,
+    record_id: &str,
+) {
+    hub.state
+        .store
+        .grants()
+        .create(&frick_store::stores::grant::CreateGrantArgs {
+            id: format!("grant-{grantee}-{record_id}"),
+            tenant_id: DEFAULT_TENANT_ID.to_string(),
+            owner_user_id: owner.into(),
+            record_type: record_type.into(),
+            record_id: record_id.into(),
+            grantee_user_id: grantee.into(),
+            permission: "read".into(),
+            created_at: "1970-01-01T00:00:00.000Z".into(),
+        })
+        .await
+        .unwrap();
+}
+
+fn upsert_owned_note(
+    tenant_id: &str,
+    app_id: &str,
+    id: &str,
+    object: &Value,
+) -> FrickStoreWriteEvent {
+    FrickStoreWriteEvent::ObjectUpsert {
+        tenant_id: tenant_id.to_string(),
+        app_id: app_id.to_string(),
+        object_type: "OwnedNote".into(),
+        object_id: id.to_string(),
+        object: object.clone(),
+        writer_user_id: None,
+    }
+}
+
+#[test]
+fn fan_out_owner_scoped_skips_non_owner() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let hub = test_hub_with_schema(owned_note_schema()).await;
+        let (_a, mut rx_a) = register_owned_note_sub(&hub, "ada");
+        let (_b, mut rx_b) = register_owned_note_sub(&hub, "bo");
+
+        // ada writes a row she owns.
+        let mut event = upsert_owned_note(
+            DEFAULT_TENANT_ID,
+            DEFAULT_APP_ID,
+            "n1",
+            &owned_note_value("n1", "secret", "ada"),
+        );
+        if let FrickStoreWriteEvent::ObjectUpsert { writer_user_id, .. } = &mut event {
+            *writer_user_id = Some("ada".into());
+        }
+        hub.handle_store_write(&event);
+
+        // The owner receives the delta inline; the non-owner (no grant) does not.
+        assert!(
+            matches!(rx_a.try_recv(), Ok(super::Outbound::Frame(_))),
+            "owner must receive her own row"
+        );
+        assert!(
+            rx_b.try_recv().is_err(),
+            "a non-owner with no grant must not receive an owner-scoped row"
+        );
+    });
+}
+
+#[test]
+fn fan_out_writer_echo_reaches_writer_despite_owner_mismatch() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let hub = test_hub_with_schema(owned_note_schema()).await;
+        let (_b, mut rx_b) = register_owned_note_sub(&hub, "bo");
+
+        // The row is owned by "ada" but written by "bo" (e.g. ownership transfer).
+        // The writer's own subscription still receives the echo (FR-234).
+        let mut event = upsert_owned_note(
+            DEFAULT_TENANT_ID,
+            DEFAULT_APP_ID,
+            "n1",
+            &owned_note_value("n1", "x", "ada"),
+        );
+        if let FrickStoreWriteEvent::ObjectUpsert { writer_user_id, .. } = &mut event {
+            *writer_user_id = Some("bo".into());
+        }
+        hub.handle_store_write(&event);
+
+        assert!(
+            matches!(rx_b.try_recv(), Ok(super::Outbound::Frame(_))),
+            "the writer must receive its own write echo"
+        );
+    });
+}
+
+#[test]
+fn fan_out_grant_relaxation_reaches_grantee() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let hub = test_hub_with_schema(owned_note_schema()).await;
+        let (_b, mut rx_b) = register_owned_note_sub(&hub, "bo");
+        // ada shares n1 with bo (read).
+        create_read_grant(&hub, "ada", "bo", "OwnedNote", "n1").await;
+
+        let mut event = upsert_owned_note(
+            DEFAULT_TENANT_ID,
+            DEFAULT_APP_ID,
+            "n1",
+            &owned_note_value("n1", "shared", "ada"),
+        );
+        if let FrickStoreWriteEvent::ObjectUpsert { writer_user_id, .. } = &mut event {
+            *writer_user_id = Some("ada".into());
+        }
+        hub.handle_store_write(&event);
+
+        // The grantee receives the delta — resolved asynchronously off the hot path.
+        let frame = tokio::time::timeout(Duration::from_secs(2), rx_b.recv())
+            .await
+            .expect("grantee delta within timeout")
+            .expect("a frame");
+        assert!(matches!(frame, super::Outbound::Frame(_)));
+    });
+}
+
+#[test]
+fn visibility_revoked_drops_row_for_non_reader_keeps_it_for_owner() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let hub = test_hub_with_schema(owned_note_schema()).await;
+        let owned = owned_note_value("n1", "shared", "ada");
+        hub.state
+            .store
+            .objects()
+            .upsert(
+                DEFAULT_TENANT_ID,
+                "OwnedNote",
+                "n1",
+                &owned,
+                1,
+                DEFAULT_APP_ID,
+                0,
+            )
+            .await
+            .unwrap();
+
+        let (_a, mut rx_a) = register_owned_note_sub(&hub, "ada");
+        let (_b, mut rx_b) = register_owned_note_sub(&hub, "bo");
+
+        // Re-evaluate visibility (as a revoke would): bo holds no grant and is
+        // not the owner, so the row must disappear for bo but not for ada.
+        hub.fan_out_object_visibility_revoked(DEFAULT_TENANT_ID, DEFAULT_APP_ID, "OwnedNote", "n1")
+            .await;
+
+        assert!(
+            rx_a.try_recv().is_err(),
+            "the owner keeps the row (no removal)"
+        );
+        let super::Outbound::Frame(bytes) = rx_b.try_recv().expect("a removal for the non-reader")
+        else {
+            panic!("expected a frame");
+        };
+        let FrickFrame::Delta(delta) = decode_frame(&bytes).unwrap() else {
+            panic!("expected a delta");
+        };
+        assert!(
+            delta.removed.is_some_and(|r| !r.is_empty()),
+            "the removal Delta carries a removed marker"
+        );
+    });
+}
+
+/// End-to-end: a fresh subscriber's initial Snapshot is owner-scoped — it
+/// carries only the rows the subscriber may read, never another user's
+/// owner-scoped rows (FR-235/FR-116). This is the largest exposure surface:
+/// before the fix the snapshot dumped every tenant row to every subscriber.
+#[tokio::test]
+async fn ws_snapshot_is_owner_scoped() {
+    use futures_util::SinkExt;
+
+    let schema = owned_note_schema();
+    let mut server = create_frick_server(test_config(), schema.clone())
+        .await
+        .unwrap();
+    let hub = GatewayHub::new(std::sync::Arc::clone(&server.state));
+    server.state.store.set_write_listener(hub.write_listener());
+
+    // Seed two owners' rows directly in the store.
+    server
+        .state
+        .store
+        .objects()
+        .upsert(
+            DEFAULT_TENANT_ID,
+            "OwnedNote",
+            "ada-1",
+            &owned_note_value("ada-1", "mine", "user-ada"),
+            1,
+            DEFAULT_APP_ID,
+            0,
+        )
+        .await
+        .unwrap();
+    server
+        .state
+        .store
+        .objects()
+        .upsert(
+            DEFAULT_TENANT_ID,
+            "OwnedNote",
+            "bo-1",
+            &owned_note_value("bo-1", "hers", "user-bo"),
+            1,
+            DEFAULT_APP_ID,
+            0,
+        )
+        .await
+        .unwrap();
+
+    let app = hub.router();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let _serve = tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+
+    let http_port = server.listen().await.unwrap();
+    let token = dev_login_token(http_port, "user-ada").await;
+
+    let url = format!("ws://127.0.0.1:{port}/_frick/sync");
+    let (mut socket, _response) = tokio_tungstenite::connect_async(&url).await.unwrap();
+
+    let hello = FrickFrame::Hello(Box::new(HelloPayload {
+        replica_id: "replica-1".into(),
+        device_id: "device-1".into(),
+        schema_hash: schema.hash.clone(),
+        known_cursors: std::iter::empty::<(String, i64)>().collect(),
+        session_token: Some(token),
+        client_capabilities: None,
+    }));
+    socket
+        .send(TungMessage::Binary(encode_frame(&hello).unwrap()))
+        .await
+        .unwrap();
+    let ack = next_frame(&mut socket).await;
+    assert!(matches!(ack, FrickFrame::HelloAck(_)), "got {ack:?}");
+    let schema_frame = next_frame(&mut socket).await;
+    assert!(
+        matches!(schema_frame, FrickFrame::Schema(_)),
+        "got {schema_frame:?}"
+    );
+
+    let subscribe = FrickFrame::Subscribe(SubscribePayload {
+        subscription_id: "sub-owned".into(),
+        kind: SubscriptionKind::Object,
+        name: "OwnedNote".into(),
+        key: None,
+        cursor: None,
+    });
+    socket
+        .send(TungMessage::Binary(encode_frame(&subscribe).unwrap()))
+        .await
+        .unwrap();
+    let snapshot = next_frame(&mut socket).await;
+    let FrickFrame::Snapshot(snapshot) = snapshot else {
+        panic!("expected snapshot, got {snapshot:?}");
+    };
+    // ada sees only her own row — bo's owner-scoped row is filtered out.
+    assert_eq!(snapshot.objects.len(), 1, "snapshot must be owner-scoped");
+    assert_eq!(snapshot.objects[0].1, "ada-1");
 }
 
 /// Read the next frame off the socket, ignoring server pings.

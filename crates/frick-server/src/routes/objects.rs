@@ -18,6 +18,9 @@ use super::{
 use crate::authz::{Action, Decision, DenyReason, ResourceContext, decide_baseline};
 use crate::error::ServerError;
 use crate::http::{AppState, respond_error};
+use crate::object_visibility::{
+    owner_field_for_type, per_record_read_authz_active, subscriber_can_read_object,
+};
 use crate::principal::Principal;
 
 /// Routes for this surface.
@@ -65,9 +68,9 @@ async fn list_objects(
             .into_response();
     };
 
-    // `listObjectsForUser` is currently a tenant+type list — per-record read
-    // visibility is a TS pass-through (`isObjectVisibleToUser` returns true),
-    // so the Rust port lists every owner row in the tenant/type/app.
+    // Tenant+type+app list, then per-record read scoping (FR-235/FR-116): the
+    // caller sees their own rows, rows of types with no owner field, rows whose
+    // owner value is absent (migrated data), and rows they hold a grant on.
     let rows = match state
         .store
         .objects()
@@ -77,7 +80,26 @@ async fn list_objects(
         Ok(rows) => rows,
         Err(error) => return respond_error(&store_error(&error), &request_id),
     };
-    let data: Vec<serde_json::Value> = rows.iter().map(value_to_json).collect();
+    let mode = state.config.object_visibility_mode;
+    let owner_field = owner_field_for_type(&state.schema, &object_type);
+    let per_record_active = per_record_read_authz_active(&state.store).await;
+    let mut data: Vec<serde_json::Value> = Vec::with_capacity(rows.len());
+    for row in &rows {
+        if subscriber_can_read_object(
+            &state.store,
+            mode,
+            owner_field,
+            &principal,
+            &object_type,
+            row,
+            per_record_active,
+            None,
+        )
+        .await
+        {
+            data.push(value_to_json(row));
+        }
+    }
 
     axum::Json(json!({
         "schemaHash": state.schema.hash,
@@ -128,6 +150,7 @@ async fn write_object(
             &object_id,
             &value,
             expected_version,
+            Some(&principal.user_id),
         )
         .await
     {

@@ -227,6 +227,10 @@ pub enum FrickStoreWriteEvent {
         object_type: String,
         object_id: String,
         object: Value,
+        /// The user id that performed the write, when known (`None` for system
+        /// writes). The writer's own subscriptions always pass the ownership
+        /// baseline on fan-out so a write's echo is never suppressed (FR-234).
+        writer_user_id: Option<String>,
     },
     /// A row was removed. Fired only when a row actually existed (§7.3).
     ObjectDelete {
@@ -950,6 +954,9 @@ impl FrickStore {
             object_type: object_type.to_string(),
             object_id: object_id.to_string(),
             object: stored,
+            // This low-level write path has no principal context; the
+            // policy-honoring `upsert_object_with_policy` carries the writer.
+            writer_user_id: None,
         };
         // Search projector (FR-245) runs after the write, before the listener.
         self.run_search_projector(tenant_id, &event).await;
@@ -960,6 +967,7 @@ impl FrickStore {
     /// Tenant-aware object write honoring the schema-declared merge policy (TS
     /// `upsertObjectWithPolicy`). Throws on version conflict; reaching the
     /// notify step means the row was written.
+    #[allow(clippy::too_many_arguments)] // tenant/app/type/id/value/version/writer
     pub async fn upsert_object_with_policy(
         &self,
         tenant_id: &str,
@@ -968,6 +976,7 @@ impl FrickStore {
         object_id: &str,
         value: &Value,
         expected_version: Option<i64>,
+        writer_user_id: Option<&str>,
     ) -> Result<ObjectUpsertResult, StoreError> {
         let now_ms = self.clock.now_ms();
         let merge_policy: FrickObjectMergePolicy =
@@ -997,6 +1006,7 @@ impl FrickStore {
             object_type: object_type.to_string(),
             object_id: object_id.to_string(),
             object: stored,
+            writer_user_id: writer_user_id.map(str::to_string),
         };
         self.run_search_projector(tenant_id, &event).await;
         self.notify_write_listener(&event);

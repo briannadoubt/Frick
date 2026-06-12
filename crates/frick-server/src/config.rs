@@ -8,6 +8,8 @@
 
 use std::collections::BTreeMap;
 
+use crate::object_visibility::ObjectVisibilityMode;
+
 /// Configuration load failure (`FrickConfigError` in TS). The message text
 /// mirrors the TS messages so operators see identical diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -359,6 +361,11 @@ pub struct FrickConfig {
     pub inspection_enabled: bool,
     pub admin_token: Option<String>,
     pub implicit_tenant_creation: bool,
+    /// Object read visibility (`FRICK_OBJECT_VISIBILITY`, FR-235). Default
+    /// `ownerScoped`: types with an `ownerUserId` field are scoped to their
+    /// owner on list/snapshot/fan-out (relaxable by sharing grants). Set
+    /// `tenantWide` to opt back into legacy allow-all-in-tenant reads.
+    pub object_visibility_mode: ObjectVisibilityMode,
     pub calls_media_plane: CallsMediaPlane,
     pub calls_livekit: Option<LiveKitConfig>,
     pub platform_events_driver: PlatformEventsDriver,
@@ -894,6 +901,15 @@ pub fn load_frick_config(env: &dyn EnvSource) -> Result<FrickConfig> {
 
     let admin_token = read(env, "FRICK_ADMIN_TOKEN");
 
+    let object_visibility_mode = match read(env, "FRICK_OBJECT_VISIBILITY") {
+        None => ObjectVisibilityMode::default(),
+        Some(raw) => ObjectVisibilityMode::parse(&raw).ok_or_else(|| {
+            FrickConfigError::new(format!(
+                "FRICK_OBJECT_VISIBILITY must be one of ownerScoped, tenantWide (got \"{raw}\")"
+            ))
+        })?,
+    };
+
     let email_provider = match read(env, "FRICK_EMAIL_PROVIDER").as_deref() {
         None | Some("noop") => EmailProvider::Noop,
         Some("resend") => EmailProvider::Resend,
@@ -929,6 +945,7 @@ pub fn load_frick_config(env: &dyn EnvSource) -> Result<FrickConfig> {
         admin_token,
         implicit_tenant_creation: parse_boolean(env, "FRICK_IMPLICIT_TENANT_CREATION")?
             .unwrap_or(!production),
+        object_visibility_mode,
         calls_media_plane,
         calls_livekit,
         platform_events_driver,

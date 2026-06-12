@@ -1135,6 +1135,9 @@ impl CallControlPlane {
                 object_id,
                 &value,
                 None,
+                // Call control-plane writes are system writes (call primitives
+                // carry no `ownerUserId`), so there is no writer echo to honor.
+                None,
             )
             .await
             .map_err(|e| CallError::Store(e.to_string()))?;

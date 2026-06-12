@@ -193,6 +193,7 @@ async fn upsert_object_fires_write_listener() {
             object_type,
             object_id,
             object,
+            ..
         } => {
             assert_eq!(tenant_id, DEFAULT_TENANT_ID);
             assert_eq!(app_id, DEFAULT_APP_ID);

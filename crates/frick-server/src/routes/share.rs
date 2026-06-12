@@ -19,6 +19,7 @@ use super::{
 use crate::boot::iso_from_epoch_ms;
 use crate::error::ServerError;
 use crate::http::{AppState, respond_error};
+use crate::principal::DEFAULT_APP_ID;
 
 /// `DEFAULT_FRICK_INVITATION_TTL_SECONDS` (`packages/protocol/src/sharing.ts`):
 /// 14 days.
@@ -312,7 +313,26 @@ async fn revoke_and_respond(
         .revoke(tenant_id, grant_id, &iso_from_epoch_ms(now))
         .await
     {
-        Ok(grant) => axum::Json(json!({ "grant": grant.map(|g| grant_json(&g)) })).into_response(),
+        Ok(grant) => {
+            // FR-235: revoking a grant removes the record's read visibility for
+            // the ex-grantee — live-drop it from any of their open object
+            // subscriptions. Grants are tenant-scoped (no app dimension), so
+            // this targets the default storage partition; a no-op when the row
+            // lives in another app's partition or the grant was for a non-object
+            // record (`read` finds nothing).
+            if let Some(grant) = &grant
+                && let Some(hub) = state.gateway()
+            {
+                hub.fan_out_object_visibility_revoked(
+                    tenant_id,
+                    DEFAULT_APP_ID,
+                    &grant.record_type,
+                    &grant.record_id,
+                )
+                .await;
+            }
+            axum::Json(json!({ "grant": grant.map(|g| grant_json(&g)) })).into_response()
+        }
         Err(error) => respond_error(&store_error(&error), request_id),
     }
 }

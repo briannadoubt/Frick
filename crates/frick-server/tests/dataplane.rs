@@ -31,6 +31,11 @@ fn test_schema() -> FrickSchema {
     SchemaBuilder::new("dataplane-test", "dataplane-test")
         .hash("dataplane-test-hash")
         .object("Note", 1, |o| o.field(field::string("body", 1).required()))
+        // An owner-scoped type (the `ownerUserId` convention) for FR-235 reads.
+        .object("OwnedNote", 2, |o| {
+            o.field(field::string("body", 1))
+                .field(field::string("ownerUserId", 2))
+        })
         .event("message", 1, |e| e.field(field::string("text", 1)))
         .stream("Chat", 1, |s| {
             s.key_field(field::string("room", 1)).event("message")
@@ -241,6 +246,58 @@ async fn object_create_then_list() {
     assert_eq!(list.status, 200, "body: {}", list.body);
     assert!(list.body.contains("note-1"), "body: {}", list.body);
     assert!(list.body.contains("hello"), "body: {}", list.body);
+    server.close().await;
+}
+
+/// `GET /objects?type=` is owner-scoped (FR-235/FR-116): each user lists only
+/// the owner-scoped rows they own — never another user's. Before the fix the
+/// list returned every tenant row to every caller.
+#[tokio::test]
+async fn object_list_is_owner_scoped() {
+    let mut server = TestServer::boot().await;
+    let ada = server.login("user-ada").await;
+    let bo = server.login("user-bo").await;
+
+    // Each user writes a row they own.
+    let a = server
+        .request(
+            "PUT",
+            "/objects/OwnedNote/o-ada",
+            &[("Authorization", &bearer(&ada))],
+            r#"{"body":"mine","ownerUserId":"user-ada"}"#,
+        )
+        .await;
+    assert_eq!(a.status, 201, "body: {}", a.body);
+    let b = server
+        .request(
+            "PUT",
+            "/objects/OwnedNote/o-bo",
+            &[("Authorization", &bearer(&bo))],
+            r#"{"body":"hers","ownerUserId":"user-bo"}"#,
+        )
+        .await;
+    assert_eq!(b.status, 201, "body: {}", b.body);
+
+    // ada lists OwnedNote: she sees her row, never bo's.
+    let ada_list = server.get("/objects?type=OwnedNote", &ada).await;
+    assert_eq!(ada_list.status, 200, "body: {}", ada_list.body);
+    assert!(ada_list.body.contains("o-ada"), "body: {}", ada_list.body);
+    assert!(
+        !ada_list.body.contains("o-bo"),
+        "ada must not see bo's owner-scoped row: {}",
+        ada_list.body
+    );
+
+    // bo lists OwnedNote: he sees his row, never ada's.
+    let bo_list = server.get("/objects?type=OwnedNote", &bo).await;
+    assert_eq!(bo_list.status, 200, "body: {}", bo_list.body);
+    assert!(bo_list.body.contains("o-bo"), "body: {}", bo_list.body);
+    assert!(
+        !bo_list.body.contains("o-ada"),
+        "bo must not see ada's owner-scoped row: {}",
+        bo_list.body
+    );
+
     server.close().await;
 }
 

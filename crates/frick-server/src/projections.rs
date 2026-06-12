@@ -739,6 +739,7 @@ pub fn drive_projection_write(registry: &ProjectionRegistry, event: &FrickStoreW
             object_type,
             object_id,
             object,
+            ..
         } => {
             let projection_event = FrickProjectionWriteEvent::ObjectUpsert {
                 tenant_id: tenant_id.clone(),
