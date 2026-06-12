@@ -248,7 +248,14 @@ fn product_ephemera(builder: SchemaBuilder) -> SchemaBuilder {
                     field::enum_(
                         "kind",
                         3,
-                        ["offer", "answer", "ice", "renegotiate", "sfuToken"],
+                        [
+                            "offer",
+                            "answer",
+                            "ice",
+                            "renegotiate",
+                            "sfuToken",
+                            "keyEpoch",
+                        ],
                     )
                     .required(),
                 )

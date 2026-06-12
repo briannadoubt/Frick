@@ -188,7 +188,7 @@ export interface TypingStateDto {
 export interface WebRTCSignalDto {
   senderDeviceId: string;
   recipientDeviceId?: string;
-  kind: "offer" | "answer" | "ice" | "renegotiate" | "sfuToken";
+  kind: "offer" | "answer" | "ice" | "renegotiate" | "sfuToken" | "keyEpoch";
   payload: Uint8Array;
 }
 

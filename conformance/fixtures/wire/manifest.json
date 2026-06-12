@@ -1200,7 +1200,8 @@
                     "answer",
                     "ice",
                     "renegotiate",
-                    "sfuToken"
+                    "sfuToken",
+                    "keyEpoch"
                   ],
                   "id": 3,
                   "kind": "enum",
@@ -3834,7 +3835,8 @@
                     "answer",
                     "ice",
                     "renegotiate",
-                    "sfuToken"
+                    "sfuToken",
+                    "keyEpoch"
                   ],
                   "id": 3,
                   "kind": "enum",

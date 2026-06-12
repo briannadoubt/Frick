@@ -240,7 +240,19 @@ pub fn call_signal_defs(id_base: i64) -> Vec<SignalDef> {
             enum_field(
                 3,
                 "kind",
-                &["offer", "answer", "ice", "renegotiate", "sfuToken"],
+                // Lists every WebRTCSignalKind the wire type carries — including
+                // `keyEpoch` (the E2EE sender-key epoch signal). Signal `value`s
+                // are dynamic msgpack (not schema-validated), so this is metadata
+                // for codegen/docs; the legacy TS schema omitted `keyEpoch`, this
+                // completes it (deliberately ahead of the old fixture).
+                &[
+                    "offer",
+                    "answer",
+                    "ice",
+                    "renegotiate",
+                    "sfuToken",
+                    "keyEpoch",
+                ],
                 true,
             ),
             field(4, "payload", FieldKind::Bytes, true),

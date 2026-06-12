@@ -320,7 +320,9 @@ export const productTestSchema: FrickSchema = {
           id: 3,
           name: "kind",
           kind: "enum",
-          enumValues: ["offer", "answer", "ice", "renegotiate", "sfuToken"],
+          // Mirrors the WebRTCSignalKind wire type — incl. keyEpoch (E2EE
+          // sender-key signal). Kept in sync with frick_server::calls::schema.
+          enumValues: ["offer", "answer", "ice", "renegotiate", "sfuToken", "keyEpoch"],
           required: true,
         },
         { id: 4, name: "payload", kind: "bytes", required: true },
