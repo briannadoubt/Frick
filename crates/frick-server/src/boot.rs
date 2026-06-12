@@ -37,7 +37,16 @@ pub struct FrickServer {
     /// Production wires a cached `reqwest` fetcher; tests inject a fixed key set
     /// so the provider-verify path runs offline.
     jwks_provider: crate::auth::SharedJwksProvider,
+    /// App-registered route builder (FR-297). Consumed in [`FrickServer::listen`].
+    app_router: Option<AppRouterBuilder>,
 }
+
+/// Builds a Rust backend's server-authoritative routes (FR-297) once at boot,
+/// given the live [`AppState`] (so handlers can reach the store and the public
+/// [`authenticate`](crate::routes::authenticate) helper). Returns a fully-built
+/// router that is merged into the framework router. Registered via
+/// [`BootSeams::app_router`].
+pub type AppRouterBuilder = Box<dyn FnOnce(AppState) -> axum::Router + Send>;
 
 /// Construction failure.
 #[derive(Debug, thiserror::Error)]
@@ -85,6 +94,13 @@ pub struct BootSeams {
     /// documented insertion point for a Rust backend's custom write-authz (RBAC,
     /// entitlement gating, …). See [`crate::authz::PolicyHook`].
     pub policy_hooks: Vec<std::sync::Arc<dyn crate::authz::PolicyHook>>,
+    /// App-registered routes (FR-297): a builder that, given the live
+    /// [`AppState`], returns a router of server-authoritative endpoints merged
+    /// into the framework router. `None` for the foundation/standalone binary —
+    /// the documented insertion point for a Rust backend's command endpoints
+    /// (they reach the store via `State<AppState>` and authenticate via the
+    /// public [`authenticate`](crate::routes::authenticate) helper).
+    pub app_router: Option<AppRouterBuilder>,
 }
 
 impl BootSeams {
@@ -111,6 +127,8 @@ impl BootSeams {
             blob_processors: Vec::new(),
             // No built-in policy hooks; a Rust backend registers its own.
             policy_hooks: Vec::new(),
+            // No built-in app routes; a Rust backend registers its own.
+            app_router: None,
         }
     }
 }
@@ -569,6 +587,7 @@ async fn build_server(
         worker: None,
         bound_port: 0,
         jwks_provider: seams.jwks_provider,
+        app_router: seams.app_router,
     })
 }
 
@@ -594,7 +613,7 @@ impl FrickServer {
         } else {
             crate::routes::dataplane_router(Arc::clone(&self.state))
         };
-        let router = public_router(Arc::clone(&self.state))
+        let mut router = public_router(Arc::clone(&self.state))
             .merge(crate::auth_routes::auth_router(Arc::clone(&self.state)))
             // Sign in with Apple / Google id-token verify routes (FR-269). The
             // JWKS resolver is the injected seam (cached `reqwest` in prod).
@@ -614,11 +633,18 @@ impl FrickServer {
             .merge(crate::routes::inspect::inspect_router(Arc::clone(
                 &self.state,
             )))
-            .merge(self.gateway.router())
-            // CORS mirrors the TS `setCors`/preflight contract so browser
-            // clients on a separate origin get the allowlist-driven
-            // `Access-Control-*` headers (FR-255 review).
-            .layer(crate::cors::cors_layer(&self.config.allowed_origins));
+            .merge(self.gateway.router());
+        // App-registered routes (FR-297): a Rust backend's server-authoritative
+        // command endpoints, built once with the live [`AppState`] (store +
+        // `authenticate`). Merged after the framework routes so an app can't
+        // shadow them, and before CORS so the allowlist covers them too.
+        if let Some(build) = self.app_router.take() {
+            router = router.merge(build(Arc::clone(&self.state)));
+        }
+        // CORS mirrors the TS `setCors`/preflight contract so browser
+        // clients on a separate origin get the allowlist-driven
+        // `Access-Control-*` headers (FR-255 review).
+        let router = router.layer(crate::cors::cors_layer(&self.config.allowed_origins));
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         self.shutdown = Some(shutdown_tx);
 

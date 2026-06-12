@@ -213,7 +213,7 @@ pub(crate) fn multi_app_dataplane_router(state: &AppState) -> axum::Router {
 /// then run the tenant gate. Returns the authenticated [`Principal`] and the
 /// `now_ms` the handler should thread through every downstream store call so
 /// time enters exactly once per request.
-pub(crate) async fn authenticate(
+pub async fn authenticate(
     state: &AppState,
     headers: &HeaderMap,
 ) -> Result<(Principal, i64), ServerError> {

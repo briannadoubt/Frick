@@ -42,6 +42,31 @@ impl PolicyHook for DenyTypeWrites {
     }
 }
 
+/// A server-authoritative command endpoint (FR-297): authenticates the request
+/// with the public helper and reads the store — the shape of a Rust backend's
+/// `appRoutes`. Returns the caller's id + their tenant's `Note` count.
+async fn note_count(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let Ok((principal, _)) = frick_server::routes::authenticate(&state, &headers).await else {
+        return axum::http::StatusCode::UNAUTHORIZED.into_response();
+    };
+    let notes = state
+        .store
+        .objects()
+        .list(
+            &principal.tenant_id,
+            "Note",
+            frick_server::principal::DEFAULT_APP_ID,
+        )
+        .await
+        .unwrap_or_default();
+    axum::Json(serde_json::json!({ "userId": principal.user_id, "noteCount": notes.len() }))
+        .into_response()
+}
+
 fn test_config() -> FrickConfig {
     let mut env = std::collections::BTreeMap::new();
     env.insert("FRICK_ENV".to_string(), "test".to_string());
@@ -99,14 +124,35 @@ impl TestServer {
         Self::serve(Arc::clone(&server.state), server).await
     }
 
+    /// Boot with an app-registered route builder (FR-297). The harness wires the
+    /// builder the same way [`frick_server::FrickServer::listen`] does
+    /// (`router.merge(build(state))`).
+    async fn boot_with_app_router(build: frick_server::AppRouterBuilder) -> Self {
+        let server = create_frick_server(test_config(), test_schema())
+            .await
+            .unwrap();
+        Self::serve_with(Arc::clone(&server.state), server, Some(build)).await
+    }
+
     async fn serve(state: AppState, server: frick_server::FrickServer) -> Self {
+        Self::serve_with(state, server, None).await
+    }
+
+    async fn serve_with(
+        state: AppState,
+        server: frick_server::FrickServer,
+        app_router: Option<frick_server::AppRouterBuilder>,
+    ) -> Self {
         // Keep the constructed server's store alive for the process lifetime by
         // leaking the handle — the router holds its own Arc to the state/store.
         std::mem::forget(server);
 
-        let router = public_router(Arc::clone(&state))
+        let mut router = public_router(Arc::clone(&state))
             .merge(frick_server::auth_routes::auth_router(Arc::clone(&state)))
-            .merge(routes::dataplane_router(state));
+            .merge(routes::dataplane_router(Arc::clone(&state)));
+        if let Some(build) = app_router {
+            router = router.merge(build(Arc::clone(&state)));
+        }
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -381,6 +427,53 @@ async fn policy_hook_denies_a_gated_write() {
         )
         .await;
     assert_eq!(ok.status, 201, "ungated write must succeed: {}", ok.body);
+
+    server.close().await;
+}
+
+/// An app-registered route (FR-297) is reachable on the framework server,
+/// receives the live AppState, authenticates with the public helper, and reads
+/// the store — the server-authoritative command shape a Rust backend needs.
+#[tokio::test]
+async fn app_route_authenticates_and_reads_the_store() {
+    let mut server = TestServer::boot_with_app_router(Box::new(|state| {
+        axum::Router::new()
+            .route("/commands/note-count", axum::routing::get(note_count))
+            .with_state(state)
+    }))
+    .await;
+    let token = server.login("user-ada").await;
+
+    // Unauthenticated → the route's own 401.
+    let anon = server.get("/commands/note-count", "").await;
+    assert_eq!(anon.status, 401, "body: {}", anon.body);
+
+    // Authenticated, no notes yet.
+    let empty = server.get("/commands/note-count", &token).await;
+    assert_eq!(empty.status, 200, "body: {}", empty.body);
+    assert!(
+        empty.body.contains("\"noteCount\":0"),
+        "body: {}",
+        empty.body
+    );
+    assert!(empty.body.contains("user-ada"), "body: {}", empty.body);
+
+    // Write a Note through the framework route, then the command sees it.
+    let put = server
+        .request(
+            "PUT",
+            "/objects/Note/n-1",
+            &[("Authorization", &bearer(&token))],
+            r#"{"body":"hi"}"#,
+        )
+        .await;
+    assert_eq!(put.status, 201, "body: {}", put.body);
+    let after = server.get("/commands/note-count", &token).await;
+    assert!(
+        after.body.contains("\"noteCount\":1"),
+        "body: {}",
+        after.body
+    );
 
     server.close().await;
 }
