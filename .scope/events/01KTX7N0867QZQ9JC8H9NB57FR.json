@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTX7N0867QZQ9JC8H9NB57FR",
+  "ts": "2026-06-12T06:17:31.142Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTX742D10100MYX2DR8PDZYH",
+    "commentId": "01KTX7N0867QZQ9JC8H9NB57FQ",
+    "author": null,
+    "body": "Not pursuing. Architectural decision (bri): Frick is a Rust-backed framework — end-developer BACKENDS are written in Rust (against the frick-server crate), while CLIENTS stay any-language (TS/Swift/Kotlin) over the unchanged wire. So server-side extensions (policy hooks, routes, jobs, projections) are Rust-native, not WASM/sidecar/DSL. Operations stay the same via the frick CLI abstraction. The real follow-ups are the Rust extension POINTS themselves: FR-296 (policy hooks) and FR-297 (app routes)."
+  }
+}

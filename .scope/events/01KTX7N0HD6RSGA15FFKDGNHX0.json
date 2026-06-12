@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTX7N0HD6RSGA15FFKDGNHX0",
+  "ts": "2026-06-12T06:17:31.437Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTX7428AHMETDPDEYNG7Q7QE",
+    "commentId": "01KTX7N0HD6RSGA15FFKDGNHWZ",
+    "author": null,
+    "body": "Framing: RUST extension point — embedder registers routes in Rust against the frick-server crate. The 'language-agnostic extension model' sibling reference in the description is dropped (FR-298 cancelled); backends are Rust."
+  }
+}
