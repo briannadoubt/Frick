@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTX7423HT6A787N4T26TD6Z9",
+  "ts": "2026-06-12T06:08:15.985Z",
+  "actor": "unknown",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTX7423HT6A787N4T26TD6Z8",
+    "number": 296,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Port app policy hooks to the Rust authz pipeline (RBAC + entitlement write gating)",
+    "description": "The TS @fricken/server ran the authz pipeline as: baseline -> APP POLICY HOOKS -> grant relaxation. The Rust `authz::decide` pipeline has no hook stage (baseline -> grant relaxation only); `routes/objects.rs` notes \"App policy hooks are FR-245 and not wired here.\" So an app cannot supply custom write authorization on the Rust server.\n\nValidated against Zavro (@zavro/backend), whose two policy hooks enforce things the schema/owner-scope/grants model cannot express:\n1. RBAC — a role x action x resource-type WRITE matrix; role is derived from the principal's handle (roleForUserId), then rbacDenyReason(role, action, type) denies the write.\n2. Entitlement — deny a module-gated object WRITE when the acting company (resolved via Membership at decision time, needs STORE ACCESS) lacks the required installed module.\n\nBoth are write-side + tightening-only (deny, never grant); entitlement needs the store at decision time.\n\nScope: add a hook stage to the Rust authz pipeline matching the TS PolicyHook contract ({ principal, action, resource:{kind,name,key,ownerId,tenantId}, context } -> { allow, reason, publicMessage }), tightening-only, runnable on allow, first-deny-wins, with store access for data-dependent hooks. Registerable via BootSeams/AppDefinition.\n\nRefinement: RBAC (role x action x type) is common enough that a NATIVE declarative primitive (role claims on the principal + a schema-level write-role matrix) could cover the common case with zero custom code — consider shipping that alongside the raw hook. Blocks any extensible downstream app (Zavro) from running its authorization model on the Rust server.\n",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

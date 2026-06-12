@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTX7428AHMETDPDEYNG7Q7QF",
+  "ts": "2026-06-12T06:08:16.138Z",
+  "actor": "unknown",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTX7428AHMETDPDEYNG7Q7QE",
+    "number": 297,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Custom app routes (server-authoritative command endpoints) in the Rust server",
+    "description": "The TS @fricken/server accepted `appRoutes` — app-defined authenticated HTTP handlers mounted alongside the framework routes, with access to the live store. Zavro uses this for server-authoritative command endpoints (createCommandRoutes() + bindStore(liveStore)). The Rust server has fixed framework routes + per-app base_path nesting but NO injection point for app-supplied route handlers.\n\nScope: a mechanism for an embedder (and ultimately the language-agnostic extension model, see sibling ticket) to register additional authenticated routes that can read/write the store and reuse the auth/principal extraction. Blocks downstream apps (Zavro) that expose server-authoritative commands beyond the schema-driven data plane.\n",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}
