@@ -113,6 +113,9 @@ fn recording_seams(apns: Arc<RecordingApnsTransport>) -> BootSeams {
         policy_hooks: Vec::new(),
         // FR-297: no app routes for the push wiring tests.
         app_router: None,
+        // FR-302: no app job handlers / recurring jobs for the push wiring tests.
+        job_handlers: Vec::new(),
+        recurring_jobs: Vec::new(),
     }
 }
 
