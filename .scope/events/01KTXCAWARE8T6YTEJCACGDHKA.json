@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTXCAWARE8T6YTEJCACGDHKA",
+  "ts": "2026-06-12T07:39:22.328Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTXC8SGYRTKXJQB8ARBZVCHY",
+    "commentId": "01KTXCAWARE8T6YTEJCACGDHK9",
+    "author": "codex",
+    "body": "Discovered during Crate CR-108/CR-112 migration. Crate's Rust POST /api/scan/:barcode now has an in-process 30/min limiter, but exact TypeScript parity needs Frick to expose trusted client-IP/rate-limit context to app routers; otherwise apps must trust X-Forwarded-For directly or reimplement socket-peer CIDR checks."
+  }
+}

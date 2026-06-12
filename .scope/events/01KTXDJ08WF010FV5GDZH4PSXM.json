@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTXDJ08WF010FV5GDZH4PSXM",
+  "ts": "2026-06-12T08:00:44.316Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTX94YGYZAPN2WH7K60ZJ50D",
+    "commentId": "01KTXDJ08WF010FV5GDZH4PSXK",
+    "author": null,
+    "body": "Resolved as superseded — not pursuing the TS-extension bridge. The evidence settled it: (1) bri's direction is Rust backends (FR-298 cancelled); (2) Crate is actively migrating its backend to Rust (CR-112 — codex landed a crate-rust-backend scaffold compiling against Frick 0.4); (3) every Rust extension point Crate's backend needed now ships — policy hooks (FR-296), custom app routes (FR-297), app job handlers + recurring jobs (FR-302), and trusted client-IP/rate-limit context (FR-303). So Crate's Rust path is unblocked and the in-process/sidecar/WASM TS bridge is unnecessary. Reopen only if a consumer's TS server logic proves genuinely impractical to port to Rust and bri chooses to revisit the Rust-only direction."
+  }
+}

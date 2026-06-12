@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTXD6KFZJ8BF9DW7FMAR55CS",
+  "ts": "2026-06-12T07:54:30.783Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTXC8SGYRTKXJQB8ARBZVCHY",
+    "commentId": "01KTXD6KFZJ8BF9DW7FMAR55CR",
+    "author": "codex",
+    "body": "Crate verification hit an upstream compile blocker while running pnpm rust:backend:check from /Users/bri/dev/Crate: frick-server/src/config.rs currently imports client_ip::IpCidr but parse_trusted_proxy_cidrs collects IpCidr::parse results into the local Result<T> alias, producing E0107/E0277 because the iterator item error is String rather than FrickConfigError. This is in the same trusted client-IP/rate-limit area Crate needs for exact scan limiter parity."
+  }
+}
