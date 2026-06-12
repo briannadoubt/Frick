@@ -20,11 +20,13 @@ internal val FRICK_OBJECT_NAMES: Map<Int, String> = mapOf(
   1 to "User",
   2 to "Conversation",
   3 to "RoomMember",
-  4 to "CallRoom",
   5 to "UserDevice",
   6 to "UserSession",
   7 to "MessageDraft",
   8 to "ScheduledMessage",
+  9 to "CallRoom",
+  10 to "CallInvite",
+  11 to "CallParticipant",
 )
 internal val FRICK_STREAM_NAMES: Map<Int, String> = mapOf(
   1 to "MessageStream",
@@ -37,19 +39,24 @@ internal val FRICK_EVENT_NAMES: Map<Int, String> = mapOf(
   4 to "ReactionAdded",
   5 to "ReceiptAdvanced",
   6 to "CallCreated",
-  7 to "CallParticipantJoined",
-  8 to "CallParticipantLeft",
-  9 to "CallEnded",
+  7 to "CallInviteSent",
+  8 to "CallInviteAccepted",
+  9 to "CallParticipantJoined",
+  10 to "CallParticipantMediaChanged",
+  11 to "CallParticipantLeft",
+  12 to "CallEnded",
 )
 internal val FRICK_OBJECT_FIELDS: Map<Int, Map<Int, String>> = mapOf(
   1 to mapOf(1 to "displayName", 2 to "avatarBlobId"),
   2 to mapOf(1 to "kind", 2 to "title", 3 to "createdBy", 4 to "lastMessageEventId"),
   3 to mapOf(1 to "conversationId", 2 to "userId", 3 to "role"),
-  4 to mapOf(1 to "conversationId", 2 to "state", 3 to "createdBy"),
   5 to mapOf(1 to "userId", 2 to "label", 3 to "platform", 4 to "lastSeenAt"),
   6 to mapOf(1 to "userId", 2 to "deviceId", 3 to "replicaId", 4 to "expiresAt"),
   7 to mapOf(1 to "userId", 2 to "conversationId", 3 to "body", 4 to "updatedAt"),
   8 to mapOf(1 to "userId", 2 to "conversationId", 3 to "body", 4 to "scheduledFor", 5 to "attachmentBlobIds", 6 to "status"),
+  9 to mapOf(1 to "conversationId", 2 to "state", 3 to "createdBy", 4 to "kind", 5 to "createdAt", 6 to "startedAt", 7 to "endedAt", 8 to "mediaSessionId", 9 to "transport"),
+  10 to mapOf(1 to "callId", 2 to "inviteeUserId", 3 to "status", 4 to "invitedBy", 5 to "invitedAt", 6 to "respondedAt"),
+  11 to mapOf(1 to "callId", 2 to "userId", 3 to "deviceId", 4 to "state", 5 to "joinedAt", 6 to "leftAt", 7 to "micEnabled", 8 to "cameraEnabled", 9 to "screenSharing"),
 )
 internal val FRICK_EVENT_FIELDS: Map<Int, Map<Int, String>> = mapOf(
   1 to mapOf(1 to "messageId", 2 to "senderId", 3 to "body", 4 to "createdAt", 5 to "attachmentBlobIds"),
@@ -57,10 +64,13 @@ internal val FRICK_EVENT_FIELDS: Map<Int, Map<Int, String>> = mapOf(
   3 to mapOf(1 to "messageId", 2 to "redactedAt"),
   4 to mapOf(1 to "messageId", 2 to "userId", 3 to "emoji"),
   5 to mapOf(1 to "userId", 2 to "sequence"),
-  6 to mapOf(1 to "callId", 2 to "createdBy"),
-  7 to mapOf(1 to "userId", 2 to "deviceId"),
-  8 to mapOf(1 to "userId", 2 to "deviceId"),
-  9 to mapOf(1 to "endedAt"),
+  6 to mapOf(1 to "callId", 2 to "conversationId", 3 to "createdBy", 4 to "kind", 5 to "createdAt"),
+  7 to mapOf(1 to "callId", 2 to "inviteeUserId", 3 to "invitedBy"),
+  8 to mapOf(1 to "callId", 2 to "inviteeUserId"),
+  9 to mapOf(1 to "callId", 2 to "userId", 3 to "deviceId", 4 to "joinedAt"),
+  10 to mapOf(1 to "callId", 2 to "userId", 3 to "deviceId", 4 to "micEnabled", 5 to "cameraEnabled", 6 to "screenSharing"),
+  11 to mapOf(1 to "callId", 2 to "userId", 3 to "deviceId", 4 to "leftAt"),
+  12 to mapOf(1 to "callId", 2 to "endedBy", 3 to "endedAt"),
 )
 
 /**
@@ -131,13 +141,6 @@ data class RoomMemberDto(
   val role: String
 )
 
-data class CallRoomDto(
-  val id: String,
-  val conversationId: String,
-  val state: String,
-  val createdBy: String
-)
-
 data class UserDeviceDto(
   val id: String,
   val userId: String,
@@ -172,6 +175,42 @@ data class ScheduledMessageDto(
   val status: String
 )
 
+data class CallRoomDto(
+  val id: String,
+  val conversationId: String,
+  val state: String,
+  val createdBy: String,
+  val kind: String,
+  val createdAt: String,
+  val startedAt: String? = null,
+  val endedAt: String? = null,
+  val mediaSessionId: String? = null,
+  val transport: String? = null
+)
+
+data class CallInviteDto(
+  val id: String,
+  val callId: String,
+  val inviteeUserId: String,
+  val status: String,
+  val invitedBy: String,
+  val invitedAt: String,
+  val respondedAt: String? = null
+)
+
+data class CallParticipantDto(
+  val id: String,
+  val callId: String,
+  val userId: String,
+  val deviceId: String,
+  val state: String,
+  val joinedAt: String,
+  val leftAt: String? = null,
+  val micEnabled: Boolean,
+  val cameraEnabled: Boolean,
+  val screenSharing: Boolean
+)
+
 data class MessageSentDto(
   val messageId: String,
   val senderId: String,
@@ -204,20 +243,49 @@ data class ReceiptAdvancedDto(
 
 data class CallCreatedDto(
   val callId: String,
-  val createdBy: String
+  val conversationId: String,
+  val createdBy: String,
+  val kind: String,
+  val createdAt: String
+)
+
+data class CallInviteSentDto(
+  val callId: String,
+  val inviteeUserId: String,
+  val invitedBy: String
+)
+
+data class CallInviteAcceptedDto(
+  val callId: String,
+  val inviteeUserId: String
 )
 
 data class CallParticipantJoinedDto(
+  val callId: String,
   val userId: String,
-  val deviceId: String
+  val deviceId: String,
+  val joinedAt: String
+)
+
+data class CallParticipantMediaChangedDto(
+  val callId: String,
+  val userId: String,
+  val deviceId: String,
+  val micEnabled: Boolean,
+  val cameraEnabled: Boolean,
+  val screenSharing: Boolean
 )
 
 data class CallParticipantLeftDto(
+  val callId: String,
   val userId: String,
-  val deviceId: String
+  val deviceId: String,
+  val leftAt: String
 )
 
 data class CallEndedDto(
+  val callId: String,
+  val endedBy: String,
   val endedAt: String
 )
 

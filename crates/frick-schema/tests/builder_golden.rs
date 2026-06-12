@@ -64,12 +64,6 @@ fn product_objects(builder: SchemaBuilder) -> SchemaBuilder {
                 .field(field::enum_("role", 3, ["owner", "member"]).required())
                 .index("byConversation", 1, ["conversationId"])
         })
-        .object("CallRoom", 4, |o| {
-            o.field(field::ref_("conversationId", 1, "Conversation").required())
-                .field(field::enum_("state", 2, ["ringing", "active", "ended"]).required())
-                .field(field::ref_("createdBy", 3, "User").required())
-                .index("byConversation", 1, ["conversationId", "state"])
-        })
         .object("UserDevice", 5, |o| {
             o.field(field::ref_("userId", 1, "User").required())
                 .field(field::string("label", 2))
@@ -102,6 +96,49 @@ fn product_objects(builder: SchemaBuilder) -> SchemaBuilder {
                 .index("byDueDate", 1, ["status", "scheduledFor"])
                 .merge_policy(FrickObjectMergePolicy::VersionPrecondition)
         })
+        // Realtime-calls control plane (FR-282), mirroring the canonical
+        // `crates/frick-server/src/calls/schema.rs` defs field-for-field.
+        // CallRoom moved off its old id 4 to keep the chat ids stable.
+        .object("CallRoom", 9, |o| {
+            o.field(field::string("conversationId", 1).required())
+                .field(field::enum_("state", 2, ["ringing", "active", "ended"]).required())
+                .field(field::string("createdBy", 3).required())
+                .field(field::enum_("kind", 4, ["audio", "video"]).required())
+                .field(field::timestamp("createdAt", 5).required())
+                .field(field::timestamp("startedAt", 6))
+                .field(field::timestamp("endedAt", 7))
+                .field(field::string("mediaSessionId", 8))
+                .field(field::string("transport", 9))
+                .index("byConversation", 1, ["conversationId", "state"])
+        })
+        .object("CallInvite", 10, |o| {
+            o.field(field::string("callId", 1).required())
+                .field(field::string("inviteeUserId", 2).required())
+                .field(
+                    field::enum_(
+                        "status",
+                        3,
+                        ["ringing", "accepted", "declined", "cancelled"],
+                    )
+                    .required(),
+                )
+                .field(field::string("invitedBy", 4).required())
+                .field(field::timestamp("invitedAt", 5).required())
+                .field(field::timestamp("respondedAt", 6))
+                .index("byCall", 1, ["callId", "inviteeUserId"])
+        })
+        .object("CallParticipant", 11, |o| {
+            o.field(field::string("callId", 1).required())
+                .field(field::string("userId", 2).required())
+                .field(field::string("deviceId", 3).required())
+                .field(field::enum_("state", 4, ["joined", "left"]).required())
+                .field(field::timestamp("joinedAt", 5).required())
+                .field(field::timestamp("leftAt", 6))
+                .field(field::bool("micEnabled", 7).required())
+                .field(field::bool("cameraEnabled", 8).required())
+                .field(field::bool("screenSharing", 9).required())
+                .index("byCall", 1, ["callId", "userId"])
+        })
 }
 
 fn product_streams_and_events(builder: SchemaBuilder) -> SchemaBuilder {
@@ -117,13 +154,15 @@ fn product_streams_and_events(builder: SchemaBuilder) -> SchemaBuilder {
                 ])
         })
         .stream("CallEventStream", 2, |s| {
-            s.key_field(field::ref_("callId", 1, "CallRoom").required())
-                .events([
-                    "CallCreated",
-                    "CallParticipantJoined",
-                    "CallParticipantLeft",
-                    "CallEnded",
-                ])
+            s.key_field(field::string("callId", 1).required()).events([
+                "CallCreated",
+                "CallInviteSent",
+                "CallInviteAccepted",
+                "CallParticipantJoined",
+                "CallParticipantMediaChanged",
+                "CallParticipantLeft",
+                "CallEnded",
+            ])
         })
         .event("MessageSent", 1, |e| {
             e.field(field::id("messageId", 1).required())
@@ -151,19 +190,45 @@ fn product_streams_and_events(builder: SchemaBuilder) -> SchemaBuilder {
                 .field(field::int("sequence", 2).required())
         })
         .event("CallCreated", 6, |e| {
-            e.field(field::ref_("callId", 1, "CallRoom").required())
-                .field(field::ref_("createdBy", 2, "User").required())
+            e.field(field::string("callId", 1).required())
+                .field(field::string("conversationId", 2).required())
+                .field(field::string("createdBy", 3).required())
+                .field(field::string("kind", 4).required())
+                .field(field::timestamp("createdAt", 5).required())
         })
-        .event("CallParticipantJoined", 7, |e| {
-            e.field(field::ref_("userId", 1, "User").required())
-                .field(field::string("deviceId", 2).required())
+        .event("CallInviteSent", 7, |e| {
+            e.field(field::string("callId", 1).required())
+                .field(field::string("inviteeUserId", 2).required())
+                .field(field::string("invitedBy", 3).required())
         })
-        .event("CallParticipantLeft", 8, |e| {
-            e.field(field::ref_("userId", 1, "User").required())
-                .field(field::string("deviceId", 2).required())
+        .event("CallInviteAccepted", 8, |e| {
+            e.field(field::string("callId", 1).required())
+                .field(field::string("inviteeUserId", 2).required())
         })
-        .event("CallEnded", 9, |e| {
-            e.field(field::timestamp("endedAt", 1).required())
+        .event("CallParticipantJoined", 9, |e| {
+            e.field(field::string("callId", 1).required())
+                .field(field::string("userId", 2).required())
+                .field(field::string("deviceId", 3).required())
+                .field(field::timestamp("joinedAt", 4).required())
+        })
+        .event("CallParticipantMediaChanged", 10, |e| {
+            e.field(field::string("callId", 1).required())
+                .field(field::string("userId", 2).required())
+                .field(field::string("deviceId", 3).required())
+                .field(field::bool("micEnabled", 4).required())
+                .field(field::bool("cameraEnabled", 5).required())
+                .field(field::bool("screenSharing", 6).required())
+        })
+        .event("CallParticipantLeft", 11, |e| {
+            e.field(field::string("callId", 1).required())
+                .field(field::string("userId", 2).required())
+                .field(field::string("deviceId", 3).required())
+                .field(field::timestamp("leftAt", 4).required())
+        })
+        .event("CallEnded", 12, |e| {
+            e.field(field::string("callId", 1).required())
+                .field(field::string("endedBy", 2).required())
+                .field(field::timestamp("endedAt", 3).required())
         })
 }
 
@@ -176,7 +241,7 @@ fn product_ephemera(builder: SchemaBuilder) -> SchemaBuilder {
                 .field(field::bool("isTyping", 1).required())
         })
         .signal("WebRTCSignal", 1, 30000, |s| {
-            s.key_field(field::ref_("callId", 1, "CallRoom").required())
+            s.key_field(field::string("callId", 1).required())
                 .field(field::string("senderDeviceId", 1).required())
                 .field(field::string("recipientDeviceId", 2))
                 .field(

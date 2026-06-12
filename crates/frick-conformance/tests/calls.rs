@@ -2,88 +2,30 @@
 //! (FR-290).
 //!
 //! These reuse the same harness client as `tests/scenarios.rs` (HTTP + WS +
-//! Hello) but boot the in-process Rust server with a call-aware schema via
-//! [`ServerHandle::in_process_with_schema`] (see the schema-approach note
-//! below). The assertions are about *observable* wire behavior: the
-//! `CallCommand` → `CallCommandResult` RPC over the WebSocket, the call
-//! lifecycle (create → join), and the FR-284 membership gate on the
+//! Hello) and boot the default in-process Rust server via
+//! [`ServerHandle::in_process`]. The assertions are about *observable* wire
+//! behavior: the `CallCommand` → `CallCommandResult` RPC over the WebSocket,
+//! the call lifecycle (create → join), and the FR-284 membership gate on the
 //! `WebRTCSignal` relay.
 //!
-//! # Schema approach (path (a): splice the *current* call types into the
-//! product schema)
+//! # Schema
 //!
 //! The store packs every object/event write against the active schema's field
 //! list (`pack_object_record`), so a `CallCommand` only works if the running
 //! server's schema carries the call control-plane types with the **current**
 //! field shape. The committed product-test fixture
-//! (`conformance/fixtures/wire/schema-product-validated.bin`) *does* carry call
-//! types, but an **older, partial** version — e.g. its `CallRoom` lacks the
-//! `kind` field the live control plane writes, so a Create fails the schema-pack
-//! with `Unknown field kind`.
-//!
-//! The least-invasive fix is therefore path (a): boot the in-process server with
-//! a schema that strips the fixture's stale call types and splices in
+//! (`conformance/fixtures/wire/schema-product-validated.bin`) carries exactly
+//! those canonical call types — its `CallRoom`/`CallInvite`/`CallParticipant`,
+//! `CallEventStream`, and `WebRTCSignal` mirror
 //! `frick_server::calls::schema::{call_object_defs, call_stream_defs,
-//! call_event_defs, call_signal_defs}(id_base)` — the *same* defs the control
-//! plane writes against — at a free id range. [`ServerHandle::in_process_with_schema`]
-//! boots that schema and every [`WsConn`] hellos with it, so the capability
-//! handshake (structural, not hash-equality) agrees. This reuses the shared
-//! harness (HTTP + WS client + Hello) rather than re-implementing it.
-//!
-//! (`build_call_schema()` would give a *call-only* server, but then the chat
-//! types — and `dev-login`'s account/object plumbing — would be absent; splicing
-//! into the product schema keeps both.)
+//! call_event_defs, call_signal_defs}` field-for-field (FR-294). So the default
+//! product schema is call-ready: no strip-and-splice is needed, and these
+//! scenarios run against the same fixture every other conformance scenario does.
 
 use frick_conformance::{ServerHandle, nonce};
 use frick_protocol::FrickFrame;
 use frick_protocol::Value;
 use frick_protocol::calls::{CallCommandName, CallCommandOp, CallKind, CallRoomState};
-use frick_protocol::schema::FrickSchema;
-use frick_server::calls::schema::{
-    CALL_EVENT_STREAM, CALL_INVITE_TYPE, CALL_PARTICIPANT_TYPE, CALL_ROOM_TYPE, WEBRTC_SIGNAL,
-    call_event_defs, call_object_defs, call_signal_defs, call_stream_defs,
-};
-
-/// The lifecycle event names the spliced `CallEventStream` carries; the stale
-/// fixture copies are stripped alongside the call objects/stream/signal so the
-/// current defs (referenced by the spliced stream) are the only ones present.
-fn call_event_names() -> Vec<String> {
-    call_event_defs(0).into_iter().map(|e| e.name).collect()
-}
-
-/// Build the product schema with its **stale** call types replaced by the
-/// current control-plane defs (see the module docs). Splices each category at
-/// `max(existing id) + 1` so the new defs never collide with the chat types.
-fn call_schema() -> FrickSchema {
-    let mut schema = frick_conformance::product_test_schema().clone();
-
-    let stale_objects = [CALL_ROOM_TYPE, CALL_INVITE_TYPE, CALL_PARTICIPANT_TYPE];
-    let stale_events = call_event_names();
-    schema
-        .objects
-        .retain(|o| !stale_objects.contains(&o.name.as_str()));
-    schema.streams.retain(|s| s.name != CALL_EVENT_STREAM);
-    schema.events.retain(|e| !stale_events.contains(&e.name));
-    schema.signals.retain(|s| s.name != WEBRTC_SIGNAL);
-
-    // Splice the current defs at a free id base per category (ids are scoped
-    // per category, so each gets its own `max + 1`).
-    let next_id = |ids: &[i64]| ids.iter().copied().max().unwrap_or(0) + 1;
-    let object_base = next_id(&schema.objects.iter().map(|o| o.id).collect::<Vec<_>>());
-    let stream_base = next_id(&schema.streams.iter().map(|s| s.id).collect::<Vec<_>>());
-    let event_base = next_id(&schema.events.iter().map(|e| e.id).collect::<Vec<_>>());
-    let signal_base = next_id(&schema.signals.iter().map(|s| s.id).collect::<Vec<_>>());
-
-    schema.objects.extend(call_object_defs(object_base));
-    schema.streams.extend(call_stream_defs(stream_base));
-    schema.events.extend(call_event_defs(event_base));
-    schema.signals.extend(call_signal_defs(signal_base));
-
-    // Distinguish the spliced schema's identity from the bare product fixture.
-    schema.hash = format!("{}+calls-fr290", schema.hash);
-    frick_protocol::schema::validate_schema(&schema).expect("spliced call schema validates");
-    schema
-}
 
 /// Pull the `reason` string out of a `Nack`'s error details map.
 fn nack_reason(nack: &frick_protocol::frame::NackPayload) -> Option<&str> {
@@ -134,7 +76,7 @@ fn webrtc_offer_value(sender_device_id: &str) -> Value {
 /// the invite for the invitee.
 #[tokio::test]
 async fn call_create_replies_with_ringing_room_and_invite() {
-    let server = ServerHandle::in_process_with_schema(call_schema()).await;
+    let server = ServerHandle::in_process().await;
     let http = server.http();
 
     let suffix = nonce();
@@ -186,7 +128,7 @@ async fn call_create_replies_with_ringing_room_and_invite() {
 /// from the (fake SFU) media plane. The room flips to `active` on first join.
 #[tokio::test]
 async fn invitee_join_yields_participant_and_media_grant() {
-    let server = ServerHandle::in_process_with_schema(call_schema()).await;
+    let server = ServerHandle::in_process().await;
     let http = server.http();
 
     let suffix = nonce();
@@ -260,7 +202,7 @@ async fn invitee_join_yields_participant_and_media_grant() {
 /// `notMember`; a member's (the creator's) signal is accepted (`Ack`).
 #[tokio::test]
 async fn webrtc_signal_is_gated_on_call_membership() {
-    let server = ServerHandle::in_process_with_schema(call_schema()).await;
+    let server = ServerHandle::in_process().await;
     let http = server.http();
 
     let suffix = nonce();

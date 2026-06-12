@@ -28,44 +28,11 @@ import {
  * CallRoom + CallParticipant object deltas into a reactive view.
  */
 
-// Build a schema that carries the full call object set so packObjectRecord can
-// encode CallParticipant/CallRoom deltas in the test.
-const callTestSchema: FrickSchema = (() => {
-  const next = structuredClone(productTestSchema);
-  next.hash = `${next.hash}-calls-client`;
-  // Replace the fixture's partial CallRoom with the full record shape.
-  next.objects = next.objects.filter((o) => o.name !== "CallRoom");
-  next.objects.push(
-    {
-      id: 90,
-      name: "CallRoom",
-      fields: [
-        { id: 1, name: "conversationId", kind: "string", required: true },
-        { id: 2, name: "state", kind: "enum", enumValues: ["ringing", "active", "ended"], required: true },
-        { id: 3, name: "createdBy", kind: "string", required: true },
-        { id: 4, name: "kind", kind: "enum", enumValues: ["audio", "video"], required: true },
-        { id: 5, name: "createdAt", kind: "timestamp", required: true },
-      ],
-      indexes: [],
-    },
-    {
-      id: 91,
-      name: "CallParticipant",
-      fields: [
-        { id: 1, name: "callId", kind: "string", required: true },
-        { id: 2, name: "userId", kind: "string", required: true },
-        { id: 3, name: "deviceId", kind: "string", required: true },
-        { id: 4, name: "state", kind: "enum", enumValues: ["joined", "left"], required: true },
-        { id: 5, name: "joinedAt", kind: "timestamp", required: true },
-        { id: 6, name: "micEnabled", kind: "bool", required: true },
-        { id: 7, name: "cameraEnabled", kind: "bool", required: true },
-        { id: 8, name: "screenSharing", kind: "bool", required: true },
-      ],
-      indexes: [],
-    },
-  );
-  return validateSchema(next);
-})();
+// The product-test fixture now carries the canonical call control-plane object
+// set (FR-294: CallRoom/CallInvite/CallParticipant mirror the Rust
+// `call_object_defs` field-for-field), so `packObjectRecord` can encode
+// CallParticipant/CallRoom deltas directly — no strip-and-splice needed.
+const callTestSchema: FrickSchema = validateSchema(productTestSchema);
 
 describe("FR-80 — call client helpers", () => {
   it("createCall sends a create CallCommand and resolves with room + invites", async () => {
