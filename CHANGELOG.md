@@ -7,6 +7,8 @@ documents the stack version and the user-visible changes in that cut.
 
 ## Unreleased
 
+## 0.4.0 — 2026-06-12
+
 ### Added
 
 The Rust server reaches feature parity with the former TypeScript server across these surfaces (all wire-compatible with the existing web/Swift/Kotlin clients):
