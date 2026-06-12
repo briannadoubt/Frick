@@ -331,12 +331,19 @@ data class FrickCacheMetadata(
     val userId: String? = null,
 ) {
     companion object {
-        val currentSchema: FrickCacheMetadata =
+        val currentSchema: FrickCacheMetadata = forDescriptor(FrickSchemaDescriptor.FOUNDATION)
+
+        /**
+         * Cache metadata for a product schema [descriptor] (FR-300), so a
+         * product-schema app's cache is keyed by its own identity rather than
+         * the foundation default.
+         */
+        fun forDescriptor(descriptor: FrickSchemaDescriptor): FrickCacheMetadata =
             FrickCacheMetadata(
-                schemaId = FRICK_SCHEMA_ID,
+                schemaId = descriptor.schemaId,
                 schemaVersion = FRICK_SCHEMA_VERSION,
-                schemaRevision = FRICK_SCHEMA_REVISION,
-                schemaHash = FRICK_SCHEMA_HASH,
+                schemaRevision = descriptor.schemaRevision,
+                schemaHash = descriptor.schemaHash,
             )
     }
 }
@@ -385,6 +392,16 @@ interface FrickTransport {
     suspend fun post(path: String, body: String): String
     suspend fun post(path: String, body: String, headers: Map<String, String>): String = post(path, body)
     suspend fun putBytes(path: String, mimeType: String, bytes: ByteArray): String
+
+    /**
+     * Issue an authenticated JSON `PUT`. Carries a default so existing
+     * [FrickTransport] implementations (and test fakes) stay source-compatible;
+     * the real [KtorFrickTransport] overrides it with `application/json`. App
+     * command endpoints that migrate to canonical PUT routes are the callers —
+     * [putBytes] would be semantically wrong for a JSON body.
+     */
+    suspend fun put(path: String, body: String, headers: Map<String, String> = emptyMap()): String =
+        throw UnsupportedOperationException("PUT is not supported by this transport")
 
     /**
      * Issue an authenticated `DELETE`. Carries a default so existing
@@ -893,6 +910,17 @@ class KtorFrickTransport(
         return response.bodyAsText()
     }
 
+    override suspend fun put(path: String, body: String, headers: Map<String, String>): String {
+        val response = httpClient.put(resolve(path)) {
+            authorize()
+            headers.forEach { (name, value) -> header(name, value) }
+            contentType(ContentType.Application.Json)
+            setBody(body)
+        }
+        requireSuccess(response)
+        return response.bodyAsText()
+    }
+
     override suspend fun putBytes(path: String, mimeType: String, bytes: ByteArray): String {
         val response = httpClient.put(resolve(path)) {
             authorize()
@@ -933,6 +961,13 @@ class FrickClient(
         sessionTokenProvider = { storage.loadSession()?.sessionToken },
     ),
     private val telemetry: FrickClientTelemetryRuntime = NoopFrickClientTelemetryRuntime,
+    /**
+     * The product schema identity + field tables this client runs with
+     * (FR-300). A product-schema app injects its generated descriptor; it flows
+     * into cache-compatibility checks and the [connectSync] handshake so the
+     * client is keyed by the product schema, not the foundation default.
+     */
+    private val descriptor: FrickSchemaDescriptor = FrickSchemaDescriptor.FOUNDATION,
 ) {
     companion object {
         const val DefaultBaseUrl = "https://127.0.0.1:4099"
@@ -941,7 +976,7 @@ class FrickClient(
 
 
     fun verifyCacheCompatibility(
-        currentMetadata: FrickCacheMetadata = FrickCacheMetadata.currentSchema,
+        currentMetadata: FrickCacheMetadata = FrickCacheMetadata.forDescriptor(descriptor),
         minimumClientRevision: Int = FRICK_MINIMUM_CLIENT_REVISION,
     ): FrickCacheMetadata {
         val resolvedCurrentMetadata = currentMetadata.withSessionScope(storage.loadSession())
@@ -1431,7 +1466,8 @@ class FrickClient(
      */
     fun connectSync(
         baseUrl: String,
-        config: FrickSyncSocketConfig = FrickSyncSocketConfig(replicaId = replicaId),
+        config: FrickSyncSocketConfig =
+            FrickSyncSocketConfig(replicaId = replicaId, descriptor = descriptor),
         httpClient: okhttp3.OkHttpClient = FrickSyncSocket.defaultOkHttpClient(),
     ): FrickSyncSocket {
         requireAuthenticatedSession()

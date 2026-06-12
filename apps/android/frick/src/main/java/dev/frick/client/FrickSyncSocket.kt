@@ -227,15 +227,23 @@ internal fun frickWebSocketUrlPath(url: String): String =
         URI(url).path?.takeIf { it.isNotEmpty() } ?: "/"
     }.getOrDefault("/")
 
-/** Build the default capability bundle the Android SDK advertises in Hello. */
-fun defaultAndroidCapabilities(sdkVersion: String = "0.1.0"): Map<String, Any?> =
+/**
+ * Build the capability bundle the Android SDK advertises in Hello. The
+ * advertised schema identity comes from [descriptor] (FR-300), so a
+ * product-schema app handshakes with its own id/revision/hash rather than the
+ * foundation defaults.
+ */
+fun defaultAndroidCapabilities(
+    sdkVersion: String = "0.1.0",
+    descriptor: FrickSchemaDescriptor = FrickSchemaDescriptor.FOUNDATION,
+): Map<String, Any?> =
     mapOf(
         "platform" to "android",
         "sdkVersion" to sdkVersion,
         "schema" to mapOf(
-            "schemaId" to FRICK_SCHEMA_ID,
-            "schemaRevision" to FRICK_SCHEMA_REVISION,
-            "schemaHash" to FRICK_SCHEMA_HASH,
+            "schemaId" to descriptor.schemaId,
+            "schemaRevision" to descriptor.schemaRevision,
+            "schemaHash" to descriptor.schemaHash,
         ),
         "transports" to listOf("websocket"),
         "encodings" to listOf("msgpack"),
@@ -246,6 +254,30 @@ fun defaultAndroidCapabilities(sdkVersion: String = "0.1.0"): Map<String, Any?> 
         "experimental" to emptyList<String>(),
         "required" to emptyList<String>(),
     )
+
+/**
+ * The product schema identity + packed-tuple field tables a client runs with
+ * (FR-300). A product-schema app injects its generated values (id / revision /
+ * hash and the `*_OBJECT_NAMES` / `*_OBJECT_FIELDS` / stream / event tables)
+ * instead of the foundation defaults, so the Hello handshake, telemetry,
+ * headers, and Delta field-name resolution all use the product schema —
+ * mirroring the Swift/web injectable descriptor. Defaults to [FOUNDATION].
+ */
+data class FrickSchemaDescriptor(
+    val schemaId: String = FRICK_SCHEMA_ID,
+    val schemaRevision: Int = FRICK_SCHEMA_REVISION,
+    val schemaHash: String = FRICK_SCHEMA_HASH,
+    val objectNames: Map<Int, String> = FRICK_OBJECT_NAMES,
+    val streamNames: Map<Int, String> = FRICK_STREAM_NAMES,
+    val eventNames: Map<Int, String> = FRICK_EVENT_NAMES,
+    val objectFields: Map<Int, Map<Int, String>> = FRICK_OBJECT_FIELDS,
+    val eventFields: Map<Int, Map<Int, String>> = FRICK_EVENT_FIELDS,
+) {
+    companion object {
+        /** The generated foundation schema (the default identity + tables). */
+        val FOUNDATION: FrickSchemaDescriptor = FrickSchemaDescriptor()
+    }
+}
 
 /**
  * Configuration knobs for the socket. Defaults are tuned for production but
@@ -259,6 +291,8 @@ data class FrickSyncSocketConfig(
     val maxBackoffMs: Long = 30_000,
     val pongTimeoutMs: Long = 10_000,
     val helloAckTimeoutMs: Long = 10_000,
+    /** Product schema identity + field tables (FR-300); foundation by default. */
+    val descriptor: FrickSchemaDescriptor = FrickSchemaDescriptor.FOUNDATION,
 )
 
 internal fun buildSyncUrl(baseUrl: String): String {
@@ -638,8 +672,8 @@ class FrickSyncSocket internal constructor(
                 attributes = mapOf(
                     "network.protocol.name" to JsonPrimitive("websocket"),
                     "url.path" to JsonPrimitive(frickWebSocketUrlPath(url)),
-                    "frick.schema_id" to JsonPrimitive(FRICK_SCHEMA_ID),
-                    "frick.schema_revision" to JsonPrimitive(FRICK_SCHEMA_REVISION),
+                    "frick.schema_id" to JsonPrimitive(config.descriptor.schemaId),
+                    "frick.schema_revision" to JsonPrimitive(config.descriptor.schemaRevision),
                     "frick.authenticated" to JsonPrimitive(authenticated),
                 ),
             ),
@@ -707,9 +741,9 @@ class FrickSyncSocket internal constructor(
             put("replicaId", config.replicaId)
             put("deviceId", config.deviceId)
             activeSessionToken?.let { token -> put("sessionToken", token) }
-            put("schemaHash", FRICK_SCHEMA_HASH)
+            put("schemaHash", config.descriptor.schemaHash)
             put("knownCursors", emptyMap<String, Int>())
-            put("clientCapabilities", defaultAndroidCapabilities(config.sdkVersion))
+            put("clientCapabilities", defaultAndroidCapabilities(config.sdkVersion, config.descriptor))
         }
         val bytes = FrickMsgPack.encodeFrame(FrameKindCodes.HELLO, payload)
         if (webSocket?.send(bytes.toByteString()) == true) {
@@ -1016,9 +1050,9 @@ class FrickSyncSocket internal constructor(
     private fun handleFrame(kind: Int, payload: Map<String, Any?>) {
         when (kind) {
             FrameKindCodes.HELLO_ACK -> {
-                val schemaHash = payload.stringField("schemaHash") ?: FRICK_SCHEMA_HASH
-                val schemaId = payload.stringField("schemaId") ?: FRICK_SCHEMA_ID
-                val schemaRev = payload.intField("schemaRevision") ?: FRICK_SCHEMA_REVISION
+                val schemaHash = payload.stringField("schemaHash") ?: config.descriptor.schemaHash
+                val schemaId = payload.stringField("schemaId") ?: config.descriptor.schemaId
+                val schemaRev = payload.intField("schemaRevision") ?: config.descriptor.schemaRevision
                 _status.value = FrickSyncStatus.Ready(schemaHash, schemaId, schemaRev)
                 backoffState.set(config.initialBackoffMs)
                 if (!helloAcked.isCompleted) helloAcked.complete(Unit)
@@ -1157,8 +1191,8 @@ class FrickSyncSocket internal constructor(
         if (tuple.size < 3) return null
         val typeId = (tuple[0] as? Number)?.toInt() ?: return null
         val id = tuple[1] as? String ?: return null
-        val typeName = FRICK_OBJECT_NAMES[typeId] ?: return null
-        val fieldTable = FRICK_OBJECT_FIELDS[typeId] ?: emptyMap()
+        val typeName = config.descriptor.objectNames[typeId] ?: return null
+        val fieldTable = config.descriptor.objectFields[typeId] ?: emptyMap()
         val packedFields = tuple[2] as? List<*> ?: emptyList<Any?>()
         val value = unpackFields(packedFields, fieldTable).toMutableMap()
         value["id"] = id
@@ -1191,9 +1225,9 @@ class FrickSyncSocket internal constructor(
         if (tuple.size < 3) return null
         val typeId = (tuple[0] as? Number)?.toInt() ?: return null
         val key = tuple[1] as? String ?: return null
-        val typeName = FRICK_OBJECT_NAMES[typeId] ?: "#$typeId"
+        val typeName = config.descriptor.objectNames[typeId] ?: "#$typeId"
         val packedFields = tuple[2] as? List<*> ?: emptyList<Any?>()
-        val value = unpackFields(packedFields, FRICK_OBJECT_FIELDS[typeId] ?: emptyMap())
+        val value = unpackFields(packedFields, config.descriptor.objectFields[typeId] ?: emptyMap())
         return mapOf("type" to typeName, "key" to key, "value" to value)
     }
 
@@ -1212,9 +1246,9 @@ class FrickSyncSocket internal constructor(
         val sequence = (tuple[2] as? Number)?.toInt() ?: return null
         val eventId = tuple[3] as? String ?: return null
         val eventTypeId = (tuple[4] as? Number)?.toInt() ?: return null
-        val streamName = FRICK_STREAM_NAMES[streamTypeId] ?: return null
-        val eventName = FRICK_EVENT_NAMES[eventTypeId] ?: return null
-        val fieldTable = FRICK_EVENT_FIELDS[eventTypeId] ?: emptyMap()
+        val streamName = config.descriptor.streamNames[streamTypeId] ?: return null
+        val eventName = config.descriptor.eventNames[eventTypeId] ?: return null
+        val fieldTable = config.descriptor.eventFields[eventTypeId] ?: emptyMap()
         val packedFields = tuple[5] as? List<*> ?: emptyList<Any?>()
         val payload = unpackFields(packedFields, fieldTable)
         return mapOf(
