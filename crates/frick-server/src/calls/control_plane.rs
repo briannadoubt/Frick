@@ -44,6 +44,7 @@ use super::schema::{
     CALL_INVITE_TYPE, CALL_PARTICIPANT_JOINED, CALL_PARTICIPANT_LEFT,
     CALL_PARTICIPANT_MEDIA_CHANGED, CALL_PARTICIPANT_TYPE, CALL_ROOM_TYPE,
 };
+use super::sfu_backend::{ConsumerHandle, MediaKind, ProducerHandle, SfuMediaOperations};
 use crate::principal::{DEFAULT_APP_ID, DEFAULT_TENANT_ID};
 
 /// Why a call-lifecycle transition was rejected (maps to the TS
@@ -75,6 +76,11 @@ pub enum CallError {
     Authz(CallAuthzReason, String),
     #[error("{0}")]
     MediaUnsupported(String),
+    /// An SFU media-negotiation op was rejected by the backend — a bad/expired
+    /// join token or an attempt to act on a transport/producer the actor does not
+    /// own (FR-166/170/171/172). The gateway maps it to `auth.forbidden`.
+    #[error("{0}")]
+    MediaForbidden(String),
     #[error("media plane error: {0}")]
     Media(#[from] super::media_plane::MediaPlaneError),
     #[error("store error: {0}")]
@@ -166,6 +172,11 @@ pub struct CallControlPlane {
     store: Arc<FrickStore>,
     media: Arc<dyn MediaPlaneAdapter>,
     clock: Arc<dyn CallClock>,
+    /// The SFU produce/consume companion (FR-292), present iff the media plane is
+    /// brokered over an SFU that supports server-side media negotiation. `None`
+    /// for the fake / P2P / LiveKit planes — the SFU ops then Nack
+    /// `mediaUnsupported`.
+    sfu_media: Option<Arc<dyn SfuMediaOperations>>,
     /// Monotonic counter making per-call stream request-ids unique + ordered.
     seq: AtomicU64,
 }
@@ -181,8 +192,27 @@ impl CallControlPlane {
             store,
             media,
             clock,
+            sfu_media: None,
             seq: AtomicU64::new(0),
         }
+    }
+
+    /// Attach the SFU produce/consume companion (FR-292). Boot calls this when the
+    /// configured media plane is brokered over an SFU that supports server-side
+    /// media negotiation, so `sfuConnectTransport`/`sfuProduce`/`sfuConsume` route
+    /// to it instead of Nacking `mediaUnsupported`.
+    #[must_use]
+    pub fn with_sfu_media(mut self, sfu_media: Arc<dyn SfuMediaOperations>) -> Self {
+        self.sfu_media = Some(sfu_media);
+        self
+    }
+
+    /// Whether this control plane is brokered over an SFU media plane that
+    /// supports the produce/consume companion (the Rust analogue of the TS
+    /// `supportsSfuMedia` guard). False for the fake / P2P / LiveKit planes.
+    #[must_use]
+    pub fn supports_sfu_media(&self) -> bool {
+        self.sfu_media.is_some()
     }
 
     fn now_iso(&self) -> String {
@@ -556,6 +586,123 @@ impl CallControlPlane {
         Ok(updated)
     }
 
+    // -- SFU media negotiation (FR-292) --------------------------------------
+    //
+    // After a participant `join`s an SFU-brokered call and receives its grant
+    // (room caps + transport params), the client negotiates real media by
+    // forwarding these through the gateway. Each validates the actor is an active
+    // participant of a live call, then delegates to the media plane's
+    // produce/consume companion — which verifies the join token and enforces
+    // transport/producer ownership. A non-SFU media plane has no companion, so
+    // these surface [`CallError::MediaUnsupported`] (→ the gateway Nacks).
+
+    /// Complete the DTLS handshake for one of the participant's transports.
+    pub async fn sfu_connect_transport(
+        &self,
+        actor: &CallActor,
+        call_id: &str,
+        token: &str,
+        transport_id: &str,
+        dtls_parameters: Value,
+    ) -> CallResult<()> {
+        let ops = self.require_sfu_participant(actor, call_id).await?;
+        ops.connect_transport(
+            call_id,
+            &media_participant(actor),
+            token,
+            transport_id,
+            dtls_parameters,
+            self.clock.now_ms(),
+        )
+        .await
+        .map_err(sfu_op_err)
+    }
+
+    /// Start producing one of the participant's tracks on its send transport.
+    pub async fn sfu_produce(
+        &self,
+        actor: &CallActor,
+        call_id: &str,
+        token: &str,
+        transport_id: &str,
+        kind: MediaKind,
+        rtp_parameters: Value,
+    ) -> CallResult<ProducerHandle> {
+        let ops = self.require_sfu_participant(actor, call_id).await?;
+        ops.produce(
+            call_id,
+            &media_participant(actor),
+            token,
+            transport_id,
+            kind,
+            rtp_parameters,
+            self.clock.now_ms(),
+        )
+        .await
+        .map_err(sfu_op_err)
+    }
+
+    /// Consume another participant's producer onto this participant's recv
+    /// transport.
+    pub async fn sfu_consume(
+        &self,
+        actor: &CallActor,
+        call_id: &str,
+        token: &str,
+        transport_id: &str,
+        producer_id: &str,
+        rtp_capabilities: Value,
+    ) -> CallResult<ConsumerHandle> {
+        let ops = self.require_sfu_participant(actor, call_id).await?;
+        ops.consume(
+            call_id,
+            &media_participant(actor),
+            token,
+            transport_id,
+            producer_id,
+            rtp_capabilities,
+            self.clock.now_ms(),
+        )
+        .await
+        .map_err(sfu_op_err)
+    }
+
+    /// Validate the actor is an active participant of a live, SFU-brokered call
+    /// and return the media plane's produce/consume companion. Returns
+    /// [`CallError::MediaUnsupported`] on a non-SFU plane (so the op Nacks
+    /// `mediaUnsupported`), or [`CallStateReason::NotParticipant`] if the actor
+    /// isn't a joined participant.
+    async fn require_sfu_participant(
+        &self,
+        actor: &CallActor,
+        call_id: &str,
+    ) -> CallResult<&Arc<dyn SfuMediaOperations>> {
+        let Some(ops) = self.sfu_media.as_ref() else {
+            return Err(CallError::MediaUnsupported(format!(
+                "Call {call_id} is not brokered over an SFU media plane; SFU media negotiation \
+                 is unsupported"
+            )));
+        };
+        let app_id = actor.app_id().to_string();
+        self.require_live_room(actor, &app_id, call_id).await?;
+        let participant = self
+            .read_participant(actor, &app_id, call_id, &actor.user_id, &actor.device_id)
+            .await?;
+        if !matches!(
+            participant,
+            Some(ref p) if matches!(p.state, CallParticipantState::Joined)
+        ) {
+            return Err(CallError::state(
+                CallStateReason::NotParticipant,
+                format!(
+                    "{}/{} is not an active participant of {call_id}",
+                    actor.user_id, actor.device_id
+                ),
+            ));
+        }
+        Ok(ops)
+    }
+
     // -- leave / end ---------------------------------------------------------
 
     /// Leave a call. Marks the actor's `CallParticipant` `left` and emits
@@ -607,6 +754,14 @@ impl CallControlPlane {
             ],
         )
         .await?;
+
+        // Reclaim the leaving participant's SFU transports/producers/consumers
+        // immediately so repeated join/leave can't leak server-side media state
+        // (FR-172). No-op on a non-SFU plane (no companion).
+        if let Some(ops) = self.sfu_media.as_ref() {
+            ops.leave_participant(call_id, &media_participant(actor))
+                .await;
+        }
 
         // Auto-end when the last active participant leaves an active call.
         let remaining = self
@@ -1026,6 +1181,21 @@ fn kind_wire(kind: CallKind) -> &'static str {
     }
 }
 
+/// Project a [`CallActor`] onto the media plane's [`MediaParticipant`] identity.
+fn media_participant(actor: &CallActor) -> MediaParticipant {
+    MediaParticipant {
+        user_id: actor.user_id.clone(),
+        device_id: actor.device_id.clone(),
+    }
+}
+
+/// Map a backend SFU op rejection (bad/expired token, transport/producer
+/// ownership violation) onto [`CallError::MediaForbidden`] so the gateway Nacks
+/// `auth.forbidden` (FR-166/170/171/172).
+fn sfu_op_err(err: super::sfu_backend::SfuBackendError) -> CallError {
+    CallError::MediaForbidden(err.0)
+}
+
 fn decode<T: serde::de::DeserializeOwned>(value: Value) -> CallResult<T> {
     rmpv::ext::from_value(value).map_err(|e| CallError::Decode(e.to_string()))
 }
@@ -1277,5 +1447,364 @@ mod tests {
                 .await,
             "an outsider is not a member"
         );
+    }
+
+    // -- SFU media negotiation (FR-292) --------------------------------------
+
+    use crate::calls::{FakeSfuBackend, SfuMediaPlaneAdapter};
+
+    /// Build a control plane brokered over a *shared* [`FakeSfuBackend`]: the same
+    /// backend serves both the media plane (so `join` mints tokens + provisions
+    /// transports through it) and the SFU produce/consume companion (so the ops
+    /// verify against that exact state). Returns the plane + the shared backend
+    /// (for transport/leak inspection).
+    async fn sfu_plane() -> (CallControlPlane, Arc<FakeSfuBackend>) {
+        let backend = Arc::new(FakeSfuBackend::default());
+        let media: Arc<dyn MediaPlaneAdapter> =
+            Arc::new(SfuMediaPlaneAdapter::new(backend.clone()));
+        let cp = plane(media).await.with_sfu_media(backend.clone());
+        (cp, backend)
+    }
+
+    /// Create (ada invites grace) and join both, returning the call id + each
+    /// participant's media grant token.
+    async fn create_and_join_two(
+        cp: &CallControlPlane,
+        ada: &CallActor,
+        grace: &CallActor,
+    ) -> (String, String, String) {
+        let created = cp.create_call(ada, create_input(&["grace"])).await.unwrap();
+        let call_id = created.room.id.clone();
+        let ada_join = cp.join_call(ada, &call_id).await.unwrap();
+        let grace_join = cp.join_call(grace, &call_id).await.unwrap();
+        (
+            call_id,
+            ada_join.media_grant.token,
+            grace_join.media_grant.token,
+        )
+    }
+
+    fn rtp_value() -> Value {
+        Value::Map(vec![(Value::from("codecs"), Value::Array(Vec::new()))])
+    }
+
+    #[tokio::test]
+    async fn sfu_forged_or_expired_token_is_rejected() {
+        let (cp, backend) = sfu_plane().await;
+        let ada = call_actor("ada", "dev-a");
+        let grace = call_actor("grace", "dev-g");
+        let (call_id, ada_token, _grace_token) = create_and_join_two(&cp, &ada, &grace).await;
+        let (ada_send, _ada_recv) = backend
+            .participant_transports(&call_id, &media_participant(&ada))
+            .expect("ada has transports");
+
+        // A forged token (right shape, wrong signature) is rejected → forbidden.
+        let forged = format!("{ada_token}.tampered");
+        let err = cp
+            .sfu_connect_transport(&ada, &call_id, &forged, &ada_send, rtp_value())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CallError::MediaForbidden(_)), "forged token");
+
+        // An *expired* token: re-mint ada a 1ms-TTL grant stamped well in the past
+        // (the TestClock is fixed), then present it — verify must reject it on the
+        // expiry check before any ownership check.
+        let expired = cp
+            .media
+            .issue_join_token(
+                &call_id,
+                media_participant(&ada),
+                cp.clock.now_ms() - 10_000,
+                IssueJoinTokenOptions { ttl_ms: Some(1) },
+            )
+            .await
+            .expect("mint expired token")
+            .token;
+        let (ada_send2, _) = backend
+            .participant_transports(&call_id, &media_participant(&ada))
+            .expect("ada still has transports");
+        let err = cp
+            .sfu_connect_transport(&ada, &call_id, &expired, &ada_send2, rtp_value())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CallError::MediaForbidden(_)), "expired token");
+    }
+
+    #[tokio::test]
+    async fn sfu_participant_cannot_act_on_a_transport_it_does_not_own() {
+        // Anti-hijack (FR-170/171): grace must not connect/produce/consume on
+        // ada's transports, nor produce onto her own recv transport.
+        let (cp, backend) = sfu_plane().await;
+        let ada = call_actor("ada", "dev-a");
+        let grace = call_actor("grace", "dev-g");
+        let (call_id, _ada_token, grace_token) = create_and_join_two(&cp, &ada, &grace).await;
+
+        let (ada_send, _ada_recv) = backend
+            .participant_transports(&call_id, &media_participant(&ada))
+            .expect("ada transports");
+        let (grace_send, grace_recv) = backend
+            .participant_transports(&call_id, &media_participant(&grace))
+            .expect("grace transports");
+
+        // grace connecting ada's transport (with grace's own valid token) → no.
+        let err = cp
+            .sfu_connect_transport(&grace, &call_id, &grace_token, &ada_send, rtp_value())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, CallError::MediaForbidden(_)),
+            "connect hijack"
+        );
+
+        // grace producing onto ada's transport → no.
+        let err = cp
+            .sfu_produce(
+                &grace,
+                &call_id,
+                &grace_token,
+                &ada_send,
+                MediaKind::Audio,
+                rtp_value(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, CallError::MediaForbidden(_)),
+            "produce hijack"
+        );
+
+        // grace producing onto her own *recv* transport (wrong direction) → no.
+        let err = cp
+            .sfu_produce(
+                &grace,
+                &call_id,
+                &grace_token,
+                &grace_recv,
+                MediaKind::Audio,
+                rtp_value(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, CallError::MediaForbidden(_)),
+            "produce on recv"
+        );
+
+        // grace consuming onto ada's transport → no.
+        let err = cp
+            .sfu_consume(
+                &grace,
+                &call_id,
+                &grace_token,
+                &ada_send,
+                "fake-producer-1",
+                rtp_value(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, CallError::MediaForbidden(_)),
+            "consume hijack"
+        );
+
+        // Sanity: grace producing on her *own send* transport is allowed.
+        cp.sfu_produce(
+            &grace,
+            &call_id,
+            &grace_token,
+            &grace_send,
+            MediaKind::Audio,
+            rtp_value(),
+        )
+        .await
+        .expect("grace may produce on her own send transport");
+    }
+
+    #[tokio::test]
+    async fn sfu_produce_then_consume_round_trips_for_owned_transports() {
+        let (cp, backend) = sfu_plane().await;
+        let ada = call_actor("ada", "dev-a");
+        let grace = call_actor("grace", "dev-g");
+        let (call_id, ada_token, grace_token) = create_and_join_two(&cp, &ada, &grace).await;
+
+        let (ada_send, _) = backend
+            .participant_transports(&call_id, &media_participant(&ada))
+            .unwrap();
+        let (_, grace_recv) = backend
+            .participant_transports(&call_id, &media_participant(&grace))
+            .unwrap();
+
+        // ada connects + produces audio on her send transport.
+        cp.sfu_connect_transport(&ada, &call_id, &ada_token, &ada_send, rtp_value())
+            .await
+            .expect("ada connects her send transport");
+        assert!(backend.is_transport_connected(&call_id, &ada_send));
+        let producer = cp
+            .sfu_produce(
+                &ada,
+                &call_id,
+                &ada_token,
+                &ada_send,
+                MediaKind::Video,
+                rtp_value(),
+            )
+            .await
+            .expect("ada produces");
+
+        // grace consumes ada's producer onto her own recv transport.
+        let consumer = cp
+            .sfu_consume(
+                &grace,
+                &call_id,
+                &grace_token,
+                &grace_recv,
+                &producer.id,
+                rtp_value(),
+            )
+            .await
+            .expect("grace consumes ada's producer");
+        assert_eq!(consumer.producer_id, producer.id);
+        assert_eq!(
+            consumer.kind,
+            MediaKind::Video,
+            "consumer echoes producer kind"
+        );
+
+        // Consuming an unknown producer is rejected.
+        let err = cp
+            .sfu_consume(
+                &grace,
+                &call_id,
+                &grace_token,
+                &grace_recv,
+                "fake-producer-does-not-exist",
+                rtp_value(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, CallError::MediaForbidden(_)),
+            "unknown producer"
+        );
+    }
+
+    #[tokio::test]
+    async fn sfu_leave_reclaims_the_participants_transports_and_producers() {
+        // FR-172: leaving reclaims a participant's transports + producers so a
+        // re-join can't leak server-side media state.
+        let (cp, backend) = sfu_plane().await;
+        let ada = call_actor("ada", "dev-a");
+        let grace = call_actor("grace", "dev-g");
+        let (call_id, ada_token, _grace_token) = create_and_join_two(&cp, &ada, &grace).await;
+
+        let (ada_send, _) = backend
+            .participant_transports(&call_id, &media_participant(&ada))
+            .unwrap();
+        cp.sfu_produce(
+            &ada,
+            &call_id,
+            &ada_token,
+            &ada_send,
+            MediaKind::Audio,
+            rtp_value(),
+        )
+        .await
+        .expect("ada produces");
+
+        // Two participants → 4 transports, 1 producer.
+        assert_eq!(backend.transport_count(&call_id), 4);
+        assert_eq!(backend.producer_count(&call_id), 1);
+
+        // grace leaves: her 2 transports are reclaimed (no leak), ada's remain.
+        cp.leave_call(&grace, &call_id).await.unwrap();
+        assert_eq!(
+            backend.transport_count(&call_id),
+            2,
+            "grace's transports reclaimed"
+        );
+        assert!(
+            backend
+                .participant_transports(&call_id, &media_participant(&grace))
+                .is_none(),
+            "grace's binding is gone"
+        );
+        // ada's producer is untouched.
+        assert_eq!(backend.producer_count(&call_id), 1);
+
+        // ada leaves last → her transports + producer are reclaimed too.
+        cp.leave_call(&ada, &call_id).await.unwrap();
+        assert_eq!(backend.transport_count(&call_id), 0, "no transports leak");
+        assert_eq!(backend.producer_count(&call_id), 0, "no producers leak");
+    }
+
+    #[tokio::test]
+    async fn sfu_op_on_a_non_sfu_plane_nacks_media_unsupported() {
+        // The fake (non-SFU-companion) plane has no produce/consume companion, so
+        // every SFU op surfaces MediaUnsupported (→ the gateway Nacks
+        // `mediaUnsupported`).
+        let cp = plane(Arc::new(FakeMediaPlaneAdapter::sfu())).await;
+        assert!(!cp.supports_sfu_media());
+        let ada = call_actor("ada", "dev-a");
+        let grace = call_actor("grace", "dev-g");
+        let created = cp
+            .create_call(&ada, create_input(&["grace"]))
+            .await
+            .unwrap();
+        let call_id = created.room.id.clone();
+        cp.join_call(&grace, &call_id).await.unwrap();
+
+        let err = cp
+            .sfu_connect_transport(&grace, &call_id, "any-token", "any-transport", rtp_value())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CallError::MediaUnsupported(_)));
+
+        let err = cp
+            .sfu_produce(
+                &grace,
+                &call_id,
+                "any-token",
+                "any-transport",
+                MediaKind::Audio,
+                rtp_value(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CallError::MediaUnsupported(_)));
+
+        let err = cp
+            .sfu_consume(
+                &grace,
+                &call_id,
+                "any-token",
+                "any-transport",
+                "any-producer",
+                rtp_value(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CallError::MediaUnsupported(_)));
+    }
+
+    #[tokio::test]
+    async fn sfu_op_requires_an_active_participant() {
+        // Even on an SFU plane, a non-participant (or someone who never joined)
+        // cannot negotiate media (notParticipant), independent of the token.
+        let (cp, _backend) = sfu_plane().await;
+        let ada = call_actor("ada", "dev-a");
+        let created = cp
+            .create_call(&ada, create_input(&["grace"]))
+            .await
+            .unwrap();
+        let call_id = created.room.id.clone();
+        // ada created but never joined → not an active participant.
+        let err = cp
+            .sfu_connect_transport(&ada, &call_id, "tok", "transport", rtp_value())
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            CallError::State(CallStateReason::NotParticipant, _)
+        ));
     }
 }

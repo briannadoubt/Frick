@@ -37,8 +37,9 @@ pub use p2p_media_plane::{
     P2pIceServer, P2pMediaPlaneAdapter, P2pMediaPlaneOptions, P2pTurnConfig,
 };
 pub use sfu_backend::{
-    FakeSfuBackend, FakeSfuBackendOptions, MintAccessTokenOptions, SfuAccessToken, SfuBackend,
-    SfuBackendError, SfuBackendFuture, SfuRoom,
+    ConsumerHandle, FakeSfuBackend, FakeSfuBackendOptions, MediaKind, MintAccessTokenOptions,
+    ProducerHandle, SfuAccessToken, SfuBackend, SfuBackendError, SfuBackendFuture,
+    SfuMediaOperations, SfuRoom,
 };
 pub use sfu_livekit::{LiveKitSfuBackend, LiveKitSfuBackendOptions};
 pub use sfu_media_plane::SfuMediaPlaneAdapter;

@@ -300,28 +300,74 @@ fn build_blob_processor_registry(
 /// Select the realtime-calls media plane per `FRICK_CALLS_MEDIA_PLANE`. `fake`
 /// (default) brokers no real media; `p2p` issues ICE/TURN for 1:1 calls; `sfu`
 /// brokers a server-side room over the fake SFU backend (a production backend is
-/// FR-288). The call lifecycle is identical across all three.
-fn build_call_media_plane(config: &FrickConfig) -> Arc<dyn crate::calls::MediaPlaneAdapter> {
+/// FR-288). The call lifecycle is identical across all four.
+///
+/// The second return is the SFU produce/consume companion (FR-292), wired only
+/// for the `sfu` arm — whose [`FakeSfuBackend`] implements the deterministic
+/// `SfuMediaOperations`. `fake` / `p2p` / `livekit` return `None`, so the SFU
+/// negotiation ops Nack `mediaUnsupported` on those planes.
+///
+/// [`FakeSfuBackend`]: crate::calls::FakeSfuBackend
+fn build_call_media_plane(
+    config: &FrickConfig,
+) -> (
+    Arc<dyn crate::calls::MediaPlaneAdapter>,
+    Option<Arc<dyn crate::calls::SfuMediaOperations>>,
+) {
     use crate::config::CallsMediaPlane;
     match config.calls_media_plane {
-        CallsMediaPlane::Fake => Arc::new(crate::calls::FakeMediaPlaneAdapter::sfu()),
-        CallsMediaPlane::P2p => Arc::new(crate::calls::P2pMediaPlaneAdapter::stun_only()),
-        CallsMediaPlane::Sfu => Arc::new(crate::calls::SfuMediaPlaneAdapter::new(Arc::new(
-            crate::calls::FakeSfuBackend::new(crate::calls::FakeSfuBackendOptions::default()),
-        ))),
+        CallsMediaPlane::Fake => (Arc::new(crate::calls::FakeMediaPlaneAdapter::sfu()), None),
+        CallsMediaPlane::P2p => (
+            Arc::new(crate::calls::P2pMediaPlaneAdapter::stun_only()),
+            None,
+        ),
+        CallsMediaPlane::Sfu => {
+            // The fake SFU backend serves both the room/token lifecycle (the
+            // media plane) and the produce/consume companion, sharing one state.
+            let backend = Arc::new(crate::calls::FakeSfuBackend::new(
+                crate::calls::FakeSfuBackendOptions::default(),
+            ));
+            let media: Arc<dyn crate::calls::MediaPlaneAdapter> =
+                Arc::new(crate::calls::SfuMediaPlaneAdapter::new(backend.clone()));
+            (media, Some(backend))
+        }
         CallsMediaPlane::Livekit => {
-            // Validated at config load: `livekit` requires the LiveKit creds.
+            // Validated at config load: `livekit` requires the LiveKit creds. The
+            // LiveKit backend has no fake produce/consume companion, so SFU
+            // negotiation ops Nack `mediaUnsupported` (the client drives LiveKit
+            // directly over its own signaling).
             let lk = config.calls_livekit.as_ref().expect(
                 "FRICK_CALLS_MEDIA_PLANE=livekit is validated at config load to carry credentials",
             );
-            Arc::new(crate::calls::SfuMediaPlaneAdapter::new(Arc::new(
-                crate::calls::LiveKitSfuBackend::new(
-                    lk.api_key.clone(),
-                    lk.api_secret.clone(),
-                    lk.ws_url.clone(),
-                ),
-            )))
+            let media: Arc<dyn crate::calls::MediaPlaneAdapter> =
+                Arc::new(crate::calls::SfuMediaPlaneAdapter::new(Arc::new(
+                    crate::calls::LiveKitSfuBackend::new(
+                        lk.api_key.clone(),
+                        lk.api_secret.clone(),
+                        lk.ws_url.clone(),
+                    ),
+                )));
+            (media, None)
         }
+    }
+}
+
+/// Build the realtime-calls control plane (FR-283) over the config-selected
+/// media plane, attaching the SFU produce/consume companion (FR-292) when the
+/// plane supports it (the `sfu` arm; see [`build_call_media_plane`]).
+fn build_calls_control_plane(
+    config: &FrickConfig,
+    store: &Arc<FrickStore>,
+) -> crate::calls::CallControlPlane {
+    let (media, sfu_media_ops) = build_call_media_plane(config);
+    let control_plane = crate::calls::CallControlPlane::new(
+        Arc::clone(store),
+        media,
+        Arc::new(crate::calls::SystemCallClock),
+    );
+    match sfu_media_ops {
+        Some(ops) => control_plane.with_sfu_media(ops),
+        None => control_plane,
     }
 }
 
@@ -403,12 +449,8 @@ async fn build_server(
     let platform_events = build_platform_events(&config, &store)?;
 
     // Realtime calls control plane (FR-283), over the config-selected media
-    // plane (FR-286 P2P / FR-287 SFU; see `build_call_media_plane`).
-    let calls = Arc::new(crate::calls::CallControlPlane::new(
-        Arc::clone(&store),
-        build_call_media_plane(&config),
-        Arc::new(crate::calls::SystemCallClock),
-    ));
+    // plane (FR-286 P2P / FR-287 SFU; see `build_calls_control_plane`).
+    let calls = Arc::new(build_calls_control_plane(&config, &store));
 
     let state = Arc::new(AppStateInner {
         config: config.clone(),
