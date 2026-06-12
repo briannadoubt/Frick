@@ -1750,14 +1750,89 @@ async fn dispatch_call_command(
             result.op = Name::SetMediaState;
             result.participant = Some(cp.set_media_state(actor, &call_id, &media).await?);
         }
-        Op::SfuConnectTransport { .. } | Op::SfuProduce { .. } | Op::SfuConsume { .. } => {
-            return Err(crate::calls::CallError::MediaUnsupported(
-                "SFU media negotiation is not supported by the configured media plane (FR-288)"
-                    .to_string(),
-            ));
+        sfu @ (Op::SfuConnectTransport { .. } | Op::SfuProduce { .. } | Op::SfuConsume { .. }) => {
+            dispatch_sfu_command(cp, actor, sfu, &mut result).await?;
         }
     }
     Ok(result)
+}
+
+/// Route the SFU media-negotiation ops (FR-292) to the control plane and populate
+/// `result`. Split out of [`dispatch_call_command`] so each stays readable. The
+/// caller guarantees `command` is one of the three `Sfu*` variants.
+async fn dispatch_sfu_command(
+    cp: &crate::calls::CallControlPlane,
+    actor: &crate::calls::CallActor,
+    command: frick_protocol::calls::CallCommandOp,
+    result: &mut frick_protocol::calls::CallCommandResultPayload,
+) -> Result<(), crate::calls::CallError> {
+    use frick_protocol::calls::{CallCommandName as Name, CallCommandOp as Op};
+    match command {
+        Op::SfuConnectTransport {
+            call_id,
+            token,
+            transport_id,
+            dtls_parameters,
+        } => {
+            cp.sfu_connect_transport(actor, &call_id, &token, &transport_id, dtls_parameters)
+                .await?;
+            result.op = Name::SfuConnectTransport;
+        }
+        Op::SfuProduce {
+            call_id,
+            token,
+            transport_id,
+            kind,
+            rtp_parameters,
+        } => {
+            let producer = cp
+                .sfu_produce(
+                    actor,
+                    &call_id,
+                    &token,
+                    &transport_id,
+                    sfu_media_kind(kind),
+                    rtp_parameters,
+                )
+                .await?;
+            result.op = Name::SfuProduce;
+            result.producer = Some(frick_protocol::calls::CallSfuProduceResult {
+                producer_id: producer.id,
+                kind: wire_media_kind(producer.kind),
+            });
+        }
+        Op::SfuConsume {
+            call_id,
+            token,
+            transport_id,
+            producer_id,
+            rtp_capabilities,
+        } => {
+            let consumer = cp
+                .sfu_consume(
+                    actor,
+                    &call_id,
+                    &token,
+                    &transport_id,
+                    &producer_id,
+                    rtp_capabilities,
+                )
+                .await?;
+            result.op = Name::SfuConsume;
+            result.consumer = Some(frick_protocol::calls::CallSfuConsumeResult {
+                consumer_id: consumer.id,
+                producer_id: consumer.producer_id,
+                kind: wire_media_kind(consumer.kind),
+                rtp_parameters: consumer.rtp_parameters,
+            });
+        }
+        // The caller only ever passes the three Sfu* variants above.
+        other => unreachable!(
+            "dispatch_sfu_command received a non-SFU op: {:?}",
+            other.name()
+        ),
+    }
+    Ok(())
 }
 
 fn call_error_to_nack(err: &crate::calls::CallError) -> (FrickErrorCode, &'static str) {
@@ -1784,9 +1859,30 @@ fn call_error_to_nack(err: &crate::calls::CallError) -> (FrickErrorCode, &'stati
             CallStateReason::NoInvitees => (FrickErrorCode::StorageConflict, "noInvitees"),
         },
         CallError::MediaUnsupported(_) => (FrickErrorCode::AuthForbidden, "mediaUnsupported"),
+        // A bad/expired join token or a transport/producer ownership violation
+        // (FR-166/170/171/172) → forbidden, never an internal error.
+        CallError::MediaForbidden(_) => (FrickErrorCode::AuthForbidden, "forbidden"),
         CallError::Media(_) | CallError::Store(_) | CallError::Decode(_) => {
             (FrickErrorCode::ServerInternal, "internal")
         }
+    }
+}
+
+/// Map the wire SFU media kind onto the backend's [`crate::calls::MediaKind`].
+fn sfu_media_kind(kind: frick_protocol::calls::CallSfuMediaKind) -> crate::calls::MediaKind {
+    use frick_protocol::calls::CallSfuMediaKind;
+    match kind {
+        CallSfuMediaKind::Audio => crate::calls::MediaKind::Audio,
+        CallSfuMediaKind::Video => crate::calls::MediaKind::Video,
+    }
+}
+
+/// Map the backend's [`crate::calls::MediaKind`] back onto the wire enum.
+fn wire_media_kind(kind: crate::calls::MediaKind) -> frick_protocol::calls::CallSfuMediaKind {
+    use frick_protocol::calls::CallSfuMediaKind;
+    match kind {
+        crate::calls::MediaKind::Audio => CallSfuMediaKind::Audio,
+        crate::calls::MediaKind::Video => CallSfuMediaKind::Video,
     }
 }
 
