@@ -79,6 +79,12 @@ pub struct BootSeams {
     /// documented insertion point for sync validators / async image / moderation
     /// processors.
     pub blob_processors: Vec<crate::blob_processors::SharedBlobProcessor>,
+    /// App-registered authorization hooks (FR-296). Run after the built-in
+    /// baseline, in order, on every authorized action; tightening-only (a hook
+    /// may deny, never grant). Empty for the foundation/standalone binary — the
+    /// documented insertion point for a Rust backend's custom write-authz (RBAC,
+    /// entitlement gating, …). See [`crate::authz::PolicyHook`].
+    pub policy_hooks: Vec<std::sync::Arc<dyn crate::authz::PolicyHook>>,
 }
 
 impl BootSeams {
@@ -103,6 +109,8 @@ impl BootSeams {
             jwks_provider: Arc::new(crate::auth::ReqwestJwksProvider::default()),
             // No stock blob processors auto-register; an app supplies its own.
             blob_processors: Vec::new(),
+            // No built-in policy hooks; a Rust backend registers its own.
+            policy_hooks: Vec::new(),
         }
     }
 }
@@ -476,6 +484,7 @@ async fn build_server(
         calls,
         blob_processors,
         platform_events,
+        policy_hooks: Arc::new(seams.policy_hooks),
     });
 
     // The gateway hub owns the live connections and the fan-out funnel. The

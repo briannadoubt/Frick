@@ -11,11 +11,36 @@ use std::sync::Arc;
 use frick_protocol::FrickSchema;
 use frick_schema::SchemaBuilder;
 use frick_schema::builder::field;
+use frick_server::authz::{Action, Decision, DenyReason, PolicyHook, PolicyInput};
 use frick_server::config::load_frick_config;
 use frick_server::http::{AppState, public_router};
-use frick_server::{FrickConfig, create_frick_server, routes};
+use frick_server::{
+    BootSeams, FrickConfig, create_frick_server, create_frick_server_with_seams, routes,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
+
+/// A policy hook (FR-296) that denies every write to a given object type — the
+/// shape of an RBAC role × type matrix gate.
+struct DenyTypeWrites {
+    object_type: &'static str,
+}
+
+impl PolicyHook for DenyTypeWrites {
+    fn evaluate<'a>(
+        &'a self,
+        input: &'a PolicyInput<'a>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<Decision>> + Send + 'a>> {
+        Box::pin(async move {
+            (input.action == Action::ObjectWrite
+                && input.resource.name.as_deref() == Some(self.object_type))
+            .then(|| Decision::Deny {
+                reason: DenyReason::NotAuthorizedForResource,
+                public_message: format!("writes to {} are gated", self.object_type),
+            })
+        })
+    }
+}
 
 fn test_config() -> FrickConfig {
     let mut env = std::collections::BTreeMap::new();
@@ -60,7 +85,21 @@ impl TestServer {
         let server = create_frick_server(test_config(), test_schema())
             .await
             .unwrap();
-        let state: AppState = Arc::clone(&server.state);
+        Self::serve(Arc::clone(&server.state), server).await
+    }
+
+    /// Boot with app policy hooks registered (FR-296), via the seam-injecting
+    /// constructor a Rust backend would use.
+    async fn boot_with_hooks(hooks: Vec<Arc<dyn PolicyHook>>) -> Self {
+        let mut seams = BootSeams::production();
+        seams.policy_hooks = hooks;
+        let server = create_frick_server_with_seams(test_config(), test_schema(), seams)
+            .await
+            .unwrap();
+        Self::serve(Arc::clone(&server.state), server).await
+    }
+
+    async fn serve(state: AppState, server: frick_server::FrickServer) -> Self {
         // Keep the constructed server's store alive for the process lifetime by
         // leaking the handle — the router holds its own Arc to the state/store.
         std::mem::forget(server);
@@ -297,6 +336,51 @@ async fn object_list_is_owner_scoped() {
         "bo must not see ada's owner-scoped row: {}",
         bo_list.body
     );
+
+    server.close().await;
+}
+
+/// An app policy hook (FR-296) tightens a write the built-in baseline allows —
+/// the shape of an RBAC / entitlement gate a Rust backend registers. The hook
+/// runs after the baseline and before grant relaxation; an ungated type is
+/// unaffected (the hook abstains).
+#[tokio::test]
+async fn policy_hook_denies_a_gated_write() {
+    let mut server = TestServer::boot_with_hooks(vec![Arc::new(DenyTypeWrites {
+        object_type: "Note",
+    })])
+    .await;
+    let token = server.login("user-ada").await;
+
+    let denied = server
+        .request(
+            "PUT",
+            "/objects/Note/n-1",
+            &[("Authorization", &bearer(&token))],
+            r#"{"body":"x"}"#,
+        )
+        .await;
+    assert_eq!(
+        denied.status, 403,
+        "gated write must be denied: {}",
+        denied.body
+    );
+    assert!(
+        denied.body.contains("notAuthorizedForResource"),
+        "body: {}",
+        denied.body
+    );
+
+    // A write to an ungated type still succeeds — the hook abstains.
+    let ok = server
+        .request(
+            "PUT",
+            "/objects/OwnedNote/o-1",
+            &[("Authorization", &bearer(&token))],
+            r#"{"body":"y","ownerUserId":"user-ada"}"#,
+        )
+        .await;
+    assert_eq!(ok.status, 201, "ungated write must succeed: {}", ok.body);
 
     server.close().await;
 }
