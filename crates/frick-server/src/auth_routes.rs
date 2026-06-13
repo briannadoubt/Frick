@@ -4,6 +4,7 @@
 //! no-store cache headers, run the tenant pre-check and the fixed-window
 //! auth-attempt limiter, and mint sessions with a 32-byte base64url token.
 
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Json;
@@ -21,6 +22,7 @@ use rand::RngCore;
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::auth_lifecycle::{AuthIdentity, AuthSessionContext, FirstSignInContext};
 use crate::email::router::PasswordResetEmail;
 use crate::error::{LimitKind, ServerError};
 use crate::extract::session_token_from_headers;
@@ -487,6 +489,23 @@ async fn email_signup(
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| email_local_part(&email));
     let user_id = format!("user-email-{}", random_token(16));
+    let first_sign_in = state
+        .auth_lifecycle
+        .on_first_sign_in(FirstSignInContext {
+            store: Arc::clone(&state.store),
+            now_ms,
+            auth_tenant_id: tenant_id.clone(),
+            identity: AuthIdentity::Email {
+                email: email.clone(),
+            },
+            proposed_user_id: user_id,
+            proposed_display_name: display_name,
+        })
+        .await;
+    let first_sign_in = match first_sign_in {
+        Ok(outcome) => outcome,
+        Err(error) => return respond_error(&error, &request_id),
+    };
 
     let created = state
         .store
@@ -494,9 +513,9 @@ async fn email_signup(
         .create(
             &CreateAccountInput {
                 tenant_id: tenant_id.clone(),
-                user_id: user_id.clone(),
+                user_id: first_sign_in.user_id.clone(),
                 handle: email.clone(),
-                display_name: display_name.clone(),
+                display_name: first_sign_in.display_name.clone(),
                 password,
             },
             now_ms,
@@ -513,9 +532,9 @@ async fn email_signup(
     mint_email_session_response(
         &state,
         &request_id,
-        &tenant_id,
-        &user_id,
-        &display_name,
+        &first_sign_in.session_tenant_id,
+        &first_sign_in.user_id,
+        &first_sign_in.display_name,
         &email,
         body.device_id,
         body.replica_id,
@@ -563,12 +582,30 @@ async fn email_login(State(state): State<AppState>, Json(body): Json<EmailLoginB
         return respond_error(&invalid_credentials(), &request_id);
     };
 
+    let session = state
+        .auth_lifecycle
+        .resolve_session(AuthSessionContext {
+            store: Arc::clone(&state.store),
+            now_ms,
+            auth_tenant_id: tenant_id.clone(),
+            identity: AuthIdentity::Email {
+                email: email.clone(),
+            },
+            user_id: account.user_id,
+            display_name: account.display_name,
+        })
+        .await;
+    let session = match session {
+        Ok(outcome) => outcome,
+        Err(error) => return respond_error(&error, &request_id),
+    };
+
     mint_email_session_response(
         &state,
         &request_id,
-        &tenant_id,
-        &account.user_id,
-        &account.display_name,
+        &session.session_tenant_id,
+        &session.user_id,
+        &session.display_name,
         &email,
         body.device_id,
         body.replica_id,
@@ -853,16 +890,29 @@ async fn mint_email_session_response(
         status,
         no_store_headers(),
         Json(json!({
-            "schemaHash": state.schema.hash,
-            "sessionToken": session.token,
-            "tenantId": tenant_id,
-            "userId": user_id,
-            "displayName": display_name,
-            "email": email,
-            "handle": email,
-            "deviceId": device_id,
-            "replicaId": replica_id,
-            "expiresAt": session.expires_at,
+            // Wrapped envelope: clients (Swift/Kotlin) decode
+            // `{ session, user, isNewUser }`. The pre-rewrite TS server returned
+            // this shape; the Rust rewrite flattened it, breaking the native
+            // SDK decoders (see FR auth-envelope regression ticket).
+            "session": {
+                "schemaHash": state.schema.hash,
+                "sessionToken": session.token,
+                "tenantId": tenant_id,
+                "userId": user_id,
+                "displayName": display_name,
+                "email": email,
+                "handle": email,
+                "deviceId": device_id,
+                "replicaId": replica_id,
+                "expiresAt": session.expires_at,
+            },
+            "user": {
+                "id": user_id,
+                "userId": user_id,
+                "displayName": display_name,
+                "email": email,
+                "handle": email,
+            },
             "isNewUser": is_new_user,
         })),
     )
@@ -1167,6 +1217,51 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(principal.user_id, "user-ada");
+
+        server.close().await;
+    }
+
+    /// FR-307: the email signup response is the wrapped
+    /// `{ session, user, isNewUser }` envelope the native SDK decoders
+    /// (Swift `SignInWithEmailEnvelope`, Kotlin) expect — NOT the flattened
+    /// session fields the 0.4.0 rewrite briefly emitted, which broke every
+    /// native signUp/signIn.
+    #[tokio::test]
+    async fn email_signup_returns_wrapped_session_envelope() {
+        let schema = frick_protocol::foundation_schema();
+        let mut server = create_frick_server(test_config(), schema).await.unwrap();
+        let port = server.listen().await.unwrap();
+
+        let response = post_json(
+            port,
+            "/auth/email/signup",
+            r#"{"email":"ada@example.com","password":"correct-horse-battery"}"#,
+        )
+        .await;
+
+        let body = response
+            .rsplit("\r\n\r\n")
+            .next()
+            .expect("response has a body");
+        let json: serde_json::Value = serde_json::from_str(body)
+            .unwrap_or_else(|_| panic!("email signup body not JSON: {response}"));
+
+        // Session is NESTED, with the token under it — not flattened.
+        assert!(
+            json["session"]["sessionToken"].is_string(),
+            "expected nested session.sessionToken: {response}"
+        );
+        assert!(
+            json.get("user").is_some(),
+            "expected a user object: {response}"
+        );
+        // isNewUser stays at the top level.
+        assert_eq!(json["isNewUser"], true, "isNewUser at top level: {response}");
+        // The token must NOT also be flattened at the top level.
+        assert!(
+            json.get("sessionToken").is_none(),
+            "sessionToken should not be top-level: {response}"
+        );
 
         server.close().await;
     }
