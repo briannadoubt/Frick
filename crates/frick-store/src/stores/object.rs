@@ -247,6 +247,32 @@ impl<'a> ObjectStore<'a> {
         rows.iter().map(|row| self.unpack(row)).collect()
     }
 
+    /// Query objects of `object_type` whose `field` equals `value` (FR-305),
+    /// scoped to `tenant_id` + `app_id`. Tenant/app/type isolation is enforced
+    /// in SQL, and the field equality is applied to the scoped, unpacked rows —
+    /// so an app filtering e.g. `InventoryItem` by `releaseId` never enumerates
+    /// other tenants' rows in app code, and the result can't cross the tenant/
+    /// app boundary.
+    ///
+    /// The match is on the field's string form (ids, refs, and string columns —
+    /// the common index keys). A schema-index-backed query that avoids the
+    /// per-type scan is a follow-on; this API shape is stable across that
+    /// change.
+    pub async fn query_by_field(
+        &self,
+        tenant_id: &str,
+        object_type: &str,
+        app_id: &str,
+        field: &str,
+        value: &str,
+    ) -> Result<Vec<Value>, StoreError> {
+        let rows = self.list(tenant_id, object_type, app_id).await?;
+        Ok(rows
+            .into_iter()
+            .filter(|row| object_field_eq(row, field, value))
+            .collect())
+    }
+
     /// Pack a value for the `packed` column: strip the record `id` key first
     /// (`without_record_id`), schema-pack via the protocol codec, then msgpack
     /// the positional tuple. Unknown type / field surfaces the TS codec error.
@@ -426,6 +452,16 @@ impl Exec for &SqlExec<'_> {
 /// contract, so the message carries over verbatim.
 fn protocol_error(err: &ProtocolError) -> StoreError {
     StoreError::store(err.message())
+}
+
+/// `true` when the object map has `field` equal (as a string) to `expected`
+/// (FR-305 query filter). Misses on absent fields or non-string values.
+fn object_field_eq(object: &Value, field: &str, expected: &str) -> bool {
+    object.as_map().is_some_and(|entries| {
+        entries
+            .iter()
+            .any(|(key, value)| key.as_str() == Some(field) && value.as_str() == Some(expected))
+    })
 }
 
 #[cfg(test)]
@@ -1288,5 +1324,78 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.to_string(), "Unknown object: Nope");
+    }
+
+    // ── FR-305: indexed/filtered object query ──────────────────────────────
+
+    /// `query_by_field` matches the field within the tenant/app/type scope and
+    /// never leaks rows from another tenant or app, even with the same value.
+    #[tokio::test]
+    async fn query_by_field_filters_and_isolates_by_tenant_and_app() {
+        let driver = memory_driver().await;
+        let schema = test_schema();
+        let store = ObjectStore::new(&driver, &schema);
+
+        store
+            .upsert(
+                TENANT,
+                TYPE,
+                "c-1",
+                &convo("c-1", "shared"),
+                1,
+                "app-a",
+                NOW,
+            )
+            .await
+            .unwrap();
+        store
+            .upsert(
+                TENANT,
+                TYPE,
+                "c-2",
+                &convo("c-2", "shared"),
+                1,
+                "app-a",
+                NOW,
+            )
+            .await
+            .unwrap();
+        store
+            .upsert(TENANT, TYPE, "c-3", &convo("c-3", "other"), 1, "app-a", NOW)
+            .await
+            .unwrap();
+        // Same value, different tenant + different app: must not leak.
+        store
+            .upsert(
+                "tenant-2",
+                TYPE,
+                "c-4",
+                &convo("c-4", "shared"),
+                1,
+                "app-a",
+                NOW,
+            )
+            .await
+            .unwrap();
+        store
+            .upsert(
+                TENANT,
+                TYPE,
+                "c-5",
+                &convo("c-5", "shared"),
+                1,
+                "app-b",
+                NOW,
+            )
+            .await
+            .unwrap();
+
+        let hits = store
+            .query_by_field(TENANT, TYPE, "app-a", "title", "shared")
+            .await
+            .unwrap();
+        let mut ids: Vec<&str> = hits.iter().filter_map(id_of).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec!["c-1", "c-2"]);
     }
 }
