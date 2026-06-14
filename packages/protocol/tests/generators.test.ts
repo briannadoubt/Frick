@@ -81,4 +81,9 @@ describe("typescript bindings generator", () => {
     expect(ts).toContain('role: "owner" | "member"');
     expect(ts).toContain('platform: "web" | "ios" | "android" | "server"');
   });
+
+  it("maps timestamp fields onto RFC3339 strings", () => {
+    expect(ts).toContain("expiresAt: string;");
+    expect(ts).toContain("lastSeenAt?: string;");
+  });
 });

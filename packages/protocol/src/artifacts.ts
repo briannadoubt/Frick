@@ -209,10 +209,9 @@ function swiftType(field: FieldDef): string {
   const base =
     field.kind === "bool" ? "Bool"
       : field.kind === "int" ? "Int"
-        : field.kind === "timestamp" ? "Date"
-          : field.kind === "bytes" ? "Data"
-            : field.kind === "json" ? "FrickJSONValue"
-            : "String";
+        : field.kind === "bytes" ? "Data"
+          : field.kind === "json" ? "FrickJSONValue"
+          : "String";
   return field.required ? base : `${base}?`;
 }
 

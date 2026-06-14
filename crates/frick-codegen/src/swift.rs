@@ -318,15 +318,19 @@ fn object_fields(fields: &[FieldDef]) -> Vec<FieldDef> {
 }
 
 /// `swiftType` (artifacts.ts). `id`/`ref`/`string`/`enum` all map to
-/// `String`; optional fields are made nullable with `?`.
+/// `String`; `timestamp` also maps to `String` so Codable preserves the
+/// canonical RFC3339 wire value. Optional fields are made nullable with `?`.
 fn swift_type(field: &FieldDef) -> String {
     let base = match field.kind {
         FieldKind::Bool => "Bool",
         FieldKind::Int => "Int",
-        FieldKind::Timestamp => "Date",
         FieldKind::Bytes => "Data",
         FieldKind::Json => "FrickJSONValue",
-        FieldKind::Id | FieldKind::Ref | FieldKind::String | FieldKind::Enum => "String",
+        FieldKind::Id
+        | FieldKind::Ref
+        | FieldKind::String
+        | FieldKind::Timestamp
+        | FieldKind::Enum => "String",
     };
     if field.required {
         base.to_string()

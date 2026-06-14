@@ -223,14 +223,14 @@ public struct UserDeviceDTO: Codable, Equatable, Sendable, Identifiable {
   public var userId: String
   public var label: String?
   public var platform: String
-  public var lastSeenAt: Date?
+  public var lastSeenAt: String?
 
   public init(
     id: String,
     userId: String,
     label: String? = nil,
     platform: String,
-    lastSeenAt: Date? = nil
+    lastSeenAt: String? = nil
   ) {
     self.id = id
     self.userId = userId
@@ -247,14 +247,14 @@ public struct UserSessionDTO: Codable, Equatable, Sendable, Identifiable {
   public var userId: String
   public var deviceId: String
   public var replicaId: String
-  public var expiresAt: Date
+  public var expiresAt: String
 
   public init(
     id: String,
     userId: String,
     deviceId: String,
     replicaId: String,
-    expiresAt: Date
+    expiresAt: String
   ) {
     self.id = id
     self.userId = userId
@@ -271,14 +271,14 @@ public struct MessageDraftDTO: Codable, Equatable, Sendable, Identifiable {
   public var userId: String
   public var conversationId: String
   public var body: String
-  public var updatedAt: Date
+  public var updatedAt: String
 
   public init(
     id: String,
     userId: String,
     conversationId: String,
     body: String,
-    updatedAt: Date
+    updatedAt: String
   ) {
     self.id = id
     self.userId = userId
@@ -295,7 +295,7 @@ public struct ScheduledMessageDTO: Codable, Equatable, Sendable, Identifiable {
   public var userId: String
   public var conversationId: String
   public var body: String
-  public var scheduledFor: Date
+  public var scheduledFor: String
   public var attachmentBlobIds: FrickJSONValue?
   public var status: String
 
@@ -304,7 +304,7 @@ public struct ScheduledMessageDTO: Codable, Equatable, Sendable, Identifiable {
     userId: String,
     conversationId: String,
     body: String,
-    scheduledFor: Date,
+    scheduledFor: String,
     attachmentBlobIds: FrickJSONValue? = nil,
     status: String
   ) {
@@ -326,9 +326,9 @@ public struct CallRoomDTO: Codable, Equatable, Sendable, Identifiable {
   public var state: String
   public var createdBy: String
   public var kind: String
-  public var createdAt: Date
-  public var startedAt: Date?
-  public var endedAt: Date?
+  public var createdAt: String
+  public var startedAt: String?
+  public var endedAt: String?
   public var mediaSessionId: String?
   public var transport: String?
 
@@ -338,9 +338,9 @@ public struct CallRoomDTO: Codable, Equatable, Sendable, Identifiable {
     state: String,
     createdBy: String,
     kind: String,
-    createdAt: Date,
-    startedAt: Date? = nil,
-    endedAt: Date? = nil,
+    createdAt: String,
+    startedAt: String? = nil,
+    endedAt: String? = nil,
     mediaSessionId: String? = nil,
     transport: String? = nil
   ) {
@@ -365,8 +365,8 @@ public struct CallInviteDTO: Codable, Equatable, Sendable, Identifiable {
   public var inviteeUserId: String
   public var status: String
   public var invitedBy: String
-  public var invitedAt: Date
-  public var respondedAt: Date?
+  public var invitedAt: String
+  public var respondedAt: String?
 
   public init(
     id: String,
@@ -374,8 +374,8 @@ public struct CallInviteDTO: Codable, Equatable, Sendable, Identifiable {
     inviteeUserId: String,
     status: String,
     invitedBy: String,
-    invitedAt: Date,
-    respondedAt: Date? = nil
+    invitedAt: String,
+    respondedAt: String? = nil
   ) {
     self.id = id
     self.callId = callId
@@ -395,8 +395,8 @@ public struct CallParticipantDTO: Codable, Equatable, Sendable, Identifiable {
   public var userId: String
   public var deviceId: String
   public var state: String
-  public var joinedAt: Date
-  public var leftAt: Date?
+  public var joinedAt: String
+  public var leftAt: String?
   public var micEnabled: Bool
   public var cameraEnabled: Bool
   public var screenSharing: Bool
@@ -407,8 +407,8 @@ public struct CallParticipantDTO: Codable, Equatable, Sendable, Identifiable {
     userId: String,
     deviceId: String,
     state: String,
-    joinedAt: Date,
-    leftAt: Date? = nil,
+    joinedAt: String,
+    leftAt: String? = nil,
     micEnabled: Bool,
     cameraEnabled: Bool,
     screenSharing: Bool
@@ -430,14 +430,14 @@ public struct MessageSentDTO: Codable, Equatable, Sendable {
   public var messageId: String
   public var senderId: String
   public var body: String
-  public var createdAt: Date
+  public var createdAt: String
   public var attachmentBlobIds: FrickJSONValue?
 
   public init(
     messageId: String,
     senderId: String,
     body: String,
-    createdAt: Date,
+    createdAt: String,
     attachmentBlobIds: FrickJSONValue? = nil
   ) {
     self.messageId = messageId
@@ -451,12 +451,12 @@ public struct MessageSentDTO: Codable, Equatable, Sendable {
 public struct MessageEditedDTO: Codable, Equatable, Sendable {
   public var messageId: String
   public var body: String
-  public var editedAt: Date
+  public var editedAt: String
 
   public init(
     messageId: String,
     body: String,
-    editedAt: Date
+    editedAt: String
   ) {
     self.messageId = messageId
     self.body = body
@@ -466,11 +466,11 @@ public struct MessageEditedDTO: Codable, Equatable, Sendable {
 
 public struct MessageRedactedDTO: Codable, Equatable, Sendable {
   public var messageId: String
-  public var redactedAt: Date
+  public var redactedAt: String
 
   public init(
     messageId: String,
-    redactedAt: Date
+    redactedAt: String
   ) {
     self.messageId = messageId
     self.redactedAt = redactedAt
@@ -511,14 +511,14 @@ public struct CallCreatedDTO: Codable, Equatable, Sendable {
   public var conversationId: String
   public var createdBy: String
   public var kind: String
-  public var createdAt: Date
+  public var createdAt: String
 
   public init(
     callId: String,
     conversationId: String,
     createdBy: String,
     kind: String,
-    createdAt: Date
+    createdAt: String
   ) {
     self.callId = callId
     self.conversationId = conversationId
@@ -561,13 +561,13 @@ public struct CallParticipantJoinedDTO: Codable, Equatable, Sendable {
   public var callId: String
   public var userId: String
   public var deviceId: String
-  public var joinedAt: Date
+  public var joinedAt: String
 
   public init(
     callId: String,
     userId: String,
     deviceId: String,
-    joinedAt: Date
+    joinedAt: String
   ) {
     self.callId = callId
     self.userId = userId
@@ -605,13 +605,13 @@ public struct CallParticipantLeftDTO: Codable, Equatable, Sendable {
   public var callId: String
   public var userId: String
   public var deviceId: String
-  public var leftAt: Date
+  public var leftAt: String
 
   public init(
     callId: String,
     userId: String,
     deviceId: String,
-    leftAt: Date
+    leftAt: String
   ) {
     self.callId = callId
     self.userId = userId
@@ -623,12 +623,12 @@ public struct CallParticipantLeftDTO: Codable, Equatable, Sendable {
 public struct CallEndedDTO: Codable, Equatable, Sendable {
   public var callId: String
   public var endedBy: String
-  public var endedAt: Date
+  public var endedAt: String
 
   public init(
     callId: String,
     endedBy: String,
-    endedAt: Date
+    endedAt: String
   ) {
     self.callId = callId
     self.endedBy = endedBy

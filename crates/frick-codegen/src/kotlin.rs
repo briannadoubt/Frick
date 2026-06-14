@@ -21,8 +21,8 @@
 //!   substring `"RTC"` → `"Rtc"` (`WebRTCSignal` → `WebRtcSignalDto`).
 //!   Property names pass through untouched (no keyword escaping — unlike
 //!   Swift).
-//! - `timestamp` maps to `String` (asymmetric with Swift's `Date`), and there
-//!   is no `protocolVersion` constant.
+//! - `timestamp` maps to `String`, preserving the canonical RFC3339 wire value
+//!   without custom serializers, and there is no `protocolVersion` constant.
 //! - `sensitivity` and `mergePolicy` are server-only metadata and are never
 //!   emitted.
 //! - Empty descriptor tables keep the blank entry line (`mapOf(\n\n)`), and

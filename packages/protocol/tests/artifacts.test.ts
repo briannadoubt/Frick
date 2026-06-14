@@ -40,6 +40,17 @@ describe("native artifacts", () => {
     expect(kotlin).toContain("val attachmentBlobIds: JsonElement? = null");
   });
 
+  it("maps timestamp fields to RFC3339 strings in native DTOs", () => {
+    const swift = generateSwiftArtifact(productTestSchema);
+    const kotlin = generateKotlinArtifact(productTestSchema);
+
+    expect(swift).toContain("public var expiresAt: String");
+    expect(swift).toContain("lastSeenAt: String? = nil");
+    expect(swift).not.toContain("public var expiresAt: Date");
+    expect(kotlin).toContain("val expiresAt: String");
+    expect(kotlin).toContain("val lastSeenAt: String? = null");
+  });
+
   it("emits Swift schema descriptor tables for objects, streams, and events", () => {
     const swift = generateSwiftArtifact(productTestSchema);
 
