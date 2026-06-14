@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTXG4C704PFJNHAGF65NWVXX",
+  "ts": "2026-06-12T08:45:43.520Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTXC8SGYRTKXJQB8ARBZVCHY",
+    "commentId": "01KTXG4C704PFJNHAGF65NWVXW",
+    "author": "codex",
+    "body": "Crate CR-108 follow-up: the Rust tenant-switch slice now preserves the TypeScript authenticated-user 60/min limiter locally for PUT /api/me/active-tenant and POST /api/me/switch-tenant. When Crate adopts Frick's trusted client-IP/rate-limit context broadly, include an authenticated-principal key path as well as public client-IP keys so apps do not keep bespoke keyed limiter plumbing."
+  }
+}

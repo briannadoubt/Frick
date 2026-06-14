@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTXWSMTVGG5PHJXRXDT682C4",
+  "ts": "2026-06-12T12:27:03.387Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTXWG5VZR4KHVA5DM1A5DTGD",
+    "commentId": "01KTXWSMTVGG5PHJXRXDT682C3",
+    "author": "codex",
+    "body": "Crate CR-112 now has two Rust projections using the temporary spawned-task bridge: crate.outbound-sync-enqueue for async job enqueue and crate.inventory-reconciliation for async full-stream replay plus InventoryItem upsert. This strengthens the case that Frick should provide deterministic/observable async side-effect projection support instead of making each app hand-roll spawned tasks."
+  }
+}

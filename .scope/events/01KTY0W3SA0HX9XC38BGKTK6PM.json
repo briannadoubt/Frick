@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTY0W3SA0HX9XC38BGKTK6PM",
+  "ts": "2026-06-12T13:38:18.538Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTXXWMY2HV1DDW5HR5BMJ9TD",
+    "commentId": "01KTY0W3SA0HX9XC38BGKTK6PK",
+    "author": "codex",
+    "body": "Crate CR-108 follow-up: current Frick boot/auth audit still shows no Rust BootSeams/AppDefinition first-sign-in lifecycle hook. App routes merge after framework auth and cannot shadow /auth/email/signup, /auth/apple/verify, /auth/google/verify, or /auth/oidc/:id/verify. Crate added a seeded web-smoke fixture to verify real browser restore/read/live-sync against the Rust host, but production first-session creation remains blocked on this FR-306 seam."
+  }
+}

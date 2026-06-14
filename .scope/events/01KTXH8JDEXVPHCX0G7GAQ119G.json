@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTXH8JDEXVPHCX0G7GAQ119G",
+  "ts": "2026-06-12T09:05:29.518Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTXC8SGYRTKXJQB8ARBZVCHY",
+    "commentId": "01KTXH8JDEXVPHCX0G7GAQ119F",
+    "author": "codex",
+    "body": "Crate CR-108 follow-up: DELETE /api/me now has a local 5/hour limiter-before-auth in the Rust backend. This is another public/destructive app route that should eventually key through Frick's trusted client-IP/rate-limit context rather than Crate trusting X-Forwarded-For directly."
+  }
+}

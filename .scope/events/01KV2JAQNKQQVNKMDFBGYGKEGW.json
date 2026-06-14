@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KV2JAQNKQQVNKMDFBGYGKEGW",
+  "ts": "2026-06-14T08:00:21.171Z",
+  "actor": "claude",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KV1CCGBP1SG7J2GB7JDGYKPN",
+    "commentId": "01KV2JAQNKQQVNKMDFBGYGKEGV",
+    "author": "claude",
+    "body": "Fixed + merged to main (PR #11, 37cc2b8). mint_email_session_response now returns the wrapped { session, user, isNewUser } envelope; unit test email_signup_returns_wrapped_session_envelope pins the shape. Scope: email responder only (generic/dev/login/refresh correctly return bare FrickSession; Apple/Google not mounted). Verified end-to-end against RangerCRM Swift suite (353/0). Follow-up: add HTTP-auth-envelope conformance fixtures (gap that let this ship)."
+  }
+}

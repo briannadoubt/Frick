@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTXXGJR0AQZVA4G2985XZK9Y",
+  "ts": "2026-06-12T12:39:34.912Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTXWG5VZR4KHVA5DM1A5DTGD",
+    "commentId": "01KTXXGJQZ1K6VTWHPHNERXC0G",
+    "author": "codex",
+    "body": "Crate sale-summary is another concrete consumer of the async side-effect projection gap: the Rust projection uses Frick's synchronous apply hook and spawns async store read/upsert work to materialize SaleSummary rows. This reinforces the reusable need for a first-class async projection side-effect seam in Frick rather than per-app spawned-task bridges."
+  }
+}

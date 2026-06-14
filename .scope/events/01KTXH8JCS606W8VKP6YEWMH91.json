@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTXH8JCS606W8VKP6YEWMH91",
+  "ts": "2026-06-12T09:05:29.497Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KT3SXZQDVJG2FHV3K9JYEZ2Q",
+    "commentId": "01KTXH8JCS606W8VKP6YEWMH90",
+    "author": "codex",
+    "body": "Crate CR-108 follow-up: Rust DELETE /api/me now preserves Crate's product-specific account deletion locally. A generic Frick account-deletion lifecycle must be hookable/configurable enough to allow Crate's non-cascade semantics: stamp User.revokedAt, clear provider/email identifiers, tombstone TenantMembership rows, revoke all sessions, but deliberately keep Tenant/InventoryItem/Release/shop history even for sole-owner deletes. Do not replace Crate's route with a generic cascade unless those semantics are expressible."
+  }
+}

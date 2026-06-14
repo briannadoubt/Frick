@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTXY9N2BDEGA5K245A2HJJZ5",
+  "ts": "2026-06-12T12:53:16.491Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTXXWMY2HV1DDW5HR5BMJ9TD",
+    "commentId": "01KTXY9N2BDEGA5K245A2HJJZ4",
+    "author": "codex",
+    "body": "Crate now has a tested Rust-side auth bootstrap helper in crates/crate-rust-backend/src/auth_bootstrap.rs that mirrors its TypeScript onFirstSignIn product behavior, but Frick auth cannot call it yet. The needed framework seam should run once on new email/provider account creation before session minting, allow app-owned store writes, and return/override tenant_id/user_id/display_name consistently across email, Apple, Google, and OIDC."
+  }
+}

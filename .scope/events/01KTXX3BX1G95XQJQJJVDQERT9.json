@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTXX3BX1G95XQJQJJVDQERT9",
+  "ts": "2026-06-12T12:32:21.921Z",
+  "actor": "unknown",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTXX3BX0WSBJC4VQ6A8Q6JFX",
+    "number": 305,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Indexed object query API for Rust app projections",
+    "description": "Crate CR-112 inventory-list projection migration preserved the current TypeScript strategy for Release update fan-out: enumerate active tenants, list every tenant's InventoryItem rows, and filter by releaseId in app code. That is correct parity and acceptable at Crate's current scale, but the reusable Frick behavior is an indexed object query/filter API usable from Rust app projections and routes. Candidate shape: object collection query by declared schema index or equality filters, scoped by app_id and tenant_id, with an explicit cross-tenant/admin iteration primitive when an app owns the fan-out. Acceptance should cover querying InventoryItem rows by releaseId without scanning every row, preserving tenant/app isolation, and working from app projection handlers without bypassing policy boundaries.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

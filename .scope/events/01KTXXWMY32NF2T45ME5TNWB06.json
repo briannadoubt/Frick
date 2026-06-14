@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTXXWMY32NF2T45ME5TNWB06",
+  "ts": "2026-06-12T12:46:10.371Z",
+  "actor": "unknown",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTXXWMY2HV1DDW5HR5BMJ9TD",
+    "number": 306,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Rust auth first-sign-in app hook seam",
+    "description": "Crate CR-108 migration found that Frick 0.4 Rust auth routes create framework account rows and mint sessions directly, but expose no app hook equivalent to TypeScript identityProviders.onFirstSignIn. Crate needs a first-sign-in hook to create a product tenant ledger entry, _default/Tenant row, owner TenantMembership row, and product User.primaryTenantId/session tenant selection before returning the auth session. App routes cannot safely shadow built-in /auth/email/signup, /auth/apple/verify, or /auth/google/verify because framework routes are merged first and app routes are intentionally non-shadowing. Add a Rust BootSeams/AppDefinition auth lifecycle hook that runs exactly once on new account/provider/email signup, can write through FrickStore, can return/override tenantId/userId/displayName/session tenant fields, and has concurrency/idempotency semantics matching provider account creation. Crate acceptance: on first sign-in create tenant-{uuid} in the tenant ledger before schema rows; write _default Tenant(kind personal, ownerId, displayName); write _default TenantMembership owner; set product User.primaryTenantId/session tenant; leave Square location unset; returning sign-ins reuse the existing tenant.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

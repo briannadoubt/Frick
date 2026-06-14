@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KTXWG5W0C1SP17JPQARWN8Q9",
+  "ts": "2026-06-12T12:21:53.152Z",
+  "actor": "unknown",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KTXWG5VZR4KHVA5DM1A5DTGD",
+    "number": 304,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Async side-effect projection seam for Rust app backends",
+    "description": "Crate CR-112 outbound-sync migration exposed a reusable Frick gap: Rust FrickProjectionHandler::apply is synchronous and FrickProjectionContext carries tenant/app only, but app-owned projections sometimes need post-commit async side effects such as store reads, job enqueue, notification intent enqueue, or durable audit writes. Crate can temporarily bridge crate.outbound-sync-enqueue by spawning async work from apply, but a first-class Frick seam should make this deterministic and observable without failing the originating write. Candidate designs: async projection handler trait, post-commit side-effect projection registry, or app write-listener fanout integrated with the existing store write funnel. Acceptance should cover async store read + enqueue_job from an InventoryEventStream-like append, detached error logging/telemetry, no regression to projection snapshot/delta behavior, and compatibility with multi-app app_id routing.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

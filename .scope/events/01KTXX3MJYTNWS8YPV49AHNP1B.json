@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTXX3MJYTNWS8YPV49AHNP1B",
+  "ts": "2026-06-12T12:32:30.814Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTXX3BX0WSBJC4VQ6A8Q6JFX",
+    "commentId": "01KTXX3MJYTNWS8YPV49AHNP1A",
+    "author": "codex",
+    "body": "Filed from Crate CR-112 inventory-list Rust migration. Crate now preserves TypeScript parity by scanning tenants/items for Release fan-out, but the generic Frick API should let app projections query declared object indexes such as InventoryItem.byRelease without O(tenants x rows) scans."
+  }
+}

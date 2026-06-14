@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTXX4EWSBF7C7DHB8QPADK48",
+  "ts": "2026-06-12T12:32:57.753Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTXWG5VZR4KHVA5DM1A5DTGD",
+    "commentId": "01KTXX4EWSBF7C7DHB8QPADK47",
+    "author": "codex",
+    "body": "Crate CR-112 now also uses the spawned-task bridge for crate.inventory-list, where object-sourced projections need async Release reads, InventoryListRow upserts, and Release fan-out work. The migration remains correct, but this is another data point for a first-class async side-effect projection seam."
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KV1CCGBQ20HFK98GB0ET1GYZ",
+  "ts": "2026-06-13T20:57:13.335Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KV1CCGBP1SG7J2GB7JDGYKPN",
+    "number": 307,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "0.4.0 regression: HTTP email-auth response is flat, breaks native SDK decoders",
+    "description": "frick-server 0.4.0's email signup/login HTTP response flattens the session fields at the top level, but the Swift (and Kotlin) SDK decoders expect the wrapped `{ session, user, isNewUser }` envelope the pre-rewrite TypeScript server returned. Every native-client signUp/signIn fails to decode -> auth is fully broken for the Swift/Kotlin SDKs against 0.4.0.\n\nCaught by RangerCRM's localhost integration suite during the 0.4.0 migration (RCRM-165): 68/383 tests failed, all with `DecodingError.keyNotFound: Key 'session' not found` thrown from `FrickClient.signUpWithEmail` in test setUp.\n\n## Evidence\n\nfrick-server 0.4.0 `POST /auth/email/signup` returns (crates/frick-server/src/auth_routes.rs `mint_email_session_response`, ~line 889):\n```json\n{ \"schemaHash\":..., \"sessionToken\":..., \"tenantId\":..., \"userId\":..., \"displayName\":..., \"email\":..., \"handle\":..., \"deviceId\":..., \"replicaId\":..., \"expiresAt\":..., \"isNewUser\": true }\n```\n\nFrickSwift 0.4.0 decodes (FrickClient.swift):\n```swift\nprivate struct SignInWithEmailEnvelope: Decodable {\n    let session: FrickSession   // <- expects a nested `session` object\n    let user: [String: FrickJSONValue]\n    let isNewUser: Bool\n}\n```\nwhere `FrickSession` = `{ schemaHash?, sessionToken, tenantId?, userId, displayName?, handle?, deviceId, replicaId, expiresAt }`. `SignInWithAppleEnvelope` and `SignInWithGoogleEnvelope` are the same wrapped shape.\n\n## Why it slipped through\n\nThe conformance fixtures (conformance/fixtures/wire/manifest.json) pin the WebSocket wire only — the HTTP auth-endpoint response shapes are not covered. The web client (@fricken/core) doesn't decode the HTTP signup response (it's WS-first), so only the native SDKs are affected and nothing caught the divergence.\n\n## Fix\n\nReturn the wrapped envelope from all auth responders (email signup + login, Apple, Google, OIDC, generic signup/login): `{ session: { schemaHash, sessionToken, tenantId, userId, displayName, handle, deviceId, replicaId, expiresAt }, user: { id/userId, displayName, email, handle }, isNewUser }`. Confirmed locally: nesting the existing fields under `session` + adding a `user` object makes RangerCRM's Swift suite decode auth and proceed (validation patch on a local Frick branch).\n\nAdd an HTTP-auth-envelope conformance fixture so this shape is pinned going forward, not just the WS wire.\n\n## Downstream\n\nRangerCRM is on the 0.4.0 stack (RCRM-165) and is fully migrated except this blocker; it will re-pin once a fixed frick-server ships (0.4.1). Until then RangerCRM's CI must run against a locally-patched server.",
+    "status": "backlog",
+    "priority": "urgent",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

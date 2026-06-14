@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTY2SYWQ709DG147JM63VEAZ",
+  "ts": "2026-06-12T14:12:05.143Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTXXWMY2HV1DDW5HR5BMJ9TD",
+    "commentId": "01KTY2SYWQ709DG147JM63VEAY",
+    "author": "codex",
+    "body": "Crate CR-108 follow-up on 2026-06-12: a fresh Rust auth audit still finds no BootSeams/AppDefinition first-sign-in lifecycle hook. Built-in auth routes are merged before app routes, so Crate cannot shadow /auth/email/signup, /auth/apple/verify, /auth/google/verify, or /auth/oidc/:id/verify. Minimal upstream seam remains: invoke an app hook only for successful new-account email/provider sign-in before session minting; pass store/account/provider context; allow Crate to create tenant ledger/schema rows and return session tenant fields; skip existing-account logins. Crate now has real web/iOS/Android seeded restore/read smoke against the Rust host, but production first-session creation remains blocked here."
+  }
+}

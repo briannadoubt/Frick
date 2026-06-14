@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTXWGEXJJN4KMZG7006ZP5HJ",
+  "ts": "2026-06-12T12:22:02.418Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTXWG5VZR4KHVA5DM1A5DTGD",
+    "commentId": "01KTXWGEXJJN4KMZG7006ZP5HH",
+    "author": "codex",
+    "body": "Filed from Crate CR-112 outbound-sync Rust migration. Crate now has a temporary spawned-task bridge for crate.outbound-sync-enqueue, but the generic need is a deterministic/observable async side-effect projection seam for Rust app backends."
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KV0KRK140611R1HMVVG7CZKH",
+  "ts": "2026-06-13T13:46:54.884Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTXXWMY2HV1DDW5HR5BMJ9TD",
+    "commentId": "01KV0KRK140611R1HMVVG7CZKG",
+    "author": "codex",
+    "body": "Crate remote-version cleanup found a release gap: CR-108 now pins crate-rust-backend to the remote Frick Git tag 0.4.0 instead of the sibling worktree, and that tag does not expose BootSeams.auth_lifecycle / AuthLifecycle / FirstSignInContext. The hook appears only in the local dirty Frick worktree, so Crate cannot preserve first-sign-in tenant bootstrap from the remote 0.4.0 tag. Please publish/tag the auth lifecycle seam (or create a 0.4.1 release) before treating this as consumable by Crate without local path dependencies."
+  }
+}

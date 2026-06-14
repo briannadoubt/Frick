@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTXXSR1C1FGP2EG766SP8T7D",
+  "ts": "2026-06-12T12:44:35.244Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTXWG5VZR4KHVA5DM1A5DTGD",
+    "commentId": "01KTXXSR1B2N9T5NQNZW7NF76G",
+    "author": "codex",
+    "body": "Crate sold-push is another migrated projection using the same spawned async side-effect bridge: the sync projection hook performs async InventoryItem/TenantMembership reads and NotificationRouter.enqueue_intent in a task. This further supports a generic Frick async projection side-effect seam with app services/context rather than app-specific spawned-task patterns."
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KTY55S20W27G6VDGN8RFMCJ6",
+  "ts": "2026-06-12T14:53:29.536Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTXXWMY2HV1DDW5HR5BMJ9TD",
+    "commentId": "01KTY55S20W27G6VDGN8RFMCJ5",
+    "author": "codex",
+    "body": "Implemented the Rust auth lifecycle seam for CR-108. Frick now exposes BootSeams.auth_lifecycle with AuthLifecycle::on_first_sign_in and resolve_session, wires it into AppStateInner, calls it from /auth/email/signup, /auth/email/login, and provider verify find/create paths, and preserves default behavior through NoopAuthLifecycle. Added Frick email-auth integration coverage proving hook-selected tenantId/userId/displayName on first signup, no second first-sign-in hook on returning login, and session resolution for returning auth. Verification: cargo fmt --check -p frick-server; cargo check -p frick-server; cargo test -p frick-server auth_lifecycle_can_choose_first_signup_and_returning_session_fields -- --nocapture."
+  }
+}
