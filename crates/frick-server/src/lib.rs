@@ -33,6 +33,7 @@ pub mod search;
 pub mod session;
 pub mod standalone;
 pub mod telemetry;
+pub mod write_side_effects;
 
 pub use apps::{AppDefinition, AppDescriptor, AppEntry, AppResolution, FrickAppRegistry};
 pub use auth::{
@@ -86,3 +87,4 @@ pub use search::{
 };
 pub use standalone::{SCHEMA_PATH_ENV, config_env, load_schema};
 pub use telemetry::{TelemetryGuard, install_tracing};
+pub use write_side_effects::{SharedWriteSideEffect, WriteSideEffect, WriteSideEffectFuture};

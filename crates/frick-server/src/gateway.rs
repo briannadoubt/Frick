@@ -1929,6 +1929,17 @@ impl GatewayHub {
     /// path ([`Self::handle_cluster_envelope`]) reuses the same `fan_out_*`
     /// helpers but never re-publishes.
     fn handle_store_write(self: &Arc<Self>, event: &FrickStoreWriteEvent) {
+        // App post-commit write side-effects (FR-304): dispatched detached for
+        // every event kind, with a store handle. A failing or slow side-effect
+        // can neither fail nor block the originating write — errors are logged.
+        for side_effect in &self.state.write_side_effects {
+            let fut = side_effect.on_write(event.clone(), Arc::clone(&self.state.store));
+            tokio::spawn(async move {
+                if let Err(err) = fut.await {
+                    tracing::error!(target: "frick.write_side_effect", error = %err, "write side-effect failed");
+                }
+            });
+        }
         match event {
             FrickStoreWriteEvent::ObjectUpsert {
                 tenant_id,

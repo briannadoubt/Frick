@@ -1044,6 +1044,7 @@ async fn test_hub_with_schema(schema: FrickSchema) -> std::sync::Arc<GatewayHub>
         blob_processors: std::sync::Arc::new(crate::blob_processors::BlobProcessorRegistry::new()),
         platform_events: std::sync::Arc::new(frick_store::MemoryPlatformEvents::new()),
         policy_hooks: std::sync::Arc::new(Vec::new()),
+        write_side_effects: Vec::new(),
     });
     let hub = GatewayHub::new(state);
     hub.state.attach_gateway(&hub);

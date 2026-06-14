@@ -127,6 +127,11 @@ pub struct BootSeams {
     /// [`FrickServer::listen`], re-enqueueing each spec's resolved targets once
     /// per interval. Empty for the foundation/standalone binary.
     pub recurring_jobs: Vec<crate::jobs::RecurringJob>,
+    /// App-registered post-commit write side-effects (FR-304). Each runs
+    /// detached after a store write commits (object upsert/delete, stream
+    /// append), with a store handle; errors are logged, never propagated to the
+    /// write. Empty for the foundation/standalone binary.
+    pub write_side_effects: Vec<crate::write_side_effects::SharedWriteSideEffect>,
 }
 
 impl BootSeams {
@@ -156,9 +161,10 @@ impl BootSeams {
             policy_hooks: Vec::new(),
             // No built-in app routes; a Rust backend registers its own.
             app_router: None,
-            // No built-in app job handlers / recurring jobs.
+            // No built-in app job handlers / recurring jobs / write side-effects.
             job_handlers: Vec::new(),
             recurring_jobs: Vec::new(),
+            write_side_effects: Vec::new(),
         }
     }
 }
@@ -546,6 +552,7 @@ async fn build_server(
         blob_processors,
         platform_events,
         policy_hooks: Arc::new(seams.policy_hooks),
+        write_side_effects: seams.write_side_effects,
     });
 
     // The gateway hub owns the live connections and the fan-out funnel. The

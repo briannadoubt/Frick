@@ -139,6 +139,12 @@ pub struct AppStateInner {
     /// standalone binary; a Rust backend supplies its own via
     /// [`crate::boot::BootSeams`]. See [`crate::authz::PolicyHook`].
     pub policy_hooks: crate::authz::PolicyHooks,
+
+    /// App-registered post-commit write side-effects (FR-304). Dispatched
+    /// detached from the gateway's store-write funnel for every write event;
+    /// empty on the standalone binary, supplied by a Rust backend via
+    /// [`crate::boot::BootSeams`].
+    pub write_side_effects: Vec<crate::write_side_effects::SharedWriteSideEffect>,
 }
 
 impl AppStateInner {
