@@ -7,6 +7,17 @@ documents the stack version and the user-visible changes in that cut.
 
 ## Unreleased
 
+## 0.5.0 — 2026-06-14
+
+### Added
+
+- **App server-extension seams (Rust backends).** First-class `BootSeams` hooks for app-owned Rust backends: an **auth first-sign-in lifecycle hook** (FR-306) that runs once on new email/Apple/Google signup, can write through the store, and can override the session's user id / display name / tenant; **async post-commit write side-effects** (FR-304) that run detached after a store write (object upsert/delete, stream append) with a store handle — for post-commit reads, `enqueue_job`, notification intents, or durable audit writes — and can neither fail nor block the originating write; and a tenant/app-scoped **`ObjectStore::query_by_field`** (FR-305) so a projection or route filters a type (e.g. by `releaseId`) without enumerating other tenants' rows in app code.
+
+### Fixed
+
+- **Email-auth response shape (FR-307).** The HTTP email signup/login response is wrapped in `{ session, user, isNewUser }` again, fixing a 0.4.0 regression where the flat response broke the native Swift/Kotlin SDK decoders.
+- **Swift/Kotlin codegen types.** `bytes` fields now generate as `Data` and `json` fields as `FrickJSONValue` (previously `String`), so generated DTOs round-trip those columns correctly.
+
 ## 0.4.0 — 2026-06-12
 
 ### Added

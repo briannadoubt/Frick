@@ -9,7 +9,7 @@ plugins {
 
 // Single source of truth for the published Maven coordinate. Bumped in
 // lockstep with the framework version; see CHANGELOG.md.
-val frickVersion = "0.4.0"
+val frickVersion = "0.5.0"
 
 android {
     namespace = "dev.frick.client"

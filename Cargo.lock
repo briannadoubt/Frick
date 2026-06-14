@@ -771,7 +771,7 @@ dependencies = [
 
 [[package]]
 name = "frick-cli"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -790,7 +790,7 @@ dependencies = [
 
 [[package]]
 name = "frick-codegen"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "frick-protocol",
@@ -802,7 +802,7 @@ dependencies = [
 
 [[package]]
 name = "frick-conformance"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "frick-protocol",
@@ -816,7 +816,7 @@ dependencies = [
 
 [[package]]
 name = "frick-mcp"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -831,7 +831,7 @@ dependencies = [
 
 [[package]]
 name = "frick-protocol"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -845,7 +845,7 @@ dependencies = [
 
 [[package]]
 name = "frick-schema"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "frick-protocol",
@@ -856,7 +856,7 @@ dependencies = [
 
 [[package]]
 name = "frick-server"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -900,7 +900,7 @@ dependencies = [
 
 [[package]]
 name = "frick-store"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "argon2",
