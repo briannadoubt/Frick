@@ -91,6 +91,11 @@ pub struct BootSeams {
     /// Production fetches + caches over HTTPS; tests inject a fixed key set so
     /// the whole verification path is exercised without a network.
     pub jwks_provider: crate::auth::SharedJwksProvider,
+    /// App auth lifecycle hook (FR-306). Built-in auth still verifies
+    /// credentials and owns account rows, while the hook may create product
+    /// schema state and choose the session tenant/user/display name returned
+    /// after first sign-in and later successful sign-ins.
+    pub auth_lifecycle: crate::auth_lifecycle::SharedAuthLifecycle,
     /// App-provided blob processors (FR-272). Registered into the shared
     /// [`BlobProcessorRegistry`](crate::blob_processors::BlobProcessorRegistry)
     /// at boot, in order; a duplicate id is a [`BootError::Config`]. Empty for
@@ -144,6 +149,7 @@ impl BootSeams {
             // Production JWKS: a cached `reqwest` fetcher hitting Apple/Google's
             // published key sets (refetched on an unknown `kid`).
             jwks_provider: Arc::new(crate::auth::ReqwestJwksProvider::default()),
+            auth_lifecycle: Arc::new(crate::auth_lifecycle::NoopAuthLifecycle),
             // No stock blob processors auto-register; an app supplies its own.
             blob_processors: Vec::new(),
             // No built-in policy hooks; a Rust backend registers its own.
@@ -532,6 +538,7 @@ async fn build_server(
         push_registry: Arc::clone(&push.registry),
         notification_router: Arc::clone(&push.router),
         email_router: Arc::clone(&seams.email_router),
+        auth_lifecycle: Arc::clone(&seams.auth_lifecycle),
         apps,
         // Populated by `attach_gateway` once the hub is built below (FR-278).
         gateway: std::sync::OnceLock::new(),

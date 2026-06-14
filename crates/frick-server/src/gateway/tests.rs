@@ -1037,6 +1037,7 @@ async fn test_hub_with_schema(schema: FrickSchema) -> std::sync::Arc<GatewayHub>
         push_registry: push.registry,
         notification_router: push.router,
         email_router: std::sync::Arc::new(crate::email::EmailRouter::noop()),
+        auth_lifecycle: std::sync::Arc::new(crate::auth_lifecycle::NoopAuthLifecycle),
         apps,
         gateway: std::sync::OnceLock::new(),
         calls,

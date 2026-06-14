@@ -7,6 +7,7 @@
 
 pub mod apps;
 pub mod auth;
+pub mod auth_lifecycle;
 pub mod auth_routes;
 pub mod authz;
 pub mod blob_processors;
@@ -37,6 +38,10 @@ pub use apps::{AppDefinition, AppDescriptor, AppEntry, AppResolution, FrickAppRe
 pub use auth::{
     FixedJwksProvider, Jwks, JwksProvider, ReqwestJwksProvider, RsaJwk, SharedJwksProvider,
     VerifiedIdentity, VerifyError, VerifyParams, provider_auth_router, verify_id_token,
+};
+pub use auth_lifecycle::{
+    AuthFullName, AuthIdentity, AuthLifecycle, AuthLifecycleOutcome, AuthSessionContext,
+    FirstSignInContext, NoopAuthLifecycle, SharedAuthLifecycle,
 };
 pub use authz::{Action, Decision, DenyReason, ResourceContext, decide_baseline};
 pub use blob_processors::{

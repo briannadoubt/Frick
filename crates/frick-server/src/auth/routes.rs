@@ -35,6 +35,7 @@ use crate::auth::verify::{
     APPLE_ISSUER, APPLE_JWKS_URI, GOOGLE_ISSUERS, GOOGLE_JWKS_URI, VerifiedIdentity, VerifyParams,
     verify_id_token,
 };
+use crate::auth_lifecycle::{AuthFullName, AuthIdentity, AuthSessionContext, FirstSignInContext};
 use crate::auth_routes::{client_ip, mint_session, new_request_id, now_ms, precheck, random_token};
 use crate::error::ServerError;
 use crate::http::{AppState, no_store_headers, respond_error};
@@ -164,6 +165,10 @@ async fn apple_verify(
     };
 
     let display_name = apple_display_name(body.full_name.as_ref(), verified.email.as_deref());
+    let full_name = body.full_name.as_ref().map(|name| AuthFullName {
+        given_name: name.given_name.clone(),
+        family_name: name.family_name.clone(),
+    });
     finish_provider_login(
         state,
         &request_id,
@@ -171,6 +176,7 @@ async fn apple_verify(
         &tenant_id,
         &verified,
         &display_name,
+        full_name,
         body.device_id,
         body.replica_id,
         now,
@@ -245,6 +251,7 @@ async fn google_verify(
         &tenant_id,
         &verified,
         &display_name,
+        None,
         body.device_id,
         body.replica_id,
         now,
@@ -355,6 +362,7 @@ async fn oidc_verify(
         &tenant_id,
         &verified,
         &display_name,
+        None,
         body.device_id,
         body.replica_id,
         now,
@@ -490,6 +498,7 @@ async fn apple_notifications(
 /// success body. The find-or-create is idempotent: a second sign-in reuses the
 /// existing account.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)] // one linear find-or-create → lifecycle → session flow
 async fn finish_provider_login(
     state: &AppState,
     request_id: &str,
@@ -497,11 +506,19 @@ async fn finish_provider_login(
     tenant_id: &str,
     verified: &VerifiedIdentity,
     display_name: &str,
+    full_name: Option<AuthFullName>,
     device_id: Option<String>,
     replica_id: Option<String>,
     now_ms: i64,
 ) -> Response {
     let handle = provider_handle(provider, &verified.subject);
+    let identity = AuthIdentity::Provider {
+        provider: provider.to_string(),
+        subject: verified.subject.clone(),
+        handle: handle.clone(),
+        email: verified.email.clone(),
+        full_name,
+    };
 
     // Indexed lookup by subject-handle (find).
     let existing = state
@@ -511,28 +528,58 @@ async fn finish_provider_login(
         .await
         .unwrap_or(None);
 
-    let (user_id, display_name, is_new_user) = if let Some(account) = existing {
-        (account.user_id, account.display_name, false)
+    let (session_outcome, is_new_user) = if let Some(account) = existing {
+        let resolved = state
+            .auth_lifecycle
+            .resolve_session(AuthSessionContext {
+                store: Arc::clone(&state.store),
+                now_ms,
+                auth_tenant_id: tenant_id.to_string(),
+                identity: identity.clone(),
+                user_id: account.user_id,
+                display_name: account.display_name,
+            })
+            .await;
+        let resolved = match resolved {
+            Ok(outcome) => outcome,
+            Err(error) => return respond_error(&error, request_id),
+        };
+        (resolved, false)
     } else {
+        let proposed_user_id = format!("user-{provider}-{}", random_token(16));
+        let first_sign_in = state
+            .auth_lifecycle
+            .on_first_sign_in(FirstSignInContext {
+                store: Arc::clone(&state.store),
+                now_ms,
+                auth_tenant_id: tenant_id.to_string(),
+                identity: identity.clone(),
+                proposed_user_id,
+                proposed_display_name: display_name.to_string(),
+            })
+            .await;
+        let first_sign_in = match first_sign_in {
+            Ok(outcome) => outcome,
+            Err(error) => return respond_error(&error, request_id),
+        };
         // Create. The password is never used (provider-backed identity); a
         // random one is stored, mirroring `dev_login`'s auto-create.
-        let user_id = format!("user-{provider}-{}", random_token(16));
         let created = state
             .store
             .accounts()
             .create(
                 &CreateAccountInput {
                     tenant_id: tenant_id.to_string(),
-                    user_id: user_id.clone(),
+                    user_id: first_sign_in.user_id.clone(),
                     handle: handle.clone(),
-                    display_name: display_name.to_string(),
+                    display_name: first_sign_in.display_name.clone(),
                     password: random_token(32),
                 },
                 now_ms,
             )
             .await;
         match created {
-            Ok(account) => (account.user_id, account.display_name, true),
+            Ok(_) => (first_sign_in, true),
             Err(_) => {
                 // A concurrent first sign-in won the create race; fall back to
                 // the now-existing row so the login still succeeds idempotently.
@@ -543,7 +590,24 @@ async fn finish_provider_login(
                     .await
                     .unwrap_or(None)
                 {
-                    Some(account) => (account.user_id, account.display_name, false),
+                    Some(account) => {
+                        let resolved = state
+                            .auth_lifecycle
+                            .resolve_session(AuthSessionContext {
+                                store: Arc::clone(&state.store),
+                                now_ms,
+                                auth_tenant_id: tenant_id.to_string(),
+                                identity: identity.clone(),
+                                user_id: account.user_id,
+                                display_name: account.display_name,
+                            })
+                            .await;
+                        let resolved = match resolved {
+                            Ok(outcome) => outcome,
+                            Err(error) => return respond_error(&error, request_id),
+                        };
+                        (resolved, false)
+                    }
                     None => return respond_error(&ServerError::Internal, request_id),
                 }
             }
@@ -552,11 +616,19 @@ async fn finish_provider_login(
 
     let device_id = device_id.unwrap_or_else(|| format!("device-{}", random_token(12)));
     let replica_id = replica_id.unwrap_or_else(|| format!("replica-{}", random_token(12)));
-    let session =
-        match mint_session(state, tenant_id, &user_id, &device_id, &replica_id, now_ms).await {
-            Ok(session) => session,
-            Err(error) => return respond_error(&error, request_id),
-        };
+    let session = match mint_session(
+        state,
+        &session_outcome.session_tenant_id,
+        &session_outcome.user_id,
+        &device_id,
+        &replica_id,
+        now_ms,
+    )
+    .await
+    {
+        Ok(session) => session,
+        Err(error) => return respond_error(&error, request_id),
+    };
 
     let status = if is_new_user {
         axum::http::StatusCode::CREATED
@@ -569,9 +641,9 @@ async fn finish_provider_login(
         Json(json!({
             "schemaHash": state.schema.hash,
             "sessionToken": session.token,
-            "tenantId": tenant_id,
-            "userId": user_id,
-            "displayName": display_name,
+            "tenantId": session_outcome.session_tenant_id,
+            "userId": session_outcome.user_id,
+            "displayName": session_outcome.display_name,
             "email": verified.email,
             "handle": handle,
             "provider": provider,

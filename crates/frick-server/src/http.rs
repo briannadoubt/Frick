@@ -91,6 +91,10 @@ pub struct AppStateInner {
     /// Tests inject a [`crate::email::RecordingEmailAdapter`]; FR-271 plugs a
     /// Resend adapter here. The injection point is [`crate::boot::BootSeams`].
     pub email_router: Arc<EmailRouter>,
+    /// App auth lifecycle hook (FR-306). Built-in auth routes call it after
+    /// credential/account decisions so apps can create product rows and resolve
+    /// the tenant carried by returned sessions.
+    pub auth_lifecycle: crate::auth_lifecycle::SharedAuthLifecycle,
     /// The multi-app registry (FR-277). Always holds at least the `_default`
     /// (root, base_path `""`) app, whose `schema` / `projections` / `search`
     /// are the legacy top-level fields above (same `Arc` interiors). On a

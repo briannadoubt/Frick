@@ -1256,7 +1256,10 @@ mod tests {
             "expected a user object: {response}"
         );
         // isNewUser stays at the top level.
-        assert_eq!(json["isNewUser"], true, "isNewUser at top level: {response}");
+        assert_eq!(
+            json["isNewUser"], true,
+            "isNewUser at top level: {response}"
+        );
         // The token must NOT also be flattened at the top level.
         assert!(
             json.get("sessionToken").is_none(),

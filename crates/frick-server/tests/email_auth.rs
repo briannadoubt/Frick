@@ -16,11 +16,49 @@
 
 use std::sync::Arc;
 
+use frick_server::auth_lifecycle::{
+    AuthLifecycle, AuthLifecycleOutcome, AuthSessionContext, FirstSignInContext,
+};
 use frick_server::email::RecordingEmailAdapter;
 use frick_server::{
-    BootSeams, FrickConfig, FrickServer, create_frick_server, create_frick_server_with_seams,
+    BootSeams, FrickConfig, FrickServer, ServerError, create_frick_server,
+    create_frick_server_with_seams,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::Mutex;
+
+#[derive(Default)]
+struct RecordingAuthLifecycle {
+    first_sign_ins: Mutex<u32>,
+    session_resolutions: Mutex<u32>,
+}
+
+#[async_trait::async_trait]
+impl AuthLifecycle for RecordingAuthLifecycle {
+    async fn on_first_sign_in(
+        &self,
+        _ctx: FirstSignInContext,
+    ) -> Result<AuthLifecycleOutcome, ServerError> {
+        *self.first_sign_ins.lock().await += 1;
+        Ok(AuthLifecycleOutcome {
+            session_tenant_id: "tenant-hooked".to_string(),
+            user_id: "user-hooked".to_string(),
+            display_name: "Hooked User".to_string(),
+        })
+    }
+
+    async fn resolve_session(
+        &self,
+        ctx: AuthSessionContext,
+    ) -> Result<AuthLifecycleOutcome, ServerError> {
+        *self.session_resolutions.lock().await += 1;
+        Ok(AuthLifecycleOutcome {
+            session_tenant_id: "tenant-returning".to_string(),
+            user_id: ctx.user_id,
+            display_name: ctx.display_name,
+        })
+    }
+}
 
 fn test_config() -> FrickConfig {
     let mut env = std::collections::BTreeMap::new();
@@ -157,6 +195,58 @@ async fn signup_then_login_happy_path() {
     assert_eq!(status, 200, "login body: {body}");
     assert!(body.contains("\"sessionToken\""), "login body: {body}");
     assert!(body.contains("\"isNewUser\":false"), "login body: {body}");
+
+    server.close().await;
+}
+
+#[tokio::test]
+async fn auth_lifecycle_can_choose_first_signup_and_returning_session_fields() {
+    let lifecycle = Arc::new(RecordingAuthLifecycle::default());
+    let mut seams = BootSeams::production();
+    seams.auth_lifecycle = lifecycle.clone();
+    let mut server =
+        create_frick_server_with_seams(test_config(), frick_protocol::foundation_schema(), seams)
+            .await
+            .unwrap();
+    server.listen().await.unwrap();
+    let port = server.port();
+
+    let (status, body) = post(
+        port,
+        "/auth/email/signup",
+        r#"{"email":"hook@example.com","password":"hunter2hunter2","displayName":"Ignored"}"#,
+    )
+    .await;
+    assert_eq!(status, 201, "signup body: {body}");
+    assert_eq!(json_string(&body, "tenantId"), "tenant-hooked");
+    assert_eq!(json_string(&body, "userId"), "user-hooked");
+    assert_eq!(json_string(&body, "displayName"), "Hooked User");
+    assert_eq!(*lifecycle.first_sign_ins.lock().await, 1);
+
+    let account = server
+        .state
+        .store
+        .accounts()
+        .read_by_identity("_default", "hook@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(account.tenant_id, "_default");
+    assert_eq!(account.user_id, "user-hooked");
+    assert_eq!(account.display_name, "Hooked User");
+
+    let (status, body) = post(
+        port,
+        "/auth/email/login",
+        r#"{"email":"hook@example.com","password":"hunter2hunter2"}"#,
+    )
+    .await;
+    assert_eq!(status, 200, "login body: {body}");
+    assert_eq!(json_string(&body, "tenantId"), "tenant-returning");
+    assert_eq!(json_string(&body, "userId"), "user-hooked");
+    assert_eq!(json_string(&body, "displayName"), "Hooked User");
+    assert_eq!(*lifecycle.first_sign_ins.lock().await, 1);
+    assert_eq!(*lifecycle.session_resolutions.lock().await, 1);
 
     server.close().await;
 }
