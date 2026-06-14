@@ -40,15 +40,49 @@ describe("native artifacts", () => {
     expect(kotlin).toContain("val attachmentBlobIds: JsonElement? = null");
   });
 
-  it("maps timestamp fields to RFC3339 strings in native DTOs", () => {
+  it("maps timestamp fields to the FrickTimestamp wrapper in native DTOs", () => {
     const swift = generateSwiftArtifact(productTestSchema);
     const kotlin = generateKotlinArtifact(productTestSchema);
 
-    expect(swift).toContain("public var expiresAt: String");
-    expect(swift).toContain("lastSeenAt: String? = nil");
+    expect(swift).toContain("public var expiresAt: FrickTimestamp");
+    expect(swift).toContain("lastSeenAt: FrickTimestamp? = nil");
+    // The wrapper owns the RFC3339 codec; no naive `Date`/`String` field.
     expect(swift).not.toContain("public var expiresAt: Date");
-    expect(kotlin).toContain("val expiresAt: String");
-    expect(kotlin).toContain("val lastSeenAt: String? = null");
+    expect(swift).not.toContain("public var expiresAt: String");
+    expect(kotlin).toContain("val expiresAt: FrickTimestamp");
+    expect(kotlin).toContain("val lastSeenAt: FrickTimestamp? = null");
+  });
+
+  it("emits the FrickTimestamp wrapper + imports when schema has timestamp fields", () => {
+    const swift = generateSwiftArtifact(productTestSchema);
+    const kotlin = generateKotlinArtifact(productTestSchema);
+
+    // Swift: a Codable wrapper that round-trips the raw RFC3339 string verbatim
+    // (singleValueContainer) and exposes a parsed `date`.
+    expect(swift).toContain("public struct FrickTimestamp: Codable, Equatable, Sendable");
+    expect(swift).toContain("public let rawValue: String");
+    expect(swift).toContain("var container = encoder.singleValueContainer()");
+    expect(swift).toContain("public var date: Date?");
+
+    // Kotlin: an inline value class (serializes as the bare string) exposing
+    // `instant`, gated behind its java.time + Serializable imports.
+    expect(kotlin).toContain("import java.time.Instant");
+    expect(kotlin).toContain("import java.time.OffsetDateTime");
+    expect(kotlin).toContain("import java.time.format.DateTimeParseException");
+    expect(kotlin).toContain("import kotlinx.serialization.Serializable");
+    expect(kotlin).toContain("value class FrickTimestamp(val rawValue: String)");
+    expect(kotlin).toContain("val instant: Instant?");
+  });
+
+  it("re-encodes a generated FrickTimestamp wrapper byte-identically (Swift codec shape)", () => {
+    // The Swift wrapper stores `rawValue` verbatim and re-emits it through a
+    // single-value container, so an RFC3339 value with fractional seconds and a
+    // non-Z offset round-trips losslessly. We assert the emitted codec is the
+    // verbatim store/emit shape that guarantees that (the executable decode↔
+    // encode round-trip lives in the Swift/Kotlin suites).
+    const swift = generateSwiftArtifact(productTestSchema);
+    expect(swift).toContain("self.rawValue = try container.decode(String.self)");
+    expect(swift).toContain("try container.encode(rawValue)");
   });
 
   it("emits Swift schema descriptor tables for objects, streams, and events", () => {

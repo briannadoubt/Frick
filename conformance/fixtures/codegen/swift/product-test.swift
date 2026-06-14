@@ -99,6 +99,44 @@ public enum FrickErrorCode: String, Codable, CaseIterable, Sendable {
   case serverInternal = "server.internal"
 }
 
+/// An RFC3339 timestamp carried verbatim from the wire. The canonical
+/// value is `rawValue` (a fixed RFC3339 string) — it re-encodes
+/// byte-identically, so fractional seconds and the exact offset (`Z` vs
+/// `+00:00`) never drift on round-trip. `date` is a lossy convenience that
+/// parses `rawValue` into a `Date`; the wire value is unaffected by it, and
+/// no app-level `JSONDecoder.dateDecodingStrategy` is required.
+public struct FrickTimestamp: Codable, Equatable, Sendable {
+  public let rawValue: String
+
+  public init(_ rawValue: String) {
+    self.rawValue = rawValue
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.singleValueContainer()
+    self.rawValue = try container.decode(String.self)
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.singleValueContainer()
+    try container.encode(rawValue)
+  }
+
+  /// The parsed instant, or `nil` if `rawValue` is not a valid RFC3339
+  /// timestamp. Parsing is millisecond-precision; `rawValue` keeps the full
+  /// wire precision.
+  public var date: Date? {
+    let withFraction = ISO8601DateFormatter()
+    withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    if let value = withFraction.date(from: rawValue) {
+      return value
+    }
+    let withoutFraction = ISO8601DateFormatter()
+    withoutFraction.formatOptions = [.withInternetDateTime]
+    return withoutFraction.date(from: rawValue)
+  }
+}
+
 public indirect enum FrickJSONValue: Codable, Equatable, Sendable {
   case string(String)
   case int(Int)
@@ -223,14 +261,14 @@ public struct UserDeviceDTO: Codable, Equatable, Sendable, Identifiable {
   public var userId: String
   public var label: String?
   public var platform: String
-  public var lastSeenAt: String?
+  public var lastSeenAt: FrickTimestamp?
 
   public init(
     id: String,
     userId: String,
     label: String? = nil,
     platform: String,
-    lastSeenAt: String? = nil
+    lastSeenAt: FrickTimestamp? = nil
   ) {
     self.id = id
     self.userId = userId
@@ -247,14 +285,14 @@ public struct UserSessionDTO: Codable, Equatable, Sendable, Identifiable {
   public var userId: String
   public var deviceId: String
   public var replicaId: String
-  public var expiresAt: String
+  public var expiresAt: FrickTimestamp
 
   public init(
     id: String,
     userId: String,
     deviceId: String,
     replicaId: String,
-    expiresAt: String
+    expiresAt: FrickTimestamp
   ) {
     self.id = id
     self.userId = userId
@@ -271,14 +309,14 @@ public struct MessageDraftDTO: Codable, Equatable, Sendable, Identifiable {
   public var userId: String
   public var conversationId: String
   public var body: String
-  public var updatedAt: String
+  public var updatedAt: FrickTimestamp
 
   public init(
     id: String,
     userId: String,
     conversationId: String,
     body: String,
-    updatedAt: String
+    updatedAt: FrickTimestamp
   ) {
     self.id = id
     self.userId = userId
@@ -295,7 +333,7 @@ public struct ScheduledMessageDTO: Codable, Equatable, Sendable, Identifiable {
   public var userId: String
   public var conversationId: String
   public var body: String
-  public var scheduledFor: String
+  public var scheduledFor: FrickTimestamp
   public var attachmentBlobIds: FrickJSONValue?
   public var status: String
 
@@ -304,7 +342,7 @@ public struct ScheduledMessageDTO: Codable, Equatable, Sendable, Identifiable {
     userId: String,
     conversationId: String,
     body: String,
-    scheduledFor: String,
+    scheduledFor: FrickTimestamp,
     attachmentBlobIds: FrickJSONValue? = nil,
     status: String
   ) {
@@ -326,9 +364,9 @@ public struct CallRoomDTO: Codable, Equatable, Sendable, Identifiable {
   public var state: String
   public var createdBy: String
   public var kind: String
-  public var createdAt: String
-  public var startedAt: String?
-  public var endedAt: String?
+  public var createdAt: FrickTimestamp
+  public var startedAt: FrickTimestamp?
+  public var endedAt: FrickTimestamp?
   public var mediaSessionId: String?
   public var transport: String?
 
@@ -338,9 +376,9 @@ public struct CallRoomDTO: Codable, Equatable, Sendable, Identifiable {
     state: String,
     createdBy: String,
     kind: String,
-    createdAt: String,
-    startedAt: String? = nil,
-    endedAt: String? = nil,
+    createdAt: FrickTimestamp,
+    startedAt: FrickTimestamp? = nil,
+    endedAt: FrickTimestamp? = nil,
     mediaSessionId: String? = nil,
     transport: String? = nil
   ) {
@@ -365,8 +403,8 @@ public struct CallInviteDTO: Codable, Equatable, Sendable, Identifiable {
   public var inviteeUserId: String
   public var status: String
   public var invitedBy: String
-  public var invitedAt: String
-  public var respondedAt: String?
+  public var invitedAt: FrickTimestamp
+  public var respondedAt: FrickTimestamp?
 
   public init(
     id: String,
@@ -374,8 +412,8 @@ public struct CallInviteDTO: Codable, Equatable, Sendable, Identifiable {
     inviteeUserId: String,
     status: String,
     invitedBy: String,
-    invitedAt: String,
-    respondedAt: String? = nil
+    invitedAt: FrickTimestamp,
+    respondedAt: FrickTimestamp? = nil
   ) {
     self.id = id
     self.callId = callId
@@ -395,8 +433,8 @@ public struct CallParticipantDTO: Codable, Equatable, Sendable, Identifiable {
   public var userId: String
   public var deviceId: String
   public var state: String
-  public var joinedAt: String
-  public var leftAt: String?
+  public var joinedAt: FrickTimestamp
+  public var leftAt: FrickTimestamp?
   public var micEnabled: Bool
   public var cameraEnabled: Bool
   public var screenSharing: Bool
@@ -407,8 +445,8 @@ public struct CallParticipantDTO: Codable, Equatable, Sendable, Identifiable {
     userId: String,
     deviceId: String,
     state: String,
-    joinedAt: String,
-    leftAt: String? = nil,
+    joinedAt: FrickTimestamp,
+    leftAt: FrickTimestamp? = nil,
     micEnabled: Bool,
     cameraEnabled: Bool,
     screenSharing: Bool
@@ -430,14 +468,14 @@ public struct MessageSentDTO: Codable, Equatable, Sendable {
   public var messageId: String
   public var senderId: String
   public var body: String
-  public var createdAt: String
+  public var createdAt: FrickTimestamp
   public var attachmentBlobIds: FrickJSONValue?
 
   public init(
     messageId: String,
     senderId: String,
     body: String,
-    createdAt: String,
+    createdAt: FrickTimestamp,
     attachmentBlobIds: FrickJSONValue? = nil
   ) {
     self.messageId = messageId
@@ -451,12 +489,12 @@ public struct MessageSentDTO: Codable, Equatable, Sendable {
 public struct MessageEditedDTO: Codable, Equatable, Sendable {
   public var messageId: String
   public var body: String
-  public var editedAt: String
+  public var editedAt: FrickTimestamp
 
   public init(
     messageId: String,
     body: String,
-    editedAt: String
+    editedAt: FrickTimestamp
   ) {
     self.messageId = messageId
     self.body = body
@@ -466,11 +504,11 @@ public struct MessageEditedDTO: Codable, Equatable, Sendable {
 
 public struct MessageRedactedDTO: Codable, Equatable, Sendable {
   public var messageId: String
-  public var redactedAt: String
+  public var redactedAt: FrickTimestamp
 
   public init(
     messageId: String,
-    redactedAt: String
+    redactedAt: FrickTimestamp
   ) {
     self.messageId = messageId
     self.redactedAt = redactedAt
@@ -511,14 +549,14 @@ public struct CallCreatedDTO: Codable, Equatable, Sendable {
   public var conversationId: String
   public var createdBy: String
   public var kind: String
-  public var createdAt: String
+  public var createdAt: FrickTimestamp
 
   public init(
     callId: String,
     conversationId: String,
     createdBy: String,
     kind: String,
-    createdAt: String
+    createdAt: FrickTimestamp
   ) {
     self.callId = callId
     self.conversationId = conversationId
@@ -561,13 +599,13 @@ public struct CallParticipantJoinedDTO: Codable, Equatable, Sendable {
   public var callId: String
   public var userId: String
   public var deviceId: String
-  public var joinedAt: String
+  public var joinedAt: FrickTimestamp
 
   public init(
     callId: String,
     userId: String,
     deviceId: String,
-    joinedAt: String
+    joinedAt: FrickTimestamp
   ) {
     self.callId = callId
     self.userId = userId
@@ -605,13 +643,13 @@ public struct CallParticipantLeftDTO: Codable, Equatable, Sendable {
   public var callId: String
   public var userId: String
   public var deviceId: String
-  public var leftAt: String
+  public var leftAt: FrickTimestamp
 
   public init(
     callId: String,
     userId: String,
     deviceId: String,
-    leftAt: String
+    leftAt: FrickTimestamp
   ) {
     self.callId = callId
     self.userId = userId
@@ -623,12 +661,12 @@ public struct CallParticipantLeftDTO: Codable, Equatable, Sendable {
 public struct CallEndedDTO: Codable, Equatable, Sendable {
   public var callId: String
   public var endedBy: String
-  public var endedAt: String
+  public var endedAt: FrickTimestamp
 
   public init(
     callId: String,
     endedBy: String,
-    endedAt: String
+    endedAt: FrickTimestamp
   ) {
     self.callId = callId
     self.endedBy = endedBy
