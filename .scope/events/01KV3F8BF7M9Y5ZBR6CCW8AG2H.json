@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KV3F8BF7M9Y5ZBR6CCW8AG2H",
+  "ts": "2026-06-14T16:25:51.847Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTXX3BX0WSBJC4VQ6A8Q6JFX",
+    "commentId": "01KV3F8BF7M9Y5ZBR6CCW8AG2G",
+    "author": null,
+    "body": "Done. ObjectStore::query_by_field(tenant, type, app, field, value) — scoped scan + field-equality filter, tenant/app isolated, for app projections/routes. Schema-index-backed (no-scan) optimization is a noted follow-on; API stable. Committed a7cf632, test green."
+  }
+}

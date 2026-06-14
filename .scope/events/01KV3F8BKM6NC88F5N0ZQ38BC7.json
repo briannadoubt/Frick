@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KV3F8BKM6NC88F5N0ZQ38BC7",
+  "ts": "2026-06-14T16:25:51.988Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTXWG5VZR4KHVA5DM1A5DTGD",
+    "commentId": "01KV3F8BKM6NC88F5N0ZQ38BC6",
+    "author": null,
+    "body": "Done. WriteSideEffect trait + BootSeams.write_side_effects; dispatched detached from the gateway store-write funnel for every event kind with a store handle. Failing/slow side-effects can't fail or block the write (errors logged). Committed 38d827b, test green (runs once with store access; erroring sibling doesn't break the write)."
+  }
+}
