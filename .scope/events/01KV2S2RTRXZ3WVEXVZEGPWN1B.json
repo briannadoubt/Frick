@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KV2S2RTRXZ3WVEXVZEGPWN1B",
+  "ts": "2026-06-14T09:58:20.248Z",
+  "actor": "unknown",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KTXXWMY2HV1DDW5HR5BMJ9TD",
+    "commentId": "01KV2S2RTQBEMEJX8CT2YSH0H8",
+    "author": null,
+    "body": "Done. New auth_lifecycle module (AuthLifecycle trait: on_first_sign_in + resolve_session, NoopAuthLifecycle default) injected via BootSeams.auth_lifecycle, threaded through finish_provider_login + email signup. Runs once on first sign-in (email/Apple/Google), writes through the store, can override session user_id/display_name/tenant; returning sign-ins reuse the account. Committed f6f5364 (+ codegen fix 5328070). Workspace 1000 tests + TS 423 + clippy/fmt/verify:generated green."
+  }
+}
