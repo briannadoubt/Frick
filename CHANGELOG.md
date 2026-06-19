@@ -7,6 +7,14 @@ documents the stack version and the user-visible changes in that cut.
 
 ## Unreleased
 
+## 0.6.0 — 2026-06-19
+
+### Added
+
+- **Bearer-based tenant re-issue (FR-311).** `frick_server::auth_routes::{mint_session, MintedSession, now_ms}` are now `pub`, so app hosts can implement a tenant switch in their own `app_router` by combining `principal_from_active_session_token` + `ensure_tenant_allowed` + `mint_session` — re-issuing a tenant-scoped session from a valid bearer without re-entering a password.
+- **FrickDesign published (FR-309).** The base SwiftUI kit (`packages/design-swift`) now ships as a standalone remote SwiftPM package, mirrored to `briannadoubt/FrickDesign` by the release tag (alongside FrickSwift).
+- **Offline blob/media uploads (FR-310).** `FrickClient.uploadBlobContent` now queues on transient network failure (a `pending_blobs` store table mirroring `pending_appends`) and returns optimistic metadata; `flushPendingBlobs()` replays on reconnect (drained alongside `flushPendingAppends`).
+
 ## 0.5.0 — 2026-06-14
 
 ### Added
