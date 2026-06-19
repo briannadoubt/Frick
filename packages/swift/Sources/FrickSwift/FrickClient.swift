@@ -413,6 +413,22 @@ public struct PendingAppend: Codable, Equatable, Sendable {
     }
 }
 
+public struct PendingBlob: Codable, Equatable, Sendable {
+    public let requestId: String
+    public let blobId: String
+    public let ownerId: String
+    public let mimeType: String
+    public let data: Data
+
+    public init(requestId: String, blobId: String, ownerId: String, mimeType: String, data: Data) {
+        self.requestId = requestId
+        self.blobId = blobId
+        self.ownerId = ownerId
+        self.mimeType = mimeType
+        self.data = data
+    }
+}
+
 public protocol FrickStorage: AnyObject, Sendable {
     func loadObjectData(type: String, id: String) throws -> Data?
     func saveObjectData(type: String, id: String, data: Data, version: Int) throws
@@ -427,6 +443,10 @@ public protocol FrickStorage: AnyObject, Sendable {
     func appendPendingAppend(_ append: PendingAppend) throws
     func removePendingAppend(requestId: String) throws
     func clearPendingAppends() throws
+    func loadPendingBlobs() throws -> [PendingBlob]
+    func appendPendingBlob(_ blob: PendingBlob) throws
+    func removePendingBlob(requestId: String) throws
+    func clearPendingBlobs() throws
     func loadCacheMetadata() throws -> FrickCacheMetadata?
     func saveCacheMetadata(_ metadata: FrickCacheMetadata) throws
     func clearCache() throws
@@ -436,6 +456,12 @@ public extension FrickStorage {
     func clearPendingAppends() throws {
         for append in try loadPendingAppends() {
             try removePendingAppend(requestId: append.requestId)
+        }
+    }
+
+    func clearPendingBlobs() throws {
+        for blob in try loadPendingBlobs() {
+            try removePendingBlob(requestId: blob.requestId)
         }
     }
 
@@ -494,6 +520,14 @@ public final class FrickSQLiteStorage: FrickStorage, @unchecked Sendable {
             CREATE TABLE IF NOT EXISTS pending_appends (
               request_id TEXT PRIMARY KEY NOT NULL,
               body BLOB NOT NULL,
+              created_at INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS pending_blobs (
+              request_id TEXT PRIMARY KEY NOT NULL,
+              blob_id TEXT NOT NULL,
+              owner_id TEXT NOT NULL,
+              mime_type TEXT NOT NULL,
+              data BLOB NOT NULL,
               created_at INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS frick_cache_metadata (
@@ -629,6 +663,58 @@ public final class FrickSQLiteStorage: FrickStorage, @unchecked Sendable {
         try run("DELETE FROM pending_appends", bindings: [])
     }
 
+    public func loadPendingBlobs() throws -> [PendingBlob] {
+        lock.lock()
+        defer { lock.unlock() }
+        return try query(
+            "SELECT request_id, blob_id, owner_id, mime_type, data FROM pending_blobs ORDER BY created_at ASC",
+            bindings: []
+        ).compactMap { row in
+            guard let requestId = row[0].text,
+                  let blobId = row[1].text,
+                  let ownerId = row[2].text,
+                  let mimeType = row[3].text,
+                  let data = row[4].data else {
+                return nil
+            }
+            return PendingBlob(requestId: requestId, blobId: blobId, ownerId: ownerId, mimeType: mimeType, data: data)
+        }
+    }
+
+    public func appendPendingBlob(_ blob: PendingBlob) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        try run(
+            """
+            INSERT OR IGNORE INTO pending_blobs (request_id, blob_id, owner_id, mime_type, data, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            bindings: [
+                .text(blob.requestId),
+                .text(blob.blobId),
+                .text(blob.ownerId),
+                .text(blob.mimeType),
+                .data(blob.data),
+                .int(Int(Date().timeIntervalSince1970 * 1000)),
+            ]
+        )
+    }
+
+    public func removePendingBlob(requestId: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        try run(
+            "DELETE FROM pending_blobs WHERE request_id = ?",
+            bindings: [.text(requestId)]
+        )
+    }
+
+    public func clearPendingBlobs() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        try run("DELETE FROM pending_blobs", bindings: [])
+    }
+
     public func loadCacheMetadata() throws -> FrickCacheMetadata? {
         lock.lock()
         defer { lock.unlock() }
@@ -690,6 +776,7 @@ public final class FrickSQLiteStorage: FrickStorage, @unchecked Sendable {
         try run("DELETE FROM local_objects", bindings: [])
         try run("DELETE FROM local_stream_events", bindings: [])
         try run("DELETE FROM pending_appends", bindings: [])
+        try run("DELETE FROM pending_blobs", bindings: [])
         try run("DELETE FROM frick_cache_metadata", bindings: [])
     }
 
@@ -1401,17 +1488,66 @@ public final class FrickClient: Sendable {
         mimeType: String,
         data: Data
     ) async throws -> FrickBlobMetadata {
-        var components = URLComponents(url: blobContentURL(blobId: blobId), resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "ownerId", value: ownerId)]
+        let requestId = requestIdFactory()
+        let blob = PendingBlob(requestId: requestId, blobId: blobId, ownerId: ownerId, mimeType: mimeType, data: data)
+        do {
+            return try await sendBlob(blob)
+        } catch {
+            if shouldQueueBlob(error) {
+                _ = try verifyCacheCompatibility()
+                try storage.appendPendingBlob(blob)
+                return FrickBlobMetadata(
+                    blobId: blobId,
+                    ownerId: ownerId,
+                    contentHash: "",
+                    byteLength: data.count,
+                    mimeType: mimeType,
+                    storageKey: nil,
+                    createdAt: nil
+                )
+            }
+            throw error
+        }
+    }
+
+    public func flushPendingBlobs() async throws {
+        _ = try requireAuthenticatedSession()
+        _ = try verifyCacheCompatibility()
+        for blob in try storage.loadPendingBlobs() {
+            _ = try await sendBlob(blob)
+            try storage.removePendingBlob(requestId: blob.requestId)
+        }
+    }
+
+    private func sendBlob(_ blob: PendingBlob) async throws -> FrickBlobMetadata {
+        _ = try requireAuthenticatedSession()
+        var components = URLComponents(url: blobContentURL(blobId: blob.blobId), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "ownerId", value: blob.ownerId)]
         var request = URLRequest(url: components.url!)
         request.httpMethod = "PUT"
-        request.setValue(mimeType, forHTTPHeaderField: "content-type")
-        request.httpBody = data
+        request.setValue(blob.mimeType, forHTTPHeaderField: "content-type")
+        request.httpBody = blob.data
         authenticate(&request)
 
         let (responseData, response) = try await session.data(for: request)
         try validate(response, data: responseData)
         return try decoder.decode(FrickBlobMetadata.self, from: responseData)
+    }
+
+    private func shouldQueueBlob(_ error: Error) -> Bool {
+        if error is FrickAuthenticationRequiredError {
+            return false
+        }
+        if error is FrickSchemaMismatchError {
+            return false
+        }
+        if error is FrickServerError {
+            return false
+        }
+        if let urlError = error as? URLError, urlError.code == .badServerResponse {
+            return false
+        }
+        return true
     }
 
     public func downloadBlobContent(blobId: String) async throws -> Data? {
@@ -1587,6 +1723,7 @@ public final class FrickClient: Sendable {
 
     public func fetchObjects<Object: Codable & Sendable>(type: String) async throws -> [Object] {
         try? await flushPendingAppends()
+        try? await flushPendingBlobs()
         let url = queryURL(path: "/objects", args: ["type": type])
         let (data, response) = try await session.data(for: authenticatedRequest(url: url))
         try validate(response, data: data)
