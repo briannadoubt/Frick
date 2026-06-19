@@ -27,6 +27,14 @@ import org.junit.Before
 import org.junit.Test
 
 /**
+ * Generous upper bound for connect/handshake and event waits. These tests run
+ * against a real in-process socket on shared CI runners, so a tight bound (the
+ * old 2s) flakes under load — none of these waits assert that the timeout
+ * fires, so the ceiling only needs to be high enough to never trip spuriously.
+ */
+private const val TEST_TIMEOUT_MS = 15_000L
+
+/**
  * Exercises FrickSyncSocket against an in-process WebSocket using
  * MockWebServer's withWebSocketUpgrade. The server-side listener captures
  * inbound frames and the test drives outbound frames by hand.
@@ -80,7 +88,7 @@ class FrickSyncSocketTest {
             replicaId = "test-replica",
             initialBackoffMs = 25,
             maxBackoffMs = 50,
-            helloAckTimeoutMs = 2_000,
+            helloAckTimeoutMs = TEST_TIMEOUT_MS,
         ),
     ): FrickSyncSocket {
         return FrickSyncSocket(
@@ -96,7 +104,7 @@ class FrickSyncSocketTest {
         ws.send(FrickMsgPack.encodeFrame(kind, payload).toByteString())
     }
 
-    private fun takeFrame(timeoutMs: Long = 2_000): Pair<Int, Map<String, Any?>> =
+    private fun takeFrame(timeoutMs: Long = TEST_TIMEOUT_MS): Pair<Int, Map<String, Any?>> =
         received.poll(timeoutMs, TimeUnit.MILLISECONDS)
             ?: error("no frame received within ${timeoutMs}ms")
 
@@ -157,7 +165,7 @@ class FrickSyncSocketTest {
         )
         val socket = newSocket()
         try {
-            val ready = withTimeout(2_000) { socket.awaitReady() }
+            val ready = withTimeout(TEST_TIMEOUT_MS) { socket.awaitReady() }
             assertNotNull(ready)
             assertEquals(FRICK_SCHEMA_HASH, ready!!.schemaHash)
         } finally {
@@ -199,7 +207,7 @@ class FrickSyncSocketTest {
         )
         val socket = newSocket()
         try {
-            assertNotNull(withTimeout(2_000) { socket.awaitReady() })
+            assertNotNull(withTimeout(TEST_TIMEOUT_MS) { socket.awaitReady() })
             // Resolves when the server's Snapshot for this subscription arrives.
             withTimeout(10_000) { socket.subscribeObjectRegistered("Account") }
         } finally {
@@ -238,7 +246,7 @@ class FrickSyncSocketTest {
         )
         val socket = newSocket()
         try {
-            assertNotNull(withTimeout(2_000) { socket.awaitReady() })
+            assertNotNull(withTimeout(TEST_TIMEOUT_MS) { socket.awaitReady() })
             withTimeout(10_000) { socket.subscribeStreamRegistered("MessageStream", "c1") }
         } finally {
             socket.close()
@@ -272,7 +280,7 @@ class FrickSyncSocketTest {
         )
         val socket = newSocket()
         try {
-            assertNotNull(withTimeout(2_000) { socket.awaitReady() })
+            assertNotNull(withTimeout(TEST_TIMEOUT_MS) { socket.awaitReady() })
             withTimeout(10_000) { socket.subscribeProjectionRegistered("Inbox") }
         } finally {
             socket.close()
@@ -304,7 +312,7 @@ class FrickSyncSocketTest {
         )
         val socket = newSocket()
         try {
-            assertNotNull(withTimeout(2_000) { socket.awaitReady() })
+            assertNotNull(withTimeout(TEST_TIMEOUT_MS) { socket.awaitReady() })
             // Resolves (does not hang) because the close drains the waiter.
             withTimeout(10_000) { socket.subscribeObjectRegistered("Account") }
         } finally {
@@ -342,7 +350,7 @@ class FrickSyncSocketTest {
             socket.awaitReady()
             @OptIn(DelicateCoroutinesApi::class)
             val ackDeferred = GlobalScope.async {
-                withTimeout(2_000) {
+                withTimeout(TEST_TIMEOUT_MS) {
                     socket.events.filter { it is FrickInboundEvent.Ack }.first() as FrickInboundEvent.Ack
                 }
             }
@@ -379,7 +387,7 @@ class FrickSyncSocketTest {
             socket.awaitReady()
             @OptIn(DelicateCoroutinesApi::class)
             val deltaDeferred = GlobalScope.async {
-                withTimeout(2_000) {
+                withTimeout(TEST_TIMEOUT_MS) {
                     socket.events.filter { it is FrickInboundEvent.Delta }.first() as FrickInboundEvent.Delta
                 }
             }
@@ -498,7 +506,7 @@ class FrickSyncSocketTest {
             socket.awaitReady()
             @OptIn(DelicateCoroutinesApi::class)
             val upsertDeferred = GlobalScope.async {
-                withTimeout(2_000) {
+                withTimeout(TEST_TIMEOUT_MS) {
                     try {
                         socket.upsertObject(type = "Conversation", id = "c-1", value = mapOf("title" to "x"))
                         null
@@ -543,7 +551,7 @@ class FrickSyncSocketTest {
         val socket = newSocket()
         try {
             socket.awaitReady()
-            val error = withTimeout(3_000) {
+            val error = withTimeout(TEST_TIMEOUT_MS) {
                 try {
                     socket.upsertObject(type = "Conversation", id = "c-1", value = mapOf("title" to "x"))
                     null
@@ -737,7 +745,7 @@ class FrickSyncSocketTest {
         val socket = newSocket()
         try {
             socket.awaitReady()
-            val failed = withTimeout(2_000) {
+            val failed = withTimeout(TEST_TIMEOUT_MS) {
                 socket.status.filter { it is FrickSyncStatus.Failed }.first() as FrickSyncStatus.Failed
             }
             assertTrue(failed.reason.startsWith("decode:"))
@@ -770,7 +778,7 @@ class FrickSyncSocketTest {
             socket.awaitReady()
             // Discard HELLO, expect a PONG within a moment.
             takeFrame() // HELLO
-            val pong = takeFrame(timeoutMs = 2_000)
+            val pong = takeFrame(timeoutMs = TEST_TIMEOUT_MS)
             assertEquals(FrameKindCodes.PONG, pong.first)
             assertEquals(42L, (pong.second["sentAt"] as Number).toLong())
         } finally {
