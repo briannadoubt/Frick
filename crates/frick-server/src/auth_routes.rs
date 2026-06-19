@@ -920,12 +920,22 @@ async fn mint_email_session_response(
 }
 
 /// A minted session token + its expiry.
-pub(crate) struct MintedSession {
-    pub(crate) token: String,
-    pub(crate) expires_at: String,
+///
+/// Public (FR-311) so app hosts can implement bearer-based session re-issue
+/// (e.g. a tenant switch) in their own `app_router` by combining
+/// [`crate::session::principal_from_active_session_token`] +
+/// [`crate::session::ensure_tenant_allowed`] + [`mint_session`].
+pub struct MintedSession {
+    pub token: String,
+    pub expires_at: String,
 }
 
-pub(crate) async fn mint_session(
+/// Mint a fresh session for `(tenant_id, user_id, device_id, replica_id)`.
+///
+/// Public (FR-311) so hosts can re-issue a tenant-scoped session from an
+/// already-authenticated bearer without re-entering a password — the seam the
+/// `/auth/login` handler uses internally.
+pub async fn mint_session(
     state: &AppState,
     tenant_id: &str,
     user_id: &str,
@@ -1078,7 +1088,9 @@ fn normalize_handle_strict(raw: &str) -> Result<String, ServerError> {
     }
 }
 
-pub(crate) fn now_ms() -> i64 {
+/// Current wall-clock epoch-ms. Public (FR-311) so hosts re-issuing sessions
+/// pass a consistent clock to [`mint_session`].
+pub fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))

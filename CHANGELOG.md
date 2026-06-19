@@ -11,6 +11,14 @@ documents the stack version and the user-visible changes in that cut.
 
 - **Swift/Kotlin codegen `timestamp` type (FR-308).** Schema `timestamp` fields now generate as a typed `FrickTimestamp` wrapper instead of a raw `String` — Swift gets a `Codable` struct, Kotlin an `@Serializable @JvmInline value class`, each carrying the canonical RFC3339 wire string verbatim (it re-encodes byte-identically, so fractional seconds and the exact offset never drift) and exposing an ergonomic parsed accessor (Swift `.date`, Kotlin `.instant`). The wrapper owns the codec, so there is no dependence on app-level `JSONDecoder` date strategies. The wire stays RFC3339 strings — server and protocol are unchanged. As with the 0.5.0 `bytes`/`json` change, this is a generated-type change for any app with timestamp fields: a field previously read as `dto.x` (a `String`) is now `dto.x` (a `FrickTimestamp`); reach the parsed value via `dto.x?.date` / `dto.x?.instant`, or the raw wire string via `dto.x?.rawValue`.
 
+## 0.6.0 — 2026-06-19
+
+### Added
+
+- **Bearer-based tenant re-issue (FR-311).** `frick_server::auth_routes::{mint_session, MintedSession, now_ms}` are now `pub`, so app hosts can implement a tenant switch in their own `app_router` by combining `principal_from_active_session_token` + `ensure_tenant_allowed` + `mint_session` — re-issuing a tenant-scoped session from a valid bearer without re-entering a password.
+- **FrickDesign published (FR-309).** The base SwiftUI kit (`packages/design-swift`) now ships as a standalone remote SwiftPM package, mirrored to `briannadoubt/FrickDesign` by the release tag (alongside FrickSwift).
+- **Offline blob/media uploads (FR-310).** `FrickClient.uploadBlobContent` now queues on transient network failure (a `pending_blobs` store table mirroring `pending_appends`) and returns optimistic metadata; `flushPendingBlobs()` replays on reconnect (drained alongside `flushPendingAppends`).
+
 ## 0.5.0 — 2026-06-14
 
 ### Added

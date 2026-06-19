@@ -853,6 +853,93 @@ final class FrickEventStreamParserTests: XCTestCase {
         XCTAssertEqual(directEnvelope?.code, .schemaIncompatible)
         XCTAssertEqual(directEnvelope?.schemaRevision, 1)
     }
+
+    // MARK: - FR-310: Offline blob queue
+
+    func testUploadBlobContentQueuesOnNetworkFailure() async throws {
+        FrickStreamingURLProtocol.reset()
+        FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-ada", token: "token-ada"), for: "/auth/dev-login")
+        // Inject a network error for the PUT path so the upload is queued.
+        FrickStreamingURLProtocol.fail(URLError(.notConnectedToInternet), for: "/blobs/blob-1/content?ownerId=owner-1")
+        let storage = try FrickSQLiteStorage(path: ":memory:")
+        let client = try makeTestClient(storage: storage, requestIdFactory: { "req-blob-1" })
+        _ = try await client.devLogin(userId: "user-ada")
+
+        let blobData = Data("hello world".utf8)
+        let metadata = try await client.uploadBlobContent(
+            blobId: "blob-1",
+            ownerId: "owner-1",
+            mimeType: "text/plain",
+            data: blobData
+        )
+
+        // The call should return an optimistic metadata value (no server round-trip).
+        XCTAssertEqual(metadata.blobId, "blob-1")
+        XCTAssertEqual(metadata.ownerId, "owner-1")
+        XCTAssertEqual(metadata.mimeType, "text/plain")
+        XCTAssertEqual(metadata.byteLength, blobData.count)
+
+        // The blob must be persisted in the pending queue.
+        let pending = try storage.loadPendingBlobs()
+        XCTAssertEqual(pending.count, 1)
+        XCTAssertEqual(pending[0].requestId, "req-blob-1")
+        XCTAssertEqual(pending[0].blobId, "blob-1")
+        XCTAssertEqual(pending[0].ownerId, "owner-1")
+        XCTAssertEqual(pending[0].mimeType, "text/plain")
+        XCTAssertEqual(pending[0].data, blobData)
+    }
+
+    func testFlushPendingBlobsReplaysAndRemoves() async throws {
+        FrickStreamingURLProtocol.reset()
+        FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-ada", token: "token-ada"), for: "/auth/dev-login")
+
+        let storage = try FrickSQLiteStorage(path: ":memory:")
+        let client = try makeTestClient(storage: storage)
+        _ = try await client.devLogin(userId: "user-ada")
+
+        // Pre-populate the queue directly (simulates a blob that was queued in a prior session).
+        let blobData = Data("image bytes".utf8)
+        let blob = PendingBlob(requestId: "req-flush-1", blobId: "blob-2", ownerId: "owner-2", mimeType: "image/png", data: blobData)
+        try storage.appendPendingBlob(blob)
+        XCTAssertEqual(try storage.loadPendingBlobs().count, 1)
+
+        // Enqueue a success response for the PUT.
+        let successPayload = """
+        {
+          "blobId": "blob-2",
+          "ownerId": "owner-2",
+          "contentHash": "abc123",
+          "byteLength": \(blobData.count),
+          "mimeType": "image/png",
+          "storageKey": "s3://bucket/blob-2",
+          "createdAt": "2026-06-18T00:00:00.000Z"
+        }
+        """
+        FrickStreamingURLProtocol.enqueue(successPayload, for: "/blobs/blob-2/content?ownerId=owner-2")
+
+        try await client.flushPendingBlobs()
+
+        // After a successful flush the pending queue must be empty.
+        XCTAssertEqual(try storage.loadPendingBlobs().count, 0)
+    }
+
+    func testFlushPendingBlobsRequiresAuthenticatedSession() async throws {
+        FrickStreamingURLProtocol.reset()
+        let storage = try FrickSQLiteStorage(path: ":memory:")
+        let blobData = Data("payload".utf8)
+        try storage.appendPendingBlob(PendingBlob(requestId: "req-1", blobId: "b1", ownerId: "o1", mimeType: "application/octet-stream", data: blobData))
+        let client = try makeTestClient(storage: storage)
+
+        do {
+            try await client.flushPendingBlobs()
+            XCTFail("expected FrickAuthenticationRequiredError")
+        } catch is FrickAuthenticationRequiredError {
+            // expected
+        }
+
+        // Queue must still be intact — auth error must not dequeue anything.
+        XCTAssertEqual(try storage.loadPendingBlobs().map(\.requestId), ["req-1"])
+    }
 }
 
 private struct QueuedResponse {
@@ -966,6 +1053,32 @@ private final class FrickStreamingURLProtocol: URLProtocol {
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             if let queued {
                 client?.urlProtocol(self, didLoad: queued.body)
+            }
+            client?.urlProtocolDidFinishLoading(self)
+            return
+        }
+
+        if request.httpMethod == "PUT" {
+            if var pathFailures = Self.failures[path], !pathFailures.isEmpty {
+                let failure = pathFailures.removeFirst()
+                Self.failures[path] = pathFailures
+                Self.lock.unlock()
+                client?.urlProtocol(self, didFailWithError: failure)
+                return
+            }
+            var putResponses = Self.responses[path] ?? []
+            let putQueued = putResponses.isEmpty ? nil : putResponses.removeFirst()
+            Self.responses[path] = putResponses
+            Self.lock.unlock()
+            let response = HTTPURLResponse(
+                url: url,
+                statusCode: putQueued?.statusCode ?? 200,
+                httpVersion: nil,
+                headerFields: ["x-frick-schema-hash": FrickSchema.schemaHash]
+            )!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            if let putQueued {
+                client?.urlProtocol(self, didLoad: putQueued.body)
             }
             client?.urlProtocolDidFinishLoading(self)
             return
