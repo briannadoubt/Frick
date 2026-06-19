@@ -116,6 +116,18 @@ private final class RecordingStorage: FrickStorage, @unchecked Sendable {
         clearPendingAppendsCount += 1
         try inner.clearPendingAppends()
     }
+    func loadPendingBlobs() throws -> [PendingBlob] {
+        try inner.loadPendingBlobs()
+    }
+    func appendPendingBlob(_ blob: PendingBlob) throws {
+        try inner.appendPendingBlob(blob)
+    }
+    func removePendingBlob(requestId: String) throws {
+        try inner.removePendingBlob(requestId: requestId)
+    }
+    func clearPendingBlobs() throws {
+        try inner.clearPendingBlobs()
+    }
     func loadCacheMetadata() throws -> FrickCacheMetadata? {
         try inner.loadCacheMetadata()
     }
