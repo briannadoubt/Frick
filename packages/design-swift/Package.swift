@@ -5,7 +5,11 @@ import PackageDescription
 let package = Package(
     name: "FrickDesign",
     platforms: [
-        .iOS(.v18),
+        // iOS lowered to 17 to match FrickSwift so downstream apps aren't forced
+        // to iOS 18 by the design kit. The one iOS-18 API (`.sidebarAdaptable`)
+        // is guarded with `if #available`. macOS stays 15 — `.sidebarAdaptable`
+        // ships there at 15 and the desktop app already targets 15.
+        .iOS(.v17),
         .macOS(.v15),
     ],
     products: [

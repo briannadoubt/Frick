@@ -221,11 +221,25 @@ public struct FrickWorkspaceShell<Content: View, Inspector: View>: View {
                     .modifier(FrickWorkspaceBadgeModifier(badge: destination.badge))
             }
         }
-        .tabViewStyle(.sidebarAdaptable)
+        .frickSidebarAdaptableTabViewStyle()
         .inspector(isPresented: inspectorPresented) {
             inspector()
         }
         .background(FrickPalette.background)
+    }
+}
+
+private extension View {
+    /// Applies `.sidebarAdaptable` where it exists (iOS 18 / macOS 15 / visionOS 2+),
+    /// otherwise leaves the platform-default tab style so the shell still builds and
+    /// runs on iOS 17 (graceful degradation to the standard tab bar).
+    @ViewBuilder
+    func frickSidebarAdaptableTabViewStyle() -> some View {
+        if #available(iOS 18.0, macOS 15.0, visionOS 2.0, *) {
+            self.tabViewStyle(.sidebarAdaptable)
+        } else {
+            self
+        }
     }
 }
 
