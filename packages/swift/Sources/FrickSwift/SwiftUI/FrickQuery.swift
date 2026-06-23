@@ -1,6 +1,5 @@
-#if canImport(SwiftUI) && canImport(Combine)
+#if canImport(SwiftUI)
 import SwiftUI
-import Combine
 import Foundation
 
 // MARK: - FrickQuery

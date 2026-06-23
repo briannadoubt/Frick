@@ -32,13 +32,18 @@ public struct FrickTimestamp: Codable, Equatable, Sendable {
     /// timestamp. Parsing is millisecond-precision; `rawValue` keeps the full
     /// wire precision.
     public var date: Date? {
-        let withFraction = ISO8601DateFormatter()
-        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let value = withFraction.date(from: rawValue) {
-            return value
-        }
-        let withoutFraction = ISO8601DateFormatter()
-        withoutFraction.formatOptions = [.withInternetDateTime]
-        return withoutFraction.date(from: rawValue)
+        Self.isoWithFraction.date(from: rawValue) ?? Self.isoPlain.date(from: rawValue)
     }
+
+    nonisolated(unsafe) private static let isoWithFraction: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    nonisolated(unsafe) private static let isoPlain: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
 }

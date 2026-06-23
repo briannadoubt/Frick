@@ -2,6 +2,7 @@ import Observation
 import XCTest
 
 @testable import FrickSwift
+import FrickSwiftMacros
 
 // MARK: - Fixture DTO
 
