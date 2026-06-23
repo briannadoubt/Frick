@@ -11,7 +11,10 @@ use frick_server::{create_frick_server, install_tracing, load_frick_config};
 
 #[tokio::main]
 async fn main() {
-    if let Err(message) = run().await {
+    // Box the boot future: its size grew past clippy's large_futures threshold
+    // as BootSeams/AppState gained seams (FR-307/FR-308). Heap-allocating the
+    // one-shot startup future is free at this call site.
+    if let Err(message) = Box::pin(run()).await {
         eprintln!("frick-server: {message}");
         std::process::exit(1);
     }

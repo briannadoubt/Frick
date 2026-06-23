@@ -140,6 +140,13 @@ pub struct AppStateInner {
     /// [`crate::boot::BootSeams`]. See [`crate::authz::PolicyHook`].
     pub policy_hooks: crate::authz::PolicyHooks,
 
+    /// App-registered connection-lifecycle hooks (FR-307), fired by the gateway
+    /// when a WebSocket connection is registered/unregistered with the new live
+    /// count. Empty on the standalone binary; a Rust backend supplies its own
+    /// via [`crate::boot::BootSeams`]. See
+    /// [`crate::gateway::ConnectionLifecycleHook`].
+    pub connection_lifecycle: crate::gateway::ConnectionLifecycleHooks,
+
     /// App-registered post-commit write side-effects (FR-304). Dispatched
     /// detached from the gateway's store-write funnel for every write event;
     /// empty on the standalone binary, supplied by a Rust backend via

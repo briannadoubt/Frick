@@ -109,6 +109,13 @@ pub struct BootSeams {
     /// documented insertion point for a Rust backend's custom write-authz (RBAC,
     /// entitlement gating, …). See [`crate::authz::PolicyHook`].
     pub policy_hooks: Vec<std::sync::Arc<dyn crate::authz::PolicyHook>>,
+    /// App-registered connection-lifecycle hooks (FR-307). Fired by the gateway
+    /// when a WebSocket connection is registered/unregistered, carrying the new
+    /// live connection count. Observational only (metrics / logging). Empty for
+    /// the foundation/standalone binary — the documented seam that
+    /// active-connection gauges (AURA-123) wire into. See
+    /// [`crate::gateway::ConnectionLifecycleHook`].
+    pub connection_lifecycle: Vec<std::sync::Arc<dyn crate::gateway::ConnectionLifecycleHook>>,
     /// App-registered routes (FR-297): a builder that, given the live
     /// [`AppState`], returns a router of server-authoritative endpoints merged
     /// into the framework router. `None` for the foundation/standalone binary —
@@ -159,6 +166,8 @@ impl BootSeams {
             blob_processors: Vec::new(),
             // No built-in policy hooks; a Rust backend registers its own.
             policy_hooks: Vec::new(),
+            // No built-in connection-lifecycle hooks; a Rust backend registers its own.
+            connection_lifecycle: Vec::new(),
             // No built-in app routes; a Rust backend registers its own.
             app_router: None,
             // No built-in app job handlers / recurring jobs / write side-effects.
@@ -552,6 +561,7 @@ async fn build_server(
         blob_processors,
         platform_events,
         policy_hooks: Arc::new(seams.policy_hooks),
+        connection_lifecycle: Arc::new(seams.connection_lifecycle),
         write_side_effects: seams.write_side_effects,
     });
 
