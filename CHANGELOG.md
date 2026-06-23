@@ -7,6 +7,12 @@ documents the stack version and the user-visible changes in that cut.
 
 ## Unreleased
 
+## 0.7.0 — 2026-06-23
+
+### Added
+
+- **Broader FrickSwift platform support.** The Swift package now declares the four Xcode-recommended deployment baselines — iOS 17, macOS 14, visionOS 2, watchOS 10 — lowering the floor from iOS 18 / macOS 15 and newly supporting visionOS and watchOS. The full API surface (including the `@Observable` / SwiftUI layer) compiles unchanged at these versions, so no APIs were backported or omitted.
+
 ### Changed
 
 - **Swift/Kotlin codegen `timestamp` type (FR-308).** Schema `timestamp` fields now generate as a typed `FrickTimestamp` wrapper instead of a raw `String` — Swift gets a `Codable` struct, Kotlin an `@Serializable @JvmInline value class`, each carrying the canonical RFC3339 wire string verbatim (it re-encodes byte-identically, so fractional seconds and the exact offset never drift) and exposing an ergonomic parsed accessor (Swift `.date`, Kotlin `.instant`). The wrapper owns the codec, so there is no dependence on app-level `JSONDecoder` date strategies. The wire stays RFC3339 strings — server and protocol are unchanged. As with the 0.5.0 `bytes`/`json` change, this is a generated-type change for any app with timestamp fields: a field previously read as `dto.x` (a `String`) is now `dto.x` (a `FrickTimestamp`); reach the parsed value via `dto.x?.date` / `dto.x?.instant`, or the raw wire string via `dto.x?.rawValue`.
