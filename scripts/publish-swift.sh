@@ -59,8 +59,13 @@ for entry in "${packages[@]}"; do
     git branch -D "${split_branch}" >/dev/null 2>&1 || true
     git subtree split --prefix="${prefix}" -b "${split_branch}"
 
-    echo "==> [${prefix}] pushing subtree to mirror main"
-    git push "${mirror}" "${split_branch}:refs/heads/main"
+    # Force-push: the mirror is generated output and the monorepo is the single
+    # source of truth, so the subtree split overwrites mirror main outright.
+    # A plain push fails with non-fast-forward whenever the synthetic split SHAs
+    # drift from the mirror's history (monorepo merges/rebases change them) or
+    # the mirror was hand-edited — the bug that blocked the 0.6.0/0.7.0 publishes.
+    echo "==> [${prefix}] force-pushing subtree to mirror main"
+    git push --force "${mirror}" "${split_branch}:refs/heads/main"
 
     echo "==> [${prefix}] tagging mirror ${version}"
     git push "${mirror}" "${split_branch}:refs/tags/${version}"

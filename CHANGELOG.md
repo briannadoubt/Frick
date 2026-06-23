@@ -7,6 +7,21 @@ documents the stack version and the user-visible changes in that cut.
 
 ## Unreleased
 
+## 0.9.0 — 2026-06-23
+
+Lockstep re-cut that returns the whole stack to one version. The 0.7.0 cut
+reached npm but its Swift and Android publishes did not land, and the
+`briannadoubt/FrickSwift` mirror had drifted to an out-of-band `0.8.0`
+(a watchOS edit committed directly to the mirror, without the FR-308
+timestamp work). 0.9.0 supersedes both: it carries the full 0.7.0 content
+below (typed `FrickTimestamp` codegen + the broadened Swift platform
+baselines) and is published across npm, the FrickSwift/FrickDesign mirrors,
+and the Android SDK together.
+
+### Changed
+
+- **`publish-swift.sh` now force-pushes the mirror `main`.** Mirrors are generated output with the monorepo as the single source of truth, so the subtree-split push overwrites the mirror unconditionally instead of failing on non-fast-forward divergence (the bug that blocked the 0.6.0 and 0.7.0 Swift publishes after the mirror was hand-edited).
+
 ## 0.7.0 — 2026-06-23
 
 ### Added
