@@ -1,0 +1,23 @@
+{
+  "v": 1,
+  "id": "01KVE2VQXCKZTBB2BN28TC9VQ9",
+  "ts": "2026-06-18T19:20:54.444Z",
+  "actor": "bri",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KVE2VQXBWZT8N0SV2780X0D0",
+    "number": 311,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Tenant switch: bearer-based session re-mint endpoint (POST /api/tenant/switch)",
+    "description": "frick-server has no way to switch the active tenant of an already-authenticated session. /auth/login accepts an optional tenant_id and mint_session(&tenant_id,...) exists, but mint_session is pub(crate) and there is no /api/tenant/switch (or /auth/tenant/switch) route. Consequences downstream (Zavro AQ-181): both the web (apps/web/lib/session.ts switchTenant POSTs ${HTTP_ENDPOINT}/api/tenant/switch) and iOS workspace switchers 404 — a user who belongs to multiple companies/tenants cannot re-scope reads to another tenant without re-entering a password (login is the only mint path). Verified against rev aebcfb5: POST /api/tenant/switch → HTTP 404.\n\nAsk: add a built-in route (e.g. POST /api/tenant/switch or /auth/tenant/switch) that takes a valid bearer + a target tenant identifier, verifies the principal is permitted in that tenant (ensure_tenant_allowed already exists), and re-mints a session for it WITHOUT requiring the password — returning the same shape as /auth/login (sessionToken, tenantId, userId, deviceId, replicaId, expiresAt). Alternatively expose a public mint/re-issue API so app hosts can implement the route in their app_router. Today neither exists. Consumers waiting: Zavro web + iOS (AQ-181).",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  },
+  "model": "claude-opus-4-8"
+}

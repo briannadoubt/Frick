@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KV7RYNEJHJT6PBHAHTC0QJTN",
+  "ts": "2026-06-16T08:32:17.874Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KV7RYNEJHJT6PBHAHTC0QJTM",
+    "number": 309,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Mirror FrickDesign (packages/design-swift) as a remote-consumable SwiftPM package",
+    "description": "FrickSwift is auto-mirrored to github.com/briannadoubt/FrickSwift and consumable as a remote SwiftPM dependency, but FrickDesign (packages/design-swift/Sources/FrickDesign — base SwiftUI kit: FrickButton/Badge/StatusChip/Metric/DataTable/ListDetailShell/SegmentedPicker/DatePicker/Chart*, tokens in Generated/FrickTokens.swift) is NOT. It only exists inside the monorepo and is not exposed as a product of the FrickSwift mirror. Zavro iOS (Aquarius AQ-91 ZavroUI) must consume FrickDesign remotely without vendoring. FIX: either (a) auto-mirror packages/design-swift -> github.com/briannadoubt/FrickDesign with its own Package.swift exposing a FrickDesign library product, or (b) add a FrickDesign target+product to the existing FrickSwift mirror's Package.swift. Blocks Aquarius AQ-91.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

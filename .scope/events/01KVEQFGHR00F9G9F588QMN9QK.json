@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KVEQFGHR00F9G9F588QMN9QK",
+  "ts": "2026-06-19T01:21:13.784Z",
+  "actor": "bri",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KV99XJK73RWXNV4PDMXJ0TTZ",
+    "field": "status",
+    "value": "done"
+  },
+  "model": "claude-opus-4-8"
+}

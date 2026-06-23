@@ -1,0 +1,14 @@
+{
+  "v": 1,
+  "id": "01KVF0C224JD034D6TX23FCTXJ",
+  "ts": "2026-06-19T03:56:37.828Z",
+  "actor": "bri",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KV7RYNEJHJT6PBHAHTC0QJTM",
+    "commentId": "01KVF0C224JD034D6TX23FCTXH",
+    "author": "bri",
+    "body": "Shipped in Frick release 0.6.0 (Frick.git tag 0.6.0 @ ace3a1d; FrickSwift + FrickDesign mirrors tagged 0.6.0). Consumed by Zavro via tag pin (zavro#205)."
+  },
+  "model": "claude-opus-4-8"
+}

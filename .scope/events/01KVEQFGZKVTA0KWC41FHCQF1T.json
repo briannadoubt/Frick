@@ -1,0 +1,14 @@
+{
+  "v": 1,
+  "id": "01KVEQFGZKVTA0KWC41FHCQF1T",
+  "ts": "2026-06-19T01:21:14.227Z",
+  "actor": "bri",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KV99XJK73RWXNV4PDMXJ0TTZ",
+    "commentId": "01KVEQFGZKVTA0KWC41FHCQF1S",
+    "author": "bri",
+    "body": "Offline blob queue (PendingBlob + flushPendingBlobs) shipped; FrickSwift mirror bumped to 101ba81e (tag 0.5.1); mobile re-pinned."
+  },
+  "model": "claude-opus-4-8"
+}
