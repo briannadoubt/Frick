@@ -499,6 +499,20 @@ final class FrickEventStreamParserTests: XCTestCase {
             sessionPersistence: FrickInMemorySessionStore()
         )
 
+        // Blob upload/download require an authenticated session (sendBlob →
+        // requireAuthenticatedSession). Inject one without a network round-trip
+        // so the recorded requests stay exactly [PUT, GET].
+        client.restoreSession(
+            FrickSession(
+                schemaHash: nil,
+                sessionToken: "token-ada",
+                userId: "user-ada",
+                deviceId: "device-1",
+                replicaId: "replica-1",
+                expiresAt: "2099-01-01T00:00:00.000Z"
+            )
+        )
+
         let metadata = try await client.uploadBlobContent(
             blobId: "blob-1",
             ownerId: "user-ada",

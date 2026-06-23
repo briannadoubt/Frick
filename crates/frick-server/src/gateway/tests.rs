@@ -301,6 +301,121 @@ fn tenant_principal(user_id: &str, tenant_id: &str) -> Principal {
     }
 }
 
+/// FR-308: the write-rate token bucket allows up to `burst` immediately, denies
+/// once drained, and refills over time.
+#[test]
+fn write_rate_token_bucket_bursts_denies_and_refills() {
+    use super::TokenBucket;
+    use std::time::{Duration, Instant};
+
+    let burst = 3.0;
+    let refill = 2.0; // tokens per second
+    let t0 = Instant::now();
+    let mut bucket = TokenBucket::new(burst, t0);
+
+    // Full bucket: three immediate writes succeed, the fourth is denied.
+    assert!(bucket.try_consume(t0, burst, refill));
+    assert!(bucket.try_consume(t0, burst, refill));
+    assert!(bucket.try_consume(t0, burst, refill));
+    assert!(
+        !bucket.try_consume(t0, burst, refill),
+        "bucket is drained after the burst"
+    );
+
+    // After 500ms, refill = 2/s * 0.5 = 1 token → exactly one more write.
+    let t1 = t0 + Duration::from_millis(500);
+    assert!(bucket.try_consume(t1, burst, refill));
+    assert!(
+        !bucket.try_consume(t1, burst, refill),
+        "only one token refilled"
+    );
+
+    // Refill is capped at `burst` even after a long idle period.
+    let t2 = t1 + Duration::from_secs(100);
+    assert!(bucket.try_consume(t2, burst, refill));
+    assert!(bucket.try_consume(t2, burst, refill));
+    assert!(bucket.try_consume(t2, burst, refill));
+    assert!(
+        !bucket.try_consume(t2, burst, refill),
+        "refill never exceeds burst capacity"
+    );
+}
+
+/// FR-308: with the bucket disabled (burst <= 0, the default), the gate always
+/// allows — proving the wiring is backward compatible.
+#[test]
+fn write_rate_gate_is_disabled_by_default() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let hub = test_hub().await;
+        assert_eq!(hub.limits().write_rate_burst, 0, "disabled by default");
+        // Many consecutive consumes all allowed when disabled.
+        for _ in 0..1000 {
+            assert!(super::try_consume_write_token(&hub, "tenant\0user"));
+        }
+    });
+}
+
+/// FR-307: connection-lifecycle hooks fire on register/unregister with the new
+/// live count, so an active-connection gauge can wire into the seam.
+#[test]
+fn connection_lifecycle_hooks_fire_on_connect_and_disconnect() {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Default)]
+    struct Recorder {
+        connects: Mutex<Vec<usize>>,
+        disconnects: Mutex<Vec<usize>>,
+        live: AtomicUsize,
+    }
+    impl super::ConnectionLifecycleHook for Recorder {
+        fn on_connect(&self, active: usize) {
+            self.connects.lock().unwrap().push(active);
+            self.live.store(active, Ordering::SeqCst);
+        }
+        fn on_disconnect(&self, active: usize) {
+            self.disconnects.lock().unwrap().push(active);
+            self.live.store(active, Ordering::SeqCst);
+        }
+    }
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let recorder = std::sync::Arc::new(Recorder::default());
+        let hooks: super::ConnectionLifecycleHooks = std::sync::Arc::new(vec![
+            recorder.clone() as std::sync::Arc<dyn super::ConnectionLifecycleHook>
+        ]);
+        let hub = test_hub_with_lifecycle(note_schema(), hooks).await;
+
+        let (id_a, _rx_a) = register_test_connection(
+            &hub,
+            Some(tenant_principal("user-a", DEFAULT_TENANT_ID)),
+            None,
+        );
+        let (id_b, _rx_b) = register_test_connection(
+            &hub,
+            Some(tenant_principal("user-b", DEFAULT_TENANT_ID)),
+            None,
+        );
+        assert_eq!(
+            *recorder.connects.lock().unwrap(),
+            vec![1, 2],
+            "on_connect sees the running live count"
+        );
+
+        hub.unregister(id_a);
+        hub.unregister(id_b);
+        assert_eq!(
+            *recorder.disconnects.lock().unwrap(),
+            vec![1, 0],
+            "on_disconnect sees the decremented live count"
+        );
+        assert_eq!(recorder.live.load(Ordering::SeqCst), 0);
+        assert_eq!(hub.connection_count(), 0);
+    });
+}
+
 #[test]
 fn close_session_by_token_closes_only_the_matching_connection() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -994,6 +1109,13 @@ async fn test_hub() -> std::sync::Arc<GatewayHub> {
 }
 
 async fn test_hub_with_schema(schema: FrickSchema) -> std::sync::Arc<GatewayHub> {
+    test_hub_with_lifecycle(schema, std::sync::Arc::new(Vec::new())).await
+}
+
+async fn test_hub_with_lifecycle(
+    schema: FrickSchema,
+    connection_lifecycle: super::ConnectionLifecycleHooks,
+) -> std::sync::Arc<GatewayHub> {
     let store = std::sync::Arc::new(
         frick_store::FrickStore::open(frick_store::FrickStoreOptions {
             schema: Some(schema.clone()),
@@ -1044,6 +1166,7 @@ async fn test_hub_with_schema(schema: FrickSchema) -> std::sync::Arc<GatewayHub>
         blob_processors: std::sync::Arc::new(crate::blob_processors::BlobProcessorRegistry::new()),
         platform_events: std::sync::Arc::new(frick_store::MemoryPlatformEvents::new()),
         policy_hooks: std::sync::Arc::new(Vec::new()),
+        connection_lifecycle,
         write_side_effects: Vec::new(),
     });
     let hub = GatewayHub::new(state);

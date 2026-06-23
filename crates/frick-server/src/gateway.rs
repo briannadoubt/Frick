@@ -54,7 +54,10 @@ use futures_util::SinkExt;
 use futures_util::stream::StreamExt;
 use tokio::sync::mpsc;
 
-use crate::authz::{Action, Decision, DenyReason, ResourceContext, decide_baseline};
+use crate::authz::{
+    Action, Decision, DenyReason, PolicyInput, PolicyResource, ResourceContext, apply_policy_hooks,
+    decide_baseline,
+};
 use crate::cluster::{ClusterEnvelope, FrickClusterBus, PresenceRecord, ProjectionChange};
 use crate::config::FrickLimits;
 use crate::error::ServerError;
@@ -141,6 +144,58 @@ pub struct GatewayHub {
     cluster_bus: Mutex<Option<Arc<dyn FrickClusterBus>>>,
 }
 
+/// App-registered WebSocket connection-lifecycle hook (FR-307). Fires when a
+/// connection is registered or unregistered, carrying the resulting live
+/// connection count for this node. Observational only (metrics, structured
+/// logging) — it cannot alter the connection or deny it. Handlers run inline
+/// after the hub lock is released, so they must be cheap and non-blocking and
+/// must never call back into the hub. Empty on the standalone binary; a Rust
+/// backend supplies its own via [`crate::boot::BootSeams`]. This is the seam
+/// that active-connection gauges wire into.
+pub trait ConnectionLifecycleHook: Send + Sync {
+    /// A connection was just registered; `active` is the new live count.
+    fn on_connect(&self, active: usize);
+    /// A connection was just unregistered; `active` is the new live count.
+    fn on_disconnect(&self, active: usize);
+}
+
+/// Shared, ordered set of connection-lifecycle hooks (see
+/// [`ConnectionLifecycleHook`]).
+pub type ConnectionLifecycleHooks =
+    std::sync::Arc<Vec<std::sync::Arc<dyn ConnectionLifecycleHook>>>;
+
+/// A monotonic token bucket for per-principal write rate limiting (FR-308).
+/// Refills continuously at `refill_per_second` up to `burst` capacity.
+struct TokenBucket {
+    tokens: f64,
+    last_refill: std::time::Instant,
+}
+
+impl TokenBucket {
+    fn new(burst: f64, now: std::time::Instant) -> Self {
+        Self {
+            tokens: burst,
+            last_refill: now,
+        }
+    }
+
+    /// Refill for elapsed time, then try to spend one token. Returns true when a
+    /// token was available (the action is allowed).
+    fn try_consume(&mut self, now: std::time::Instant, burst: f64, refill_per_second: f64) -> bool {
+        let elapsed = now
+            .saturating_duration_since(self.last_refill)
+            .as_secs_f64();
+        self.tokens = (self.tokens + elapsed * refill_per_second).min(burst);
+        self.last_refill = now;
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// The locked interior of the hub.
 #[derive(Default)]
 struct HubInner {
@@ -155,6 +210,11 @@ struct HubInner {
     /// `set_subscribed_tenants` so peer nodes can drop envelopes for tenants
     /// this node has no subscribers for (map 06 §1.4).
     tenant_subscriber_counts: HashMap<String, u32>,
+    /// Per-principal write-rate token buckets (FR-308). Keyed by
+    /// `principal.connection_key()`; pruned when the principal's last
+    /// connection unregisters. Empty/unused when the bucket is disabled
+    /// (`write_rate_burst <= 0`).
+    rate_buckets: HashMap<String, TokenBucket>,
 }
 
 impl GatewayHub {
@@ -268,6 +328,7 @@ impl GatewayHub {
     fn register(&self, connection: Connection) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let mut transitioned_tenant = None;
+        let mut active = None;
         if let Ok(mut inner) = self.inner.lock() {
             if let Some(principal) = &connection.principal {
                 *inner
@@ -281,9 +342,16 @@ impl GatewayHub {
                 }
             }
             inner.connections.insert(id, connection);
+            active = Some(inner.connections.len());
         }
         if transitioned_tenant.is_some() {
             self.push_subscribed_tenants();
+        }
+        // Fire lifecycle hooks after releasing the lock (FR-307).
+        if let Some(active) = active {
+            for hook in self.state.connection_lifecycle.iter() {
+                hook.on_connect(active);
+            }
         }
         id
     }
@@ -291,18 +359,33 @@ impl GatewayHub {
     /// Unregister a connection, releasing its per-principal slot.
     fn unregister(&self, id: u64) {
         let mut transitioned_tenant = false;
-        if let Ok(mut inner) = self.inner.lock()
-            && let Some(connection) = inner.connections.remove(&id)
-            && let Some(principal) = &connection.principal
-        {
-            release_principal_slot(&mut inner.per_principal, &principal.connection_key());
-            // Tenant refcount: −1 on disconnect (gateway.ts:318).
-            let tenant_id = principal.tenant_id.clone();
-            transitioned_tenant =
-                bump_tenant_count(&mut inner.tenant_subscriber_counts, &tenant_id, -1);
+        let mut active = None;
+        if let Ok(mut inner) = self.inner.lock() {
+            if let Some(connection) = inner.connections.remove(&id)
+                && let Some(principal) = &connection.principal
+            {
+                let key = principal.connection_key();
+                release_principal_slot(&mut inner.per_principal, &key);
+                // Drop the principal's write-rate bucket once its last
+                // connection is gone, so the map can't grow unbounded (FR-308).
+                if !inner.per_principal.contains_key(&key) {
+                    inner.rate_buckets.remove(&key);
+                }
+                // Tenant refcount: −1 on disconnect (gateway.ts:318).
+                let tenant_id = principal.tenant_id.clone();
+                transitioned_tenant =
+                    bump_tenant_count(&mut inner.tenant_subscriber_counts, &tenant_id, -1);
+            }
+            active = Some(inner.connections.len());
         }
         if transitioned_tenant {
             self.push_subscribed_tenants();
+        }
+        // Fire lifecycle hooks after releasing the lock (FR-307).
+        if let Some(active) = active {
+            for hook in self.state.connection_lifecycle.iter() {
+                hook.on_disconnect(active);
+            }
         }
     }
 
@@ -1178,6 +1261,10 @@ async fn handle_subscribe(hub: &Arc<GatewayHub>, id: u64, payload: SubscribePayl
 
 // ---- Append (§6.6) ----------------------------------------------------------
 
+// A cohesive sequential handler: principal resolution → anti-flood gate →
+// pending-write reservation → payload-size cap → baseline+policy authz → store
+// append. Splitting it would scatter the ordered guard sequence; kept whole.
+#[allow(clippy::too_many_lines)]
 async fn handle_append(
     hub: &Arc<GatewayHub>,
     id: u64,
@@ -1187,6 +1274,32 @@ async fn handle_append(
         return false;
     };
     let limits = hub.limits().clone();
+
+    // Anti-flood token bucket (FR-308), per principal connection-key. Disabled
+    // unless the app sets write_rate_burst > 0; checked before reserving a
+    // pending-write slot so a flood is shed cheaply.
+    if !try_consume_write_token(hub, &principal.connection_key()) {
+        let nack = simple_nack(
+            FrickErrorCode::RateLimitExceeded,
+            "Write rate limit exceeded",
+            &payload.request_id,
+            true,
+            Some(Value::Map(vec![
+                ("limit".into(), "writeRateBurst".into()),
+                (
+                    "configuredBurst".into(),
+                    Value::from(limits.write_rate_burst),
+                ),
+                (
+                    "configuredRefillPerSecond".into(),
+                    Value::from(limits.write_rate_refill_per_second),
+                ),
+            ])),
+            None,
+        );
+        send_frame(hub, id, &nack);
+        return false;
+    }
 
     if !try_reserve_pending_write(hub, id) {
         let nack = simple_nack(
@@ -1232,7 +1345,12 @@ async fn handle_append(
 
     // assertCanAppend → store.appendEvent (idempotent by requestId). The store
     // write listener fans the created event out (no inline broadcast, FR-114).
-    let decision = decide_baseline(
+    // Pipeline mirrors the object-write path (FR-296): baseline → app policy
+    // hooks (tightening-only). Running hooks here lets a Rust backend enforce
+    // stream-scoped authz (e.g. channel broadcast: only admins may append to a
+    // channel's MessageStream). With no stream-affecting hooks registered this
+    // is behaviour-preserving.
+    let baseline = decide_baseline(
         &principal,
         Action::StreamAppend,
         &ResourceContext {
@@ -1240,6 +1358,24 @@ async fn handle_append(
             owner_user_id: None,
         },
     );
+    let decision = apply_policy_hooks(
+        baseline,
+        &PolicyInput {
+            principal: &principal,
+            action: Action::StreamAppend,
+            resource: PolicyResource {
+                kind: "stream",
+                name: Some(payload.stream.clone()),
+                key: Some(payload.key.clone()),
+                event: Some(payload.event.clone()),
+                owner_id: None,
+                tenant_id: principal.tenant_id.clone(),
+            },
+            context: Some(&payload.payload),
+        },
+        &hub.state.policy_hooks,
+    )
+    .await;
     if let Decision::Deny {
         reason,
         public_message,
@@ -2910,6 +3046,34 @@ fn release_pending_write(hub: &Arc<GatewayHub>, id: u64) {
     {
         connection.pending_writes = connection.pending_writes.saturating_sub(1);
     }
+}
+
+/// Anti-flood gate (FR-308): spend one write token for `key`'s bucket. Returns
+/// `true` when the write is allowed. A non-positive burst disables the bucket
+/// and always allows (backward compatible). The bucket is created full on first
+/// use so a fresh principal can immediately burst up to capacity.
+//
+// Casts are precision-safe in practice: write_rate_burst / _refill_per_second
+// are small operator-configured rate counts (single/double digits up to a few
+// thousand), far below f64's 2^52 exact-integer range.
+#[allow(clippy::cast_precision_loss)]
+fn try_consume_write_token(hub: &Arc<GatewayHub>, key: &str) -> bool {
+    let limits = hub.limits();
+    let burst = limits.write_rate_burst;
+    if burst <= 0 {
+        return true;
+    }
+    let burst = burst as f64;
+    let refill = limits.write_rate_refill_per_second.max(0) as f64;
+    let now = std::time::Instant::now();
+    let Ok(mut inner) = hub.inner.lock() else {
+        return true; // never block writes on a poisoned lock
+    };
+    let bucket = inner
+        .rate_buckets
+        .entry(key.to_string())
+        .or_insert_with(|| TokenBucket::new(burst, now));
+    bucket.try_consume(now, burst, refill)
 }
 
 // ---- outbound + close -------------------------------------------------------

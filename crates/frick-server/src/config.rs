@@ -281,6 +281,14 @@ pub struct FrickLimits {
     pub max_search_filter_key_bytes: i64,
     pub max_search_filter_value_bytes: i64,
     pub max_pending_appends_per_client: i64,
+    /// Anti-flood token bucket for stream appends (FR-308), keyed per principal
+    /// connection-key. `write_rate_burst` is the bucket capacity (max tokens =
+    /// max appends allowed instantaneously); `write_rate_refill_per_second` is
+    /// the steady-state refill. **`write_rate_burst <= 0` disables the bucket**
+    /// (the default — fully backward compatible). An app enables anti-flood by
+    /// setting both > 0. This is the documented per-write rate-limit seam.
+    pub write_rate_burst: i64,
+    pub write_rate_refill_per_second: i64,
     pub max_web_socket_frame_bytes: i64,
     pub max_web_socket_connections: i64,
     pub max_connections_per_principal: i64,
@@ -313,6 +321,10 @@ impl Default for FrickLimits {
             max_search_filter_key_bytes: 128,
             max_search_filter_value_bytes: 512,
             max_pending_appends_per_client: 1_000,
+            // Disabled by default (burst <= 0): fully backward compatible. An
+            // app opts into anti-flood by setting both fields > 0.
+            write_rate_burst: 0,
+            write_rate_refill_per_second: 0,
             max_web_socket_frame_bytes: 524_288,
             max_web_socket_connections: 10_000,
             max_connections_per_principal: 64,

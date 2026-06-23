@@ -267,6 +267,7 @@ async fn write_decision(
                 kind: "object",
                 name: Some(object_type.to_string()),
                 key: Some(object_id.to_string()),
+                event: None,
                 owner_id: None,
                 tenant_id: principal.tenant_id.clone(),
             },

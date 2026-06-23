@@ -163,6 +163,10 @@ pub struct PolicyResource {
     pub name: Option<String>,
     /// The record id / stream key / presence key, if any.
     pub key: Option<String>,
+    /// For a `stream.append`, the event type being appended (e.g. `MessageSent`,
+    /// `MessagePinned`); `None` for non-stream actions. Lets a hook gate by
+    /// event type (e.g. "only admins may append `MessageSent` to a channel").
+    pub event: Option<String>,
     /// The resource owner's user id, when known.
     pub owner_id: Option<String>,
     /// The tenant the resource belongs to.
@@ -243,6 +247,7 @@ mod tests {
                 kind: "object",
                 name: Some("Invoice".into()),
                 key: Some("inv-1".into()),
+                event: None,
                 owner_id: Some(principal.user_id.clone()),
                 tenant_id: principal.tenant_id.clone(),
             },
