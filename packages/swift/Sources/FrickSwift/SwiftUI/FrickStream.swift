@@ -1,7 +1,7 @@
-#if canImport(SwiftUI) && canImport(Combine)
+#if canImport(SwiftUI) && canImport(Observation)
 import SwiftUI
-import Combine
 import Foundation
+import Observation
 
 /// SwiftUI property wrapper that subscribes to a Frick stream via the
 /// surrounding `FrickSyncSocket` and exposes the live tail as
@@ -27,14 +27,14 @@ import Foundation
 @propertyWrapper
 public struct FrickStream: DynamicProperty {
     @Environment(\.frickSyncSocket) private var socket
-    @StateObject private var store: StreamStore
+    @State private var store: StreamStore
     private let streamName: String
     private let key: String
 
     public init(_ stream: String, key: String) {
         self.streamName = stream
         self.key = key
-        _store = StateObject(wrappedValue: StreamStore())
+        _store = State(initialValue: StreamStore())
     }
 
     public var wrappedValue: [FrickStreamEvent] { store.events }
@@ -51,11 +51,12 @@ public struct FrickStream: DynamicProperty {
 }
 
 @MainActor
-private final class StreamStore: ObservableObject {
-    @Published private(set) var events: [FrickStreamEvent] = []
-    private var listenerTask: Task<Void, Never>?
-    private var currentSocket: FrickSyncSocket?
-    private var currentKey: String?
+@Observable
+private final class StreamStore {
+    var events: [FrickStreamEvent] = []
+    @ObservationIgnored private var listenerTask: Task<Void, Never>?
+    @ObservationIgnored private var currentSocket: FrickSyncSocket?
+    @ObservationIgnored private var currentKey: String?
 
     func attach(socket: FrickSyncSocket?, stream: String, key: String) {
         let scope = "\(stream)\u{0}\(key)"
@@ -72,9 +73,7 @@ private final class StreamStore: ObservableObject {
                     guard case let .delta(_, evs, _) = event else { continue }
                     let filtered = evs.filter { $0.stream == stream && $0.streamId == key }
                     if filtered.isEmpty { continue }
-                    await MainActor.run {
-                        self?.events.append(contentsOf: filtered)
-                    }
+                    self?.events.append(contentsOf: filtered)
                 }
             } catch {
                 // Swallow — the socket emits its own status updates that
@@ -94,14 +93,14 @@ private final class StreamStore: ObservableObject {
 @propertyWrapper
 public struct FrickPresence: DynamicProperty {
     @Environment(\.frickSyncSocket) private var socket
-    @StateObject private var store: PresenceStore
+    @State private var store: PresenceStore
     private let presenceName: String
     private let key: String
 
     public init(_ name: String, key: String) {
         self.presenceName = name
         self.key = key
-        _store = StateObject(wrappedValue: PresenceStore())
+        _store = State(initialValue: PresenceStore())
     }
 
     public var wrappedValue: [FrickPresenceRecord] { store.records }
@@ -115,11 +114,12 @@ public struct FrickPresence: DynamicProperty {
 }
 
 @MainActor
-private final class PresenceStore: ObservableObject {
-    @Published private(set) var records: [FrickPresenceRecord] = []
-    private var listenerTask: Task<Void, Never>?
-    private var currentSocket: FrickSyncSocket?
-    private var currentKey: String?
+@Observable
+private final class PresenceStore {
+    var records: [FrickPresenceRecord] = []
+    @ObservationIgnored private var listenerTask: Task<Void, Never>?
+    @ObservationIgnored private var currentSocket: FrickSyncSocket?
+    @ObservationIgnored private var currentKey: String?
 
     func attach(socket: FrickSyncSocket?, name: String, key: String) {
         let scope = "\(name)\u{0}\(key)"
@@ -136,19 +136,17 @@ private final class PresenceStore: ObservableObject {
                     guard case let .presenceDelta(deltaName, deltaRecords, cleared) = event,
                           deltaName == name
                     else { continue }
-                    await MainActor.run {
-                        guard let self else { return }
-                        var next = self.records
-                        next.removeAll { record in cleared.contains(record.key) }
-                        for record in deltaRecords {
-                            if let idx = next.firstIndex(where: { $0.key == record.key }) {
-                                next[idx] = record
-                            } else {
-                                next.append(record)
-                            }
+                    guard let self else { break }
+                    var next = records
+                    next.removeAll { cleared.contains($0.key) }
+                    for record in deltaRecords {
+                        if let idx = next.firstIndex(where: { $0.key == record.key }) {
+                            next[idx] = record
+                        } else {
+                            next.append(record)
                         }
-                        self.records = next
                     }
+                    records = next
                 }
             } catch {
                 // See comment in StreamStore — surface errors via the

@@ -1,0 +1,14 @@
+{
+  "v": 1,
+  "id": "01KVEQFGP8YFRQ3AFTDFGTA2JM",
+  "ts": "2026-06-19T01:21:13.928Z",
+  "actor": "bri",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KVE2VQXBWZT8N0SV2780X0D0",
+    "commentId": "01KVEQFGP8YFRQ3AFTDFGTA2JK",
+    "author": "bri",
+    "body": "Implemented (mint_session/MintedSession/now_ms made pub, branch fr-311-tenant-switch @ def85b4) + consumed: host re-pinned + POST /api/tenant/switch live; verified E2E (login→switch→Sparkle data→back). AQ-181."
+  },
+  "model": "claude-opus-4-8"
+}

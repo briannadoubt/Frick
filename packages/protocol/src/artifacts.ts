@@ -5,6 +5,7 @@ import {
 } from "./generators/error-enums.js";
 
 export function generateSwiftArtifact(schema: FrickSchema): string {
+  const timestampSupport = schemaHasTimestampFields(schema) ? [swiftTimestampSupport(), ""] : [];
   const jsonSupport = schemaHasJsonFields(schema) ? [swiftJsonValueSupport(), ""] : [];
   const declarations = [
     ...schema.objects.map((type) => swiftStruct(`${type.name}DTO`, objectFields(type.fields), type.name)),
@@ -33,6 +34,7 @@ export function generateSwiftArtifact(schema: FrickSchema): string {
     "",
     generateSwiftErrorEnum(),
     "",
+    ...timestampSupport,
     ...jsonSupport,
     ...declarations,
   ].join("\n");
@@ -86,7 +88,20 @@ function swiftSchemaDescriptor(schema: FrickSchema): string {
 }
 
 export function generateKotlinArtifact(schema: FrickSchema): string {
-  const imports = schemaHasJsonFields(schema) ? ["", "import kotlinx.serialization.json.JsonElement"] : [];
+  const importLines: string[] = [];
+  if (schemaHasTimestampFields(schema)) {
+    importLines.push(
+      "import java.time.Instant",
+      "import java.time.OffsetDateTime",
+      "import java.time.format.DateTimeParseException",
+      "import kotlinx.serialization.Serializable",
+    );
+  }
+  if (schemaHasJsonFields(schema)) {
+    importLines.push("import kotlinx.serialization.json.JsonElement");
+  }
+  const imports = importLines.length > 0 ? ["", ...importLines] : [];
+  const timestampSupport = schemaHasTimestampFields(schema) ? [kotlinTimestampSupport(), ""] : [];
   const declarations = [
     ...schema.objects.map((type) => kotlinClass(`${kotlinTypeName(type.name)}Dto`, objectFields(type.fields))),
     ...schema.events.map((type) => kotlinClass(`${kotlinTypeName(type.name)}Dto`, type.fields)),
@@ -110,6 +125,7 @@ export function generateKotlinArtifact(schema: FrickSchema): string {
     "",
     generateKotlinErrorEnum(),
     "",
+    ...timestampSupport,
     ...declarations,
   ].join("\n");
 }
@@ -211,6 +227,7 @@ function swiftType(field: FieldDef): string {
       : field.kind === "int" ? "Int"
         : field.kind === "bytes" ? "Data"
           : field.kind === "json" ? "FrickJSONValue"
+            : field.kind === "timestamp" ? "FrickTimestamp"
           : "String";
   return field.required ? base : `${base}?`;
 }
@@ -221,6 +238,7 @@ function kotlinType(field: FieldDef): string {
       : field.kind === "int" ? "Int"
         : field.kind === "bytes" ? "ByteArray"
           : field.kind === "json" ? "JsonElement"
+            : field.kind === "timestamp" ? "FrickTimestamp"
           : "String";
   return field.required ? base : `${base}?`;
 }
@@ -234,6 +252,14 @@ function kotlinTypeName(name: string): string {
 }
 
 function schemaHasJsonFields(schema: FrickSchema): boolean {
+  return schemaHasFieldKind(schema, "json");
+}
+
+function schemaHasTimestampFields(schema: FrickSchema): boolean {
+  return schemaHasFieldKind(schema, "timestamp");
+}
+
+function schemaHasFieldKind(schema: FrickSchema, kind: FieldDef["kind"]): boolean {
   const fieldSets = [
     ...schema.objects.map((type) => type.fields),
     ...schema.events.map((type) => type.fields),
@@ -241,7 +267,73 @@ function schemaHasJsonFields(schema: FrickSchema): boolean {
     ...schema.signals.map((type) => type.fields),
     ...schema.jobs.map((type) => type.fields),
   ];
-  return fieldSets.some((fields) => fields.some((field) => field.kind === "json"));
+  return fieldSets.some((fields) => fields.some((field) => field.kind === kind));
+}
+
+function swiftTimestampSupport(): string {
+  return [
+    "/// An RFC3339 timestamp carried verbatim from the wire. The canonical",
+    "/// value is `rawValue` (a fixed RFC3339 string) — it re-encodes",
+    "/// byte-identically, so fractional seconds and the exact offset (`Z` vs",
+    "/// `+00:00`) never drift on round-trip. `date` is a lossy convenience that",
+    "/// parses `rawValue` into a `Date`; the wire value is unaffected by it, and",
+    "/// no app-level `JSONDecoder.dateDecodingStrategy` is required.",
+    "public struct FrickTimestamp: Codable, Equatable, Sendable {",
+    "  public let rawValue: String",
+    "",
+    "  public init(_ rawValue: String) {",
+    "    self.rawValue = rawValue",
+    "  }",
+    "",
+    "  public init(from decoder: Decoder) throws {",
+    "    let container = try decoder.singleValueContainer()",
+    "    self.rawValue = try container.decode(String.self)",
+    "  }",
+    "",
+    "  public func encode(to encoder: Encoder) throws {",
+    "    var container = encoder.singleValueContainer()",
+    "    try container.encode(rawValue)",
+    "  }",
+    "",
+    "  /// The parsed instant, or `nil` if `rawValue` is not a valid RFC3339",
+    "  /// timestamp. Parsing is millisecond-precision; `rawValue` keeps the full",
+    "  /// wire precision.",
+    "  public var date: Date? {",
+    "    let withFraction = ISO8601DateFormatter()",
+    "    withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]",
+    "    if let value = withFraction.date(from: rawValue) {",
+    "      return value",
+    "    }",
+    "    let withoutFraction = ISO8601DateFormatter()",
+    "    withoutFraction.formatOptions = [.withInternetDateTime]",
+    "    return withoutFraction.date(from: rawValue)",
+    "  }",
+    "}",
+  ].join("\n");
+}
+
+function kotlinTimestampSupport(): string {
+  return [
+    "/**",
+    " * An RFC3339 timestamp carried verbatim from the wire. The canonical value",
+    " * is [rawValue] (a fixed RFC3339 string) — an inline value class serializes",
+    " * as that bare string, so it re-encodes byte-identically and fractional",
+    " * seconds and the exact offset (Z vs +00:00) never drift on round-trip.",
+    " * [instant] is a convenience that parses [rawValue]; the wire value is",
+    " * unaffected by it, and no custom serializer configuration is required.",
+    " */",
+    "@Serializable",
+    "@JvmInline",
+    "value class FrickTimestamp(val rawValue: String) {",
+    "  /** The parsed instant, or null if [rawValue] is not a valid RFC3339 timestamp. */",
+    "  val instant: Instant?",
+    "    get() = try {",
+    "      OffsetDateTime.parse(rawValue).toInstant()",
+    "    } catch (e: DateTimeParseException) {",
+    "      null",
+    "    }",
+    "}",
+  ].join("\n");
 }
 
 function swiftJsonValueSupport(): string {

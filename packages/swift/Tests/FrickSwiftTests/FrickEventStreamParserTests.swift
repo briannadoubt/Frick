@@ -487,6 +487,9 @@ final class FrickEventStreamParserTests: XCTestCase {
             for: "/blobs/blob-1/content?ownerId=user-ada"
         )
         FrickStreamingURLProtocol.enqueue(downloaded, for: "/blobs/blob-1/content")
+        // Blob upload/download require an authenticated session, so sign in
+        // first (mirrors the queue/flush blob tests).
+        FrickStreamingURLProtocol.enqueue(devLoginResponse(userId: "user-ada", token: "token-ada"), for: "/auth/dev-login")
 
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [FrickStreamingURLProtocol.self]
@@ -498,6 +501,7 @@ final class FrickEventStreamParserTests: XCTestCase {
             storage: try FrickSQLiteStorage(path: ":memory:"),
             sessionPersistence: FrickInMemorySessionStore()
         )
+        _ = try await client.devLogin(userId: "user-ada")
 
         // Blob upload/download require an authenticated session (sendBlob →
         // requireAuthenticatedSession). Inject one without a network round-trip
@@ -526,7 +530,8 @@ final class FrickEventStreamParserTests: XCTestCase {
         XCTAssertEqual(metadata.byteLength, uploaded.count)
         XCTAssertEqual(content, downloaded)
 
-        let requests = FrickStreamingURLProtocol.recordedRequests
+        // Scope to the blob traffic — the dev-login request is also recorded.
+        let requests = FrickStreamingURLProtocol.recordedRequests.filter { $0.path.hasPrefix("/blobs/") }
         XCTAssertEqual(requests.map(\.method), ["PUT", "GET"])
         XCTAssertEqual(requests.map(\.path), [
             "/blobs/blob-1/content?ownerId=user-ada",

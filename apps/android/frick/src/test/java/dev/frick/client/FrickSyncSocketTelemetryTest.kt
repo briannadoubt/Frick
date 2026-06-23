@@ -21,6 +21,14 @@ import org.junit.Before
 import org.junit.Test
 
 /**
+ * Generous upper bound for the connect/handshake waits. These tests drive a
+ * real in-process socket on shared CI runners; a tight bound (the old 1–2s)
+ * flakes under load. No wait here asserts the timeout fires, so the ceiling
+ * only needs to be high enough to never trip spuriously.
+ */
+private const val TEST_TIMEOUT_MS = 15_000L
+
+/**
  * Verifies FrickSyncSocket emits the OpenTelemetry-style span + metrics that
  * mirror the TS client (packages/core/src/runtime.ts) and Swift FR-74:
  *  - one client span `"WebSocket /_frick/sync"` at connect with the shared
@@ -123,7 +131,7 @@ class FrickSyncSocketTelemetryTest {
                 replicaId = "test-replica",
                 initialBackoffMs = 25,
                 maxBackoffMs = 50,
-                helloAckTimeoutMs = 2_000,
+                helloAckTimeoutMs = TEST_TIMEOUT_MS,
             ),
             httpClient = client,
             telemetry = telemetry,
@@ -138,7 +146,7 @@ class FrickSyncSocketTelemetryTest {
             }
         }
         val socket = newSocket(telemetry)
-        withTimeout(2_000) { socket.awaitReady() }
+        withTimeout(TEST_TIMEOUT_MS) { socket.awaitReady() }
         // Wait for the inbound HelloAck counter to record (poll, not a fixed
         // sleep, so the assertions don't flake under CI load).
         awaitUntil { "HelloAck" in telemetry.counterKinds("frick.client.ws.frames.received.total") }
@@ -183,13 +191,13 @@ class FrickSyncSocketTelemetryTest {
         val socket = FrickSyncSocket(
             baseUrl = "http://${server.hostName}:${server.port}",
             sessionTokenProvider = { null },
-            config = FrickSyncSocketConfig(replicaId = "test-replica", helloAckTimeoutMs = 1_000),
+            config = FrickSyncSocketConfig(replicaId = "test-replica", helloAckTimeoutMs = TEST_TIMEOUT_MS),
             httpClient = client,
             telemetry = telemetry,
         ).also { it.connect() }
         try {
             // Wait for the span to open.
-            withTimeout(2_000) {
+            withTimeout(TEST_TIMEOUT_MS) {
                 while (telemetry.spans.isEmpty()) Thread.sleep(20)
             }
             assertEquals(JsonPrimitive(false), telemetry.spans.first().startAttributes["frick.authenticated"])
@@ -199,7 +207,7 @@ class FrickSyncSocketTelemetryTest {
     }
 
     /** Poll until [condition] holds or the timeout elapses — avoids fixed-sleep flakiness under CI load. */
-    private fun awaitUntil(timeoutMs: Long = 2_000, condition: () -> Boolean) {
+    private fun awaitUntil(timeoutMs: Long = TEST_TIMEOUT_MS, condition: () -> Boolean) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (!condition() && System.currentTimeMillis() < deadline) Thread.sleep(10)
     }
@@ -215,11 +223,11 @@ class FrickSyncSocketTelemetryTest {
         val socket = FrickSyncSocket(
             baseUrl = "http://${server.hostName}:${server.port}",
             sessionTokenProvider = { "test-token" },
-            config = FrickSyncSocketConfig(replicaId = "test-replica", helloAckTimeoutMs = 2_000),
+            config = FrickSyncSocketConfig(replicaId = "test-replica", helloAckTimeoutMs = TEST_TIMEOUT_MS),
             httpClient = client,
         ).also { it.connect() }
         try {
-            val ready = withTimeout(2_000) { socket.awaitReady() }
+            val ready = withTimeout(TEST_TIMEOUT_MS) { socket.awaitReady() }
             assertNotNull(ready)
         } finally {
             socket.close()

@@ -234,17 +234,29 @@ open class FrickStore<Model: FrickModel> {
     /// Apply a batch of upserts. New ids are inserted; existing ids are merged
     /// in place. Records for other object types are ignored (object
     /// subscriptions are type-scoped on the wire, but a shared event stream
-    /// may carry sibling types). Always re-sorts + re-emits.
+    /// may carry sibling types).
+    ///
+    /// Re-sorts only when the membership set changes (new items added); for
+    /// pure in-place updates the sorted order is unchanged, so we skip the
+    /// O(n log n) sort and just re-assign `items` to fire observation.
     private func apply(records: [FrickObjectRecord]) {
+        var added = false
         for record in records where record.type == Model.objectType {
             if let existing = byId[record.id] {
                 existing.merge(record: record)
             } else if let model = Model(record: record) {
                 byId[record.id] = model
+                added = true
             }
         }
         hasBootstrapped = true
-        reemit()
+        if added {
+            reemit()
+        } else {
+            // No set change — re-assign without sorting to force SwiftUI
+            // observation to fire for the in-place merges above.
+            items = items
+        }
     }
 
     /// Apply a batch of removals, dropping matching ids from the cache. Always

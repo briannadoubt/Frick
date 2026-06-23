@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KV99XJK8R4R5SKGCMZ58CMYA",
+  "ts": "2026-06-16T22:48:02.408Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KV99XJK73RWXNV4PDMXJ0TTZ",
+    "number": 310,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Offline-queue blob/media uploads in FrickSwift (FrickClient.uploadBlobContent)",
+    "description": "FrickSyncSocket already queues object writes + stream appends while offline and replays on reconnect, but FrickClient.uploadBlobContent (blob PUT) throws when offline rather than queuing. Field apps capturing photos offline (Aquarius AQ-85) can durably queue the Media OBJECT write but not the blob bytes — the photo upload surfaces an error until reconnect. Add offline queuing/replay for blob content uploads (local blob staging → flush on reconnect) so media capture is fully offline-first. Surfaced by Aquarius AQ-85.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

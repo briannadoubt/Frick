@@ -29,7 +29,9 @@
 //!   `id: [:]` via the TS `|| ":"` fallback.
 //! - `FrickJSONValue` support is emitted only when an object/event/presence/
 //!   signal/job **field** has `kind: "json"`; key fields, blob metadata
-//!   fields, and projection fields are not consulted.
+//!   fields, and projection fields are not consulted. The `FrickTimestamp`
+//!   wrapper (for `timestamp` fields) is emitted under the same field-set rule,
+//!   ahead of the `FrickJSONValue` block.
 //! - `sensitivity` and `mergePolicy` are deliberately never emitted.
 
 use frick_protocol::FrickErrorCode;
@@ -82,6 +84,11 @@ pub fn generate_swift_artifact(schema: &FrickSchema) -> String {
         generate_swift_error_enum(),
         String::new(),
     ];
+
+    if schema_has_timestamp_fields(schema) {
+        lines.push(swift_timestamp_support().into());
+        lines.push(String::new());
+    }
 
     if schema_has_json_fields(schema) {
         lines.push(swift_json_value_support().into());
@@ -318,19 +325,18 @@ fn object_fields(fields: &[FieldDef]) -> Vec<FieldDef> {
 }
 
 /// `swiftType` (artifacts.ts). `id`/`ref`/`string`/`enum` all map to
-/// `String`; `timestamp` also maps to `String` so Codable preserves the
-/// canonical RFC3339 wire value. Optional fields are made nullable with `?`.
+/// `String`; `timestamp` maps to the generated `FrickTimestamp` wrapper, which
+/// carries the canonical RFC3339 wire string verbatim (re-encoding
+/// byte-identically) while exposing a parsed `date`. Optional fields are made
+/// nullable with `?`.
 fn swift_type(field: &FieldDef) -> String {
     let base = match field.kind {
         FieldKind::Bool => "Bool",
         FieldKind::Int => "Int",
         FieldKind::Bytes => "Data",
         FieldKind::Json => "FrickJSONValue",
-        FieldKind::Id
-        | FieldKind::Ref
-        | FieldKind::String
-        | FieldKind::Timestamp
-        | FieldKind::Enum => "String",
+        FieldKind::Timestamp => "FrickTimestamp",
+        FieldKind::Id | FieldKind::Ref | FieldKind::String | FieldKind::Enum => "String",
     };
     if field.required {
         base.to_string()
@@ -353,6 +359,16 @@ fn swift_identifier(name: &str) -> String {
 /// job `fields` are consulted — never key fields, blob metadata fields, or
 /// projection fields.
 fn schema_has_json_fields(schema: &FrickSchema) -> bool {
+    schema_has_field_kind(schema, FieldKind::Json)
+}
+
+/// `schemaHasTimestampFields` (artifacts.ts): same consulted field sets as
+/// `schemaHasJsonFields`, gating emission of the `FrickTimestamp` wrapper.
+fn schema_has_timestamp_fields(schema: &FrickSchema) -> bool {
+    schema_has_field_kind(schema, FieldKind::Timestamp)
+}
+
+fn schema_has_field_kind(schema: &FrickSchema, kind: FieldKind) -> bool {
     schema
         .objects
         .iter()
@@ -362,7 +378,48 @@ fn schema_has_json_fields(schema: &FrickSchema) -> bool {
         .chain(schema.signals.iter().map(|t| &t.fields))
         .chain(schema.jobs.iter().map(|t| &t.fields))
         .flatten()
-        .any(|field| field.kind == FieldKind::Json)
+        .any(|field| field.kind == kind)
+}
+
+/// `swiftTimestampSupport` (artifacts.ts), verbatim.
+const fn swift_timestamp_support() -> &'static str {
+    r"/// An RFC3339 timestamp carried verbatim from the wire. The canonical
+/// value is `rawValue` (a fixed RFC3339 string) — it re-encodes
+/// byte-identically, so fractional seconds and the exact offset (`Z` vs
+/// `+00:00`) never drift on round-trip. `date` is a lossy convenience that
+/// parses `rawValue` into a `Date`; the wire value is unaffected by it, and
+/// no app-level `JSONDecoder.dateDecodingStrategy` is required.
+public struct FrickTimestamp: Codable, Equatable, Sendable {
+  public let rawValue: String
+
+  public init(_ rawValue: String) {
+    self.rawValue = rawValue
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.singleValueContainer()
+    self.rawValue = try container.decode(String.self)
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.singleValueContainer()
+    try container.encode(rawValue)
+  }
+
+  /// The parsed instant, or `nil` if `rawValue` is not a valid RFC3339
+  /// timestamp. Parsing is millisecond-precision; `rawValue` keeps the full
+  /// wire precision.
+  public var date: Date? {
+    let withFraction = ISO8601DateFormatter()
+    withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    if let value = withFraction.date(from: rawValue) {
+      return value
+    }
+    let withoutFraction = ISO8601DateFormatter()
+    withoutFraction.formatOptions = [.withInternetDateTime]
+    return withoutFraction.date(from: rawValue)
+  }
+}"
 }
 
 /// `swiftJsonValueSupport` (artifacts.ts), verbatim.
@@ -643,6 +700,64 @@ mod tests {
         }];
         let artifact = generate_swift_artifact(&schema);
         assert!(artifact.contains("public indirect enum FrickJSONValue"));
+    }
+
+    #[test]
+    fn timestamp_field_maps_to_wrapper_and_emits_support() {
+        let mut schema = synthetic_schema();
+        schema.events = vec![EventDef {
+            id: 1,
+            name: "Tick".to_string(),
+            fields: vec![
+                field(1, "at", FieldKind::Timestamp, true),
+                field(2, "seenAt", FieldKind::Timestamp, false),
+            ],
+        }];
+        let artifact = generate_swift_artifact(&schema);
+
+        assert!(artifact.contains("public struct FrickTimestamp"));
+        assert!(artifact.contains("  public var at: FrickTimestamp\n"));
+        assert!(artifact.contains("  public var seenAt: FrickTimestamp?\n"));
+        // No timestamp fields elsewhere means no JSON support gets dragged in.
+        assert!(!artifact.contains("FrickJSONValue"));
+    }
+
+    #[test]
+    fn timestamp_support_precedes_json_support() {
+        // Both wrappers emit when both kinds are present; the timestamp block
+        // is ahead of the JSON block (matches the TS generator ordering).
+        let mut schema = synthetic_schema();
+        schema.events = vec![EventDef {
+            id: 1,
+            name: "Mixed".to_string(),
+            fields: vec![
+                field(1, "at", FieldKind::Timestamp, true),
+                field(2, "meta", FieldKind::Json, true),
+            ],
+        }];
+        let artifact = generate_swift_artifact(&schema);
+
+        let ts = artifact.find("public struct FrickTimestamp").unwrap();
+        let json = artifact
+            .find("public indirect enum FrickJSONValue")
+            .unwrap();
+        assert!(ts < json);
+    }
+
+    #[test]
+    fn timestamp_outside_consulted_field_sets_does_not_emit_support() {
+        // Presence/blob *key* and metadata fields are not consulted — mirror
+        // the JSON omission rule for timestamps too.
+        let mut schema = synthetic_schema();
+        schema.presences = vec![PresenceDef {
+            id: 1,
+            name: "Ghost".to_string(),
+            key_fields: vec![field(1, "since", FieldKind::Timestamp, true)],
+            fields: vec![field(2, "alive", FieldKind::Bool, true)],
+            ttl_ms: 1000,
+        }];
+        let artifact = generate_swift_artifact(&schema);
+        assert!(!artifact.contains("FrickTimestamp"));
     }
 
     #[test]

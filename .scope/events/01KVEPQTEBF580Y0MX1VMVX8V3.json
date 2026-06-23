@@ -1,0 +1,23 @@
+{
+  "v": 1,
+  "id": "01KVEPQTEBF580Y0MX1VMVX8V3",
+  "ts": "2026-06-19T01:08:17.483Z",
+  "actor": "bri",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KVEPQTEA2QQNG4NJAG3M0K2Z",
+    "number": 312,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "FrickClient.installSession should reset cache on tenantId change (not just userId/schemaHash)",
+    "description": "FrickClient's local cache is scoped to (userId, schemaHash); installSession auto-resets the cache only when userId or schemaHash changes. But a same-user TENANT switch (re-minting a session for a different tenant via the new /api/tenant/switch, FR-311) keeps the stale cache, and verifyCacheCompatibility then throws FrickCacheIncompatibleError on every read under the new tenant (cache metadata carries tenant_id, which the compatibility check compares). Zavro AQ-181 works around this by calling client.resetCache() after restoreSession on a tenant switch. Framework fix: installSession should also detect a tenantId change and reset/re-key the cache, so consumers don't have to remember to resetCache() when switching tenants.",
+    "status": "backlog",
+    "priority": "medium",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  },
+  "model": "claude-opus-4-8"
+}

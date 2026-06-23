@@ -1,0 +1,14 @@
+{
+  "v": 1,
+  "id": "01KVEQFGTW03HTJ9M6M7QGGV4K",
+  "ts": "2026-06-19T01:21:14.076Z",
+  "actor": "bri",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KV7RYNEJHJT6PBHAHTC0QJTM",
+    "commentId": "01KVEQFGTW03HTJ9M6M7QGGV4J",
+    "author": "bri",
+    "body": "FrickDesign mirrored to github.com/briannadoubt/FrickDesign (d619de03, tag 0.5.0) via subtree split; consumed by mobile ZavroUI (AQ-91)."
+  },
+  "model": "claude-opus-4-8"
+}

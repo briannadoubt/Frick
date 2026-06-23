@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KV3S5JHAGQB6W3294AX2811X",
+  "ts": "2026-06-14T19:19:06.538Z",
+  "actor": "claude",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KV3S5JHAGQB6W3294AX2811W",
+    "number": 308,
+    "keyPrefix": "FR",
+    "ticketType": "story",
+    "title": "Codegen: ergonomic typed timestamps (Date/Instant) instead of raw RFC3339 String",
+    "description": "0.5.0 codegen maps schema `timestamp` -> `String` in both the Swift and Kotlin SDKs (crates/frick-codegen/src/swift.rs `swift_type` ~L321 'timestamp also maps to String so Codable preserves the canonical RFC3339 wire value'; kotlin.rs ~L24/257). Wire-faithful, but it forces every app to hand-roll RFC3339 parsing on every timestamp field and lose the natural typed API. RangerCRM (RCRM-165, 0.5.0 migration) has ~38 timestamp fields and wants `Date` values, not strings.\n\n## Goal\nGenerate an *ergonomic, typed* timestamp in the SDKs WITHOUT regressing RFC3339 fidelity or depending on app-level decoder config.\n\n## Why a naive String->Date flip is wrong\nThe String choice was deliberate: a generated `Date` that relies on the app setting `JSONDecoder.dateDecodingStrategy = .iso8601` is fragile (silent decode failures if the app forgets), and RFC3339 round-trips (fractional seconds, offset vs Z) can drift precision on re-encode. Any fix must own the decoding strategy in generated code and stay lossless.\n\n## Options (recommend B)\n- **A. `Date`/`Instant` with a built-in RFC3339 codec.** Generate `Date?` (Swift) / `Instant?` (Kotlin) and emit per-field custom Codable/serializer using a fixed RFC3339 parser the codegen owns — not the app's JSONDecoder strategy. Simplest downstream (RangerCRM's `Date?` model accessors work unchanged) but must guarantee lossless round-trip.\n- **B. Typed wrapper `FrickTimestamp` (recommended).** A small generated value type wrapping the raw RFC3339 `String` (lossless, re-encodes verbatim) exposing a computed `.date: Date?` / `.instant`. Wire fidelity + ergonomics, no precision drift, no app decoder dependence. Downstream cost: `dto.x` -> `dto.x?.date` at the app's model boundary (small).\n\n## Constraints\n- Wire stays RFC3339 — DO NOT change the server or the wire format. This is codegen-only.\n- Swift AND Kotlin in parity (both currently String).\n- Update BOTH codegen paths that must agree: the Rust `frick-codegen` (swift.rs/kotlin.rs) AND the TS `@fricken/protocol` `generateSwiftArtifact`/Kotlin generator (RangerCRM consumes the TS one via `npm run schema:gen-swift`). The 0.5.0 bytes/json change (commit 5328070) touched both — mirror that.\n- Update the codegen conformance fixtures (conformance/fixtures/codegen/swift/product-test.swift currently has `updatedAt: String`; the Kotlin fixture too) and the codegen drift check.\n- Add a round-trip test proving an RFC3339 value decodes to the typed form and re-encodes byte-identically (no precision loss).\n\n## Downstream\nRangerCRM bumps @fricken/protocol to the fixed release (0.5.1) and regenerates. Option A: app unchanged (model accessors stay `Date?`). Option B: ~38 model accessors change `dto.x` -> `dto.x?.date`. Either is fine; pick the cleaner framework design.\n\nFiled from RCRM-165; user is cutting 0.5.1 with this fix.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": null,
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}
