@@ -13,20 +13,15 @@ let package = Package(
     ],
     products: [
         .library(name: "FrickSwift", targets: ["FrickSwift"]),
-        .library(name: "FrickSwiftMacros", targets: ["FrickSwiftMacros"]),
     ],
     dependencies: [
-        // Mirror of swiftlang/swift-syntax under our own org. Same code/tags as
-        // upstream — the fork exists ONLY so Xcode Cloud can read it: Cloud's
-        // GitHub-App model requires the app be installed on every org hosting a
-        // dependency, and you can't install it on `swiftlang`. Pointing at our
-        // fork keeps the whole graph under briannadoubt. Sync the fork when
-        // bumping the swift-syntax version range.
-        .package(url: "https://github.com/briannadoubt/swift-syntax.git", "509.0.0" ..< "603.0.0"),
+        .package(url: "https://github.com/swiftlang/swift-syntax.git", "509.0.0" ..< "603.0.0"),
     ],
     targets: [
         // The compiler plugin that implements `@FrickModel`. Builds for the
-        // host toolchain only; it is never linked into the app binary.
+        // host toolchain only; it is never linked into the app binary, and its
+        // swift-syntax dependency stays host-only — which is why consumers don't
+        // need to grant CI access to swift-syntax and it isn't built per-platform.
         .macro(
             name: "FrickMacros",
             dependencies: [
@@ -34,19 +29,21 @@ let package = Package(
                 .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
             ]
         ),
+        // FrickSwift owns the @FrickModel macro DECLARATION (FrickModelMacro.swift)
+        // and depends on the FrickMacros plugin directly, so `import FrickSwift`
+        // exposes the macro. This keeps the macro internal (the 0.8.x shape) rather
+        // than a separate FrickSwiftMacros product the app links — which had pulled
+        // swift-syntax into every per-platform app build + Xcode Cloud's repo graph.
         .target(
             name: "FrickSwift",
+            dependencies: ["FrickMacros"],
             linkerSettings: [
                 .linkedLibrary("sqlite3"),
             ]
         ),
-        .target(
-            name: "FrickSwiftMacros",
-            dependencies: ["FrickMacros"]
-        ),
         .testTarget(
             name: "FrickSwiftTests",
-            dependencies: ["FrickSwift", "FrickSwiftMacros"]
+            dependencies: ["FrickSwift"]
         ),
         .testTarget(
             name: "FrickMacrosTests",

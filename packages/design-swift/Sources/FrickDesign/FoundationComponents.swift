@@ -210,7 +210,7 @@ public struct FrickWorkspaceShell<Content: View, Inspector: View>: View {
     }
 
     public var body: some View {
-        TabView(selection: selection) {
+        let base = TabView(selection: selection) {
             ForEach(destinations) { destination in
                 content(destination)
                     .tabItem {
@@ -222,10 +222,18 @@ public struct FrickWorkspaceShell<Content: View, Inspector: View>: View {
             }
         }
         .frickSidebarAdaptableTabViewStyle()
-        .inspector(isPresented: inspectorPresented) {
-            inspector()
-        }
-        .background(FrickPalette.background)
+
+        // `.inspector` is unavailable on visionOS — apply it only where it exists
+        // so the workspace shell still compiles for the Vision platform.
+        #if os(visionOS)
+        return base.background(FrickPalette.background)
+        #else
+        return base
+            .inspector(isPresented: inspectorPresented) {
+                inspector()
+            }
+            .background(FrickPalette.background)
+        #endif
     }
 }
 
