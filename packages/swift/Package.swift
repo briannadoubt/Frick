@@ -16,7 +16,13 @@ let package = Package(
         .library(name: "FrickSwiftMacros", targets: ["FrickSwiftMacros"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/swiftlang/swift-syntax.git", "509.0.0" ..< "603.0.0"),
+        // Mirror of swiftlang/swift-syntax under our own org. Same code/tags as
+        // upstream — the fork exists ONLY so Xcode Cloud can read it: Cloud's
+        // GitHub-App model requires the app be installed on every org hosting a
+        // dependency, and you can't install it on `swiftlang`. Pointing at our
+        // fork keeps the whole graph under briannadoubt. Sync the fork when
+        // bumping the swift-syntax version range.
+        .package(url: "https://github.com/briannadoubt/swift-syntax.git", "509.0.0" ..< "603.0.0"),
     ],
     targets: [
         // The compiler plugin that implements `@FrickModel`. Builds for the
