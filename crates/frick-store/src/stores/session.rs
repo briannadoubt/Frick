@@ -222,6 +222,93 @@ impl SessionStore {
             .await?;
         Ok(result.changes)
     }
+
+    /// Per-user device directory primitive (AURA-325): list the distinct
+    /// **active** (non-expired) devices a user currently has, optionally scoped
+    /// to a single tenant (`None` spans all tenants). This is the framework
+    /// support multi-device E2EE (AURA-41) builds on: a sender derives the
+    /// fan-out set for sender-key distribution / multi-device delivery from
+    /// this directory.
+    ///
+    /// A device may back several session rows (re-login, replica churn); the
+    /// result is de-duplicated on `device_id`, keeping the most recently seen
+    /// row, and ordered by `device_id` for deterministic output. Expiry uses
+    /// the same `Date.parse(expires_at) <= now` rule as [`read_active`]: an
+    /// unparseable `expires_at` is treated as active.
+    pub async fn list_active_devices_for_user(
+        &self,
+        user_id: &str,
+        tenant_id: Option<&str>,
+        now_ms: i64,
+    ) -> Result<Vec<UserDevice>, StoreError> {
+        let rows = match tenant_id {
+            Some(tenant) => {
+                self.sql
+                    .all(
+                        "SELECT * FROM auth_sessions WHERE user_id = ? AND tenant_id = ? \
+                         ORDER BY device_id, last_seen_at DESC",
+                        &[user_id.into(), tenant.into()],
+                    )
+                    .await?
+            }
+            None => {
+                self.sql
+                    .all(
+                        "SELECT * FROM auth_sessions WHERE user_id = ? \
+                         ORDER BY device_id, last_seen_at DESC",
+                        &[user_id.into()],
+                    )
+                    .await?
+            }
+        };
+
+        let mut seen = std::collections::BTreeSet::new();
+        let mut devices = Vec::new();
+        for row in &rows {
+            // TS parity: `Date.parse(expires_at) <= now` ⇒ expired; NaN stays active.
+            if let Some(expires_ms) =
+                parse_iso_to_epoch_ms(row.text("expires_at").unwrap_or_default())
+                && expires_ms <= now_ms
+            {
+                continue;
+            }
+            let device_id = row.text("device_id").unwrap_or_default().to_owned();
+            if !seen.insert(device_id.clone()) {
+                continue; // already captured the most-recent row for this device
+            }
+            devices.push(UserDevice {
+                device_id,
+                replica_id: row.text("replica_id").unwrap_or_default().to_owned(),
+                last_seen_at: row.text("last_seen_at").unwrap_or_default().to_owned(),
+            });
+        }
+        Ok(devices)
+    }
+}
+
+/// One active device of a user, as surfaced by the device directory
+/// ([`SessionStore::list_active_devices_for_user`], AURA-325).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserDevice {
+    pub device_id: String,
+    pub replica_id: String,
+    pub last_seen_at: String,
+}
+
+/// Sender-key fan-out target computation (AURA-325). Given a user's active
+/// `devices` (from the directory) and the `origin_device_id` that authored the
+/// message, return the distinct set of *other* device ids the sender-key /
+/// multi-device payload must be delivered to. The origin is excluded (it
+/// already holds the key); input order is preserved and duplicates removed.
+#[must_use]
+pub fn fan_out_targets(devices: &[UserDevice], origin_device_id: &str) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    devices
+        .iter()
+        .map(|device| device.device_id.clone())
+        .filter(|id| id != origin_device_id)
+        .filter(|id| seen.insert(id.clone()))
+        .collect()
 }
 
 /// `sessionTokenDigest` (session-store.ts:167-169): SHA-256 **hex** of the
@@ -402,6 +489,116 @@ mod tests {
         );
         assert_eq!(row.text("app_id"), Some("_default"));
         assert!(row.text("session_token").is_none(), "no raw-token column");
+    }
+
+    // ── Device directory + fan-out (AURA-325) ───────────────────────────────
+
+    fn dev_input(
+        token: &str,
+        user: &str,
+        device: &str,
+        tenant: &str,
+        expires_at: &str,
+    ) -> CreateSessionInput {
+        CreateSessionInput {
+            session_token: token.to_owned(),
+            tenant_id: tenant.to_owned(),
+            user_id: user.to_owned(),
+            device_id: device.to_owned(),
+            replica_id: "r1".to_owned(),
+            expires_at: expires_at.to_owned(),
+        }
+    }
+
+    #[tokio::test]
+    async fn directory_lists_distinct_active_devices_excluding_expired_and_other_users() {
+        let sessions = store().await;
+        let active = iso_from_epoch_ms(NOW + 60_000);
+        let expired = iso_from_epoch_ms(NOW - 1);
+        // u1 has two devices, plus a second (newer) session row for da (dedup),
+        // plus an expired session on dc. u2 is a different user.
+        sessions
+            .create(&dev_input("t-a1", "u1", "da", "t1", &active), NOW)
+            .await
+            .unwrap();
+        sessions
+            .create(&dev_input("t-a2", "u1", "da", "t1", &active), NOW + 5)
+            .await
+            .unwrap();
+        sessions
+            .create(&dev_input("t-b", "u1", "db", "t1", &active), NOW)
+            .await
+            .unwrap();
+        sessions
+            .create(&dev_input("t-c", "u1", "dc", "t1", &expired), NOW)
+            .await
+            .unwrap();
+        sessions
+            .create(&dev_input("t-z", "u2", "dz", "t1", &active), NOW)
+            .await
+            .unwrap();
+
+        let devices = sessions
+            .list_active_devices_for_user("u1", Some("t1"), NOW)
+            .await
+            .unwrap();
+        let ids: Vec<&str> = devices.iter().map(|d| d.device_id.as_str()).collect();
+        // Distinct, active, ordered; dc (expired) and dz (u2) excluded.
+        assert_eq!(ids, vec!["da", "db"]);
+    }
+
+    #[tokio::test]
+    async fn directory_scopes_to_tenant_or_spans_all() {
+        let sessions = store().await;
+        let active = iso_from_epoch_ms(NOW + 60_000);
+        sessions
+            .create(&dev_input("t-1", "u1", "da", "t1", &active), NOW)
+            .await
+            .unwrap();
+        sessions
+            .create(&dev_input("t-2", "u1", "db", "t2", &active), NOW)
+            .await
+            .unwrap();
+
+        let scoped = sessions
+            .list_active_devices_for_user("u1", Some("t1"), NOW)
+            .await
+            .unwrap();
+        assert_eq!(
+            scoped
+                .iter()
+                .map(|d| d.device_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["da"]
+        );
+
+        let all = sessions
+            .list_active_devices_for_user("u1", None, NOW)
+            .await
+            .unwrap();
+        assert_eq!(
+            all.iter().map(|d| d.device_id.as_str()).collect::<Vec<_>>(),
+            vec!["da", "db"]
+        );
+    }
+
+    #[test]
+    fn fan_out_excludes_origin_and_dedups_preserving_order() {
+        let dev = |id: &str| UserDevice {
+            device_id: id.to_owned(),
+            replica_id: "r".to_owned(),
+            last_seen_at: "t".to_owned(),
+        };
+        let devices = vec![dev("db"), dev("da"), dev("db"), dev("origin")];
+        // Origin removed, duplicate db collapsed, input order preserved.
+        assert_eq!(fan_out_targets(&devices, "origin"), vec!["db", "da"]);
+        // No origin present ⇒ every distinct device is a target.
+        assert_eq!(
+            fan_out_targets(&devices, "nope"),
+            vec!["db", "da", "origin"]
+        );
+        // Empty directory ⇒ no targets.
+        assert!(fan_out_targets(&[], "origin").is_empty());
     }
 
     #[tokio::test]
