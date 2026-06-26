@@ -79,6 +79,18 @@ pub struct BlobPageCursor {
     pub blob_id: String,
 }
 
+/// Outcome of a [`BlobStore::gc_unreferenced`] sweep (AURA-334).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BlobGcReport {
+    /// Blobs examined in the (`app_id`, `tenant_id`) partition.
+    pub scanned: usize,
+    /// Unreferenced blobs older than the grace cutoff — eligible for deletion.
+    /// Populated in both dry-run and live mode.
+    pub collectable: Vec<String>,
+    /// Blobs actually deleted (always `0` in dry-run).
+    pub deleted: usize,
+}
+
 /// `derivativeStorageKey(parent, deriv)` (blob-derivative-store.ts:60-65): the
 /// canonical, stable path-style storage key for a derivative.
 #[must_use]
@@ -248,6 +260,54 @@ impl BlobStore {
             )
             .await?;
         Ok(result.changes > 0)
+    }
+
+    /// Reference-tracked blob garbage collection (AURA-334) — the store-layer
+    /// half of the orphaned-ciphertext sweep (FR-57). Collects blobs in one
+    /// (`app_id`, `tenant_id`) partition that are BOTH:
+    ///   1. **unreferenced** — `blob_id` absent from the caller-supplied
+    ///      `referenced` live set, and
+    ///   2. **past the grace period** — `created_at < older_than_iso`.
+    ///
+    /// `dry_run = true` (the safe default callers should start with) returns the
+    /// candidate list WITHOUT deleting. A referenced blob is NEVER collected,
+    /// and a blob newer than the grace cutoff is NEVER collected — so a
+    /// freshly-uploaded blob whose reference has not yet committed survives.
+    ///
+    /// The store deliberately does not enumerate references itself: attachment
+    /// ids live inside E2EE ciphertext the server cannot read, so the caller
+    /// (or an explicit server-side reference index) supplies the live
+    /// `referenced` set. ISO-8601 `created_at` sorts lexicographically =
+    /// chronologically, so the cutoff is a plain string comparison.
+    pub async fn gc_unreferenced(
+        &self,
+        tenant_id: &str,
+        app_id: &str,
+        referenced: &std::collections::HashSet<String>,
+        older_than_iso: &str,
+        dry_run: bool,
+    ) -> Result<BlobGcReport, StoreError> {
+        let blobs = self.list_all_oldest_first(tenant_id, app_id).await?;
+        let scanned = blobs.len();
+        let collectable: Vec<String> = blobs
+            .into_iter()
+            .filter(|blob| blob.created_at.as_str() < older_than_iso)
+            .map(|blob| blob.blob_id)
+            .filter(|blob_id| !referenced.contains(blob_id))
+            .collect();
+        let mut deleted = 0usize;
+        if !dry_run {
+            for blob_id in &collectable {
+                if self.delete_metadata(tenant_id, blob_id, app_id).await? {
+                    deleted += 1;
+                }
+            }
+        }
+        Ok(BlobGcReport {
+            scanned,
+            collectable,
+            deleted,
+        })
     }
 
     /// `listAllOldestFirst` (blob-store.ts:187-196): every row for a tenant,
@@ -511,6 +571,89 @@ mod tests {
             mime_type: "text/plain".to_owned(),
             storage_key: None,
         }
+    }
+
+    // ── Reference-tracked blob GC (AURA-334) ─────────────────────────────────
+
+    #[tokio::test]
+    async fn gc_unreferenced_respects_references_grace_and_dry_run() {
+        use std::collections::HashSet;
+        let blobs = store().await;
+        let old = NOW;
+        let recent = NOW + 60_000;
+        blobs
+            .create(TENANT, &meta("orphan-old"), "app-a", old)
+            .await
+            .unwrap();
+        blobs
+            .create(TENANT, &meta("kept-ref"), "app-a", old)
+            .await
+            .unwrap();
+        blobs
+            .create(TENANT, &meta("orphan-recent"), "app-a", recent)
+            .await
+            .unwrap();
+
+        // Cutoff sits between `old` and `recent`.
+        let cutoff = iso_from_epoch_ms(NOW + 1_000);
+        let referenced: HashSet<String> = ["kept-ref".to_owned()].into_iter().collect();
+
+        // Dry run: lists only the old + unreferenced blob, deletes nothing.
+        let report = blobs
+            .gc_unreferenced(TENANT, "app-a", &referenced, &cutoff, true)
+            .await
+            .unwrap();
+        assert_eq!(report.scanned, 3);
+        assert_eq!(report.collectable, vec!["orphan-old".to_owned()]);
+        assert_eq!(report.deleted, 0);
+        assert!(
+            blobs
+                .read(TENANT, "orphan-old", "app-a")
+                .await
+                .unwrap()
+                .is_some()
+        );
+
+        // Live run: deletes exactly the candidate; referenced + recent survive.
+        let report = blobs
+            .gc_unreferenced(TENANT, "app-a", &referenced, &cutoff, false)
+            .await
+            .unwrap();
+        assert_eq!(report.deleted, 1);
+        assert_eq!(report.collectable, vec!["orphan-old".to_owned()]);
+        assert!(
+            blobs
+                .read(TENANT, "orphan-old", "app-a")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            blobs
+                .read(TENANT, "kept-ref", "app-a")
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            blobs
+                .read(TENANT, "orphan-recent", "app-a")
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn gc_unreferenced_empty_partition_is_a_noop() {
+        use std::collections::HashSet;
+        let blobs = store().await;
+        let cutoff = iso_from_epoch_ms(NOW + 1_000);
+        let report = blobs
+            .gc_unreferenced(TENANT, "app-a", &HashSet::new(), &cutoff, false)
+            .await
+            .unwrap();
+        assert_eq!(report, BlobGcReport::default());
     }
 
     // ── Port of app-scoping-tail-stores.test.ts (BlobStore section) ──────────
