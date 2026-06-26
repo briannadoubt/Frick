@@ -147,6 +147,13 @@ pub struct AppStateInner {
     /// [`crate::gateway::ConnectionLifecycleHook`].
     pub connection_lifecycle: crate::gateway::ConnectionLifecycleHooks,
 
+    /// App-registered cross-region federation hooks (AURA-323), fired by the
+    /// gateway on the origin path for every locally-originated committed write
+    /// so a backend can replicate to peer regions. Empty on the standalone
+    /// binary; supplied by a Rust backend via [`crate::boot::BootSeams`]. See
+    /// [`crate::federation::FederationHook`].
+    pub federation_hooks: crate::federation::FederationHooks,
+
     /// App-registered post-commit write side-effects (FR-304). Dispatched
     /// detached from the gateway's store-write funnel for every write event;
     /// empty on the standalone binary, supplied by a Rust backend via

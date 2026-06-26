@@ -2076,6 +2076,13 @@ impl GatewayHub {
                 }
             });
         }
+        // Cross-region federation seam (AURA-323): hand each locally-originated
+        // write to app federation hooks so a backend can forward/replicate it to
+        // peer regions per its own routing policy. Observational + non-blocking;
+        // any network forwarding is the hook's own responsibility.
+        for hook in self.state.federation_hooks.iter() {
+            hook.on_local_write(event);
+        }
         match event {
             FrickStoreWriteEvent::ObjectUpsert {
                 tenant_id,
