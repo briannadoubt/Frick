@@ -417,6 +417,44 @@ fn connection_lifecycle_hooks_fire_on_connect_and_disconnect() {
 }
 
 #[test]
+fn federation_hooks_fire_on_local_write() {
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct Recorder {
+        seen: Mutex<Vec<String>>,
+    }
+    impl crate::federation::FederationHook for Recorder {
+        fn on_local_write(&self, event: &FrickStoreWriteEvent) {
+            if let FrickStoreWriteEvent::ObjectUpsert { object_id, .. } = event {
+                self.seen.lock().unwrap().push(object_id.clone());
+            }
+        }
+    }
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let recorder = std::sync::Arc::new(Recorder::default());
+        let hooks: crate::federation::FederationHooks = std::sync::Arc::new(vec![
+            recorder.clone() as std::sync::Arc<dyn crate::federation::FederationHook>
+        ]);
+        let hub = test_hub_with_seams(note_schema(), std::sync::Arc::new(Vec::new()), hooks).await;
+
+        hub.handle_store_write(&FrickStoreWriteEvent::ObjectUpsert {
+            tenant_id: DEFAULT_TENANT_ID.to_string(),
+            app_id: DEFAULT_APP_ID.to_string(),
+            object_type: "Note".into(),
+            object_id: "fed-1".into(),
+            object: note_value("fed-1", "hi"),
+            writer_user_id: None,
+        });
+
+        // The federation hook observed the locally-originated write.
+        assert_eq!(*recorder.seen.lock().unwrap(), vec!["fed-1".to_owned()]);
+    });
+}
+
+#[test]
 fn close_session_by_token_closes_only_the_matching_connection() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
@@ -1116,6 +1154,19 @@ async fn test_hub_with_lifecycle(
     schema: FrickSchema,
     connection_lifecycle: super::ConnectionLifecycleHooks,
 ) -> std::sync::Arc<GatewayHub> {
+    test_hub_with_seams(
+        schema,
+        connection_lifecycle,
+        std::sync::Arc::new(Vec::new()),
+    )
+    .await
+}
+
+async fn test_hub_with_seams(
+    schema: FrickSchema,
+    connection_lifecycle: super::ConnectionLifecycleHooks,
+    federation_hooks: crate::federation::FederationHooks,
+) -> std::sync::Arc<GatewayHub> {
     let store = std::sync::Arc::new(
         frick_store::FrickStore::open(frick_store::FrickStoreOptions {
             schema: Some(schema.clone()),
@@ -1167,6 +1218,7 @@ async fn test_hub_with_lifecycle(
         platform_events: std::sync::Arc::new(frick_store::MemoryPlatformEvents::new()),
         policy_hooks: std::sync::Arc::new(Vec::new()),
         connection_lifecycle,
+        federation_hooks,
         write_side_effects: Vec::new(),
     });
     let hub = GatewayHub::new(state);

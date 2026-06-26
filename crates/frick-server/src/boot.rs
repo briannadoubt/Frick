@@ -116,6 +116,12 @@ pub struct BootSeams {
     /// active-connection gauges (AURA-123) wire into. See
     /// [`crate::gateway::ConnectionLifecycleHook`].
     pub connection_lifecycle: Vec<std::sync::Arc<dyn crate::gateway::ConnectionLifecycleHook>>,
+    /// App-registered cross-region federation hooks (AURA-323). Invoked by the
+    /// gateway on the origin path for every locally-originated committed write,
+    /// so a backend can replicate/forward the event to peer regions per its own
+    /// routing policy. Empty for the foundation/standalone binary. See
+    /// [`crate::federation::FederationHook`].
+    pub federation_hooks: Vec<std::sync::Arc<dyn crate::federation::FederationHook>>,
     /// App-registered routes (FR-297): a builder that, given the live
     /// [`AppState`], returns a router of server-authoritative endpoints merged
     /// into the framework router. `None` for the foundation/standalone binary —
@@ -168,6 +174,8 @@ impl BootSeams {
             policy_hooks: Vec::new(),
             // No built-in connection-lifecycle hooks; a Rust backend registers its own.
             connection_lifecycle: Vec::new(),
+            // No built-in federation hooks; a Rust backend registers its own (AURA-323).
+            federation_hooks: Vec::new(),
             // No built-in app routes; a Rust backend registers its own.
             app_router: None,
             // No built-in app job handlers / recurring jobs / write side-effects.
@@ -562,6 +570,7 @@ async fn build_server(
         platform_events,
         policy_hooks: Arc::new(seams.policy_hooks),
         connection_lifecycle: Arc::new(seams.connection_lifecycle),
+        federation_hooks: Arc::new(seams.federation_hooks),
         write_side_effects: seams.write_side_effects,
     });
 

@@ -21,6 +21,7 @@ pub mod diagnostics;
 pub mod email;
 pub mod error;
 pub mod extract;
+pub mod federation;
 pub mod gateway;
 pub mod http;
 pub mod jobs;
