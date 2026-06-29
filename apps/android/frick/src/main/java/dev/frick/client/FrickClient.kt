@@ -974,6 +974,14 @@ class FrickClient(
         const val LocalDevelopmentBaseUrl = "http://10.0.2.2:4099"
     }
 
+    init {
+        // The top-level schema-compatibility checks (HTTP header + response
+        // body) must validate against THIS client's PRODUCT schema, not the
+        // SDK's foundation default — otherwise a product-schema (e.g. aura)
+        // server is always rejected. Publish the descriptor's hash for them.
+        // (Follow-up: thread the descriptor through those helpers directly.)
+        frickExpectedSchemaHash = descriptor.schemaHash
+    }
 
     fun verifyCacheCompatibility(
         currentMetadata: FrickCacheMetadata = FrickCacheMetadata.forDescriptor(descriptor),
@@ -1596,11 +1604,16 @@ private suspend fun requireSuccess(response: HttpResponse) {
     requireCompatibleSchemaHeaders(response)
 }
 
+// Set by FrickClient.init to the client's product-schema hash so the top-level
+// compatibility checks below validate against it rather than the SDK's
+// foundation default (FRICK_SCHEMA_HASH).
+private var frickExpectedSchemaHash: String = FRICK_SCHEMA_HASH
+
 private fun requireCompatibleSchemaHeaders(response: HttpResponse) {
     val headerHash = response.headers["x-frick-schema-hash"]
-    if (headerHash != null && headerHash != FRICK_SCHEMA_HASH) {
+    if (headerHash != null && headerHash != frickExpectedSchemaHash) {
         throw FrickSchemaMismatchException(
-            expectedSchemaHash = FRICK_SCHEMA_HASH,
+            expectedSchemaHash = frickExpectedSchemaHash,
             actualSchemaHash = headerHash,
         )
     }
@@ -1671,9 +1684,9 @@ private fun parseResponseObject(responseJson: String): JsonObject =
 
 private fun JsonObject.requireCompatibleSchema() {
     val actualSchemaHash = optionalString("schemaHash")
-    if (actualSchemaHash != null && actualSchemaHash != FRICK_SCHEMA_HASH) {
+    if (actualSchemaHash != null && actualSchemaHash != frickExpectedSchemaHash) {
         throw FrickSchemaMismatchException(
-            expectedSchemaHash = FRICK_SCHEMA_HASH,
+            expectedSchemaHash = frickExpectedSchemaHash,
             actualSchemaHash = actualSchemaHash,
         )
     }
