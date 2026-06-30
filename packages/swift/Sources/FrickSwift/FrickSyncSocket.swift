@@ -1309,7 +1309,7 @@ public actor FrickSyncSocket {
                 do {
                     try await sendOrQueue(requestId: requestId, frame: frame, expectResponse: false)
                 } catch {
-                    if let pending = await self.takeResponder(requestId: requestId) {
+                    if let pending = self.takeResponder(requestId: requestId) {
                         pending.resume(throwing: error)
                     }
                 }
@@ -1343,7 +1343,7 @@ public actor FrickSyncSocket {
                 do {
                     try await sendOrQueue(requestId: requestId, frame: frame, expectResponse: false)
                 } catch {
-                    if let pending = await self.takeCallResponder(requestId: requestId) {
+                    if let pending = self.takeCallResponder(requestId: requestId) {
                         pending.resume(throwing: error)
                     }
                 }
