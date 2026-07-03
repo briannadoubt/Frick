@@ -81,6 +81,13 @@ pub struct StreamRetentionPruneResult {
     pub pruned_by_count: u64,
 }
 
+/// Sentinel written to the SQL `event_type` column by
+/// [`StreamStore::redact_event`] (AURA-191). Purely an audit/introspection
+/// marker on the raw row — readers never match against it directly, because
+/// `unpack_stream_event` decodes the event's identity from the still-intact
+/// packed tuple, not this column.
+pub const REDACTED_EVENT_TYPE_MARKER: &str = "__redacted__";
+
 /// The durable stream-event store. Borrows the driver and schema for its
 /// lifetime, plus an optional mutable idempotency front-cache and a replay
 /// window (`replay_window_ms`, `> 0` to enable; `<= 0`/`None` disables the
@@ -578,6 +585,123 @@ impl<'a> StreamStore<'a> {
         })
     }
 
+    /// Redact a single event's payload in place, preserving sequence
+    /// integrity (AURA-191 — the stream-side counterpart to
+    /// [`ObjectStore::delete_by_field`](crate::stores::object::ObjectStore::delete_by_field)
+    /// used by account-deletion cascades).
+    ///
+    /// Unlike a hard delete, the row's identity — `(tenant_id, stream_type,
+    /// stream_id, sequence)` — and its `event_id` are left untouched, so
+    /// every other member's cursor (`read`/`read_before`'s `after`/`before`
+    /// bounds, [`head`](Self::head)) keeps working exactly as if the event
+    /// were still there: no gap, no renumbering, no other row shifts. Only
+    /// the event's fields are erased — decoding a redacted row now yields an
+    /// empty payload map (`unpack_stream_event` still succeeds; it just finds
+    /// zero packed fields). `event_type` in SQL is stamped with
+    /// [`REDACTED_EVENT_TYPE_MARKER`] purely for audit/introspection; the
+    /// stream/event identity actually read back comes from the still-intact
+    /// packed tuple, so existing readers never choke on an unknown event
+    /// name. A no-op redact (already redacted, or absent) is idempotent and
+    /// returns `false` only when no row exists at that address.
+    pub async fn redact_event(
+        &self,
+        tenant_id: &str,
+        stream: &str,
+        stream_id: &str,
+        sequence: i64,
+        app_id: &str,
+    ) -> Result<bool, StoreError> {
+        let Some(row) = self
+            .sql
+            .get(
+                "SELECT packed FROM stream_events
+          WHERE app_id = ? AND tenant_id = ? AND stream_type = ? AND stream_id = ? AND sequence = ?",
+                &[
+                    app_id.into(),
+                    tenant_id.into(),
+                    stream.into(),
+                    stream_id.into(),
+                    sequence.into(),
+                ],
+            )
+            .await?
+        else {
+            return Ok(false);
+        };
+        let packed: PackedStreamEvent = decode_packed(
+            row.blob("packed")
+                .ok_or_else(|| StoreError::driver("stream_events.packed missing"))?,
+        )?;
+        // Keep every identity component (stream type id, stream key, sequence,
+        // event id, event type id) — only the field payload is dropped.
+        let tombstoned: PackedStreamEvent =
+            (packed.0, packed.1, packed.2, packed.3, packed.4, Vec::new());
+        let encoded = encode_packed(&tombstoned)?;
+
+        let result = self
+            .sql
+            .run(
+                "UPDATE stream_events SET packed = ?, event_type = ?
+          WHERE app_id = ? AND tenant_id = ? AND stream_type = ? AND stream_id = ? AND sequence = ?",
+                &[
+                    encoded.into(),
+                    REDACTED_EVENT_TYPE_MARKER.into(),
+                    app_id.into(),
+                    tenant_id.into(),
+                    stream.into(),
+                    stream_id.into(),
+                    sequence.into(),
+                ],
+            )
+            .await?;
+        Ok(result.changes > 0)
+    }
+
+    /// Redact every event authored by `field == value` (e.g. `senderId`)
+    /// across an entire stream type within a tenant/app — the id-enumeration
+    /// step an account-deletion cascade needs to erase a user's authored
+    /// content from streams shared with other members, without disturbing
+    /// any other member's events or sequence numbers. Returns the count
+    /// redacted.
+    ///
+    /// Same scan-then-filter shape as
+    /// [`ObjectStore::delete_by_field`](crate::stores::object::ObjectStore::delete_by_field):
+    /// the field lives inside the packed payload, not a SQL column, so there
+    /// is no indexed `UPDATE ... WHERE` — list every event of the stream
+    /// type, filter the unpacked payload in app code, then redact each match
+    /// by its exact `(stream_id, sequence)` address.
+    pub async fn redact_by_field(
+        &self,
+        tenant_id: &str,
+        stream: &str,
+        app_id: &str,
+        field: &str,
+        value: &str,
+    ) -> Result<u64, StoreError> {
+        let events = self
+            .list_all_by_stream_type(tenant_id, stream, app_id)
+            .await?;
+        let mut redacted = 0u64;
+        for stored in events {
+            if !event_field_eq(&stored.event.payload, field, value) {
+                continue;
+            }
+            if self
+                .redact_event(
+                    tenant_id,
+                    stream,
+                    &stored.event.stream_id,
+                    stored.event.sequence,
+                    app_id,
+                )
+                .await?
+            {
+                redacted += 1;
+            }
+        }
+        Ok(redacted)
+    }
+
     fn map_events(
         &self,
         rows: &[crate::driver::SqlRow],
@@ -687,6 +811,19 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 /// contract, so the message carries over verbatim.
 fn protocol_error(err: &ProtocolError) -> StoreError {
     StoreError::store(err.message())
+}
+
+/// `true` when the event's unpacked payload map has `field` equal (as a
+/// string) to `expected` — the stream-event sibling of
+/// `object.rs`'s `object_field_eq`, used by
+/// [`StreamStore::redact_by_field`]. Misses on absent fields, non-string
+/// values, or an already-redacted (empty) payload.
+fn event_field_eq(payload: &Value, field: &str, expected: &str) -> bool {
+    payload.as_map().is_some_and(|entries| {
+        entries
+            .iter()
+            .any(|(key, value)| key.as_str() == Some(field) && value.as_str() == Some(expected))
+    })
 }
 
 #[cfg(test)]
@@ -1626,5 +1763,230 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.to_string(), "Unknown event: Nope");
+    }
+
+    // ── redact_event / redact_by_field (AURA-191) ───────────────────────────
+
+    /// Redacting an event zeroes its payload but leaves its identity —
+    /// sequence, event id, ordering relative to its neighbours — completely
+    /// intact, so a stream reader sees no gap and no renumbering.
+    #[tokio::test]
+    async fn redact_event_clears_payload_but_preserves_sequence_and_event_id() {
+        let driver = memory_driver().await;
+        let schema = test_schema();
+        let store = StreamStore::new(&driver, &schema, None);
+
+        for body in ["a", "b", "c"] {
+            append_msg(&store, "conv-a", body, DEFAULT_APP_ID).await;
+        }
+
+        let redacted = store
+            .redact_event(TENANT, STREAM, "conv-a", 2, DEFAULT_APP_ID)
+            .await
+            .unwrap();
+        assert!(redacted);
+
+        let all = store
+            .read(TENANT, STREAM, "conv-a", 0, None, DEFAULT_APP_ID)
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 3, "redaction must not delete or gap the row");
+        assert_eq!(all[0].event.sequence, 1);
+        assert_eq!(all[1].event.sequence, 2);
+        assert_eq!(all[2].event.sequence, 3);
+        assert_eq!(all[1].event.event_id, "event-_default-conv-a-b");
+        assert_eq!(all[1].event.event, EVENT, "event type identity survives");
+
+        // The payload is gone (empty map) — no residual plaintext.
+        let Value::Map(entries) = &all[1].event.payload else {
+            panic!("expected map");
+        };
+        assert!(
+            entries.is_empty(),
+            "redacted payload must carry no fields, got {entries:?}"
+        );
+
+        // Neighbours are untouched.
+        assert_eq!(body_of(&all[0]), "a");
+        assert_eq!(body_of(&all[2]), "c");
+
+        // The SQL event_type column is stamped with the audit marker, while
+        // the packed tuple's own identity is what readers actually decode.
+        let row = driver
+            .get(
+                "SELECT event_type FROM stream_events WHERE stream_id = ? AND sequence = ?",
+                &["conv-a".into(), 2_i64.into()],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.text("event_type"), Some(REDACTED_EVENT_TYPE_MARKER));
+    }
+
+    /// Redacting an address with no row is a no-op, not an error.
+    #[tokio::test]
+    async fn redact_event_is_noop_for_missing_row() {
+        let driver = memory_driver().await;
+        let schema = test_schema();
+        let store = StreamStore::new(&driver, &schema, None);
+
+        let redacted = store
+            .redact_event(TENANT, STREAM, "never", 1, DEFAULT_APP_ID)
+            .await
+            .unwrap();
+        assert!(!redacted);
+    }
+
+    /// Redacting twice is idempotent: the second call is a normal update (the
+    /// row still exists) and the payload stays empty.
+    #[tokio::test]
+    async fn redact_event_is_idempotent() {
+        let driver = memory_driver().await;
+        let schema = test_schema();
+        let store = StreamStore::new(&driver, &schema, None);
+        append_msg(&store, "conv-a", "a", DEFAULT_APP_ID).await;
+
+        assert!(
+            store
+                .redact_event(TENANT, STREAM, "conv-a", 1, DEFAULT_APP_ID)
+                .await
+                .unwrap()
+        );
+        assert!(
+            store
+                .redact_event(TENANT, STREAM, "conv-a", 1, DEFAULT_APP_ID)
+                .await
+                .unwrap()
+        );
+
+        assert_eq!(count(&store, "conv-a").await, 1);
+    }
+
+    /// Redaction is scoped by app: even though the PK excludes `app_id` (the
+    /// sequence space is shared, so `app-a`'s row lands at sequence 1 and
+    /// `app-b`'s at sequence 2), asking `app-b` to redact `app-a`'s row is a
+    /// no-op, and asking `app-b` to redact its own row succeeds without
+    /// touching `app-a`'s — mirroring `ObjectStore`'s cross-app isolation.
+    #[tokio::test]
+    async fn redact_event_isolates_by_app() {
+        let driver = memory_driver().await;
+        let schema = test_schema();
+        let store = StreamStore::new(&driver, &schema, None);
+
+        let a1 = append_msg(&store, "room-1", "a1", "app-a").await;
+        let b1 = append_msg(&store, "room-1", "b1", "app-b").await;
+        assert_eq!(a1.event.event.sequence, 1);
+        assert_eq!(b1.event.event.sequence, 2);
+
+        // app-b cannot redact app-a's row by guessing its sequence.
+        let cross_app = store
+            .redact_event(TENANT, STREAM, "room-1", 1, "app-b")
+            .await
+            .unwrap();
+        assert!(!cross_app);
+        let a_events = store
+            .read(TENANT, STREAM, "room-1", 0, None, "app-a")
+            .await
+            .unwrap();
+        assert_eq!(body_of(&a_events[0]), "a1", "app-a's row is untouched");
+
+        // app-b redacting its own row succeeds and leaves app-a alone.
+        let own = store
+            .redact_event(TENANT, STREAM, "room-1", 2, "app-b")
+            .await
+            .unwrap();
+        assert!(own);
+        let a_events_after = store
+            .read(TENANT, STREAM, "room-1", 0, None, "app-a")
+            .await
+            .unwrap();
+        assert_eq!(body_of(&a_events_after[0]), "a1");
+    }
+
+    /// `redact_by_field` finds every event whose payload field matches and
+    /// redacts each one, leaving non-matching events and their sequences
+    /// alone — the enumeration step an account-deletion cascade needs to
+    /// erase a user's authored content from a stream shared with others.
+    #[tokio::test]
+    async fn redact_by_field_redacts_only_matching_events() {
+        let driver = memory_driver().await;
+        let schema = test_schema();
+        let store = StreamStore::new(&driver, &schema, None);
+
+        // Two senders' messages interleaved in the same conversation stream.
+        let payload_for = |sender: &str, body: &str| {
+            Value::Map(vec![
+                ("messageId".into(), Value::from(format!("m-{body}"))),
+                ("senderId".into(), Value::from(sender)),
+                ("body".into(), Value::from(body)),
+                ("createdAt".into(), Value::from("2026-05-31T00:00:00.000Z")),
+            ])
+        };
+        for (i, (sender, body)) in [
+            ("user-ada", "hi"),
+            ("user-bob", "hello"),
+            ("user-ada", "bye"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            store
+                .append(
+                    TENANT,
+                    STREAM,
+                    "conv-shared",
+                    "r1",
+                    &format!("req-{i}"),
+                    EVENT,
+                    &payload_for(sender, body),
+                    DEFAULT_APP_ID,
+                    &format!("event-{i}"),
+                    NOW,
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+
+        let redacted = store
+            .redact_by_field(TENANT, STREAM, DEFAULT_APP_ID, "senderId", "user-ada")
+            .await
+            .unwrap();
+        assert_eq!(redacted, 2);
+
+        let all = store
+            .read(TENANT, STREAM, "conv-shared", 0, None, DEFAULT_APP_ID)
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 3, "no rows are deleted, only redacted");
+        assert_eq!(all[0].event.sequence, 1);
+        assert_eq!(all[1].event.sequence, 2);
+        assert_eq!(all[2].event.sequence, 3);
+
+        // user-ada's two messages are hollowed out.
+        for stored in [&all[0], &all[2]] {
+            let Value::Map(entries) = &stored.event.payload else {
+                panic!("expected map");
+            };
+            assert!(entries.is_empty());
+        }
+        // user-bob's message survives untouched.
+        assert_eq!(body_of(&all[1]), "hello");
+    }
+
+    /// No matches ⇒ `0`, and it's not an error.
+    #[tokio::test]
+    async fn redact_by_field_returns_zero_when_nothing_matches() {
+        let driver = memory_driver().await;
+        let schema = test_schema();
+        let store = StreamStore::new(&driver, &schema, None);
+        append_msg(&store, "conv-a", "a", DEFAULT_APP_ID).await;
+
+        let redacted = store
+            .redact_by_field(TENANT, STREAM, DEFAULT_APP_ID, "senderId", "nobody")
+            .await
+            .unwrap();
+        assert_eq!(redacted, 0);
+        assert_eq!(count(&store, "conv-a").await, 1);
     }
 }
