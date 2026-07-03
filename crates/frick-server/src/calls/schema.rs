@@ -24,6 +24,13 @@ pub const CALL_PARTICIPANT_TYPE: &str = "CallParticipant";
 pub const CALL_EVENT_STREAM: &str = "CallEventStream";
 /// Signal name for WebRTC SDP/ICE routing during a call.
 pub const WEBRTC_SIGNAL: &str = "WebRTCSignal";
+/// Signal name for the in-call data-channel relay (AURA-316): reactions,
+/// raise-hand, and live captions. A second, distinct signal from
+/// [`WEBRTC_SIGNAL`] so a client can subscribe to/rate-limit ephemeral UX
+/// chatter independently of SDP/ICE negotiation; gated on the same
+/// [`super::control_plane::CallControlPlane::is_signal_member`] check
+/// (FR-284) in the gateway.
+pub const CALL_DATA_CHANNEL: &str = "CallDataChannel";
 
 /// Lifecycle event names appended to the [`CALL_EVENT_STREAM`].
 pub const CALL_CREATED: &str = "CallCreated";
@@ -224,40 +231,75 @@ pub fn call_stream_defs(id_base: i64) -> Vec<StreamDef> {
     }]
 }
 
-/// Signal definition for WebRTC SDP/ICE routing during a call, numbered from
-/// `id_base`. The payload rides as opaque `bytes`; the relay is gated on call
-/// membership in FR-284.
+/// Signal definitions for WebRTC SDP/ICE routing and the in-call data-channel
+/// relay, numbered from `id_base`. Payloads ride as opaque `bytes`; both
+/// relays are gated on call membership (FR-284 / AURA-316) — see
+/// `handle_signal` in the gateway.
 #[must_use]
 pub fn call_signal_defs(id_base: i64) -> Vec<SignalDef> {
-    vec![SignalDef {
-        id: id_base,
-        name: WEBRTC_SIGNAL.to_string(),
-        ttl_ms: 30_000,
+    vec![
+        SignalDef {
+            id: id_base,
+            name: WEBRTC_SIGNAL.to_string(),
+            ttl_ms: 30_000,
+            key_fields: vec![field(1, "callId", FieldKind::String, true)],
+            fields: vec![
+                field(1, "senderDeviceId", FieldKind::String, true),
+                field(2, "recipientDeviceId", FieldKind::String, false),
+                enum_field(
+                    3,
+                    "kind",
+                    // Lists every WebRTCSignalKind the wire type carries —
+                    // including `keyEpoch` (the E2EE sender-key epoch signal).
+                    // Signal `value`s are dynamic msgpack (not
+                    // schema-validated), so this is metadata for codegen/docs;
+                    // the legacy TS schema omitted `keyEpoch`, this completes
+                    // it (deliberately ahead of the old fixture).
+                    &[
+                        "offer",
+                        "answer",
+                        "ice",
+                        "renegotiate",
+                        "sfuToken",
+                        "keyEpoch",
+                    ],
+                    true,
+                ),
+                field(4, "payload", FieldKind::Bytes, true),
+            ],
+        },
+        call_data_channel_signal_def(id_base + 1),
+    ]
+}
+
+/// Signal definition for the in-call data-channel relay (AURA-316):
+/// reactions / raise-hand / captions. Deliberately separate from
+/// [`WEBRTC_SIGNAL`] (a distinct signal name) so a client can subscribe to or
+/// throttle ephemeral UX chatter independently of SDP/ICE — the payload is
+/// small, unreliable-by-nature (a dropped reaction is fine to lose), and
+/// unrelated to media negotiation. Keyed by `callId`, same as `WebRTCSignal`;
+/// the gateway applies the identical `is_signal_member` membership gate to
+/// both (FR-284).
+#[must_use]
+pub fn call_data_channel_signal_def(id: i64) -> SignalDef {
+    SignalDef {
+        id,
+        name: CALL_DATA_CHANNEL.to_string(),
+        // Short TTL: this is ephemeral live UX signaling, not durable state —
+        // an offline recipient does not need a reaction replayed minutes later.
+        ttl_ms: 10_000,
         key_fields: vec![field(1, "callId", FieldKind::String, true)],
         fields: vec![
-            field(1, "senderDeviceId", FieldKind::String, true),
-            field(2, "recipientDeviceId", FieldKind::String, false),
-            enum_field(
-                3,
-                "kind",
-                // Lists every WebRTCSignalKind the wire type carries — including
-                // `keyEpoch` (the E2EE sender-key epoch signal). Signal `value`s
-                // are dynamic msgpack (not schema-validated), so this is metadata
-                // for codegen/docs; the legacy TS schema omitted `keyEpoch`, this
-                // completes it (deliberately ahead of the old fixture).
-                &[
-                    "offer",
-                    "answer",
-                    "ice",
-                    "renegotiate",
-                    "sfuToken",
-                    "keyEpoch",
-                ],
-                true,
-            ),
+            field(1, "senderUserId", FieldKind::String, true),
+            field(2, "senderDeviceId", FieldKind::String, true),
+            enum_field(3, "kind", &["reaction", "raiseHand", "caption"], true),
+            // Opaque per-kind body: e.g. `{emoji}` for a reaction, `{active}`
+            // for raise-hand, `{text, isFinal}` for a caption fragment. Signal
+            // `value`s are dynamic msgpack (not schema-validated), so this is
+            // metadata for codegen/docs, mirroring `WebRTCSignal.payload`.
             field(4, "payload", FieldKind::Bytes, true),
         ],
-    }]
+    }
 }
 
 /// Build a complete, self-contained [`FrickSchema`] carrying only the call
@@ -299,7 +341,7 @@ mod tests {
         assert_eq!(schema.objects.len(), 3);
         assert_eq!(schema.events.len(), 7);
         assert_eq!(schema.streams.len(), 1);
-        assert_eq!(schema.signals.len(), 1);
+        assert_eq!(schema.signals.len(), 2);
     }
 
     #[test]
@@ -313,6 +355,57 @@ mod tests {
         let events = call_event_defs(50);
         assert_eq!(events.first().map(|e| e.id), Some(50));
         assert_eq!(events.last().map(|e| e.id), Some(56));
+        // The data-channel relay signal is spliced in right after WebRTCSignal
+        // (AURA-316), so a host reserving `n` ids for `call_signal_defs` keeps
+        // both signals contiguous.
+        let signals = call_signal_defs(60);
+        assert_eq!(signals.len(), 2);
+        assert_eq!(signals[0].id, 60);
+        assert_eq!(signals[0].name, WEBRTC_SIGNAL);
+        assert_eq!(signals[1].id, 61);
+        assert_eq!(signals[1].name, CALL_DATA_CHANNEL);
+    }
+
+    #[test]
+    fn call_data_channel_signal_is_keyed_by_call_id_and_carries_a_kind_enum() {
+        // AURA-316: the data-channel relay reuses the same `callId` key shape
+        // as `WebRTCSignal` (so `is_signal_member`'s call-id lookup applies
+        // unchanged) and enumerates exactly the reactions/raise-hand/captions
+        // envelope kinds the ticket asks for.
+        let signal = call_data_channel_signal_def(1);
+        assert_eq!(signal.name, CALL_DATA_CHANNEL);
+        assert_eq!(
+            signal
+                .key_fields
+                .iter()
+                .map(|f| f.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["callId"]
+        );
+        let kind = signal
+            .fields
+            .iter()
+            .find(|f| f.name == "kind")
+            .expect("kind field");
+        assert_eq!(
+            kind.enum_values.as_deref(),
+            Some(
+                vec![
+                    "reaction".to_string(),
+                    "raiseHand".to_string(),
+                    "caption".to_string(),
+                ]
+                .as_slice()
+            )
+        );
+        // Ephemeral by design: short TTL relative to the durable call-event
+        // stream, and strictly shorter than the WebRTCSignal TTL since a stale
+        // reaction is worthless.
+        let webrtc = call_signal_defs(1)
+            .into_iter()
+            .find(|s| s.name == WEBRTC_SIGNAL)
+            .expect("webrtc signal");
+        assert!(signal.ttl_ms < webrtc.ttl_ms);
     }
 
     #[test]

@@ -1694,20 +1694,24 @@ async fn handle_signal(hub: &Arc<GatewayHub>, id: u64, payload: SignalPayload) -
         return false;
     }
     let app_id = connection_app_id(hub, id);
-    // FR-284: gate the WebRTCSignal relay on call membership — only a member of
-    // the call (creator / non-resolved invitee / participant of a non-ended
-    // call) may relay SDP/ICE. The signal is keyed by the call id.
-    if payload.name == crate::calls::schema::WEBRTC_SIGNAL
-        && !hub
-            .state
-            .calls
-            .is_signal_member(
-                &principal.tenant_id,
-                &app_id,
-                &payload.key,
-                &principal.user_id,
-            )
-            .await
+    // FR-284 / AURA-316: gate the WebRTCSignal *and* CallDataChannel relays on
+    // call membership — only a member of the call (creator / non-resolved
+    // invitee / participant of a non-ended call) may relay SDP/ICE or in-call
+    // data-channel envelopes (reactions/raise-hand/captions). Both signals are
+    // keyed by the call id, so the same membership check applies unchanged.
+    if matches!(
+        payload.name.as_str(),
+        crate::calls::schema::WEBRTC_SIGNAL | crate::calls::schema::CALL_DATA_CHANNEL
+    ) && !hub
+        .state
+        .calls
+        .is_signal_member(
+            &principal.tenant_id,
+            &app_id,
+            &payload.key,
+            &principal.user_id,
+        )
+        .await
     {
         let nack = simple_nack(
             FrickErrorCode::AuthForbidden,

@@ -1131,6 +1131,202 @@ async fn create_call_enqueues_a_ringing_push_per_invitee() {
     assert_eq!(recipients, vec!["bob".to_string(), "carol".to_string()]);
 }
 
+/// AURA-317 — the ring path itself (a real `CallCommand::Create` frame through
+/// [`handle_raw_frame`]/[`handle_call_command`], not the [`enqueue_ringing_push`]
+/// helper directly) ends with a durable `push.deliver` job for the invitee,
+/// while the creator still gets their ordinary `CallCommandResult` frame.
+/// Proves the trigger is really wired into the control-plane's create path, and
+/// that emitting the push intent is metadata-only + doesn't disturb the normal
+/// call-command reply.
+#[tokio::test]
+async fn call_command_create_frame_triggers_a_ringing_push_job() {
+    use frick_protocol::calls::{CallCommandName, CallCommandOp, CallCommandPayload};
+    use frick_store::stores::job::ListJobsFilter;
+
+    let hub = test_hub_with_schema(crate::calls::schema::build_call_schema()).await;
+    let creator = tenant_principal("ada", DEFAULT_TENANT_ID);
+    let (creator_id, mut creator_rx) = register_test_connection(&hub, Some(creator), None);
+
+    let create = FrickFrame::CallCommand(CallCommandPayload {
+        request_id: "req-create-1".into(),
+        command: CallCommandOp::Create {
+            conversation_id: "conv-42".into(),
+            invitee_user_ids: vec!["grace".into()],
+            kind: None,
+            region_hint: None,
+        },
+    });
+    let bytes = encode_frame(&create).unwrap();
+    let closed = super::handle_raw_frame(&hub, creator_id, &bytes).await;
+    assert!(!closed);
+
+    // The creator still gets the ordinary CallCommandResult — the push trigger
+    // is a side-channel, not a replacement reply.
+    let out = creator_rx.try_recv().expect("a reply frame");
+    let super::Outbound::Frame(bytes) = out else {
+        panic!("expected a frame");
+    };
+    let FrickFrame::CallCommandResult(result) = decode_frame(&bytes).unwrap() else {
+        panic!("expected a CallCommandResult");
+    };
+    assert_eq!(result.request_id, "req-create-1");
+    assert_eq!(result.op, CallCommandName::Create);
+    let room = result.room.expect("create result carries the room");
+    let call_id = room.id.clone();
+
+    // A durable push.deliver job landed for grace's ringing push, decoding to
+    // a call.ringing intent keyed on the real call id the control plane minted.
+    let jobs = hub
+        .state
+        .store
+        .jobs()
+        .list(&ListJobsFilter {
+            tenant_id: Some(DEFAULT_TENANT_ID.to_string()),
+            job_type: Some("push.deliver".to_string()),
+            ..ListJobsFilter::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(jobs.len(), 1, "one ringing push for the lone invitee");
+    let intent =
+        crate::push::router::decode_intent(&jobs[0].payload).expect("a valid push.deliver intent");
+    assert_eq!(intent.intent, "call.ringing");
+    assert_eq!(intent.recipient_user_ids, vec!["grace".to_string()]);
+    assert_eq!(intent.thread_id.as_deref(), Some(call_id.as_str()));
+    let Some(Value::Map(data)) = intent.body.data.as_ref() else {
+        panic!("ringing push must carry a data map");
+    };
+    // Metadata-only: no message/call-content field, just routing data.
+    let flat = format!("{data:?}").to_lowercase();
+    for banned in ["ciphertext", "plaintext", "sdp", "\"offer\"", "\"answer\""] {
+        assert!(
+            !flat.contains(banned),
+            "push data leaked `{banned}`: {flat}"
+        );
+    }
+    assert!(
+        data.iter()
+            .any(|(k, v)| k.as_str() == Some("callId") && v.as_str() == Some(call_id.as_str()))
+    );
+}
+
+// ---- CallDataChannel relay (AURA-316) ---------------------------------------
+
+/// AURA-316: `CallDataChannel` (reactions/raise-hand/captions) rides the
+/// generic `SignalSend`/`SignalDeliver` primitive, reusing the exact FR-284
+/// call-membership gate already proven for `WebRTCSignal` — no new authz
+/// surface, no touching the framework-reserved `CallCommandOp`/object types.
+/// A call member (creator or invitee) may relay a data-channel envelope; an
+/// outsider is rejected with the same `notMember` Nack shape as the signaling
+/// relay.
+#[tokio::test]
+async fn call_data_channel_relay_is_gated_on_call_membership_like_webrtc_signal() {
+    use frick_protocol::frame::SignalPayload;
+
+    // The default `test_hub()` schema (`Note`-only) has no `CallRoom`/
+    // `CallInvite` object types, so `create_call` would fail to persist; use
+    // the real call schema instead (same one `CallControlPlane`'s own unit
+    // tests build against).
+    let hub = test_hub_with_schema(crate::calls::schema::build_call_schema()).await;
+
+    let creator = tenant_principal("ada", DEFAULT_TENANT_ID);
+    let outsider = tenant_principal("mallory", DEFAULT_TENANT_ID);
+    let (creator_id, mut creator_rx) = register_test_connection(&hub, Some(creator), None);
+    let (outsider_id, mut outsider_rx) = register_test_connection(&hub, Some(outsider), None);
+
+    // Create a call with ada as creator and grace as the lone invitee (grace
+    // never connects here; only membership bookkeeping is under test).
+    let created = hub
+        .state
+        .calls
+        .create_call(
+            &crate::calls::call_actor("ada", "dev-a"),
+            crate::calls::CreateCallInput {
+                conversation_id: "conv-1".into(),
+                invitee_user_ids: vec!["grace".into()],
+                kind: None,
+                region_hint: None,
+            },
+        )
+        .await
+        .expect("create call");
+    let call_id = created.room.id.clone();
+
+    // The creator (a call member) relays a reaction — it is accepted (Ack),
+    // not Nacked.
+    let reaction = FrickFrame::SignalSend(SignalPayload {
+        request_id: "req-reaction-1".into(),
+        name: crate::calls::schema::CALL_DATA_CHANNEL.to_string(),
+        key: call_id.clone(),
+        value: Value::Map(vec![
+            ("kind".into(), "reaction".into()),
+            ("emoji".into(), "🎉".into()),
+        ]),
+    });
+    let bytes = encode_frame(&reaction).unwrap();
+    let closed = super::handle_raw_frame(&hub, creator_id, &bytes).await;
+    assert!(!closed);
+    let out = creator_rx.try_recv().expect("a reply frame");
+    let super::Outbound::Frame(bytes) = out else {
+        panic!("expected a frame");
+    };
+    match decode_frame(&bytes).unwrap() {
+        FrickFrame::Ack(ack) => assert_eq!(ack.request_id, "req-reaction-1"),
+        other => panic!("expected an Ack for a member's relay, got {other:?}"),
+    }
+
+    // An outsider (never invited, never joined) relaying on the same call id
+    // is rejected with the identical `notMember` Nack the WebRTCSignal gate
+    // uses (FR-284) — same seam, same failure shape.
+    let hijack = FrickFrame::SignalSend(SignalPayload {
+        request_id: "req-reaction-2".into(),
+        name: crate::calls::schema::CALL_DATA_CHANNEL.to_string(),
+        key: call_id.clone(),
+        value: Value::Map(vec![("kind".into(), "raiseHand".into())]),
+    });
+    let bytes = encode_frame(&hijack).unwrap();
+    let closed = super::handle_raw_frame(&hub, outsider_id, &bytes).await;
+    assert!(!closed);
+    let out = outsider_rx.try_recv().expect("a reply frame");
+    let super::Outbound::Frame(bytes) = out else {
+        panic!("expected a frame");
+    };
+    let FrickFrame::Nack(nack) = decode_frame(&bytes).unwrap() else {
+        panic!("expected a nack for a non-member's relay");
+    };
+    assert_eq!(nack.error.code, FrickErrorCode::AuthForbidden);
+    let Some(Value::Map(details)) = &nack.error.details else {
+        panic!("details map");
+    };
+    assert!(
+        details
+            .iter()
+            .any(|(k, v)| k.as_str() == Some("reason") && v.as_str() == Some("notMember")),
+        "expected reason:notMember, got {details:?}"
+    );
+
+    // A completely unrelated signal name (not WebRTCSignal or CallDataChannel)
+    // is never subject to the call-membership gate at all — the outsider's
+    // relay on an arbitrary signal succeeds.
+    let unrelated = FrickFrame::SignalSend(SignalPayload {
+        request_id: "req-unrelated".into(),
+        name: "SomeOtherSignal".into(),
+        key: call_id,
+        value: Value::Map(vec![]),
+    });
+    let bytes = encode_frame(&unrelated).unwrap();
+    let closed = super::handle_raw_frame(&hub, outsider_id, &bytes).await;
+    assert!(!closed);
+    let out = outsider_rx.try_recv().expect("a reply frame");
+    let super::Outbound::Frame(bytes) = out else {
+        panic!("expected a frame");
+    };
+    match decode_frame(&bytes).unwrap() {
+        FrickFrame::Ack(ack) => assert_eq!(ack.request_id, "req-unrelated"),
+        other => panic!("expected an Ack for an ungated signal, got {other:?}"),
+    }
+}
+
 // ---- helpers ----------------------------------------------------------------
 
 fn test_config() -> FrickConfig {

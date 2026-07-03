@@ -81,8 +81,29 @@ string_enum! {
     }
 }
 
+string_enum! {
+    /// Kinds of lightweight in-call data-channel envelope relayed via the
+    /// `CallDataChannel` signal (AURA-316): ephemeral UX signaling that rides
+    /// alongside the media plane rather than a `CallCommand` or a durable
+    /// `CallEventStream` event.
+    pub enum CallDataChannelKind {
+        /// A transient emoji/reaction burst.
+        Reaction => "reaction",
+        /// A participant raising/lowering their hand.
+        RaiseHand => "raiseHand",
+        /// A live caption/transcription fragment.
+        Caption => "caption",
+    }
+}
+
 /// Canonical signal type name for WebRTC relay (`WEBRTC_SIGNAL_TYPE`).
 pub const WEBRTC_SIGNAL_TYPE: &str = "WebRTCSignal";
+
+/// Canonical signal type name for the in-call data-channel relay (AURA-316):
+/// reactions / raise-hand / captions. Gated on the same call-membership check
+/// as [`WEBRTC_SIGNAL_TYPE`] (FR-284), but kept as a distinct signal name so a
+/// client can subscribe to/rate-limit UX chatter independently of SDP/ICE.
+pub const CALL_DATA_CHANNEL_TYPE: &str = "CallDataChannel";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

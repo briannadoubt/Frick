@@ -28,9 +28,10 @@ pub mod schema;
 pub mod value;
 
 pub use calls::{
-    CallCommandName, CallCommandOp, CallCommandPayload, CallCommandResultPayload, CallInviteRecord,
-    CallKind, CallMediaGrant, CallMediaStatePatch, CallParticipantRecord, CallRoomRecord,
-    CallSfuConsumeResult, CallSfuProduceResult, WEBRTC_SIGNAL_TYPE,
+    CALL_DATA_CHANNEL_TYPE, CallCommandName, CallCommandOp, CallCommandPayload,
+    CallCommandResultPayload, CallDataChannelKind, CallInviteRecord, CallKind, CallMediaGrant,
+    CallMediaStatePatch, CallParticipantRecord, CallRoomRecord, CallSfuConsumeResult,
+    CallSfuProduceResult, WEBRTC_SIGNAL_TYPE,
 };
 pub use capabilities::{
     FrickClientCapabilities, FrickClientPlatform, FrickSchemaCapability, FrickServerCapabilities,
