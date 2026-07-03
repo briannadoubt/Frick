@@ -2,18 +2,20 @@
 //!
 //! The store encrypts a deliberately scoped set of value columns before they
 //! reach the SQL driver (or the filesystem / S3 blob-bytes drivers) and
-//! decrypts them on the way back out. Covered surfaces: `objects.packed`
-//! (object-store values, which is where application record data such as
-//! drafts lives), blob content bytes on every bytes driver (routed through
-//! the facade's `write_content` / `read_content`), and
-//! `push_device_registrations.token` (push tokens are device-identifying
-//! PII). Deliberately NOT covered, with reasons: `auth_sessions`,
-//! `auth_refresh_tokens`, and `auth_password_reset_tokens` store one-way
-//! SHA-256 digests rather than recoverable secrets; `signal_outbox` rows are
-//! ephemeral with a thirty-second TTL; `search_indexes` must hold matchable
-//! derived text to function; `stream_events.packed` and `jobs.packed` are
-//! named follow-up surfaces (they thread through the idempotency cache and
-//! tombstone-rewrite paths and get their own ticket).
+//! decrypts them on the way back out.
+//!
+//! ## Coverage
+//!
+//! | Surface | Status | Notes |
+//! |---|---|---|
+//! | `objects.packed` | covered (AURA-328) | object-store values — application record data such as drafts |
+//! | blob content bytes | covered (AURA-328) | every bytes driver, via the facade's `write_content` / `read_content` |
+//! | `push_device_registrations.token` | covered (AURA-328) | device-identifying PII, TEXT envelope |
+//! | `stream_events.packed` | covered (AURA-436) | packed event tuples; sealed on append and tombstone rewrite, opened on every read incl. the durable idempotency lookup |
+//! | `jobs.packed` | covered (AURA-436) | job payloads; sealed on enqueue and on the completion-result overwrite, opened in `map_row` under the row's own tenant |
+//! | `auth_sessions` / `auth_refresh_tokens` / `auth_password_reset_tokens` | not covered | one-way SHA-256 digests, not recoverable secrets |
+//! | `signal_outbox` | not covered | ephemeral rows with a thirty-second TTL |
+//! | `search_indexes` | not covered | must hold matchable derived text to function |
 //!
 //! The scheme is envelope encryption. A 32-byte master key comes from a
 //! [`KeyProvider`]; the production default is [`EnvKeyProvider`], which reads
@@ -62,8 +64,9 @@ pub const STORE_KEY_ID_ENV: &str = "FRICK_STORE_KEY_ID";
 pub const DEFAULT_ENV_KEY_ID: &str = "env-1";
 
 /// Binary envelope magic. Eight bytes chosen to be vanishingly improbable as
-/// a legacy plaintext prefix (`objects.packed` always starts with a msgpack
-/// fixarray byte, and push tokens are printable text).
+/// a legacy plaintext prefix (the packed columns — `objects.packed`,
+/// `stream_events.packed`, `jobs.packed` — are msgpack, whose encodings never
+/// begin with this eight-byte run, and push tokens are printable text).
 const ENVELOPE_MAGIC: &[u8; 8] = b"FRICKAE1";
 
 /// Text envelope prefix for TEXT columns: the base64 of the binary envelope

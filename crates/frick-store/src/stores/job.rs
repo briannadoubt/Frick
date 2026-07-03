@@ -19,6 +19,7 @@
 use frick_protocol::Value;
 
 use crate::driver::{SqlDialect, SqlDriver, SqlRow, SqlValue};
+use crate::encryption::AtRestEncryption;
 use crate::error::StoreError;
 use crate::packed::{decode_packed, encode_packed};
 
@@ -213,12 +214,39 @@ const fn civil_from_days(days: i64) -> (i64, i64, i64) {
 /// hands out short-lived store views.
 pub struct JobStore<'a> {
     sql: &'a SqlDriver,
+    /// Optional at-rest encryption engine (AURA-436, extending AURA-328).
+    /// When set, the packed job payload (and the completion result that
+    /// overwrites it) is sealed under the tenant-derived key before it hits
+    /// the `jobs.packed` column and opened on every read (legacy plaintext
+    /// rows pass through untouched).
+    encryption: Option<&'a AtRestEncryption>,
 }
 
 impl<'a> JobStore<'a> {
     #[must_use]
     pub const fn new(sql: &'a SqlDriver) -> Self {
-        Self { sql }
+        Self {
+            sql,
+            encryption: None,
+        }
+    }
+
+    /// Attach (or detach) the at-rest encryption engine. The facade threads
+    /// its configured engine through here so every `jobs()` view encrypts
+    /// consistently; `None` keeps the historical plaintext behavior.
+    #[must_use]
+    pub const fn with_encryption(mut self, encryption: Option<&'a AtRestEncryption>) -> Self {
+        self.encryption = encryption;
+        self
+    }
+
+    /// Seal an encoded packed payload for `tenant_id`, or pass it through
+    /// when no encryption engine is attached (or no key is active).
+    fn seal_packed(&self, tenant_id: &str, encoded: Vec<u8>) -> Result<Vec<u8>, StoreError> {
+        match self.encryption {
+            Some(encryption) => encryption.encrypt(tenant_id, &encoded),
+            None => Ok(encoded),
+        }
     }
 
     /// Insert a new job, or — when `idempotency_key` is set and a row already
@@ -242,7 +270,7 @@ impl<'a> JobStore<'a> {
         let now = epoch_ms_to_iso(now_ms);
         let available_at = input.available_at.clone().unwrap_or_else(|| now.clone());
         let max_attempts = input.max_attempts.unwrap_or(5);
-        let packed = encode_packed(&input.payload)?;
+        let packed = self.seal_packed(&input.tenant_id, encode_packed(&input.payload)?)?;
 
         // TS uses `sql.run` and reads `lastInsertRowid`; here the `RETURNING
         // id` row is read directly (the dialect-portable path — PG callers
@@ -334,7 +362,9 @@ impl<'a> JobStore<'a> {
           RETURNING *"
         );
         let rows = self.sql.all(&sql, &params).await?;
-        rows.iter().map(map_row).collect()
+        rows.iter()
+            .map(|row| map_row(row, self.encryption))
+            .collect()
     }
 
     /// Mark a job completed. Idempotent — re-completing an already-completed
@@ -350,13 +380,27 @@ impl<'a> JobStore<'a> {
     ) -> Result<(), StoreError> {
         let now = epoch_ms_to_iso(now_ms);
         if let Some(result) = result {
+            let encoded = encode_packed(result)?;
+            // Sealing needs the row's tenant (the per-tenant HKDF input), and
+            // `complete` addresses the row by id alone — look it up when a key
+            // is active. A missing row was a silent no-op before (the UPDATE
+            // matched nothing), so returning early preserves that behavior.
+            let stored = match self.encryption {
+                Some(encryption) if encryption.is_active() => {
+                    let Some(row) = self.get_by_id(job_id, None, None).await? else {
+                        return Ok(());
+                    };
+                    encryption.encrypt(&row.tenant_id, &encoded)?
+                }
+                _ => encoded,
+            };
             self.sql
                 .run(
                     "UPDATE jobs SET status = 'completed', completed_at = ?, packed = ?
             WHERE id = ? AND status != 'dead_lettered'",
                     &[
                         SqlValue::from(now.as_str()),
-                        SqlValue::from(encode_packed(result)?),
+                        SqlValue::from(stored),
                         SqlValue::from(job_id),
                     ],
                 )
@@ -473,7 +517,9 @@ impl<'a> JobStore<'a> {
           LIMIT ?"
         );
         let rows = self.sql.all(&sql, &params).await?;
-        rows.iter().map(map_row).collect()
+        rows.iter()
+            .map(|row| map_row(row, self.encryption))
+            .collect()
     }
 
     /// Single-row lookup, optionally scoped to a tenant and/or app partition.
@@ -495,7 +541,9 @@ impl<'a> JobStore<'a> {
         }
         let sql = format!("SELECT * FROM jobs WHERE {where_sql} LIMIT 1");
         let row = self.sql.get(&sql, &params).await?;
-        row.as_ref().map(map_row).transpose()
+        row.as_ref()
+            .map(|row| map_row(row, self.encryption))
+            .transpose()
     }
 
     /// Snapshot of row counts by status, plus a synthetic `failed` bucket
@@ -573,24 +621,38 @@ impl<'a> JobStore<'a> {
                 ],
             )
             .await?;
-        row.as_ref().map(map_row).transpose()
+        row.as_ref()
+            .map(|row| map_row(row, self.encryption))
+            .transpose()
     }
 }
 
 /// TS `mapRow` (`job-store.ts:438-460`): numbers through `Number(...)`,
 /// nullable columns become absent properties (TS truthiness — empty strings
 /// also map to `None`), `app_id ?? DEFAULT_APP_ID`.
-fn map_row(row: &SqlRow) -> Result<JobRow, StoreError> {
+///
+/// `encryption` opens a sealed `packed` column under the row's own
+/// `tenant_id` (AURA-436); legacy plaintext rows pass through untouched.
+fn map_row(row: &SqlRow, encryption: Option<&AtRestEncryption>) -> Result<JobRow, StoreError> {
     let status_text = required_text(row, "status")?;
     let status = JobStatus::parse(&status_text).ok_or_else(|| {
         StoreError::store(format!("jobs.map_row: unknown status '{status_text}'"))
     })?;
+    let tenant_id = required_text(row, "tenant_id")?;
     let packed = row
         .blob("packed")
         .ok_or_else(|| StoreError::store("jobs.map_row: missing column 'packed'"))?;
+    let opened;
+    let packed: &[u8] = match encryption {
+        Some(encryption) => {
+            opened = encryption.decrypt(&tenant_id, packed)?;
+            &opened
+        }
+        None => packed,
+    };
     Ok(JobRow {
         id: required_i64(row, "id")?,
-        tenant_id: required_text(row, "tenant_id")?,
+        tenant_id,
         app_id: optional_text(row, "app_id").unwrap_or_else(|| DEFAULT_APP_ID.to_string()),
         job_type: required_text(row, "job_type")?,
         payload: decode_packed(packed)?,

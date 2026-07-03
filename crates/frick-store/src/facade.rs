@@ -765,13 +765,16 @@ impl FrickStore {
         SignalStore::new(&self.driver, &self.schema)
     }
 
-    /// A [`JobStore`] view.
+    /// A [`JobStore`] view, carrying the configured at-rest encryption engine
+    /// (AURA-436) so `jobs.packed` payloads seal on write and open on read.
     #[must_use]
     pub fn jobs(&self) -> JobStore<'_> {
-        JobStore::new(&self.driver)
+        JobStore::new(&self.driver).with_encryption(self.encryption.as_deref())
     }
 
-    /// A [`StreamStore`] view configured with this facade's replay window. Does
+    /// A [`StreamStore`] view configured with this facade's replay window and
+    /// the configured at-rest encryption engine (AURA-436) so
+    /// `stream_events.packed` payloads seal on write and open on read. Does
     /// NOT carry the cache — callers that want the front-cache go through
     /// [`append_event`](Self::append_event), which threads the shared cache.
     #[must_use]
@@ -781,6 +784,7 @@ impl FrickStore {
             &self.schema,
             Some(self.idempotency_replay_window_ms),
         )
+        .with_encryption(self.encryption.as_deref())
     }
 
     // ---- §7.3 write-notification funnel ----------------------------------

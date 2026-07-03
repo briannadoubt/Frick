@@ -26,6 +26,7 @@ use frick_protocol::{
 };
 
 use crate::driver::SqlDriver;
+use crate::encryption::AtRestEncryption;
 use crate::error::StoreError;
 use crate::packed::{decode_packed, encode_packed};
 use crate::stores::blob_bytes::iso_from_epoch_ms;
@@ -96,6 +97,11 @@ pub struct StreamStore<'a> {
     sql: &'a SqlDriver,
     schema: &'a FrickSchema,
     replay_window_ms: Option<i64>,
+    /// Optional at-rest encryption engine (AURA-436, extending AURA-328).
+    /// When set, the packed event tuple is sealed under the tenant-derived
+    /// key before it hits the `stream_events.packed` column and opened on
+    /// every read (legacy plaintext rows pass through untouched).
+    encryption: Option<&'a AtRestEncryption>,
 }
 
 impl<'a> StreamStore<'a> {
@@ -109,6 +115,34 @@ impl<'a> StreamStore<'a> {
             sql,
             schema,
             replay_window_ms,
+            encryption: None,
+        }
+    }
+
+    /// Attach (or detach) the at-rest encryption engine. The facade threads
+    /// its configured engine through here so every `streams()` view encrypts
+    /// consistently; `None` keeps the historical plaintext behavior.
+    #[must_use]
+    pub const fn with_encryption(mut self, encryption: Option<&'a AtRestEncryption>) -> Self {
+        self.encryption = encryption;
+        self
+    }
+
+    /// Seal an encoded packed tuple for `tenant_id`, or pass it through when
+    /// no encryption engine is attached (or no key is active).
+    fn seal_packed(&self, tenant_id: &str, encoded: Vec<u8>) -> Result<Vec<u8>, StoreError> {
+        match self.encryption {
+            Some(encryption) => encryption.encrypt(tenant_id, &encoded),
+            None => Ok(encoded),
+        }
+    }
+
+    /// Open a stored `packed` column value: enveloped bytes decrypt under the
+    /// tenant-derived key, legacy plaintext passes through verbatim.
+    fn open_packed(&self, tenant_id: &str, stored: &[u8]) -> Result<Vec<u8>, StoreError> {
+        match self.encryption {
+            Some(encryption) => encryption.decrypt(tenant_id, stored),
+            None => Ok(stored.to_vec()),
         }
     }
 
@@ -197,6 +231,7 @@ impl<'a> StreamStore<'a> {
         };
         let packed =
             pack_stream_event(self.schema, &wire_event).map_err(|err| protocol_error(&err))?;
+        let stored_packed = self.seal_packed(tenant_id, encode_packed(&packed)?)?;
         let created_at = iso_from_epoch_ms(now_ms);
 
         // 4. INSERT the event — exact column order from map 03 §8.2.
@@ -213,7 +248,7 @@ impl<'a> StreamStore<'a> {
                     sequence.into(),
                     event_id.into(),
                     event.into(),
-                    encode_packed(&packed)?.into(),
+                    stored_packed.into(),
                     replica_id.into(),
                     request_id.into(),
                     created_at.clone().into(),
@@ -628,15 +663,17 @@ impl<'a> StreamStore<'a> {
         else {
             return Ok(false);
         };
-        let packed: PackedStreamEvent = decode_packed(
+        let opened = self.open_packed(
+            tenant_id,
             row.blob("packed")
                 .ok_or_else(|| StoreError::driver("stream_events.packed missing"))?,
         )?;
+        let packed: PackedStreamEvent = decode_packed(&opened)?;
         // Keep every identity component (stream type id, stream key, sequence,
         // event id, event type id) — only the field payload is dropped.
         let tombstoned: PackedStreamEvent =
             (packed.0, packed.1, packed.2, packed.3, packed.4, Vec::new());
-        let encoded = encode_packed(&tombstoned)?;
+        let encoded = self.seal_packed(tenant_id, encode_packed(&tombstoned)?)?;
 
         let result = self
             .sql
@@ -719,10 +756,12 @@ impl<'a> StreamStore<'a> {
         tenant_id: &str,
         app_id: &str,
     ) -> Result<StoredEvent, StoreError> {
-        let packed: PackedStreamEvent = decode_packed(
+        let opened = self.open_packed(
+            tenant_id,
             row.blob("packed")
                 .ok_or_else(|| StoreError::driver("stream_events.packed missing"))?,
         )?;
+        let packed: PackedStreamEvent = decode_packed(&opened)?;
         let event =
             unpack_stream_event(self.schema, &packed).map_err(|err| protocol_error(&err))?;
         Ok(StoredEvent {

@@ -1,14 +1,16 @@
 //! Store-level integration tests for server-side at-rest encryption
-//! (AURA-328): object values, blob content bytes, and push tokens round-trip
-//! through the facade while their stored columns carry sealed envelopes,
-//! legacy plaintext rows keep reading after a key is configured, and a wrong
-//! key fails reads loudly instead of returning garbage.
+//! (AURA-328 + AURA-436): object values, blob content bytes, push tokens,
+//! stream-event payloads, and job payloads round-trip through the facade
+//! while their stored columns carry sealed envelopes, legacy plaintext rows
+//! keep reading after a key is configured, and a wrong key fails reads loudly
+//! instead of returning garbage.
 
 use std::sync::Arc;
 
-use frick_protocol::schema::{FieldDef, FieldKind, ObjectDef};
+use frick_protocol::schema::{EventDef, FieldDef, FieldKind, ObjectDef, StreamDef};
 use frick_protocol::{FrickSchema, Value};
 use frick_store::stores::blob::BlobMetadataInput;
+use frick_store::stores::job::EnqueueInput;
 use frick_store::stores::push_registration::{
     PushEnvironment, PushPlatform, PushRegistrationInput,
 };
@@ -31,8 +33,21 @@ fn engine(key: [u8; 32]) -> Arc<AtRestEncryption> {
     )))
 }
 
-/// A minimal product schema with one `Conversation` object type, so the
-/// object codec has fields to pack.
+fn test_field(id: i64, name: &str, kind: FieldKind, required: bool) -> FieldDef {
+    FieldDef {
+        id,
+        name: name.into(),
+        kind,
+        required,
+        ref_: None,
+        enum_values: None,
+        sensitivity: None,
+    }
+}
+
+/// A minimal product schema with one `Conversation` object type (so the
+/// object codec has fields to pack) and one `chat` stream carrying `message`
+/// events (so the stream codec does too).
 fn test_schema() -> FrickSchema {
     FrickSchema {
         name: "at-rest-test".into(),
@@ -60,8 +75,17 @@ fn test_schema() -> FrickSchema {
             indexes: vec![],
             merge_policy: None,
         }],
-        streams: vec![],
-        events: vec![],
+        streams: vec![StreamDef {
+            id: 3,
+            name: "chat".into(),
+            key_fields: vec![test_field(1, "roomId", FieldKind::String, true)],
+            events: vec!["message".into()],
+        }],
+        events: vec![EventDef {
+            id: 4,
+            name: "message".into(),
+            fields: vec![test_field(1, "text", FieldKind::String, true)],
+        }],
         presences: vec![],
         signals: vec![],
         blobs: vec![],
@@ -423,4 +447,326 @@ async fn wrong_key_fails_reads_across_reopen() {
         .await
         .expect_err("wrong key must fail the read");
     assert!(error.to_string().contains("at-rest decryption failed"));
+}
+
+// ---------------------------------------------------------------------------
+// AURA-436: stream_events.packed
+// ---------------------------------------------------------------------------
+
+fn message_payload(text: &str) -> Value {
+    Value::Map(vec![("text".into(), text.into())])
+}
+
+async fn raw_stream_packed(store: &FrickStore, event_id: &str) -> Vec<u8> {
+    store
+        .sql_driver()
+        .get(
+            "SELECT packed FROM stream_events WHERE event_id = ?",
+            &[event_id.into()],
+        )
+        .await
+        .expect("raw packed read")
+        .expect("row exists")
+        .blob("packed")
+        .expect("packed is a blob")
+        .to_vec()
+}
+
+#[tokio::test]
+async fn stream_event_payloads_seal_at_rest_and_round_trip() {
+    let store = FrickStore::open(options(":memory:", Some(engine([7u8; 32]))))
+        .await
+        .expect("open encrypted store");
+    let appended = store
+        .append_event(
+            DEFAULT_TENANT_ID,
+            "chat",
+            "room-1",
+            "replica-1",
+            "req-1",
+            "message",
+            &message_payload("stream secret payload"),
+            DEFAULT_APP_ID,
+        )
+        .await
+        .expect("append");
+    assert!(appended.created);
+
+    // The stored packed column is a sealed envelope, not msgpack plaintext.
+    let stored = raw_stream_packed(&store, &appended.event.event.event_id).await;
+    assert!(
+        stored.starts_with(ENVELOPE_MAGIC),
+        "stream packed column must be sealed"
+    );
+    assert!(
+        !stored
+            .windows(b"stream secret payload".len())
+            .any(|w| w == b"stream secret payload"),
+        "plaintext must not appear in the stored bytes"
+    );
+
+    // Every read path decrypts: read, list_all, and the durable idempotency
+    // lookup a replayed append routes through.
+    let read = store
+        .streams()
+        .read(DEFAULT_TENANT_ID, "chat", "room-1", 0, None, DEFAULT_APP_ID)
+        .await
+        .expect("read");
+    assert_eq!(read.len(), 1);
+    assert_eq!(
+        read[0].event.payload,
+        message_payload("stream secret payload")
+    );
+    let listed = store
+        .streams()
+        .list_all(DEFAULT_TENANT_ID, DEFAULT_APP_ID)
+        .await
+        .expect("list_all");
+    assert_eq!(listed.len(), 1);
+    let replayed = store
+        .append_event(
+            DEFAULT_TENANT_ID,
+            "chat",
+            "room-1",
+            "replica-1",
+            "req-1",
+            "message",
+            &message_payload("stream secret payload"),
+            DEFAULT_APP_ID,
+        )
+        .await
+        .expect("replayed append");
+    assert!(!replayed.created, "replay must dedupe");
+    assert_eq!(
+        replayed.event.event.payload,
+        message_payload("stream secret payload")
+    );
+
+    // The AURA-191 tombstone rewrite re-seals: the redacted row still carries
+    // an envelope and reads back with an empty payload.
+    let redacted = store
+        .streams()
+        .redact_event(DEFAULT_TENANT_ID, "chat", "room-1", 1, DEFAULT_APP_ID)
+        .await
+        .expect("redact");
+    assert!(redacted);
+    let stored = raw_stream_packed(&store, &appended.event.event.event_id).await;
+    assert!(
+        stored.starts_with(ENVELOPE_MAGIC),
+        "redacted packed column must stay sealed"
+    );
+    let read = store
+        .streams()
+        .read(DEFAULT_TENANT_ID, "chat", "room-1", 0, None, DEFAULT_APP_ID)
+        .await
+        .expect("read after redact");
+    assert_eq!(read.len(), 1);
+    assert_eq!(read[0].event.payload, Value::Map(vec![]));
+}
+
+#[tokio::test]
+async fn legacy_plaintext_stream_rows_read_after_key_is_configured() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("legacy-streams.sqlite");
+    let path = path.to_str().expect("utf8 path");
+
+    // Yesterday's server: no key configured, the packed tuple lands plaintext.
+    {
+        let plain = FrickStore::open(options(path, None))
+            .await
+            .expect("open plaintext store");
+        let appended = plain
+            .append_event(
+                DEFAULT_TENANT_ID,
+                "chat",
+                "room-legacy",
+                "replica-legacy",
+                "req-legacy",
+                "message",
+                &message_payload("legacy stream text"),
+                DEFAULT_APP_ID,
+            )
+            .await
+            .expect("plaintext append");
+        assert!(
+            !raw_stream_packed(&plain, &appended.event.event.event_id)
+                .await
+                .starts_with(ENVELOPE_MAGIC)
+        );
+    }
+
+    // Today's server: key configured. The legacy row still reads, and new
+    // appends seal — encrypt-on-write, no migration of existing rows.
+    let sealed = FrickStore::open(options(path, Some(engine([7u8; 32]))))
+        .await
+        .expect("reopen with key");
+    let read = sealed
+        .streams()
+        .read(
+            DEFAULT_TENANT_ID,
+            "chat",
+            "room-legacy",
+            0,
+            None,
+            DEFAULT_APP_ID,
+        )
+        .await
+        .expect("legacy read");
+    assert_eq!(read.len(), 1);
+    assert_eq!(read[0].event.payload, message_payload("legacy stream text"));
+    let fresh = sealed
+        .append_event(
+            DEFAULT_TENANT_ID,
+            "chat",
+            "room-legacy",
+            "replica-fresh",
+            "req-fresh",
+            "message",
+            &message_payload("fresh stream text"),
+            DEFAULT_APP_ID,
+        )
+        .await
+        .expect("sealed append");
+    assert!(
+        raw_stream_packed(&sealed, &fresh.event.event.event_id)
+            .await
+            .starts_with(ENVELOPE_MAGIC)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AURA-436: jobs.packed
+// ---------------------------------------------------------------------------
+
+fn job_payload(text: &str) -> Value {
+    Value::Map(vec![("note".into(), text.into())])
+}
+
+fn job_input(job_type: &str, payload: Value) -> EnqueueInput {
+    EnqueueInput {
+        tenant_id: DEFAULT_TENANT_ID.to_string(),
+        app_id: None,
+        job_type: job_type.to_string(),
+        payload,
+        idempotency_key: None,
+        available_at: None,
+        max_attempts: None,
+    }
+}
+
+async fn raw_job_packed(store: &FrickStore, job_id: i64) -> Vec<u8> {
+    store
+        .sql_driver()
+        .get("SELECT packed FROM jobs WHERE id = ?", &[job_id.into()])
+        .await
+        .expect("raw packed read")
+        .expect("row exists")
+        .blob("packed")
+        .expect("packed is a blob")
+        .to_vec()
+}
+
+#[tokio::test]
+async fn job_payloads_seal_at_rest_and_round_trip() {
+    let store = FrickStore::open(options(":memory:", Some(engine([7u8; 32]))))
+        .await
+        .expect("open encrypted store");
+    let row = store
+        .jobs()
+        .enqueue(
+            job_input("send-email", job_payload("job secret input")),
+            NOW,
+        )
+        .await
+        .expect("enqueue");
+    assert_eq!(row.payload, job_payload("job secret input"));
+
+    // The stored packed column is a sealed envelope, not msgpack plaintext.
+    let stored = raw_job_packed(&store, row.id).await;
+    assert!(
+        stored.starts_with(ENVELOPE_MAGIC),
+        "job packed column must be sealed"
+    );
+    assert!(
+        !stored
+            .windows(b"job secret input".len())
+            .any(|w| w == b"job secret input"),
+        "plaintext must not appear in the stored bytes"
+    );
+
+    // claim() and get_by_id() decrypt.
+    let claimed = store
+        .jobs()
+        .claim("worker-1", Some("send-email"), 1, None, NOW)
+        .await
+        .expect("claim");
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].payload, job_payload("job secret input"));
+
+    // The completion-result overwrite re-seals under the row's tenant.
+    store
+        .jobs()
+        .complete(row.id, Some(&job_payload("job secret result")), NOW + 1_000)
+        .await
+        .expect("complete");
+    let stored = raw_job_packed(&store, row.id).await;
+    assert!(
+        stored.starts_with(ENVELOPE_MAGIC),
+        "completion result must be sealed"
+    );
+    let completed = store
+        .jobs()
+        .get_by_id(row.id, Some(DEFAULT_TENANT_ID), Some(DEFAULT_APP_ID))
+        .await
+        .expect("get_by_id")
+        .expect("present");
+    assert_eq!(completed.payload, job_payload("job secret result"));
+}
+
+#[tokio::test]
+async fn legacy_plaintext_job_rows_read_after_key_is_configured() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("legacy-jobs.sqlite");
+    let path = path.to_str().expect("utf8 path");
+
+    // Yesterday's server: no key configured, the payload lands plaintext.
+    let job_id = {
+        let plain = FrickStore::open(options(path, None))
+            .await
+            .expect("open plaintext store");
+        let row = plain
+            .jobs()
+            .enqueue(job_input("send-email", job_payload("legacy job text")), NOW)
+            .await
+            .expect("plaintext enqueue");
+        assert!(
+            !raw_job_packed(&plain, row.id)
+                .await
+                .starts_with(ENVELOPE_MAGIC)
+        );
+        row.id
+    };
+
+    // Today's server: key configured. The legacy row still reads, and new
+    // enqueues seal — encrypt-on-write, no migration of existing rows.
+    let sealed = FrickStore::open(options(path, Some(engine([7u8; 32]))))
+        .await
+        .expect("reopen with key");
+    let legacy = sealed
+        .jobs()
+        .get_by_id(job_id, None, None)
+        .await
+        .expect("legacy read")
+        .expect("legacy row present");
+    assert_eq!(legacy.payload, job_payload("legacy job text"));
+    let fresh = sealed
+        .jobs()
+        .enqueue(job_input("send-email", job_payload("fresh job text")), NOW)
+        .await
+        .expect("sealed enqueue");
+    assert!(
+        raw_job_packed(&sealed, fresh.id)
+            .await
+            .starts_with(ENVELOPE_MAGIC)
+    );
 }
