@@ -12,9 +12,15 @@ argon2 = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
+# At-rest value encryption (AURA-328): the workspace's established pure-Rust
+# AEAD (ChaCha20-Poly1305, already a workspace dependency for call E2EE) plus
+# HKDF-SHA256 for per-tenant key derivation (same crate/version frick-server
+# uses for Web Push content encryption). No native deps.
+chacha20poly1305 = { workspace = true }
 deadpool-postgres = { workspace = true }
 frick-protocol = { workspace = true }
 hex = { workspace = true }
+hkdf = "0.12"
 object_store = { workspace = true }
 rand = { workspace = true }
 rmp-serde = { workspace = true }

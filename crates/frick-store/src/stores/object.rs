@@ -30,6 +30,7 @@ use frick_protocol::{
 };
 
 use crate::driver::{RunResult, SqlDriver, SqlExec, SqlRow, SqlValue};
+use crate::encryption::AtRestEncryption;
 use crate::error::StoreError;
 use crate::packed::{decode_packed, encode_packed, without_record_id};
 use crate::stores::blob_bytes::iso_from_epoch_ms;
@@ -48,12 +49,30 @@ pub struct ObjectUpsertResult {
 pub struct ObjectStore<'a> {
     sql: &'a SqlDriver,
     schema: &'a FrickSchema,
+    /// Optional at-rest encryption engine (AURA-328). When set, `pack` seals
+    /// the encoded record under the tenant-derived key before it hits the
+    /// `objects.packed` column and `unpack` opens it (legacy plaintext rows
+    /// pass through untouched).
+    encryption: Option<&'a AtRestEncryption>,
 }
 
 impl<'a> ObjectStore<'a> {
     #[must_use]
     pub const fn new(sql: &'a SqlDriver, schema: &'a FrickSchema) -> Self {
-        Self { sql, schema }
+        Self {
+            sql,
+            schema,
+            encryption: None,
+        }
+    }
+
+    /// Attach (or detach) the at-rest encryption engine. The facade threads
+    /// its configured engine through here so every `objects()` view encrypts
+    /// consistently; `None` keeps the historical plaintext behavior.
+    #[must_use]
+    pub const fn with_encryption(mut self, encryption: Option<&'a AtRestEncryption>) -> Self {
+        self.encryption = encryption;
+        self
     }
 
     /// Legacy positional signature. Always writes unconditionally — equivalent
@@ -108,7 +127,7 @@ impl<'a> ObjectStore<'a> {
     ) -> Result<ObjectUpsertResult, StoreError> {
         // Pack outside the transaction: an unknown type / field is a caller
         // error, not a storage one, and must surface before we BEGIN.
-        let packed = self.pack(object_type, object_id, value)?;
+        let packed = self.pack(tenant_id, object_type, object_id, value)?;
         // The transaction callback is `for<'a> FnOnce(&'a SqlExec<'a>)`, so the
         // returned future may only borrow data valid for the (universally
         // quantified) transaction lifetime — it cannot hold these `&str` args
@@ -186,7 +205,7 @@ impl<'a> ObjectStore<'a> {
             .await?;
         match row {
             None => Ok(None),
-            Some(row) => Ok(Some(self.unpack(&row)?)),
+            Some(row) => Ok(Some(self.unpack(tenant_id, &row)?)),
         }
     }
 
@@ -244,7 +263,7 @@ impl<'a> ObjectStore<'a> {
                 &[app_id.into(), tenant_id.into(), object_type.into()],
             )
             .await?;
-        rows.iter().map(|row| self.unpack(row)).collect()
+        rows.iter().map(|row| self.unpack(tenant_id, row)).collect()
     }
 
     /// Return just the object ids of `object_type`, scoped to `tenant_id` +
@@ -336,8 +355,11 @@ impl<'a> ObjectStore<'a> {
     /// Pack a value for the `packed` column: strip the record `id` key first
     /// (`without_record_id`), schema-pack via the protocol codec, then msgpack
     /// the positional tuple. Unknown type / field surfaces the TS codec error.
+    /// With encryption attached, the encoded bytes are sealed under the
+    /// tenant-derived at-rest key (AURA-328) before storage.
     fn pack(
         &self,
+        tenant_id: &str,
         object_type: &str,
         object_id: &str,
         value: &Value,
@@ -349,16 +371,30 @@ impl<'a> ObjectStore<'a> {
             &without_record_id(value),
         )
         .map_err(|err| protocol_error(&err))?;
-        encode_packed(&record)
+        let encoded = encode_packed(&record)?;
+        match self.encryption {
+            Some(encryption) => encryption.encrypt(tenant_id, &encoded),
+            None => Ok(encoded),
+        }
     }
 
     /// Decode a `packed` column back into the object value (`id` re-injected
-    /// first by `unpack_object_record`).
-    fn unpack(&self, row: &SqlRow) -> Result<Value, StoreError> {
-        let packed: PackedRecord = decode_packed(
-            row.blob("packed")
-                .ok_or_else(|| StoreError::driver("objects.packed missing"))?,
-        )?;
+    /// first by `unpack_object_record`). With encryption attached, an
+    /// enveloped column is opened first; legacy plaintext rows pass through
+    /// the engine untouched (encrypt-on-write compatibility).
+    fn unpack(&self, tenant_id: &str, row: &SqlRow) -> Result<Value, StoreError> {
+        let stored = row
+            .blob("packed")
+            .ok_or_else(|| StoreError::driver("objects.packed missing"))?;
+        let opened;
+        let bytes: &[u8] = match self.encryption {
+            Some(encryption) => {
+                opened = encryption.decrypt(tenant_id, stored)?;
+                &opened
+            }
+            None => stored,
+        };
+        let packed: PackedRecord = decode_packed(bytes)?;
         let record =
             unpack_object_record(self.schema, &packed).map_err(|err| protocol_error(&err))?;
         Ok(record.value)
@@ -381,7 +417,7 @@ impl<'a> ObjectStore<'a> {
         version: i64,
         now_ms: i64,
     ) -> Result<(), StoreError> {
-        let packed = self.pack(object_type, object_id, value)?;
+        let packed = self.pack(tenant_id, object_type, object_id, value)?;
         write_row_packed(
             exec,
             app_id,

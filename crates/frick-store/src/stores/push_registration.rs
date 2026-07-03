@@ -16,6 +16,7 @@
 //! mutators take `now_ms`. Store logic never touches the clock or a CSPRNG.
 
 use crate::driver::{SqlDriver, SqlRow};
+use crate::encryption::AtRestEncryption;
 use crate::error::StoreError;
 use crate::stores::blob_bytes::iso_from_epoch_ms;
 
@@ -126,12 +127,47 @@ pub struct PushRegistrationInput {
 /// `PushRegistrationStore` (`storage/push-registration-store.ts`).
 pub struct PushRegistrationStore {
     sql: std::sync::Arc<SqlDriver>,
+    /// Optional at-rest encryption engine (AURA-328). When set, the `token`
+    /// column is sealed under the tenant-derived key on write and opened on
+    /// read; legacy plaintext tokens pass through untouched.
+    encryption: Option<std::sync::Arc<AtRestEncryption>>,
 }
 
 impl PushRegistrationStore {
     #[must_use]
     pub fn new(sql: std::sync::Arc<SqlDriver>) -> Self {
-        Self { sql }
+        Self {
+            sql,
+            encryption: None,
+        }
+    }
+
+    /// Attach (or detach) the at-rest encryption engine; the facade threads
+    /// its configured engine through here at construction.
+    #[must_use]
+    pub fn with_encryption(mut self, encryption: Option<std::sync::Arc<AtRestEncryption>>) -> Self {
+        self.encryption = encryption;
+        self
+    }
+
+    /// Seal a token for storage, or pass it through when encryption is off.
+    fn seal_token(&self, tenant_id: &str, token: &str) -> Result<String, StoreError> {
+        match &self.encryption {
+            Some(encryption) => encryption.encrypt_text(tenant_id, token),
+            None => Ok(token.to_owned()),
+        }
+    }
+
+    /// Map a `SELECT *` row and open its token (legacy plaintext rows pass
+    /// through). The tenant id comes from the row itself, so every read path
+    /// decrypts under the tenant that owns the registration.
+    fn map_row_opened(&self, row: &SqlRow) -> Result<PushDeviceRegistration, StoreError> {
+        let mut registration = map_row(row);
+        if let Some(encryption) = &self.encryption {
+            registration.token =
+                encryption.decrypt_text(&registration.tenant_id, &registration.token)?;
+        }
+        Ok(registration)
     }
 
     /// `register` (push-registration-store.ts:78-125): reactivate-or-refresh.
@@ -162,12 +198,13 @@ impl PushRegistrationStore {
             )
             .await?;
         let now = iso_from_epoch_ms(now_ms);
+        let stored_token = self.seal_token(&input.tenant_id, &input.token)?;
         if let Some(existing) = existing {
             self.sql
                 .run(
                     "UPDATE push_device_registrations\n             SET token = ?, environment = ?, last_seen_at = ?\n             WHERE registration_id = ?",
                     &[
-                        input.token.as_str().into(),
+                        stored_token.as_str().into(),
                         input.environment.as_str().into(),
                         now.as_str().into(),
                         existing.registration_id.as_str().into(),
@@ -190,7 +227,7 @@ impl PushRegistrationStore {
                     input.user_id.as_str().into(),
                     input.device_id.as_str().into(),
                     input.platform.as_str().into(),
-                    input.token.as_str().into(),
+                    stored_token.as_str().into(),
                     input.environment.as_str().into(),
                     now.as_str().into(),
                     now.as_str().into(),
@@ -248,7 +285,7 @@ impl PushRegistrationStore {
                 &[registration_id.into(), tenant_id.into()],
             )
             .await?;
-        Ok(row.as_ref().map(map_row))
+        row.as_ref().map(|row| self.map_row_opened(row)).transpose()
     }
 
     /// `listByUser` (push-registration-store.ts:162-170): a user's ACTIVE
@@ -265,7 +302,7 @@ impl PushRegistrationStore {
                 &[tenant_id.into(), user_id.into()],
             )
             .await?;
-        Ok(rows.iter().map(map_row).collect())
+        rows.iter().map(|row| self.map_row_opened(row)).collect()
     }
 
     /// `touch` (push-registration-store.ts:173-181): bump `last_seen_at` after a
@@ -309,7 +346,7 @@ impl PushRegistrationStore {
                 ],
             )
             .await?;
-        Ok(row.as_ref().map(map_row))
+        row.as_ref().map(|row| self.map_row_opened(row)).transpose()
     }
 }
 
