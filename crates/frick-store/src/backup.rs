@@ -63,6 +63,12 @@ struct TableSpec {
 /// ⚠️ NOT dumped (map 03 §14.1): `schema_versions`, `devtools_events`,
 /// `auth_password_reset_tokens`, `invitations`, `grants`,
 /// `auth_refresh_tokens`, `service_principals`, `auth_saml_seen_assertions`.
+///
+/// `auth_registration_locks` (migration 0025) and `sealed_sender_access`
+/// (migration 0026) ARE dumped and tenant-erased (AURA-437) — they carry a
+/// `tenant_id` and hold durable security state (the reglock PIN verifier and
+/// the sealed-sender token hash) that must survive a backup/restore and must
+/// not survive a tenant erasure. They post-date the TS mirror.
 const TABLE_ORDER: &[TableSpec] = &[
     TableSpec {
         name: "tenants",
@@ -179,6 +185,18 @@ const TABLE_ORDER: &[TableSpec] = &[
         order_by: "tenant_id ASC, occurred_at ASC, event_id ASC",
     },
     TableSpec {
+        name: "auth_registration_locks",
+        tenant_scoped: true,
+        infra_only: false,
+        order_by: "tenant_id ASC, user_id ASC",
+    },
+    TableSpec {
+        name: "sealed_sender_access",
+        tenant_scoped: true,
+        infra_only: false,
+        order_by: "tenant_id ASC, user_id ASC",
+    },
+    TableSpec {
         name: "admin_audit_log",
         tenant_scoped: false,
         infra_only: true,
@@ -212,6 +230,8 @@ const TENANT_SCOPED_TABLES: &[&str] = &[
     "platform_events",
     "analytics_aggregate_buckets",
     "analytics_recent_events",
+    "auth_registration_locks",
+    "sealed_sender_access",
 ];
 
 /// Child table keyed off `platform_events` (scope checked via the parent

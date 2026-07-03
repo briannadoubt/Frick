@@ -648,3 +648,135 @@ fn header_line(schema_hash: &str, tenant_id: &str, applied: &[&str]) -> String {
     })
     .to_string()
 }
+
+/// AURA-437: `auth_registration_locks` (migration 0025) and
+/// `sealed_sender_access` (migration 0026) are in the backup/erasure
+/// enumeration — their rows dump, restore, and are erased by the per-tenant
+/// truncate exactly like every other tenant-scoped table.
+#[tokio::test]
+#[expect(clippy::too_many_lines)] // dump + restore + erase, asserted end to end
+async fn reglock_and_sealed_sender_rows_dump_restore_and_erase() {
+    let source = open_store_with(test_schema("hash-1")).await;
+    seed_tenant(&source, TENANT_A, "a").await;
+    seed_tenant(&source, TENANT_B, "b").await;
+    source
+        .registration_locks()
+        .enable(TENANT_A, "user-a", "verifier-a", "salt-a", NOW)
+        .await
+        .expect("enable reglock a");
+    source
+        .registration_locks()
+        .enable(TENANT_B, "user-b", "verifier-b", "salt-b", NOW)
+        .await
+        .expect("enable reglock b");
+    source
+        .sealed_sender_access()
+        .issue(TENANT_A, "user-a", "token-a", NOW)
+        .await
+        .expect("issue sealed-sender a");
+    source
+        .sealed_sender_access()
+        .issue(TENANT_B, "user-b", "token-b", NOW)
+        .await
+        .expect("issue sealed-sender b");
+
+    // 1. Both tables appear in a whole-DB dump — one row per tenant each.
+    let lines = source.dump_database(None, NOW).await.expect("dump");
+    let count_of = |table: &str| {
+        lines
+            .iter()
+            .filter(|line| line.contains(&format!("\"type\":\"{table}\"")))
+            .count()
+    };
+    assert_eq!(count_of("auth_registration_locks"), 2);
+    assert_eq!(count_of("sealed_sender_access"), 2);
+    // The dump carries hashes, never the raw PIN verifier or token.
+    assert!(lines.iter().all(|line| !line.contains("verifier-b")));
+    assert!(lines.iter().all(|line| !line.contains("token-b")));
+
+    // 2. Restore into a fresh store: the rows come back verifiable.
+    let target = open_store_with(test_schema("hash-1")).await;
+    target
+        .restore_database(
+            &lines,
+            RestoreOptions {
+                confirm: true,
+                ..RestoreOptions::default()
+            },
+            NOW,
+            NOW,
+        )
+        .await
+        .expect("restore");
+    assert!(
+        target
+            .registration_locks()
+            .verify(TENANT_B, "user-b", "verifier-b")
+            .await
+            .expect("verify reglock")
+    );
+    assert!(
+        target
+            .sealed_sender_access()
+            .verify(TENANT_B, "user-b", "token-b")
+            .await
+            .expect("verify sealed-sender")
+    );
+
+    // 3. Erasure: a per-tenant overwrite restore of tenant B from a dump that
+    // has NO reglock/sealed-sender rows truncates tenant B's rows (the
+    // per-tenant erasure enumeration) while tenant A's survive untouched.
+    let bare = open_store_with(test_schema("hash-1")).await;
+    seed_tenant(&bare, TENANT_B, "b").await;
+    let bare_lines = bare
+        .dump_database(Some(TENANT_B), NOW)
+        .await
+        .expect("bare per-tenant dump");
+    target
+        .restore_database(
+            &bare_lines,
+            RestoreOptions {
+                confirm: true,
+                overwrite: true,
+                ..RestoreOptions::default()
+            },
+            NOW,
+            NOW,
+        )
+        .await
+        .expect("overwrite restore erases tenant B");
+    assert!(
+        target
+            .registration_locks()
+            .read(TENANT_B, "user-b")
+            .await
+            .expect("read reglock b")
+            .is_none(),
+        "tenant B reglock row must be erased"
+    );
+    assert!(
+        target
+            .sealed_sender_access()
+            .read(TENANT_B, "user-b")
+            .await
+            .expect("read sealed-sender b")
+            .is_none(),
+        "tenant B sealed-sender row must be erased"
+    );
+    assert!(
+        target
+            .registration_locks()
+            .verify(TENANT_A, "user-a", "verifier-a")
+            .await
+            .expect("verify reglock a"),
+        "tenant A reglock row must survive"
+    );
+    assert!(
+        target
+            .sealed_sender_access()
+            .verify(TENANT_A, "user-a", "token-a")
+            .await
+            .expect("verify sealed-sender a"),
+        "tenant A sealed-sender row must survive"
+    );
+}
