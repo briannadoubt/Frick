@@ -17,7 +17,10 @@ use super::{
     ActiveApp, authenticate, map_get, msgpack_byte_len, new_request_id, parse_body_value,
     require_record, require_string, value_to_json,
 };
-use crate::authz::{Action, Decision, DenyReason, ResourceContext, decide_baseline};
+use crate::authz::{
+    Action, Decision, DenyReason, PolicyInput, PolicyResource, ResourceContext,
+    apply_policy_hooks, decide_baseline,
+};
 use crate::error::{LimitKind, ServerError};
 use crate::http::{AppState, respond_error};
 use crate::principal::Principal;
@@ -306,7 +309,9 @@ async fn append(
         Ok(value) => value,
         Err(error) => return respond_error(&error, &request_id),
     };
-    if let Err(error) = append_decision(&principal) {
+    if let Err(error) =
+        append_decision(&state, &principal, &stream, &key, &event, &payload).await
+    {
         return respond_error(&error, &request_id);
     }
 
@@ -350,14 +355,43 @@ async fn stream_read_decision(
     decision_to_result(decision)
 }
 
-/// The `stream.append` decision (`assertCanAppend`): the baseline only (the
-/// read-only cascade never relaxes append, and app policy hooks are FR-245).
-fn append_decision(principal: &Principal) -> Result<(), ServerError> {
+/// The `stream.append` decision (`assertCanAppend`): the baseline, then app
+/// policy hooks (FR-296) — the read-only cascade never relaxes append, so
+/// baseline → hooks is the whole pipeline. `payload` is the event record, so a
+/// hook can gate on field values; `event` is the event type, letting a hook
+/// gate by event type (e.g. "only admins may append `MessageSent`").
+async fn append_decision(
+    state: &AppState,
+    principal: &Principal,
+    stream: &str,
+    key: &str,
+    event: &str,
+    payload: &Value,
+) -> Result<(), ServerError> {
     let resource = ResourceContext {
         tenant_id: principal.tenant_id.clone(),
         owner_user_id: None,
     };
-    decision_to_result(decide_baseline(principal, Action::StreamAppend, &resource))
+    let decision = decide_baseline(principal, Action::StreamAppend, &resource);
+    let decision = apply_policy_hooks(
+        decision,
+        &PolicyInput {
+            principal,
+            action: Action::StreamAppend,
+            resource: PolicyResource {
+                kind: "stream",
+                name: Some(stream.to_string()),
+                key: Some(key.to_string()),
+                event: Some(event.to_string()),
+                owner_id: None,
+                tenant_id: principal.tenant_id.clone(),
+            },
+            context: Some(payload),
+        },
+        &state.policy_hooks,
+    )
+    .await;
+    decision_to_result(decision)
 }
 
 /// Cascade grant relaxation (`relaxWithCascadeGrants`, `authz.ts:549-587`): a

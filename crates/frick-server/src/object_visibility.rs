@@ -14,6 +14,7 @@ use frick_protocol::Value;
 use frick_protocol::schema::{FieldKind, FrickSchema, object_by_name};
 use frick_store::FrickStore;
 
+use crate::authz::{Action, Decision, PolicyHooks, PolicyInput, PolicyResource, apply_policy_hooks};
 use crate::principal::Principal;
 
 /// The conventional owner field (`ownerUserId`): a `string` field with this
@@ -149,6 +150,92 @@ pub async fn subscriber_can_read_object(
     }
     // Owner mismatch with grants live: an active read-satisfying grant on this
     // exact record flips the deny to allow (`relaxWithGrants`).
+    let Some(id) = object_record_id(object) else {
+        return false;
+    };
+    store
+        .grants()
+        .has_active_grant_for(
+            &principal.tenant_id,
+            &principal.user_id,
+            object_type,
+            id,
+            "read",
+        )
+        .await
+        .unwrap_or(false)
+}
+
+/// Per-record read visibility, additionally gated by app policy hooks
+/// (FR-296). Used by the `GET /objects` LIST route (`routes/objects.rs`),
+/// where a hook can tighten a whole object TYPE (e.g. "role X may not read
+/// `Invoice`"). Pipeline per row, mirroring the single-resource write pipeline
+/// (`authz.rs:3-9`): ownership/admin baseline → app policy hooks → sharing
+/// grant relaxation. A hook denying the type still lets through exactly the
+/// rows the caller holds an active read-satisfying grant on — the grant check
+/// re-runs even after a hook deny, so a coarse type-level hook composes with
+/// per-record grants rather than overriding them. When `hooks` is empty this
+/// is behavior-identical to [`subscriber_can_read_object`] (the hook stage is
+/// a no-op per [`apply_policy_hooks`]'s empty-hooks fast path).
+#[allow(clippy::too_many_arguments)] // the full read pipeline's inputs
+pub async fn subscriber_can_read_object_with_hooks(
+    store: &FrickStore,
+    hooks: &PolicyHooks,
+    mode: ObjectVisibilityMode,
+    owner_field: Option<&str>,
+    principal: &Principal,
+    object_type: &str,
+    object: &Value,
+    per_record_active: bool,
+    writer_user_id: Option<&str>,
+) -> bool {
+    let owner_baseline = writer_user_id == Some(principal.user_id.as_str())
+        || is_object_visible_to_user(mode, owner_field, object, &principal.user_id);
+    let admin_or_owner_visible = principal.is_admin() || owner_baseline;
+
+    // The hook stage only ever tightens an allow, so with no hooks registered
+    // (or an owner-deny baseline) this reduces to exactly the pre-existing
+    // ownership + grant pipeline.
+    let baseline_decision = if admin_or_owner_visible {
+        Decision::Allow
+    } else {
+        Decision::Deny {
+            reason: crate::authz::DenyReason::OwnerMismatch,
+            public_message: "Not the resource owner".to_string(),
+        }
+    };
+
+    let owner_id = object_field_str(object, owner_field.unwrap_or(CONVENTIONAL_OWNER_FIELD))
+        .map(str::to_string);
+    let record_id = object_record_id(object).map(str::to_string);
+    let decision = apply_policy_hooks(
+        baseline_decision,
+        &PolicyInput {
+            principal,
+            action: Action::ObjectRead,
+            resource: PolicyResource {
+                kind: "object",
+                name: Some(object_type.to_string()),
+                key: record_id,
+                event: None,
+                owner_id,
+                tenant_id: principal.tenant_id.clone(),
+            },
+            context: Some(object),
+        },
+        hooks,
+    )
+    .await;
+
+    if decision.is_allow() {
+        return true;
+    }
+    if !per_record_active {
+        return false;
+    }
+    // A hook deny (or the original owner-mismatch deny) is still eligible for
+    // per-record grant relaxation: an active read-satisfying grant on this
+    // exact record flips it back to allow, same as the no-hooks path.
     let Some(id) = object_record_id(object) else {
         return false;
     };

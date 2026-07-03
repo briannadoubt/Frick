@@ -76,7 +76,10 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use super::{ActiveApp, authenticate, map_get, new_request_id, parse_body_value, require_string};
-use crate::authz::{Action, Decision, DenyReason, ResourceContext, decide_baseline};
+use crate::authz::{
+    Action, Decision, DenyReason, PolicyInput, PolicyResource, ResourceContext,
+    apply_policy_hooks, decide_baseline,
+};
 use crate::error::{LimitKind, ServerError};
 use crate::http::{AppState, respond_error};
 use crate::principal::Principal;
@@ -220,7 +223,9 @@ async fn declare_blob(
         Ok(value) => value,
         Err(error) => return respond_error(&error, &request_id),
     };
-    if let Err(error) = ownership_decision(&principal, &owner_id) {
+    if let Err(error) =
+        ownership_decision(&state, &principal, &owner_id, None, Some(&parsed)).await
+    {
         return respond_error(&error, &request_id);
     }
     let blob_id = match require_string(&parsed, "blobId", "blobId") {
@@ -379,6 +384,7 @@ async fn put_content(
 
     // 3/4. Resolve owner + mime, run ownership/validation, pick the status.
     let resolved = match resolve_upload(
+        &state,
         &principal,
         metadata.as_ref(),
         &uri,
@@ -386,7 +392,9 @@ async fn put_content(
         &blob_id,
         content,
         &content_hash,
-    ) {
+    )
+    .await
+    {
         Ok(resolved) => resolved,
         Err(error) => return respond_error(&error, &request_id),
     };
@@ -1057,9 +1065,11 @@ struct ResolvedUpload {
 /// Resolve owner/mime/status for an upload and run the ownership + content
 /// validation (`put_content` step 3/4, map 05 §3.5). Existing metadata →
 /// ownership + byteLength/contentHash match (200); a new blob → ownerId from
-/// `?ownerId=` or `x-frick-owner-id` (201). Pure (no store I/O) so the route
-/// body stays under the line cap.
-fn resolve_upload(
+/// `?ownerId=` or `x-frick-owner-id` (201). The ownership decision needs
+/// `state` (app policy hooks, FR-296), so this is no longer store-I/O-free.
+#[allow(clippy::too_many_arguments)]
+async fn resolve_upload(
+    state: &AppState,
     principal: &Principal,
     metadata: Option<&BlobMetadata>,
     uri: &axum::http::Uri,
@@ -1070,7 +1080,7 @@ fn resolve_upload(
 ) -> Result<ResolvedUpload, ServerError> {
     if let Some(metadata) = metadata {
         // Existing blob (declared-then-upload or overwrite) → 200.
-        ownership_decision(principal, &metadata.owner_id)?;
+        ownership_decision(state, principal, &metadata.owner_id, Some(blob_id), None).await?;
         validate_blob_content(
             blob_id,
             metadata.byte_length,
@@ -1093,7 +1103,7 @@ fn resolve_upload(
         .ok_or_else(|| ServerError::BadRequest {
             message: "ownerId must be a non-empty string".into(),
         })?;
-    ownership_decision(principal, &owner_id)?;
+    ownership_decision(state, principal, &owner_id, Some(blob_id), None).await?;
     Ok(ResolvedUpload {
         status: StatusCode::CREATED,
         response_content_hash: content_hash.to_owned(),
@@ -1320,13 +1330,43 @@ fn read_blob_decision(principal: &Principal, owner_id: &str) -> Result<(), Serve
 }
 
 /// `assertBlobOwnership` (authz.ts:1103-1116): the `blob.write` baseline (owner
-/// / admin). No cascade — a non-owner cannot upload to another's blob.
-fn ownership_decision(principal: &Principal, owner_id: &str) -> Result<(), ServerError> {
+/// / admin), then app policy hooks (FR-296). No grant cascade — a non-owner
+/// cannot upload to another's blob. `blob_id` is the resource key when already
+/// known (absent for a not-yet-parsed declare-blob body); `context` is the
+/// action-specific payload (the declare body, or `None` for a content upload
+/// where the payload is raw bytes, not a `Value`), so a hook can gate on
+/// field values.
+async fn ownership_decision(
+    state: &AppState,
+    principal: &Principal,
+    owner_id: &str,
+    blob_id: Option<&str>,
+    context: Option<&Value>,
+) -> Result<(), ServerError> {
     let resource = ResourceContext {
         tenant_id: principal.tenant_id.clone(),
         owner_user_id: Some(owner_id.to_owned()),
     };
-    decision_to_result(decide_baseline(principal, Action::BlobWrite, &resource))
+    let decision = decide_baseline(principal, Action::BlobWrite, &resource);
+    let decision = apply_policy_hooks(
+        decision,
+        &PolicyInput {
+            principal,
+            action: Action::BlobWrite,
+            resource: PolicyResource {
+                kind: "blob",
+                name: None,
+                key: blob_id.map(str::to_string),
+                event: None,
+                owner_id: Some(owner_id.to_owned()),
+                tenant_id: principal.tenant_id.clone(),
+            },
+            context,
+        },
+        &state.policy_hooks,
+    )
+    .await;
+    decision_to_result(decision)
 }
 
 fn decision_to_result(decision: Decision) -> Result<(), ServerError> {

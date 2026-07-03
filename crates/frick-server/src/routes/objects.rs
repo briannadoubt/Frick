@@ -22,7 +22,7 @@ use crate::authz::{
 use crate::error::ServerError;
 use crate::http::{AppState, respond_error};
 use crate::object_visibility::{
-    owner_field_for_type, per_record_read_authz_active, subscriber_can_read_object,
+    owner_field_for_type, per_record_read_authz_active, subscriber_can_read_object_with_hooks,
 };
 use crate::principal::Principal;
 
@@ -88,8 +88,9 @@ async fn list_objects(
     let per_record_active = per_record_read_authz_active(&state.store).await;
     let mut data: Vec<serde_json::Value> = Vec::with_capacity(rows.len());
     for row in &rows {
-        if subscriber_can_read_object(
+        if subscriber_can_read_object_with_hooks(
             &state.store,
+            &state.policy_hooks,
             mode,
             owner_field,
             &principal,
