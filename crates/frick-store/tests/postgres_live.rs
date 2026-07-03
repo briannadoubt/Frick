@@ -133,7 +133,7 @@ async fn pg_live_migrations_apply_and_are_idempotent() {
     let first = run_framework_migrations_postgres(&driver, 1, MigrationRunnerOptions::default())
         .await
         .expect("first migration run");
-    assert_eq!(first.applied.len(), 24, "all framework migrations applied");
+    assert_eq!(first.applied.len(), 26, "all framework migrations applied");
     assert!(first.already_applied.is_empty());
     assert_eq!(first.applied[0].id, "0001_initial_foundation_tables");
     assert!(first.applied[0].checksum.starts_with("sha256-"));
@@ -152,12 +152,12 @@ async fn pg_live_migrations_apply_and_are_idempotent() {
         second.applied.is_empty(),
         "idempotent re-run applies nothing"
     );
-    assert_eq!(second.already_applied.len(), 24);
+    assert_eq!(second.already_applied.len(), 26);
 
     let ledger = list_applied_migrations_postgres(&driver)
         .await
         .expect("ledger reads");
-    assert_eq!(ledger.len(), 24);
+    assert_eq!(ledger.len(), 26);
     assert_eq!(ledger[0].id, "0001_initial_foundation_tables");
 }
 

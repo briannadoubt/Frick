@@ -656,7 +656,7 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
 mod tests {
     use super::*;
 
-    const EXPECTED_MIGRATION_IDS: [&str; 24] = [
+    const EXPECTED_MIGRATION_IDS: [&str; 26] = [
         "0001_initial_foundation_tables",
         "0002_idempotency_keys_created_at",
         "0003_tenant_boundary",
@@ -681,6 +681,8 @@ mod tests {
         "0022_jobs_idempotency_app_scope",
         "0023_app_scoped_idempotency_presence_keys",
         "0024_refresh_token_family",
+        "0025_auth_registration_locks",
+        "0026_sealed_sender_access",
     ];
 
     /// Mirrors `FOUNDATION_TABLES` in `apps/server/tests/migrations.test.ts`.
@@ -726,7 +728,7 @@ mod tests {
     #[test]
     fn sqlite_fixture_checksums_match_rust_recomputation() {
         let entries = fixture_entries(SQLITE_MIGRATIONS_JSON);
-        assert_eq!(entries.len(), 24);
+        assert_eq!(entries.len(), 26);
         for entry in &entries {
             let migration = FrameworkMigration {
                 id: entry.id.clone(),
@@ -749,7 +751,7 @@ mod tests {
     #[test]
     fn postgres_fixture_parses_and_checksums_match() {
         let entries = fixture_entries(POSTGRES_MIGRATIONS_JSON);
-        assert_eq!(entries.len(), 24);
+        assert_eq!(entries.len(), 26);
         let ids: Vec<&str> = entries.iter().map(|entry| entry.id.as_str()).collect();
         assert_eq!(
             ids, EXPECTED_MIGRATION_IDS,
@@ -851,6 +853,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn migration_0025_creates_the_registration_lock_table() {
+        let driver = memory_driver();
+        run_framework_migrations(&driver, 1, MigrationRunnerOptions::default())
+            .await
+            .expect("migrations apply");
+
+        let tables = list_tables(&driver).await;
+        assert!(
+            tables.iter().any(|name| name == "auth_registration_locks"),
+            "0025 creates auth_registration_locks"
+        );
+
+        let columns = driver
+            .all("PRAGMA table_info(auth_registration_locks)", &[])
+            .await
+            .expect("table_info")
+            .iter()
+            .map(|row| row.text("name").expect("column name").to_string())
+            .collect::<Vec<_>>();
+        for column in [
+            "tenant_id",
+            "user_id",
+            "verifier_hash",
+            "salt",
+            "enabled",
+            "failed_attempts",
+            "locked_until_ms",
+            "last_activity_ms",
+            "created_at",
+            "updated_at",
+        ] {
+            assert!(
+                columns.iter().any(|name| name == column),
+                "missing column {column}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn migration_0026_creates_the_sealed_sender_access_table() {
+        let driver = memory_driver();
+        run_framework_migrations(&driver, 1, MigrationRunnerOptions::default())
+            .await
+            .expect("migrations apply");
+
+        let tables = list_tables(&driver).await;
+        assert!(
+            tables.iter().any(|name| name == "sealed_sender_access"),
+            "0026 creates sealed_sender_access"
+        );
+
+        let columns = driver
+            .all("PRAGMA table_info(sealed_sender_access)", &[])
+            .await
+            .expect("table_info")
+            .iter()
+            .map(|row| row.text("name").expect("column name").to_string())
+            .collect::<Vec<_>>();
+        for column in [
+            "tenant_id",
+            "user_id",
+            "token_hash",
+            "revoked",
+            "created_at",
+            "updated_at",
+        ] {
+            assert!(
+                columns.iter().any(|name| name == column),
+                "missing column {column}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn is_idempotent_across_repeated_runs() {
         let driver = memory_driver();
         let first = run_framework_migrations(&driver, 1, MigrationRunnerOptions::default())
@@ -860,15 +936,15 @@ mod tests {
             .await
             .expect("second run");
 
-        assert_eq!(first.applied.len(), 24);
+        assert_eq!(first.applied.len(), 26);
         assert_eq!(second.applied.len(), 0);
-        assert_eq!(second.already_applied.len(), 24);
+        assert_eq!(second.already_applied.len(), 26);
         assert_eq!(
             list_applied_migrations(&driver)
                 .await
                 .expect("ledger")
                 .len(),
-            24
+            26
         );
     }
 
@@ -1075,7 +1151,7 @@ Refusing to boot — restore the original migration or roll the database forward
             )
             .await
             .expect("ledger rows");
-        assert_eq!(rows.len(), 24);
+        assert_eq!(rows.len(), 26);
         for row in &rows {
             assert_eq!(
                 row.text("applied_at"),
@@ -1109,7 +1185,7 @@ Refusing to boot — restore the original migration or roll the database forward
                 .await
                 .expect("ledger")
                 .len(),
-            24
+            26
         );
     }
 

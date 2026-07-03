@@ -1416,6 +1416,9 @@ async fn test_hub_with_seams(
         connection_lifecycle,
         federation_hooks,
         write_side_effects: Vec::new(),
+        sealed_sender: std::sync::Arc::new(crate::sealed_sender::SealedSenderState::ephemeral(
+            86_400_000,
+        )),
     });
     let hub = GatewayHub::new(state);
     hub.state.attach_gateway(&hub);

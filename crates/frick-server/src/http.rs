@@ -159,6 +159,12 @@ pub struct AppStateInner {
     /// empty on the standalone binary, supplied by a Rust backend via
     /// [`crate::boot::BootSeams`].
     pub write_side_effects: Vec<crate::write_side_effects::SharedWriteSideEffect>,
+
+    /// Sealed-sender state (AURA-326): the server's certificate signing key
+    /// and certificate TTL, built at boot from
+    /// `FRICK_SEALED_SENDER_KEY_PEM` (or an ephemeral key). Read by the
+    /// `/sealed-sender/*` routes. See [`crate::sealed_sender`].
+    pub sealed_sender: Arc<crate::sealed_sender::SealedSenderState>,
 }
 
 impl AppStateInner {

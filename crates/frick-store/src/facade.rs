@@ -30,6 +30,7 @@ use serde_json::{Map, Value as JsonValue};
 use sha2::Digest;
 
 use crate::driver::{SqlDialect, SqlDriver};
+use crate::encryption::AtRestEncryption;
 use crate::error::StoreError;
 use crate::migrations::{self, AppliedMigrationRow};
 use crate::packed::encode_packed;
@@ -52,7 +53,9 @@ use crate::stores::password_reset::PasswordResetTokenStore;
 use crate::stores::presence::PresenceStore;
 use crate::stores::push_registration::PushRegistrationStore;
 use crate::stores::refresh_token::RefreshTokenStore;
+use crate::stores::reglock::RegistrationLockStore;
 use crate::stores::saml_assertion::SamlAssertionStore;
+use crate::stores::sealed_sender::SealedSenderAccessStore;
 use crate::stores::search::{
     self, SEARCH_ADAPTER_ID, SearchFilterValue, SearchOp, SearchQueryResult,
 };
@@ -174,6 +177,13 @@ pub struct FrickStoreOptions {
     /// Hard cap on `devtools_events` rows. `None` ⇒
     /// [`crate::stores::devtools_events::DEFAULT_DEVTOOLS_EVENTS_MAX_ROWS`].
     pub devtools_events_max_rows: Option<i64>,
+    /// At-rest value encryption engine (AURA-328). `None` ⇒ resolve from the
+    /// environment via [`AtRestEncryption::from_env`] (`FRICK_STORE_KEY`,
+    /// fallback `FRICK_AT_REST_KEY`); with no key configured the store runs
+    /// plaintext exactly as before. Inject an explicit engine here to use a
+    /// non-env [`crate::encryption::KeyProvider`] (for example a cloud KMS)
+    /// or to pin keys in tests without touching process environment.
+    pub encryption: Option<Arc<AtRestEncryption>>,
 }
 
 impl Default for FrickStoreOptions {
@@ -197,6 +207,7 @@ impl Default for FrickStoreOptions {
             stream_retention_prune_interval_ms: None,
             devtools_events_retention_ms: None,
             devtools_events_max_rows: None,
+            encryption: None,
         }
     }
 }
@@ -319,6 +330,8 @@ pub struct FrickStore {
     sessions: SessionStore,
     password_reset_tokens: PasswordResetTokenStore,
     refresh_tokens: RefreshTokenStore,
+    registration_locks: RegistrationLockStore,
+    sealed_sender_access: SealedSenderAccessStore,
     saml_assertions: SamlAssertionStore,
     service_principals: ServicePrincipalStore,
     blobs: BlobStore,
@@ -336,6 +349,10 @@ pub struct FrickStore {
     grants: GrantStore,
     admin_audit: AdminAuditStore,
     push_registrations: PushRegistrationStore,
+    /// At-rest value encryption engine (AURA-328), threaded into the object
+    /// view, the blob-content facade methods, and the push-registration
+    /// store. `None` ⇒ plaintext mode (no key configured).
+    encryption: Option<Arc<AtRestEncryption>>,
     /// Durable DevTools event feed (FR-274). The append side is best-effort
     /// fire-and-forget from emission points; the read side backs the
     /// `/_frick/inspect/devtools/*` routes and the diagnostics `recentErrors`.
@@ -497,6 +514,14 @@ impl FrickStore {
             options.blob_s3_config.as_ref(),
         )?;
 
+        // 5c. Resolve the at-rest encryption engine (AURA-328): an injected
+        // engine wins; otherwise consult the environment. A malformed env key
+        // fails construction loudly rather than silently running plaintext.
+        let encryption = match options.encryption {
+            Some(encryption) => Some(encryption),
+            None => AtRestEncryption::from_env()?.map(Arc::new),
+        };
+
         // 6. Instantiate every Arc-owning sub-store. The data-plane stores
         // (objects / streams / presence / signals / jobs) are lifetime-borrowing
         // zero-cost views built on demand from `&self.driver` / `&self.schema`.
@@ -506,6 +531,8 @@ impl FrickStore {
             sessions: SessionStore::new(Arc::clone(&driver)),
             password_reset_tokens: PasswordResetTokenStore::new(Arc::clone(&driver)),
             refresh_tokens: RefreshTokenStore::new(Arc::clone(&driver)),
+            registration_locks: RegistrationLockStore::new(Arc::clone(&driver)),
+            sealed_sender_access: SealedSenderAccessStore::new(Arc::clone(&driver)),
             saml_assertions: SamlAssertionStore::new(Arc::clone(&driver)),
             service_principals: ServicePrincipalStore::new(Arc::clone(&driver)),
             blobs: BlobStore::new(Arc::clone(&driver)),
@@ -515,7 +542,9 @@ impl FrickStore {
             invitations: InvitationStore::new(Arc::clone(&driver)),
             grants: GrantStore::new(Arc::clone(&driver)),
             admin_audit: AdminAuditStore::new(Arc::clone(&driver)),
-            push_registrations: PushRegistrationStore::new(Arc::clone(&driver)),
+            push_registrations: PushRegistrationStore::new(Arc::clone(&driver))
+                .with_encryption(encryption.clone()),
+            encryption,
             devtools_events: DevToolsEventStore::new(
                 Arc::clone(&driver),
                 devtools_events_retention_ms,
@@ -575,6 +604,16 @@ impl FrickStore {
     pub fn refresh_tokens(&self) -> &RefreshTokenStore {
         &self.refresh_tokens
     }
+    /// Registration-lock (recovery-PIN) store (AURA-178).
+    #[must_use]
+    pub fn registration_locks(&self) -> &RegistrationLockStore {
+        &self.registration_locks
+    }
+    /// Sealed-sender unidentified-access token store (AURA-326).
+    #[must_use]
+    pub fn sealed_sender_access(&self) -> &SealedSenderAccessStore {
+        &self.sealed_sender_access
+    }
     /// SAML seen-assertion store.
     #[must_use]
     pub fn saml_assertions(&self) -> &SamlAssertionStore {
@@ -614,8 +653,16 @@ impl FrickStore {
         app_id: &str,
         now_ms: i64,
     ) -> Result<(), StoreError> {
+        let sealed;
+        let stored: &[u8] = match &self.encryption {
+            Some(encryption) => {
+                sealed = encryption.encrypt(tenant_id, content)?;
+                &sealed
+            }
+            None => content,
+        };
         self.blob_bytes
-            .write(tenant_id, blob_id, content, app_id, now_ms)
+            .write(tenant_id, blob_id, stored, app_id, now_ms)
             .await
     }
 
@@ -628,7 +675,19 @@ impl FrickStore {
         blob_id: &str,
         app_id: &str,
     ) -> Result<Option<Vec<u8>>, StoreError> {
-        self.blob_bytes.read(tenant_id, blob_id, app_id).await
+        let stored = self.blob_bytes.read(tenant_id, blob_id, app_id).await?;
+        match (&self.encryption, stored) {
+            (Some(encryption), Some(bytes)) => Ok(Some(encryption.decrypt(tenant_id, &bytes)?)),
+            (None, stored) => Ok(stored),
+            (_, None) => Ok(None),
+        }
+    }
+
+    /// The configured at-rest encryption engine (AURA-328), if any. Exposed
+    /// so servers can surface encryption status in diagnostics.
+    #[must_use]
+    pub fn at_rest_encryption(&self) -> Option<&AtRestEncryption> {
+        self.encryption.as_deref()
     }
     /// Tenant ledger store.
     #[must_use]
@@ -686,10 +745,12 @@ impl FrickStore {
 
     // ---- Data-plane store views (lifetime-borrowing, built on demand) ----
 
-    /// An [`ObjectStore`] view over this facade's driver + schema.
+    /// An [`ObjectStore`] view over this facade's driver + schema, carrying
+    /// the configured at-rest encryption engine (AURA-328) so `objects.packed`
+    /// values seal on write and open on read.
     #[must_use]
     pub fn objects(&self) -> ObjectStore<'_> {
-        ObjectStore::new(&self.driver, &self.schema)
+        ObjectStore::new(&self.driver, &self.schema).with_encryption(self.encryption.as_deref())
     }
 
     /// A [`PresenceStore`] view.

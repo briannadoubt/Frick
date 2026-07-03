@@ -8,6 +8,7 @@
 pub mod apps;
 pub mod auth;
 pub mod auth_lifecycle;
+pub mod auth_reglock;
 pub mod auth_routes;
 pub mod authz;
 pub mod blob_processors;
@@ -30,6 +31,7 @@ pub mod principal;
 pub mod projections;
 pub mod push;
 pub mod routes;
+pub mod sealed_sender;
 pub mod search;
 pub mod session;
 pub mod standalone;
@@ -44,6 +46,9 @@ pub use auth::{
 pub use auth_lifecycle::{
     AuthFullName, AuthIdentity, AuthLifecycle, AuthLifecycleOutcome, AuthSessionContext,
     FirstSignInContext, NoopAuthLifecycle, SharedAuthLifecycle,
+};
+pub use auth_reglock::{
+    REGLOCK_KDF, REGLOCK_PBKDF2_ITERATIONS, REGLOCK_PBKDF2_KEY_BITS, reglock_router,
 };
 pub use authz::{Action, Decision, DenyReason, ResourceContext, decide_baseline};
 pub use blob_processors::{
@@ -81,6 +86,11 @@ pub use push::{
     FrickNotificationIntent, FrickPushPayload, NotificationRouter, PUSH_DELIVER_JOB_TYPE,
     PushAdapter, PushRegistry, PushSubsystem, PushTransports, ReqwestApnsTransport,
     ReqwestFcmTransport, ReqwestWebPushTransport, build_push_subsystem,
+};
+pub use sealed_sender::{
+    CertificateError, SEALED_DEVICE_ID, SEALED_SENDER_ALGORITHM, SEALED_SENDER_CERT_VERSION,
+    SealedSenderState, SenderCertificate, certificate_payload, sealed_sender_router,
+    verify_certificate_with_key,
 };
 pub use search::{
     DEFAULT_SEARCH_LIMIT, FrickSearchIndexDefinition, MAX_SEARCH_LIMIT, SearchDoc, SearchRegistry,

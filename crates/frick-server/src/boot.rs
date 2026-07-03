@@ -550,6 +550,12 @@ async fn build_server(
     // plane (FR-286 P2P / FR-287 SFU; see `build_calls_control_plane`).
     let calls = Arc::new(build_calls_control_plane(&config, &store));
 
+    // Sealed-sender state (AURA-326): the pinned PEM key when configured,
+    // else an ephemeral boot key. A malformed PEM fails boot loudly.
+    let sealed_sender = Arc::new(crate::sealed_sender::SealedSenderState::from_config(
+        &config,
+    )?);
+
     let state = Arc::new(AppStateInner {
         config: config.clone(),
         store,
@@ -572,6 +578,7 @@ async fn build_server(
         connection_lifecycle: Arc::new(seams.connection_lifecycle),
         federation_hooks: Arc::new(seams.federation_hooks),
         write_side_effects: seams.write_side_effects,
+        sealed_sender,
     });
 
     // The gateway hub owns the live connections and the fan-out funnel. The
@@ -702,6 +709,12 @@ impl FrickServer {
                 Arc::clone(&self.state),
             ))
             .merge(crate::routes::inspect::inspect_router(Arc::clone(
+                &self.state,
+            )))
+            // Sealed-sender delivery primitive (AURA-326): the public config
+            // route, the authenticated certificate/token routes, and the
+            // deliberately unauthenticated `/sealed-sender/deliver`.
+            .merge(crate::sealed_sender::sealed_sender_router(Arc::clone(
                 &self.state,
             )))
             .merge(self.gateway.router());

@@ -298,6 +298,16 @@ pub struct FrickLimits {
     pub max_blob_bytes_per_principal: i64,
     pub max_auth_attempts_per_window: i64,
     pub auth_rate_limit_window_ms: i64,
+    /// Fixed-window anti-abuse cap for the sealed-sender delivery route
+    /// (AURA-326), keyed per recipient. Because the sender is anonymous on
+    /// that route, throttling is keyed by the recipient the envelope is
+    /// addressed to. From `FRICK_MAX_SEALED_DELIVERIES_PER_WINDOW`.
+    pub max_sealed_deliveries_per_window: i64,
+    /// Window for [`max_sealed_deliveries_per_window`] in milliseconds, from
+    /// `FRICK_SEALED_DELIVERY_WINDOW_MS`.
+    ///
+    /// [`max_sealed_deliveries_per_window`]: Self::max_sealed_deliveries_per_window
+    pub sealed_delivery_window_ms: i64,
     pub presence_ttl_min_seconds: i64,
     pub presence_ttl_max_seconds: i64,
     pub signal_ttl_min_seconds: i64,
@@ -335,6 +345,8 @@ impl Default for FrickLimits {
             max_blob_bytes_per_principal: 9_007_199_254_740_991,
             max_auth_attempts_per_window: 30,
             auth_rate_limit_window_ms: 300_000,
+            max_sealed_deliveries_per_window: 120,
+            sealed_delivery_window_ms: 60_000,
             presence_ttl_min_seconds: 5,
             presence_ttl_max_seconds: 600,
             signal_ttl_min_seconds: 1,
@@ -396,6 +408,24 @@ pub struct FrickConfig {
     pub idempotency_key_retention_ms: i64,
     pub devtools_events_retention_ms: i64,
     pub expired_session_retention_grace_ms: i64,
+    /// Registration-lock inactivity expiry in seconds
+    /// (`FRICK_REGLOCK_EXPIRY_SECONDS`, AURA-178). Signal-style: an enabled
+    /// recovery-PIN lock stops being enforced on re-registration once the
+    /// account has gone this long without authenticated activity. Default 7
+    /// days (604800).
+    pub reglock_expiry_seconds: i64,
+    /// The sealed-sender certificate signing key (AURA-326): a PKCS#8 PEM
+    /// ECDSA P-256 private key from `FRICK_SEALED_SENDER_KEY_PEM`. The server
+    /// signs short-lived sender certificates with this key; clients verify
+    /// them against the public half published by `GET /sealed-sender/config`.
+    /// `None` (the default) generates an ephemeral key at boot — fine for a
+    /// single node, but a multi-node deployment must pin one key so every
+    /// node issues certificates the whole fleet's clients accept.
+    pub sealed_sender_key_pem: Option<String>,
+    /// Sender-certificate lifetime in seconds
+    /// (`FRICK_SEALED_SENDER_CERT_TTL_SECONDS`, AURA-326). Short-lived by
+    /// design so a revoked device ages out quickly. Default one day (86400).
+    pub sealed_sender_cert_ttl_seconds: i64,
     /// Sign in with Apple audience(s) (FR-269): the iOS bundle id(s) and/or
     /// Services id(s) the verified id-token's `aud` must match. From
     /// `FRICK_APPLE_AUDIENCES` (comma list). Empty ⇒ the `/auth/apple/*` routes
@@ -1012,6 +1042,14 @@ pub fn load_frick_config(env: &dyn EnvSource) -> Result<FrickConfig> {
             "FRICK_EXPIRED_SESSION_RETENTION_GRACE_MS",
         )?
         .unwrap_or(0),
+        reglock_expiry_seconds: parse_positive_integer(env, "FRICK_REGLOCK_EXPIRY_SECONDS")?
+            .unwrap_or(604_800),
+        sealed_sender_key_pem: read(env, "FRICK_SEALED_SENDER_KEY_PEM"),
+        sealed_sender_cert_ttl_seconds: parse_positive_integer(
+            env,
+            "FRICK_SEALED_SENDER_CERT_TTL_SECONDS",
+        )?
+        .unwrap_or(86_400),
         apple_audiences: parse_comma_list(env, "FRICK_APPLE_AUDIENCES"),
         google_client_ids: parse_comma_list(env, "FRICK_GOOGLE_CLIENT_IDS"),
         oidc_providers: parse_oidc_providers(env)?,
@@ -1036,6 +1074,12 @@ fn load_limits(env: &dyn EnvSource) -> Result<FrickLimits> {
     }
     if let Some(value) = parse_boolean(env, "FRICK_BIND_SESSION_DEVICE")? {
         limits.bind_session_device = value;
+    }
+    if let Some(value) = parse_positive_integer(env, "FRICK_MAX_SEALED_DELIVERIES_PER_WINDOW")? {
+        limits.max_sealed_deliveries_per_window = value;
+    }
+    if let Some(value) = parse_positive_integer(env, "FRICK_SEALED_DELIVERY_WINDOW_MS")? {
+        limits.sealed_delivery_window_ms = value;
     }
     Ok(limits)
 }

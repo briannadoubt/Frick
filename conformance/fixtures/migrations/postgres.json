@@ -142,7 +142,7 @@
   {
     "id": "0021_app_boundary",
     "schemaRevision": 1,
-    "description": "Add app_id columns to framework tables with compound (app_id, tenant_id, …) indexes mirroring the tenant boundary (FR-36).",
+    "description": "Add app_id columns to framework tables with compound (app_id, tenant_id, \u2026) indexes mirroring the tenant boundary (FR-36).",
     "sql": "\n      ALTER TABLE objects ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';\n      CREATE INDEX IF NOT EXISTS idx_objects_app_tenant\n        ON objects (app_id, tenant_id, object_type, object_id);\n\n      ALTER TABLE stream_events ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';\n      CREATE INDEX IF NOT EXISTS idx_stream_events_app_tenant\n        ON stream_events (app_id, tenant_id, stream_type, stream_id, sequence);\n      CREATE INDEX IF NOT EXISTS idx_stream_events_app_tenant_event_id\n        ON stream_events (app_id, tenant_id, event_id);\n\n      ALTER TABLE presence_leases ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';\n      CREATE INDEX IF NOT EXISTS idx_presence_leases_app_tenant\n        ON presence_leases (app_id, tenant_id, presence_type, presence_key);\n\n      ALTER TABLE signal_outbox ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';\n      CREATE INDEX IF NOT EXISTS idx_signal_outbox_app_tenant\n        ON signal_outbox (app_id, tenant_id, signal_type, signal_key, expires_at);\n\n      ALTER TABLE blob_metadata ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';\n      CREATE INDEX IF NOT EXISTS idx_blob_metadata_app_tenant\n        ON blob_metadata (app_id, tenant_id, blob_id);\n      CREATE INDEX IF NOT EXISTS idx_blob_metadata_app_tenant_owner\n        ON blob_metadata (app_id, tenant_id, owner_id, created_at DESC);\n\n      ALTER TABLE blob_content ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';\n      CREATE INDEX IF NOT EXISTS idx_blob_content_app_tenant\n        ON blob_content (app_id, tenant_id, blob_id);\n\n      ALTER TABLE jobs ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';\n      CREATE INDEX IF NOT EXISTS idx_jobs_app_tenant\n        ON jobs (app_id, tenant_id, job_type, status, id);\n      CREATE INDEX IF NOT EXISTS idx_jobs_app_tenant_status_available_at\n        ON jobs (app_id, tenant_id, status, available_at);\n\n      ALTER TABLE auth_sessions ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';\n      CREATE INDEX IF NOT EXISTS idx_auth_sessions_app_tenant_user\n        ON auth_sessions (app_id, tenant_id, user_id, expires_at DESC);\n\n      ALTER TABLE auth_accounts ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';\n      CREATE INDEX IF NOT EXISTS idx_auth_accounts_app_tenant_handle\n        ON auth_accounts (app_id, tenant_id, LOWER(handle));\n\n      ALTER TABLE idempotency_keys ADD COLUMN app_id TEXT NOT NULL DEFAULT '_default';\n      CREATE INDEX IF NOT EXISTS idx_idempotency_keys_app_tenant\n        ON idempotency_keys (app_id, tenant_id, replica_id, request_id);\n    ",
     "checksum": "sha256-7c912e7a5524f165469060d5fd7d615b062933792796abe90487a011deccc050"
   },
@@ -166,5 +166,19 @@
     "description": "Add family_id to auth_refresh_tokens for refresh-token reuse/family detection (auth-core-3).",
     "sql": "\n      ALTER TABLE auth_refresh_tokens ADD COLUMN IF NOT EXISTS family_id TEXT;\n      CREATE INDEX IF NOT EXISTS idx_refresh_tokens_by_family\n        ON auth_refresh_tokens (family_id);\n    ",
     "checksum": "sha256-9aa167b17fb0c6964d79d8bdd13f88099f452f9929b0df4b19ccc631ee0c41b6"
+  },
+  {
+    "id": "0025_auth_registration_locks",
+    "schemaRevision": 1,
+    "description": "Server-enforced registration-lock / recovery-PIN verifier records (AURA-178): per-user PIN verifier hash + salt, enable flag, attempt lockout, and last-activity for the inactivity-expiry window.",
+    "sql": "\n      CREATE TABLE IF NOT EXISTS auth_registration_locks (\n        tenant_id TEXT NOT NULL DEFAULT '_default',\n        user_id TEXT NOT NULL,\n        verifier_hash TEXT NOT NULL,\n        salt TEXT NOT NULL,\n        enabled INTEGER NOT NULL DEFAULT 1,\n        failed_attempts INTEGER NOT NULL DEFAULT 0,\n        locked_until_ms BIGINT NOT NULL DEFAULT 0,\n        last_activity_ms BIGINT NOT NULL DEFAULT 0,\n        created_at TEXT NOT NULL,\n        updated_at TEXT NOT NULL,\n        PRIMARY KEY (tenant_id, user_id)\n      );\n    ",
+    "checksum": "sha256-bbebf606e519d8069073fa3c4de573dc4d4e8087f8e493860b83aa64b77bfc48"
+  },
+  {
+    "id": "0026_sealed_sender_access",
+    "schemaRevision": 1,
+    "description": "Sealed-sender unidentified-access tokens (AURA-326): per-recipient anti-abuse token hash gating the sealed (sender-hidden) delivery route, with revocation.",
+    "sql": "\n      CREATE TABLE IF NOT EXISTS sealed_sender_access (\n        tenant_id TEXT NOT NULL DEFAULT '_default',\n        user_id TEXT NOT NULL,\n        token_hash TEXT NOT NULL,\n        revoked INTEGER NOT NULL DEFAULT 0,\n        created_at TEXT NOT NULL,\n        updated_at TEXT NOT NULL,\n        PRIMARY KEY (tenant_id, user_id)\n      );\n    ",
+    "checksum": "sha256-fbdad7975871a0556a1e17cfb38d2e4cd006a19a1b838b31b7a1f74c65432e55"
   }
 ]

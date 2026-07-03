@@ -423,8 +423,9 @@ fn events_json(events: &[StoredEvent]) -> Vec<serde_json::Value> {
 }
 
 /// One stored event → `{stream, streamId, sequence, eventId, event, payload,
-/// tenantId, appId}` (the TS `StoredEvent` JSON shape).
-fn event_json(stored: &StoredEvent) -> serde_json::Value {
+/// tenantId, appId}` (the TS `StoredEvent` JSON shape). Shared with the
+/// sealed-sender delivery route so both append surfaces answer identically.
+pub(crate) fn event_json(stored: &StoredEvent) -> serde_json::Value {
     let StreamEventInput {
         stream,
         stream_id,
