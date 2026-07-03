@@ -7,10 +7,38 @@
 //! - `GET  /blobs` — owner-scoped metadata list + usage block.
 //! - `POST /blobs` — metadata-only declaration.
 //! - `GET  /blobs/:id` — metadata JSON (read authz with grant cascade).
-//! - `PUT  /blobs/:id/content` — the full upload sequence (map 05 §3.5).
+//! - `PUT  /blobs/:id/content` — the full upload sequence (map 05 §3.5), or one
+//!   chunk of a resumable upload when the request carries `Content-Range`
+//!   (AURA-432, see the "Resumable/chunked upload" section below).
+//! - `HEAD /blobs/:id/content` — resumable-upload offset probe: returns the
+//!   server-known committed byte count for an in-progress chunked upload via
+//!   `x-frick-upload-offset` (0 when no chunks have landed yet).
 //! - `GET  /blobs/:id/content` — raw bytes download.
 //! - `GET  /blobs/:id/derivatives` — derivative row list.
 //! - `GET  /blobs/:id/derivatives/:derivativeId/content` — derivative bytes.
+//!
+//! ## Resumable/chunked upload (AURA-432)
+//!
+//! `PUT /blobs/:id/content` additionally accepts a `Content-Range: bytes
+//! <start>-<end>/<total>` header. When present the raw body is treated as ONE
+//! chunk of a larger upload rather than the whole content:
+//!
+//! - `start` MUST equal the number of bytes already staged for `:id` (0 for
+//!   the first chunk) — a mismatch is a 409 `storage.conflict` naming the
+//!   `expectedOffset`, so a client that lost its place can resync via `HEAD`.
+//! - A non-final chunk (`end + 1 < total`) is appended to a durable staging
+//!   area and the response is `202 {ok, blobId, receivedOffset, totalBytes}`.
+//! - The final chunk (`end + 1 == total`) assembles the complete bytes and
+//!   falls through to the same ownership/hash/quota/processor pipeline the
+//!   whole-body upload uses, then clears the staging area.
+//!
+//! Chunks are staged WITHOUT a schema migration by reusing the existing
+//! `blob_derivatives` byte store under a reserved, publicly-unaddressable
+//! parent-id namespace ([`is_staging_namespace`]) — see
+//! [`stage_key_for`]/[`read_staged_bytes`]/[`clear_staged_bytes`]. The public
+//! derivative routes explicitly refuse that namespace so a chunked upload's
+//! partial bytes can never be read back through `GET
+//! /blobs/:id/derivatives*`.
 //!
 //! ## Integrator wiring
 //!
@@ -41,7 +69,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use frick_protocol::Value;
 use frick_store::StoreError;
-use frick_store::facade::DerivativeRow;
+use frick_store::facade::{DerivativeRecordInput, DerivativeRow};
 use frick_store::stores::blob::{BlobMetadata, BlobMetadataInput};
 use serde::Deserialize;
 use serde_json::json;
@@ -68,6 +96,7 @@ pub fn blobs_router(state: AppState) -> axum::Router {
             "/blobs/:id/content",
             get(get_content)
                 .put(put_content)
+                .head(head_content)
                 .layer(DefaultBodyLimit::disable()),
         )
         .route(
@@ -306,6 +335,29 @@ async fn put_content(
         Err(error) => return respond_error(&error, &request_id),
     };
 
+    // AURA-432: a `Content-Range` header means this PUT carries one chunk of a
+    // resumable upload rather than the whole body — hand off to the chunk path
+    // and never fall through to the whole-body sequence below.
+    if let Some(range_header) = header_str(&headers, header::CONTENT_RANGE.as_str()) {
+        let range = match parse_content_range(range_header) {
+            Ok(range) => range,
+            Err(error) => return respond_error(&error, &request_id),
+        };
+        return put_content_chunk(
+            &state,
+            &principal,
+            active.app_id(),
+            &blob_id,
+            &uri,
+            &headers,
+            now,
+            range,
+            body.as_ref(),
+            &request_id,
+        )
+        .await;
+    }
+
     // 1. Bound the raw body at maxBlobBytes → 413 `blob.tooLarge`.
     let max_blob_bytes = state.config.limits.max_blob_bytes;
     if i64::try_from(body.len()).unwrap_or(i64::MAX) > max_blob_bytes {
@@ -458,6 +510,450 @@ async fn put_content(
         })),
     )
         .into_response()
+}
+
+// ── AURA-432: resumable/chunked upload ──────────────────────────────────────
+
+/// A parsed `Content-Range: bytes <start>-<end>/<total>` request header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ContentRange {
+    start: u64,
+    end: u64,
+    total: u64,
+}
+
+impl ContentRange {
+    /// Whether `end` is the last byte of `total` — i.e. this chunk completes
+    /// the upload.
+    fn is_final(self) -> bool {
+        self.end + 1 == self.total
+    }
+}
+
+/// Parse a `Content-Range: bytes <start>-<end>/<total>` header (the only unit
+/// this endpoint accepts). Malformed/unsupported input is a 400
+/// `sync.protocolError` — the `*` (unknown-length) form is rejected because a
+/// resumable upload MUST declare its total length up front so the server can
+/// tell the final chunk apart from an interior one.
+fn parse_content_range(raw: &str) -> Result<ContentRange, ServerError> {
+    let bad = || ServerError::BadRequest {
+        message: format!("invalid Content-Range header: {raw}"),
+    };
+    let rest = raw.trim().strip_prefix("bytes ").ok_or_else(bad)?;
+    let (range, total) = rest.split_once('/').ok_or_else(bad)?;
+    let (start, end) = range.split_once('-').ok_or_else(bad)?;
+    let start: u64 = start.trim().parse().map_err(|_| bad())?;
+    let end: u64 = end.trim().parse().map_err(|_| bad())?;
+    let total: u64 = total.trim().parse().map_err(|_| bad())?;
+    if end < start || end >= total {
+        return Err(bad());
+    }
+    Ok(ContentRange { start, end, total })
+}
+
+/// The reserved `blob_derivatives.parent_blob_id` prefix used to stage
+/// in-progress chunked-upload bytes (module docs, "Resumable/chunked
+/// upload"). Chosen so it can NEVER equal a real `blob_id`: an HTTP path
+/// segment is matched and percent-decoded by axum before this string
+/// comparison ever runs, but [`is_staging_namespace`] is applied to every
+/// value that reaches the derivative routes regardless — so even a `blob_id`
+/// crafted to collide with this literal prefix is refused there.
+const STAGING_NAMESPACE: &str = "\u{0}aura-432-upload\u{0}";
+
+/// The single staged-chunk derivative id under a staging parent (one row per
+/// upload holds the whole accumulated prefix so far; ordering is enforced by
+/// the offset check in [`put_content_chunk`], not by having one row per
+/// chunk).
+const STAGING_DERIVATIVE_ID: &str = "chunk";
+
+/// Build the reserved staging `parent_blob_id` for a real `blob_id`. Tenant
+/// isolation is already provided by `blob_derivatives`' `tenant_id` column, so
+/// this only needs to be unique per real blob id within that tenant.
+fn stage_key_for(blob_id: &str) -> String {
+    format!("{STAGING_NAMESPACE}{blob_id}")
+}
+
+/// Whether a `blob_id` path value falls inside the reserved staging
+/// namespace. The public derivative routes call this and refuse to serve
+/// (404, indistinguishable from "unknown blob") any value it matches, so a
+/// chunked upload's partial bytes can never be read back through `GET
+/// /blobs/:id/derivatives*` even if a caller crafts their own `blob_id` to
+/// collide with [`STAGING_NAMESPACE`].
+fn is_staging_namespace(blob_id: &str) -> bool {
+    blob_id.starts_with(STAGING_NAMESPACE)
+}
+
+/// Read the bytes staged so far for `blob_id` (empty when none).
+async fn read_staged_bytes(
+    state: &AppState,
+    tenant_id: &str,
+    blob_id: &str,
+) -> Result<Vec<u8>, StoreError> {
+    let parent = stage_key_for(blob_id);
+    let result = state
+        .store
+        .read_derivative(&parent, STAGING_DERIVATIVE_ID, tenant_id)
+        .await?;
+    Ok(result.map(|result| result.bytes).unwrap_or_default())
+}
+
+/// Persist the full accumulated staged bytes for `blob_id` (an upsert — the
+/// caller passes the WHOLE prefix received so far, not just the new chunk).
+async fn write_staged_bytes(
+    state: &AppState,
+    tenant_id: &str,
+    blob_id: &str,
+    content: Vec<u8>,
+) -> Result<(), StoreError> {
+    let parent = stage_key_for(blob_id);
+    state
+        .store
+        .record_derivative(&DerivativeRecordInput {
+            parent_blob_id: parent,
+            derivative_id: STAGING_DERIVATIVE_ID.to_string(),
+            tenant_id: tenant_id.to_string(),
+            processor_id: "aura-432-chunk-stage".to_string(),
+            mime_type: "application/octet-stream".to_string(),
+            content,
+            metadata_json: None,
+            storage_key: None,
+        })
+        .await
+}
+
+/// Discard the staged bytes for `blob_id` (finalize/abandon cleanup). No-op
+/// when nothing is staged.
+async fn clear_staged_bytes(
+    state: &AppState,
+    tenant_id: &str,
+    blob_id: &str,
+) -> Result<(), StoreError> {
+    let parent = stage_key_for(blob_id);
+    state
+        .store
+        .blobs()
+        .delete_derivatives(&parent, tenant_id)
+        .await?;
+    Ok(())
+}
+
+/// Resolve the eventual owner for a chunk upload: existing metadata's owner,
+/// else `?ownerId=`/`x-frick-owner-id` for a brand-new blob (the same
+/// resolution `resolve_upload` runs, split out here so `put_content_chunk`
+/// stays under the line cap).
+fn resolve_chunk_owner(
+    metadata: Option<&BlobMetadata>,
+    uri: &axum::http::Uri,
+    headers: &HeaderMap,
+) -> Result<String, ServerError> {
+    if let Some(metadata) = metadata {
+        return Ok(metadata.owner_id.clone());
+    }
+    owner_id_from_query(uri)
+        .or_else(|| header_str(headers, OWNER_ID_HEADER).map(str::to_owned))
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| ServerError::BadRequest {
+            message: "ownerId must be a non-empty string".into(),
+        })
+}
+
+/// Handle one chunk of a resumable upload (the `Content-Range` branch of
+/// `PUT /blobs/:id/content`). Ownership is re-derived exactly as the
+/// whole-body path does (existing metadata's owner, or `?ownerId=`/
+/// `x-frick-owner-id` for a brand-new blob) so a chunk cannot be staged by
+/// anyone but the eventual owner.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+async fn put_content_chunk(
+    state: &AppState,
+    principal: &Principal,
+    app_id: &str,
+    blob_id: &str,
+    uri: &axum::http::Uri,
+    headers: &HeaderMap,
+    now: i64,
+    range: ContentRange,
+    chunk: &[u8],
+    request_id: &str,
+) -> Response {
+    if chunk.len() as u64 != range.end - range.start + 1 {
+        return respond_error(
+            &(ServerError::BadRequest {
+                message: format!(
+                    "Content-Range declared {} bytes but the body carried {}",
+                    range.end - range.start + 1,
+                    chunk.len()
+                ),
+            }),
+            request_id,
+        );
+    }
+    let max_blob_bytes = state.config.limits.max_blob_bytes;
+    if i64::try_from(range.total).unwrap_or(i64::MAX) > max_blob_bytes {
+        return respond_error(
+            &too_large(
+                usize::try_from(range.total).unwrap_or(usize::MAX),
+                max_blob_bytes,
+            ),
+            request_id,
+        );
+    }
+
+    // Resolve + authorize the eventual owner, mirroring `resolve_upload`'s
+    // ownership half (the mime/status half only matters for the whole-body
+    // response, decided again at finalize).
+    let metadata = match state
+        .store
+        .blobs()
+        .read(&principal.tenant_id, blob_id, app_id)
+        .await
+    {
+        Ok(metadata) => metadata,
+        Err(error) => return respond_error(&store_error(&error), request_id),
+    };
+    let owner_id = match resolve_chunk_owner(metadata.as_ref(), uri, headers) {
+        Ok(owner_id) => owner_id,
+        Err(error) => return respond_error(&error, request_id),
+    };
+    if let Err(error) = ownership_decision(principal, &owner_id) {
+        return respond_error(&error, request_id);
+    }
+
+    // The staged prefix so far MUST match `range.start` exactly — out-of-order
+    // or duplicate chunks are rejected with the offset the server actually has,
+    // so a client can resync via `HEAD` and resume cleanly.
+    let staged = match read_staged_bytes(state, &principal.tenant_id, blob_id).await {
+        Ok(staged) => staged,
+        Err(error) => return respond_error(&store_error(&error), request_id),
+    };
+    let staged_len = staged.len() as u64;
+    if range.start != staged_len {
+        return respond_error(
+            &ServerError::StorageConflict {
+                detail: Value::Map(vec![
+                    ("reason".into(), Value::from("uploadOffsetMismatch")),
+                    (
+                        "expectedOffset".into(),
+                        Value::from(i64::try_from(staged_len).unwrap_or(i64::MAX)),
+                    ),
+                    (
+                        "receivedOffset".into(),
+                        Value::from(i64::try_from(range.start).unwrap_or(i64::MAX)),
+                    ),
+                ]),
+            },
+            request_id,
+        );
+    }
+
+    let mut assembled = staged;
+    assembled.extend_from_slice(chunk);
+
+    if !range.is_final() {
+        // Interior chunk: persist the growing prefix and report progress.
+        let received_offset = assembled.len();
+        if let Err(error) =
+            write_staged_bytes(state, &principal.tenant_id, blob_id, assembled).await
+        {
+            return respond_error(&store_error(&error), request_id);
+        }
+        return (
+            StatusCode::ACCEPTED,
+            axum::Json(json!({
+                "ok": true,
+                "blobId": blob_id,
+                "receivedOffset": received_offset,
+                "totalBytes": range.total,
+            })),
+        )
+            .into_response();
+    }
+
+    // Final chunk: the assembled bytes must match the declared total, then the
+    // rest is byte-for-byte the whole-body upload sequence (steps 2-8 of
+    // `put_content`), reusing `resolve_upload` for ownership/hash checks.
+    if assembled.len() as u64 != range.total {
+        return respond_error(
+            &(ServerError::BadRequest {
+                message: format!(
+                    "assembled upload is {} bytes but Content-Range declared {}",
+                    assembled.len(),
+                    range.total
+                ),
+            }),
+            request_id,
+        );
+    }
+    let content = assembled.as_slice();
+    let content_hash = sha256_content_hash(content);
+
+    let resolved = match resolve_upload(
+        principal,
+        metadata.as_ref(),
+        uri,
+        headers,
+        blob_id,
+        content,
+        &content_hash,
+    ) {
+        Ok(resolved) => resolved,
+        Err(error) => return respond_error(&error, request_id),
+    };
+    let ResolvedUpload {
+        status: response_status,
+        response_content_hash,
+        owner_id: resolved_owner_id,
+        mime_type: resolved_mime_type,
+        existing_byte_length,
+    } = resolved;
+
+    let matching_processors = state.blob_processors.matching(
+        &resolved_mime_type,
+        i64::try_from(content.len()).unwrap_or(i64::MAX),
+    );
+    if let Err(error) = run_sync_validators(
+        state,
+        &matching_processors,
+        principal,
+        &resolved_owner_id,
+        &resolved_mime_type,
+        blob_id,
+        content,
+    ) {
+        return respond_error(&error, request_id);
+    }
+
+    let quota = state.config.limits.max_blob_bytes_per_principal;
+    if quota_configured(quota) {
+        let current_bytes = match state
+            .store
+            .blobs()
+            .total_bytes_for_owner(&principal.tenant_id, &resolved_owner_id, app_id)
+            .await
+        {
+            Ok(total) => total,
+            Err(error) => return respond_error(&store_error(&error), request_id),
+        };
+        let incoming = i64::try_from(content.len()).unwrap_or(i64::MAX);
+        let projected = current_bytes - existing_byte_length + incoming;
+        if projected > quota {
+            return respond_error(
+                &quota_exceeded(&resolved_owner_id, projected, quota),
+                request_id,
+            );
+        }
+    }
+
+    let byte_length = i64::try_from(content.len()).unwrap_or(i64::MAX);
+
+    if metadata.is_none()
+        && let Err(error) = state
+            .store
+            .blobs()
+            .create(
+                &principal.tenant_id,
+                &BlobMetadataInput {
+                    blob_id: blob_id.to_string(),
+                    owner_id: resolved_owner_id.clone(),
+                    content_hash: content_hash.clone(),
+                    byte_length,
+                    mime_type: infer_mime_type(headers),
+                    storage_key: None,
+                },
+                app_id,
+                now,
+            )
+            .await
+    {
+        return respond_error(&store_error(&error), request_id);
+    }
+
+    if let Err(error) = state
+        .store
+        .write_content(&principal.tenant_id, blob_id, content, app_id, now)
+        .await
+    {
+        return respond_error(&store_error(&error), request_id);
+    }
+
+    // The staging area is no longer needed once the real bytes are committed.
+    if let Err(error) = clear_staged_bytes(state, &principal.tenant_id, blob_id).await {
+        return respond_error(&store_error(&error), request_id);
+    }
+
+    if let Err(error) = enqueue_process_jobs(
+        state,
+        &matching_processors,
+        &principal.tenant_id,
+        app_id,
+        blob_id,
+        &content_hash,
+    )
+    .await
+    {
+        return respond_error(&store_error(&error), request_id);
+    }
+
+    (
+        response_status,
+        axum::Json(json!({
+            "ok": true,
+            "blobId": blob_id,
+            "byteLength": byte_length,
+            "contentHash": response_content_hash,
+        })),
+    )
+        .into_response()
+}
+
+/// `HEAD /blobs/:id/content` (AURA-432): the resumable-upload offset probe.
+/// Requires the same ownership as an upload (not read authz) — a caller must
+/// be the (eventual) owner to learn how much of their own in-flight upload
+/// has landed. `x-frick-upload-offset` is 0 when nothing is staged yet;
+/// existing metadata (an already-finalized blob) also reports 0 — resuming a
+/// completed upload makes no sense, the caller should just `GET` it.
+async fn head_content(
+    State(state): State<AppState>,
+    active: ActiveApp,
+    Path(blob_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let request_id = new_request_id();
+    let (principal, _now) = match authenticate(&state, &headers).await {
+        Ok(result) => result,
+        Err(error) => return respond_error(&error, &request_id),
+    };
+
+    let metadata = match state
+        .store
+        .blobs()
+        .read(&principal.tenant_id, &blob_id, active.app_id())
+        .await
+    {
+        Ok(metadata) => metadata,
+        Err(error) => return respond_error(&store_error(&error), &request_id),
+    };
+    let owner_id = match &metadata {
+        Some(metadata) => metadata.owner_id.clone(),
+        None => principal.user_id.clone(),
+    };
+    if let Err(error) = ownership_decision(&principal, &owner_id) {
+        return respond_error(&error, &request_id);
+    }
+
+    let offset = if metadata.is_some() {
+        0
+    } else {
+        match read_staged_bytes(&state, &principal.tenant_id, &blob_id).await {
+            Ok(staged) => staged.len(),
+            Err(error) => return respond_error(&store_error(&error), &request_id),
+        }
+    };
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("x-frick-upload-offset", offset)
+        .body(Body::empty())
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 /// Run the sync blob validators (FR-272) over the 4 KiB preview. Each matching
@@ -671,6 +1167,12 @@ async fn list_derivatives(
     headers: HeaderMap,
 ) -> Response {
     let request_id = new_request_id();
+    // AURA-432: the staging namespace is never a real blob — refuse it before
+    // even touching metadata, so a crafted `blob_id` can never observe
+    // someone else's in-progress chunked-upload bytes (module docs).
+    if is_staging_namespace(&blob_id) {
+        return blob_not_found("blob_not_found");
+    }
     let (principal, _now) = match authenticate(&state, &headers).await {
         Ok(result) => result,
         Err(error) => return respond_error(&error, &request_id),
@@ -720,6 +1222,10 @@ async fn get_derivative_content(
     headers: HeaderMap,
 ) -> Response {
     let request_id = new_request_id();
+    // AURA-432: same staging-namespace refusal as `list_derivatives`.
+    if is_staging_namespace(&blob_id) {
+        return blob_not_found("blob_not_found");
+    }
     let (principal, _now) = match authenticate(&state, &headers).await {
         Ok(result) => result,
         Err(error) => return respond_error(&error, &request_id),

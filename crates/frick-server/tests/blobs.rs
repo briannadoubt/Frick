@@ -758,3 +758,310 @@ async fn duplicate_processor_id_fails_boot() {
         frick_server::create_frick_server_with_seams(test_config(), test_schema(), seams).await;
     assert!(result.is_err(), "duplicate processor id should fail boot");
 }
+
+// ── AURA-432: chunked/resumable upload ──────────────────────────────────────
+
+impl TestServer {
+    /// PUT one chunk of a resumable upload: a `Content-Range: bytes
+    /// <start>-<end>/<total>` header alongside the raw chunk bytes.
+    async fn put_chunk(
+        &self,
+        path: &str,
+        token: &str,
+        start: usize,
+        end: usize,
+        total: usize,
+        chunk: &[u8],
+    ) -> HttpResponse {
+        self.request(
+            "PUT",
+            path,
+            &[
+                ("Authorization", &bearer(token)),
+                ("Content-Range", &format!("bytes {start}-{end}/{total}")),
+            ],
+            chunk,
+        )
+        .await
+    }
+
+    async fn head(&self, path: &str, token: &str) -> HttpResponse {
+        self.request("HEAD", path, &[("Authorization", &bearer(token))], b"")
+            .await
+    }
+}
+
+/// Two chunks land in order, the final chunk assembles + commits the whole
+/// blob exactly like a whole-body upload, and the `HEAD` probe reports 0
+/// once the upload is finalized (nothing left staged).
+#[tokio::test]
+async fn chunked_upload_two_chunks_assembles_and_commits() {
+    let mut server = TestServer::boot().await;
+    let token = server.login("user-ada").await;
+
+    let full = b"hello chunked world!!"; // 21 bytes
+    assert_eq!(full.len(), 21);
+    let (first, second) = full.split_at(11);
+
+    // Probe before any chunk lands: nothing staged.
+    let probe = server.head("/blobs/chunked-1/content", &token).await;
+    assert_eq!(probe.status, 200, "body: {}", probe.text());
+    assert_eq!(probe.header("x-frick-upload-offset"), Some("0"));
+
+    // First (non-final) chunk → 202, reports the new offset.
+    let chunk1 = server
+        .put_chunk(
+            "/blobs/chunked-1/content?ownerId=user-ada",
+            &token,
+            0,
+            10,
+            full.len(),
+            first,
+        )
+        .await;
+    assert_eq!(chunk1.status, 202, "body: {}", chunk1.text());
+    assert!(
+        chunk1.text().contains("\"receivedOffset\":11"),
+        "{}",
+        chunk1.text()
+    );
+
+    // The metadata row does not exist yet — the upload is still in flight.
+    let meta_during = server.get("/blobs/chunked-1", &token).await;
+    assert_eq!(meta_during.status, 404, "body: {}", meta_during.text());
+
+    // HEAD now reports the staged offset.
+    let probe2 = server.head("/blobs/chunked-1/content", &token).await;
+    assert_eq!(probe2.status, 200, "body: {}", probe2.text());
+    assert_eq!(probe2.header("x-frick-upload-offset"), Some("11"));
+
+    // Final chunk completes the range → 201 (new blob), same shape as a
+    // whole-body upload response.
+    let chunk2 = server
+        .put_chunk(
+            "/blobs/chunked-1/content?ownerId=user-ada",
+            &token,
+            11,
+            full.len() - 1,
+            full.len(),
+            second,
+        )
+        .await;
+    assert_eq!(chunk2.status, 201, "body: {}", chunk2.text());
+    assert!(chunk2.text().contains("\"ok\":true"), "{}", chunk2.text());
+    assert!(
+        chunk2.text().contains("\"byteLength\":21"),
+        "{}",
+        chunk2.text()
+    );
+
+    // The assembled bytes round-trip exactly through the normal download path.
+    let download = server.get("/blobs/chunked-1/content", &token).await;
+    assert_eq!(download.status, 200, "body: {}", download.text());
+    assert_eq!(download.body, full);
+
+    // The staging area is cleared on finalize — HEAD reports 0 again (the
+    // blob is complete, not "in flight").
+    let probe3 = server.head("/blobs/chunked-1/content", &token).await;
+    assert_eq!(probe3.status, 200, "body: {}", probe3.text());
+    assert_eq!(probe3.header("x-frick-upload-offset"), Some("0"));
+
+    server.close().await;
+}
+
+/// A chunk whose declared `start` does not match the server's staged offset
+/// is rejected with a 409 naming the offset the server actually has, so a
+/// client can resync.
+#[tokio::test]
+async fn chunked_upload_out_of_order_chunk_is_rejected() {
+    let mut server = TestServer::boot().await;
+    let token = server.login("user-ada").await;
+
+    let full = b"0123456789abcdef"; // 16 bytes
+    let chunk1 = server
+        .put_chunk(
+            "/blobs/chunked-2/content?ownerId=user-ada",
+            &token,
+            0,
+            7,
+            full.len(),
+            &full[..8],
+        )
+        .await;
+    assert_eq!(chunk1.status, 202, "body: {}", chunk1.text());
+
+    // Retrying the SAME range (start=0) instead of resuming from 8 is a
+    // conflict: the server already has 8 bytes staged.
+    let replay = server
+        .put_chunk(
+            "/blobs/chunked-2/content?ownerId=user-ada",
+            &token,
+            0,
+            7,
+            full.len(),
+            &full[..8],
+        )
+        .await;
+    assert_eq!(replay.status, 409, "body: {}", replay.text());
+    assert!(
+        replay.text().contains("\"expectedOffset\":8"),
+        "{}",
+        replay.text()
+    );
+
+    // Skipping ahead (start=9, past the staged offset of 8) is also rejected.
+    let skip_ahead = server
+        .put_chunk(
+            "/blobs/chunked-2/content?ownerId=user-ada",
+            &token,
+            9,
+            15,
+            full.len(),
+            &full[9..],
+        )
+        .await;
+    assert_eq!(skip_ahead.status, 409, "body: {}", skip_ahead.text());
+    assert!(
+        skip_ahead.text().contains("\"expectedOffset\":8"),
+        "{}",
+        skip_ahead.text()
+    );
+
+    server.close().await;
+}
+
+/// A client that lost track of its own progress can call `HEAD` to learn the
+/// server's committed offset and resume the upload from exactly that point.
+#[tokio::test]
+async fn chunked_upload_resumes_from_probed_offset() {
+    let mut server = TestServer::boot().await;
+    let token = server.login("user-ada").await;
+
+    let full = b"resume-me-please-thanks"; // 23 bytes
+    let path = "/blobs/chunked-3/content?ownerId=user-ada";
+
+    let chunk1 = server
+        .put_chunk(path, &token, 0, 9, full.len(), &full[..10])
+        .await;
+    assert_eq!(chunk1.status, 202, "body: {}", chunk1.text());
+
+    // Simulate a client restart: it doesn't remember its offset, so it asks.
+    let probe = server.head("/blobs/chunked-3/content", &token).await;
+    assert_eq!(probe.status, 200, "body: {}", probe.text());
+    let offset: usize = probe
+        .header("x-frick-upload-offset")
+        .and_then(|value| value.parse().ok())
+        .expect("offset header present");
+    assert_eq!(offset, 10);
+
+    // Resume from the probed offset through to the end.
+    let finish = server
+        .put_chunk(
+            path,
+            &token,
+            offset,
+            full.len() - 1,
+            full.len(),
+            &full[offset..],
+        )
+        .await;
+    assert_eq!(finish.status, 201, "body: {}", finish.text());
+
+    let download = server.get("/blobs/chunked-3/content", &token).await;
+    assert_eq!(download.status, 200, "body: {}", download.text());
+    assert_eq!(download.body, full);
+
+    server.close().await;
+}
+
+/// The final chunk's assembled length is checked against the declared total
+/// — a client that lies about `total` (or drops bytes) gets a 400, not a
+/// silently truncated/corrupted blob.
+#[tokio::test]
+async fn chunked_upload_final_chunk_length_mismatch_is_rejected() {
+    let mut server = TestServer::boot().await;
+    let token = server.login("user-ada").await;
+
+    // Declares total=10 but only ever sends 5 bytes as the "final" chunk
+    // (end+1 == total is satisfied by the header math, the actual body is
+    // short).
+    let bad = server
+        .put_chunk(
+            "/blobs/chunked-4/content?ownerId=user-ada",
+            &token,
+            0,
+            9,
+            10,
+            b"short",
+        )
+        .await;
+    assert_eq!(bad.status, 400, "body: {}", bad.text());
+
+    server.close().await;
+}
+
+/// The reserved staging namespace can never be read back through the public
+/// derivatives surface, even by the same owner who is running the chunked
+/// upload — the staged bytes are only ever visible to the finalize step.
+#[tokio::test]
+async fn chunked_upload_staging_is_not_reachable_via_derivatives_api() {
+    let mut server = TestServer::boot().await;
+    let token = server.login("user-ada").await;
+
+    let chunk1 = server
+        .put_chunk(
+            "/blobs/chunked-5/content?ownerId=user-ada",
+            &token,
+            0,
+            4,
+            10,
+            b"hello",
+        )
+        .await;
+    assert_eq!(chunk1.status, 202, "body: {}", chunk1.text());
+
+    // Declare + "own" a blob whose id equals the reserved staging parent key
+    // for chunked-5, then try to read its derivatives — must 404, not leak
+    // the in-flight staged bytes.
+    let staging_key = "\u{0}aura-432-upload\u{0}chunked-5";
+    // The JSON body needs the NUL bytes JSON-escaped (a raw NUL is not
+    // legal inside a JSON string); the URL path below uses the literal bytes.
+    let json_escaped_key = staging_key.replace('\u{0}', "\\u0000");
+    let declare_body = format!(
+        r#"{{"blobId":"{json_escaped_key}","ownerId":"user-ada","contentHash":"sha256-pending","byteLength":0,"mimeType":"text/plain"}}"#
+    );
+    let declare = server
+        .request(
+            "POST",
+            "/blobs",
+            &[
+                ("Authorization", &bearer(&token)),
+                ("Content-Type", "application/json"),
+            ],
+            declare_body.as_bytes(),
+        )
+        .await;
+    assert_eq!(declare.status, 201, "body: {}", declare.text());
+
+    let derivatives = server
+        .get(
+            &format!("/blobs/{}/derivatives", urlencode(staging_key)),
+            &token,
+        )
+        .await;
+    assert_eq!(derivatives.status, 404, "body: {}", derivatives.text());
+    assert!(
+        derivatives.text().contains("blob_not_found"),
+        "{}",
+        derivatives.text()
+    );
+
+    server.close().await;
+}
+
+/// Percent-encode a path segment's NUL bytes (the only characters our test
+/// staging key contains that aren't already URL-safe) so it survives the raw
+/// HTTP request line intact.
+fn urlencode(input: &str) -> String {
+    input.replace('\u{0}', "%00")
+}
