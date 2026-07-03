@@ -247,6 +247,66 @@ impl<'a> ObjectStore<'a> {
         rows.iter().map(|row| self.unpack(row)).collect()
     }
 
+    /// Return just the object ids of `object_type`, scoped to `tenant_id` +
+    /// `app_id`, ordered by `object_id ASC` (same ordering as
+    /// [`list`](Self::list)). Cheaper than `list` when a caller only needs ids
+    /// to drive a follow-up per-id operation (e.g. a delete cascade) — it reads
+    /// `object_id` directly instead of unpacking every row's `packed` column.
+    pub async fn list_ids(
+        &self,
+        tenant_id: &str,
+        object_type: &str,
+        app_id: &str,
+    ) -> Result<Vec<String>, StoreError> {
+        let rows = self
+            .sql
+            .all(
+                "SELECT object_id FROM objects WHERE app_id = ? AND tenant_id = ? AND object_type = ? ORDER BY object_id ASC",
+                &[app_id.into(), tenant_id.into(), object_type.into()],
+            )
+            .await?;
+        Ok(rows
+            .iter()
+            .filter_map(|row| row.text("object_id").map(str::to_owned))
+            .collect())
+    }
+
+    /// Delete every object of `object_type` whose `field` equals `value`
+    /// (the delete-side counterpart to [`query_by_field`](Self::query_by_field)),
+    /// scoped to `tenant_id` + `app_id`. Returns the number of rows removed.
+    ///
+    /// Matches the same scan-then-filter shape as `query_by_field`: list the
+    /// scoped rows, find the matching ids, then delete each by id. Two steps
+    /// (not a single `DELETE ... WHERE`) because the field lives inside the
+    /// packed/msgpack blob, not a SQL column — there is no schema-index-backed
+    /// query yet (see `query_by_field`'s doc comment).
+    pub async fn delete_by_field(
+        &self,
+        tenant_id: &str,
+        object_type: &str,
+        app_id: &str,
+        field: &str,
+        value: &str,
+    ) -> Result<u64, StoreError> {
+        let rows = self.list(tenant_id, object_type, app_id).await?;
+        let mut deleted = 0u64;
+        for row in rows {
+            if !object_field_eq(&row, field, value) {
+                continue;
+            }
+            let Some(object_id) = id_of_value(&row) else {
+                continue;
+            };
+            if self
+                .delete(tenant_id, object_type, object_id, app_id)
+                .await?
+            {
+                deleted += 1;
+            }
+        }
+        Ok(deleted)
+    }
+
     /// Query objects of `object_type` whose `field` equals `value` (FR-305),
     /// scoped to `tenant_id` + `app_id`. Tenant/app/type isolation is enforced
     /// in SQL, and the field equality is applied to the scoped, unpacked rows —
@@ -461,6 +521,17 @@ fn object_field_eq(object: &Value, field: &str, expected: &str) -> bool {
         entries
             .iter()
             .any(|(key, value)| key.as_str() == Some(field) && value.as_str() == Some(expected))
+    })
+}
+
+/// Read the re-injected `id` string out of an unpacked object value (see
+/// `unpack_object_record`'s doc comment on [`ObjectStore::unpack`]).
+fn id_of_value(object: &Value) -> Option<&str> {
+    object.as_map().and_then(|entries| {
+        entries
+            .iter()
+            .find(|(key, _)| key.as_str() == Some("id"))
+            .and_then(|(_, value)| value.as_str())
     })
 }
 
@@ -1397,5 +1468,198 @@ mod tests {
         let mut ids: Vec<&str> = hits.iter().filter_map(id_of).collect();
         ids.sort_unstable();
         assert_eq!(ids, vec!["c-1", "c-2"]);
+    }
+
+    // ── list_ids (AURA-431) ─────────────────────────────────────────────────
+
+    /// `list_ids` returns just the ids, ordered like `list`, scoped to
+    /// tenant + app + type.
+    #[tokio::test]
+    async fn list_ids_orders_and_scopes_like_list() {
+        let driver = memory_driver().await;
+        let schema = test_schema();
+        let store = ObjectStore::new(&driver, &schema);
+
+        for id in ["c-3", "c-1", "c-2"] {
+            store
+                .upsert(TENANT, TYPE, id, &convo(id, id), 1, "app-a", NOW)
+                .await
+                .unwrap();
+        }
+        // Different tenant + different app: must not leak into the id list.
+        store
+            .upsert(
+                "tenant-2",
+                TYPE,
+                "c-9",
+                &convo("c-9", "c-9"),
+                1,
+                "app-a",
+                NOW,
+            )
+            .await
+            .unwrap();
+        store
+            .upsert(TENANT, TYPE, "c-8", &convo("c-8", "c-8"), 1, "app-b", NOW)
+            .await
+            .unwrap();
+
+        let ids = store.list_ids(TENANT, TYPE, "app-a").await.unwrap();
+        assert_eq!(ids, vec!["c-1", "c-2", "c-3"]);
+    }
+
+    /// `list_ids` on an empty/unmatched scope returns an empty vec, not an error.
+    #[tokio::test]
+    async fn list_ids_empty_when_no_rows() {
+        let driver = memory_driver().await;
+        let schema = test_schema();
+        let store = ObjectStore::new(&driver, &schema);
+
+        let ids = store.list_ids(TENANT, TYPE, DEFAULT_APP_ID).await.unwrap();
+        assert!(ids.is_empty());
+    }
+
+    // ── delete_by_field (AURA-431) ──────────────────────────────────────────
+
+    /// `delete_by_field` removes only the rows whose field matches, within the
+    /// tenant/app/type scope, and reports the count removed.
+    #[tokio::test]
+    async fn delete_by_field_removes_matches_and_reports_count() {
+        let driver = memory_driver().await;
+        let schema = test_schema();
+        let store = ObjectStore::new(&driver, &schema);
+
+        store
+            .upsert(
+                TENANT,
+                TYPE,
+                "c-1",
+                &convo("c-1", "shared"),
+                1,
+                "app-a",
+                NOW,
+            )
+            .await
+            .unwrap();
+        store
+            .upsert(
+                TENANT,
+                TYPE,
+                "c-2",
+                &convo("c-2", "shared"),
+                1,
+                "app-a",
+                NOW,
+            )
+            .await
+            .unwrap();
+        store
+            .upsert(TENANT, TYPE, "c-3", &convo("c-3", "other"), 1, "app-a", NOW)
+            .await
+            .unwrap();
+
+        let deleted = store
+            .delete_by_field(TENANT, TYPE, "app-a", "title", "shared")
+            .await
+            .unwrap();
+        assert_eq!(deleted, 2);
+
+        let remaining = store.list_ids(TENANT, TYPE, "app-a").await.unwrap();
+        assert_eq!(remaining, vec!["c-3"]);
+    }
+
+    /// `delete_by_field` never crosses tenant or app boundaries, even when the
+    /// field value matches identically in another scope.
+    #[tokio::test]
+    async fn delete_by_field_isolates_by_tenant_and_app() {
+        let driver = memory_driver().await;
+        let schema = test_schema();
+        let store = ObjectStore::new(&driver, &schema);
+
+        store
+            .upsert(
+                TENANT,
+                TYPE,
+                "c-1",
+                &convo("c-1", "shared"),
+                1,
+                "app-a",
+                NOW,
+            )
+            .await
+            .unwrap();
+        store
+            .upsert(
+                "tenant-2",
+                TYPE,
+                "c-2",
+                &convo("c-2", "shared"),
+                1,
+                "app-a",
+                NOW,
+            )
+            .await
+            .unwrap();
+        store
+            .upsert(
+                TENANT,
+                TYPE,
+                "c-3",
+                &convo("c-3", "shared"),
+                1,
+                "app-b",
+                NOW,
+            )
+            .await
+            .unwrap();
+
+        let deleted = store
+            .delete_by_field(TENANT, TYPE, "app-a", "title", "shared")
+            .await
+            .unwrap();
+        assert_eq!(deleted, 1);
+
+        // The other tenant's and other app's rows survive untouched.
+        assert!(
+            store
+                .read("tenant-2", TYPE, "c-2", "app-a")
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            store
+                .read(TENANT, TYPE, "c-3", "app-b")
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    /// No matches ⇒ `0`, and it's not an error.
+    #[tokio::test]
+    async fn delete_by_field_returns_zero_when_nothing_matches() {
+        let driver = memory_driver().await;
+        let schema = test_schema();
+        let store = ObjectStore::new(&driver, &schema);
+
+        store
+            .upsert(
+                TENANT,
+                TYPE,
+                "c-1",
+                &convo("c-1", "other"),
+                1,
+                DEFAULT_APP_ID,
+                NOW,
+            )
+            .await
+            .unwrap();
+
+        let deleted = store
+            .delete_by_field(TENANT, TYPE, DEFAULT_APP_ID, "title", "shared")
+            .await
+            .unwrap();
+        assert_eq!(deleted, 0);
     }
 }
