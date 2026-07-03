@@ -45,7 +45,10 @@ pub fn auth_router(state: AppState) -> axum::Router {
         .route("/auth/email/reset-password", post(email_reset_password))
         .route("/auth/refresh", post(refresh))
         .route("/auth/refresh/revoke", post(refresh_revoke))
-        .with_state(state)
+        .with_state(state.clone())
+        // Registration-lock management routes (AURA-178); the challenge
+        // itself rides `/auth/login` + `/auth/email/login` below.
+        .merge(crate::auth_reglock::reglock_router(state))
 }
 
 #[derive(Debug, Deserialize)]
@@ -67,6 +70,10 @@ struct LoginBody {
     tenant_id: Option<String>,
     device_id: Option<String>,
     replica_id: Option<String>,
+    /// Registration-lock proof (AURA-178): the base64 PBKDF2 verifier derived
+    /// from the recovery PIN. Required only while the account's lock is
+    /// enforced; its absence triggers the 423 challenge.
+    recovery_pin_verifier: Option<String>,
 }
 
 // Field names are the wire contract (userId/tenantId/deviceId/replicaId), so
@@ -106,6 +113,8 @@ struct EmailLoginBody {
     tenant_id: Option<String>,
     device_id: Option<String>,
     replica_id: Option<String>,
+    /// Registration-lock proof (AURA-178), as on [`LoginBody`].
+    recovery_pin_verifier: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -262,6 +271,21 @@ async fn login(State(state): State<AppState>, Json(body): Json<LoginBody>) -> Re
             &request_id,
         );
     };
+
+    // Registration lock (AURA-178): a password alone must not re-register a
+    // locked account — demand the recovery-PIN verifier before minting.
+    if let Err(challenge) = crate::auth_reglock::check_registration_lock(
+        &state,
+        &request_id,
+        &tenant_id,
+        &account.user_id,
+        body.recovery_pin_verifier.as_deref(),
+        now_ms,
+    )
+    .await
+    {
+        return challenge;
+    }
 
     let device_id = body
         .device_id
@@ -582,6 +606,21 @@ async fn email_login(State(state): State<AppState>, Json(body): Json<EmailLoginB
         return respond_error(&invalid_credentials(), &request_id);
     };
 
+    // Registration lock (AURA-178): the password re-registration path must
+    // also present the recovery-PIN verifier while the lock is enforced.
+    if let Err(challenge) = crate::auth_reglock::check_registration_lock(
+        &state,
+        &request_id,
+        &tenant_id,
+        &account.user_id,
+        body.recovery_pin_verifier.as_deref(),
+        now_ms,
+    )
+    .await
+    {
+        return challenge;
+    }
+
     let session = state
         .auth_lifecycle
         .resolve_session(AuthSessionContext {
@@ -810,6 +849,11 @@ async fn refresh(
     if !account_exists {
         return respond_error(&invalid_refresh_token(), &request_id);
     }
+
+    // Token refresh IS authenticated activity: keep the registration-lock
+    // inactivity window alive for accounts with live devices (AURA-178).
+    crate::auth_reglock::touch_reglock_activity(&state, &record.tenant_id, &record.user_id, now_ms)
+        .await;
 
     match mint_session(
         &state,
