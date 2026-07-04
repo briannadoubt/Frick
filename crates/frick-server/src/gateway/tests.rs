@@ -1350,18 +1350,51 @@ async fn test_hub_with_lifecycle(
     schema: FrickSchema,
     connection_lifecycle: super::ConnectionLifecycleHooks,
 ) -> std::sync::Arc<GatewayHub> {
-    test_hub_with_seams(
+    test_hub_full(
         schema,
         connection_lifecycle,
+        std::sync::Arc::new(Vec::new()),
         std::sync::Arc::new(Vec::new()),
     )
     .await
 }
 
+/// A test hub with federation hooks registered — used by the federation tests.
 async fn test_hub_with_seams(
     schema: FrickSchema,
     connection_lifecycle: super::ConnectionLifecycleHooks,
     federation_hooks: crate::federation::FederationHooks,
+) -> std::sync::Arc<GatewayHub> {
+    test_hub_full(
+        schema,
+        connection_lifecycle,
+        federation_hooks,
+        std::sync::Arc::new(Vec::new()),
+    )
+    .await
+}
+
+/// A test hub with app policy hooks registered (FR-296) — used to prove the
+/// sync-gateway object/projection delivery paths run the same hooks the HTTP
+/// routes do. Empty hooks reduce these paths to their pre-hook behavior.
+async fn test_hub_with_hooks(
+    schema: FrickSchema,
+    policy_hooks: Vec<std::sync::Arc<dyn crate::authz::PolicyHook>>,
+) -> std::sync::Arc<GatewayHub> {
+    test_hub_full(
+        schema,
+        std::sync::Arc::new(Vec::new()),
+        std::sync::Arc::new(Vec::new()),
+        std::sync::Arc::new(policy_hooks),
+    )
+    .await
+}
+
+async fn test_hub_full(
+    schema: FrickSchema,
+    connection_lifecycle: super::ConnectionLifecycleHooks,
+    federation_hooks: crate::federation::FederationHooks,
+    policy_hooks: crate::authz::PolicyHooks,
 ) -> std::sync::Arc<GatewayHub> {
     let store = std::sync::Arc::new(
         frick_store::FrickStore::open(frick_store::FrickStoreOptions {
@@ -1412,7 +1445,7 @@ async fn test_hub_with_seams(
         calls,
         blob_processors: std::sync::Arc::new(crate::blob_processors::BlobProcessorRegistry::new()),
         platform_events: std::sync::Arc::new(frick_store::MemoryPlatformEvents::new()),
-        policy_hooks: std::sync::Arc::new(Vec::new()),
+        policy_hooks,
         connection_lifecycle,
         federation_hooks,
         write_side_effects: Vec::new(),
@@ -1698,6 +1731,226 @@ fn fan_out_grant_relaxation_reaches_grantee() {
             .expect("a frame");
         assert!(matches!(frame, super::Outbound::Frame(_)));
     });
+}
+
+/// A tightening-only policy hook (FR-296) that denies `ObjectRead` of a single
+/// object TYPE — the shape `LoadoutRbac` uses to hide `CUSTOMER_PRIVATE_TYPES`
+/// from a customer-role principal. Used to prove the sync gateway (snapshot +
+/// fan-out) enforces it, not just HTTP.
+struct DenyObjectReadOfType {
+    object_type: String,
+}
+
+impl crate::authz::PolicyHook for DenyObjectReadOfType {
+    fn evaluate<'a>(
+        &'a self,
+        input: &'a crate::authz::PolicyInput<'a>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<crate::authz::Decision>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            let denies = input.action == crate::authz::Action::ObjectRead
+                && input.resource.name.as_deref() == Some(self.object_type.as_str());
+            denies.then(|| crate::authz::Decision::Deny {
+                reason: crate::authz::DenyReason::NotAuthorizedForResource,
+                public_message: "type read gated".to_string(),
+            })
+        })
+    }
+}
+
+/// FR-296 gateway bypass closed: a registered hook that denies `ObjectRead` of a
+/// TYPE is enforced over the sync socket's LIVE FAN-OUT, exactly as the HTTP
+/// LIST route enforces it — a subscriber does NOT receive the delta for a
+/// hook-denied type, EXCEPT the specific record it holds an active read grant
+/// on (the type-level hook composes with per-record grants, never overrides
+/// them). The row's owner is subject to the same hook (owner holds no self
+/// grant), so a hook-denied type is hidden even from its owner unless granted.
+#[test]
+fn fan_out_hook_denies_type_but_grant_still_reaches_grantee() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let hub = test_hub_with_hooks(
+            owned_note_schema(),
+            vec![std::sync::Arc::new(DenyObjectReadOfType {
+                object_type: "OwnedNote".into(),
+            })],
+        )
+        .await;
+        let (_a, mut rx_a) = register_owned_note_sub(&hub, "ada");
+        let (_b, mut rx_b) = register_owned_note_sub(&hub, "bo");
+        // ada shares n1 with bo (read); bo has a grant, ada (the owner) does not.
+        create_read_grant(&hub, "ada", "bo", "OwnedNote", "n1").await;
+
+        let mut event = upsert_owned_note(
+            DEFAULT_TENANT_ID,
+            DEFAULT_APP_ID,
+            "n1",
+            &owned_note_value("n1", "secret", "ada"),
+        );
+        if let FrickStoreWriteEvent::ObjectUpsert { writer_user_id, .. } = &mut event {
+            *writer_user_id = Some("ada".into());
+        }
+        hub.handle_store_write(&event);
+
+        // The grantee still receives the delta — the per-record grant relaxes the
+        // type-level hook deny (resolved off the hot path).
+        let frame = tokio::time::timeout(Duration::from_secs(2), rx_b.recv())
+            .await
+            .expect("grantee delta within timeout")
+            .expect("a frame");
+        assert!(matches!(frame, super::Outbound::Frame(_)));
+
+        // The owner (ada) is denied by the type-level hook and holds no grant on
+        // her own record, so despite being the writer/owner she receives NOTHING
+        // — the hook is enforced over the socket, not just HTTP.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            rx_a.try_recv().is_err(),
+            "a type-denying hook must suppress the fan-out even for the owner/writer over the socket"
+        );
+    });
+}
+
+/// EMPTY-HOOKS INVARIANCE control: with NO hooks registered, the fan-out
+/// delivers exactly the pre-hook set — the owner/writer receives her row inline,
+/// a non-owner without a grant receives nothing. Reruns
+/// `fan_out_owner_scoped_skips_non_owner`'s assertions through the (now
+/// hook-aware) fan-out to prove it's byte-behavior-identical when hooks absent.
+#[test]
+fn fan_out_no_hooks_is_owner_scoped_unchanged() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let hub = test_hub_with_hooks(owned_note_schema(), vec![]).await;
+        let (_a, mut rx_a) = register_owned_note_sub(&hub, "ada");
+        let (_b, mut rx_b) = register_owned_note_sub(&hub, "bo");
+
+        let mut event = upsert_owned_note(
+            DEFAULT_TENANT_ID,
+            DEFAULT_APP_ID,
+            "n1",
+            &owned_note_value("n1", "secret", "ada"),
+        );
+        if let FrickStoreWriteEvent::ObjectUpsert { writer_user_id, .. } = &mut event {
+            *writer_user_id = Some("ada".into());
+        }
+        hub.handle_store_write(&event);
+
+        assert!(
+            matches!(rx_a.try_recv(), Ok(super::Outbound::Frame(_))),
+            "with no hooks the owner still receives her row inline"
+        );
+        assert!(
+            rx_b.try_recv().is_err(),
+            "with no hooks a non-owner with no grant still receives nothing"
+        );
+    });
+}
+
+/// FR-296 snapshot path: the initial subscription Snapshot is also hook-gated. A
+/// type-denying hook hides the type's rows from the snapshot, EXCEPT rows the
+/// subscriber holds an active read grant on. Drives `handle_subscribe` directly
+/// against a registered connection + real session, then reads the Snapshot off
+/// the outbound channel.
+#[tokio::test]
+async fn snapshot_hook_denies_type_but_grant_still_surfaces() {
+    use frick_store::stores::session::CreateSessionInput;
+
+    let hub = test_hub_with_hooks(
+        owned_note_schema(),
+        vec![std::sync::Arc::new(DenyObjectReadOfType {
+            object_type: "OwnedNote".into(),
+        })],
+    )
+    .await;
+
+    // Two rows owned by ada: n1 shared with bo, n2 not shared.
+    for (id, body) in [("n1", "shared"), ("n2", "private")] {
+        hub.state
+            .store
+            .objects()
+            .upsert(
+                DEFAULT_TENANT_ID,
+                "OwnedNote",
+                id,
+                &owned_note_value(id, body, "ada"),
+                1,
+                DEFAULT_APP_ID,
+                0,
+            )
+            .await
+            .unwrap();
+    }
+    create_read_grant(&hub, "ada", "bo", "OwnedNote", "n1").await;
+
+    // A real, active session for bo so the subscribe's per-frame re-validation
+    // authenticates the principal.
+    let token = "tok-snap-bo";
+    hub.state
+        .store
+        .sessions()
+        .create(
+            &CreateSessionInput {
+                session_token: token.into(),
+                tenant_id: DEFAULT_TENANT_ID.into(),
+                user_id: "bo".into(),
+                device_id: "device-1".into(),
+                replica_id: "replica-1".into(),
+                expires_at: "2999-01-01T00:00:00.000Z".into(),
+            },
+            now_ms(),
+        )
+        .await
+        .expect("session created");
+    let principal = principal_from_active_session_token(&hub.state.store, token, now_ms())
+        .await
+        .expect("active principal");
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<super::Outbound>();
+    let id = hub.register(super::Connection {
+        principal: Some(principal),
+        session_token: Some(token.to_string()),
+        app_id: DEFAULT_APP_ID.to_string(),
+        handshake_complete: true,
+        subscriptions: std::collections::HashSet::new(),
+        pending_writes: 0,
+        outbound: tx,
+    });
+
+    super::handle_subscribe(
+        &hub,
+        id,
+        SubscribePayload {
+            subscription_id: "sub-owned".into(),
+            kind: SubscriptionKind::Object,
+            name: "OwnedNote".into(),
+            key: None,
+            cursor: None,
+        },
+    )
+    .await;
+
+    // Find the Snapshot frame: the hook denies the OwnedNote type, so it carries
+    // only n1 (granted), not n2 (private).
+    let mut snapshot = None;
+    while let Ok(super::Outbound::Frame(bytes)) = rx.try_recv() {
+        if let FrickFrame::Snapshot(payload) = decode_frame(&bytes).unwrap() {
+            snapshot = Some(payload);
+        }
+    }
+    let snapshot = snapshot.expect("a Snapshot frame");
+    let ids: Vec<String> = snapshot
+        .objects
+        .iter()
+        .map(|record| record.1.clone())
+        .collect();
+    assert!(
+        ids.contains(&"n1".to_string()),
+        "the granted row must survive the type-level hook deny in the snapshot: {ids:?}"
+    );
+    assert!(
+        !ids.contains(&"n2".to_string()),
+        "the non-granted row of a hook-denied type must be hidden from the snapshot: {ids:?}"
+    );
 }
 
 #[test]

@@ -42,6 +42,27 @@ impl PolicyHook for DenyTypeWrites {
     }
 }
 
+/// A tightening-only policy hook (FR-296) that denies every occurrence of a
+/// single action, regardless of resource — a blunt gate used to prove a given
+/// route actually consults `state.policy_hooks` (vs. silently bypassing them).
+struct DenyAction {
+    action: Action,
+}
+
+impl PolicyHook for DenyAction {
+    fn evaluate<'a>(
+        &'a self,
+        input: &'a PolicyInput<'a>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<Decision>> + Send + 'a>> {
+        Box::pin(async move {
+            (input.action == self.action).then(|| Decision::Deny {
+                reason: DenyReason::NotAuthorizedForResource,
+                public_message: format!("{} is gated", input.action.as_str()),
+            })
+        })
+    }
+}
+
 /// A server-authoritative command endpoint (FR-297): authenticates the request
 /// with the public helper and reads the store — the shape of a Rust backend's
 /// `appRoutes`. Returns the caller's id + their tenant's `Note` count.
@@ -138,6 +159,22 @@ impl TestServer {
         let server = create_frick_server_with_seams(test_config(), test_schema(), seams)
             .await
             .unwrap();
+        Self::serve(Arc::clone(&server.state), server).await
+    }
+
+    /// Boot with app policy hooks (FR-296) AND a registered projection (FR-245)
+    /// with a `read` handler, so `GET /projections/:name` can reach the
+    /// `Found(data)` arm the `projection.read` hook gates.
+    async fn boot_with_hooks_and_projection(
+        hooks: Vec<Arc<dyn PolicyHook>>,
+        projection: frick_server::projections::FrickProjection,
+    ) -> Self {
+        let mut seams = BootSeams::production();
+        seams.policy_hooks = hooks;
+        let server = create_frick_server_with_seams(test_config(), test_schema(), seams)
+            .await
+            .unwrap();
+        server.state.projections.register(projection).unwrap();
         Self::serve(Arc::clone(&server.state), server).await
     }
 
@@ -448,6 +485,331 @@ async fn policy_hook_denies_a_gated_write() {
         .await;
     assert_eq!(ok.status, 201, "ungated write must succeed: {}", ok.body);
 
+    server.close().await;
+}
+
+/// A tightening-only policy hook (FR-296) denies `stream.append` — proving
+/// `POST /append` actually consults `state.policy_hooks` (it previously
+/// bypassed them entirely, per the `streams.rs` `append_decision` fn-level
+/// comment before this fix).
+#[tokio::test]
+async fn policy_hook_denies_stream_append() {
+    let mut server = TestServer::boot_with_hooks(vec![Arc::new(DenyAction {
+        action: Action::StreamAppend,
+    })])
+    .await;
+    let token = server.login("user-ada").await;
+
+    let denied = server
+        .request(
+            "POST",
+            "/append",
+            &[("Authorization", &bearer(&token))],
+            r#"{"stream":"Chat","key":"room-1","event":"message","payload":{"text":"hi"},"requestId":"req-1"}"#,
+        )
+        .await;
+    assert_eq!(
+        denied.status, 403,
+        "gated stream.append must be denied: {}",
+        denied.body
+    );
+    assert!(
+        denied.body.contains("notAuthorizedForResource"),
+        "body: {}",
+        denied.body
+    );
+    server.close().await;
+}
+
+/// With no hooks registered, `POST /append` behaves exactly as before the fix
+/// (tightening-only: an empty-hooks server must see zero behavior change).
+#[tokio::test]
+async fn no_hooks_stream_append_still_succeeds() {
+    let mut server = TestServer::boot().await;
+    let token = server.login("user-ada").await;
+
+    let ok = server
+        .request(
+            "POST",
+            "/append",
+            &[("Authorization", &bearer(&token))],
+            r#"{"stream":"Chat","key":"room-1","event":"message","payload":{"text":"hi"},"requestId":"req-1"}"#,
+        )
+        .await;
+    assert_eq!(ok.status, 200, "body: {}", ok.body);
+    server.close().await;
+}
+
+/// A tightening-only policy hook (FR-296) denies `blob.write` — proving
+/// `POST /blobs` (declare) and `PUT /blobs/:id/content` (upload) actually
+/// consult `state.policy_hooks` (both previously bypassed them via the sync
+/// `ownership_decision` helper, per its FR-245 doc comment before this fix).
+#[tokio::test]
+async fn policy_hook_denies_blob_write() {
+    let mut server = TestServer::boot_with_hooks(vec![Arc::new(DenyAction {
+        action: Action::BlobWrite,
+    })])
+    .await;
+    let token = server.login("user-ada").await;
+
+    let denied = server
+        .request(
+            "POST",
+            "/blobs",
+            &[("Authorization", &bearer(&token))],
+            r#"{"blobId":"blob-1","ownerId":"user-ada","contentHash":"sha256-abc","byteLength":3,"mimeType":"text/plain"}"#,
+        )
+        .await;
+    assert_eq!(
+        denied.status, 403,
+        "gated blob.write (declare) must be denied: {}",
+        denied.body
+    );
+    assert!(
+        denied.body.contains("notAuthorizedForResource"),
+        "body: {}",
+        denied.body
+    );
+
+    let denied_upload = server
+        .request(
+            "PUT",
+            "/blobs/blob-2/content?ownerId=user-ada",
+            &[
+                ("Authorization", &bearer(&token)),
+                ("Content-Type", "text/plain"),
+            ],
+            "hi!",
+        )
+        .await;
+    assert_eq!(
+        denied_upload.status, 403,
+        "gated blob.write (upload) must be denied: {}",
+        denied_upload.body
+    );
+    assert!(
+        denied_upload.body.contains("notAuthorizedForResource"),
+        "body: {}",
+        denied_upload.body
+    );
+    server.close().await;
+}
+
+/// With no hooks registered, blob declare + upload behave exactly as before
+/// the fix (tightening-only: zero behavior change for an empty-hooks server).
+#[tokio::test]
+async fn no_hooks_blob_write_still_succeeds() {
+    let mut server = TestServer::boot().await;
+    let token = server.login("user-ada").await;
+
+    let declare = server
+        .request(
+            "POST",
+            "/blobs",
+            &[("Authorization", &bearer(&token))],
+            r#"{"blobId":"blob-1","ownerId":"user-ada","contentHash":"sha256-abc","byteLength":3,"mimeType":"text/plain"}"#,
+        )
+        .await;
+    assert_eq!(declare.status, 201, "body: {}", declare.body);
+    server.close().await;
+}
+
+/// A tightening-only policy hook (FR-296) denies `projection.read` — proving
+/// `GET /projections/:name` actually consults `state.policy_hooks` (it
+/// previously never referenced them at all).
+#[tokio::test]
+async fn policy_hook_denies_projection_read() {
+    use frick_server::projections::{
+        FrickProjection, FrickProjectionContext, FrickProjectionHandler,
+        FrickProjectionWriteEvent, ProjectionApplyResult,
+    };
+
+    struct EmptyReadable;
+    impl FrickProjectionHandler for EmptyReadable {
+        fn apply(
+            &self,
+            _event: &FrickProjectionWriteEvent,
+            _ctx: &FrickProjectionContext,
+        ) -> ProjectionApplyResult {
+            ProjectionApplyResult::none()
+        }
+        fn read(
+            &self,
+            _ctx: &FrickProjectionContext,
+            _query: &std::collections::BTreeMap<String, String>,
+        ) -> Option<frick_protocol::Value> {
+            Some(frick_protocol::Value::Map(Vec::new()))
+        }
+    }
+
+    let mut server = TestServer::boot_with_hooks_and_projection(
+        vec![Arc::new(DenyAction {
+            action: Action::ProjectionRead,
+        })],
+        FrickProjection::new("readable", Vec::new(), Box::new(EmptyReadable)),
+    )
+    .await;
+    let token = server.login("user-ada").await;
+
+    let denied = server.get("/projections/readable", &token).await;
+    assert_eq!(
+        denied.status, 403,
+        "gated projection.read must be denied: {}",
+        denied.body
+    );
+    assert!(
+        denied.body.contains("notAuthorizedForResource"),
+        "body: {}",
+        denied.body
+    );
+    server.close().await;
+}
+
+/// With no hooks registered, `GET /projections/:name` behaves exactly as
+/// before the fix (tightening-only: zero behavior change).
+#[tokio::test]
+async fn no_hooks_projection_read_still_succeeds() {
+    use frick_server::projections::{
+        FrickProjection, FrickProjectionContext, FrickProjectionHandler,
+        FrickProjectionWriteEvent, ProjectionApplyResult,
+    };
+
+    struct EmptyReadable;
+    impl FrickProjectionHandler for EmptyReadable {
+        fn apply(
+            &self,
+            _event: &FrickProjectionWriteEvent,
+            _ctx: &FrickProjectionContext,
+        ) -> ProjectionApplyResult {
+            ProjectionApplyResult::none()
+        }
+        fn read(
+            &self,
+            _ctx: &FrickProjectionContext,
+            _query: &std::collections::BTreeMap<String, String>,
+        ) -> Option<frick_protocol::Value> {
+            Some(frick_protocol::Value::Map(Vec::new()))
+        }
+    }
+
+    let mut server = TestServer::boot_with_hooks_and_projection(
+        Vec::new(),
+        FrickProjection::new("readable", Vec::new(), Box::new(EmptyReadable)),
+    )
+    .await;
+    let token = server.login("user-ada").await;
+
+    let ok = server.get("/projections/readable", &token).await;
+    assert_eq!(ok.status, 200, "body: {}", ok.body);
+    server.close().await;
+}
+
+/// A tightening-only policy hook (FR-296) denies `object.read` — proving
+/// `GET /objects` (LIST) actually consults `state.policy_hooks` per row (it
+/// previously never built an `Action::ObjectRead` decision at all). A hook
+/// denying the whole type still lets through exactly the rows the caller
+/// holds an active sharing grant on (composes with grant relaxation, doesn't
+/// replace it).
+#[tokio::test]
+async fn policy_hook_denies_object_read_list_but_grants_still_surface() {
+    let mut server = TestServer::boot_with_hooks(vec![Arc::new(DenyAction {
+        action: Action::ObjectRead,
+    })])
+    .await;
+    let owner = server.login("user-owner").await;
+    let grantee = server.login("user-grantee").await;
+
+    // Owner writes a row (object.write is unaffected — the hook only gates
+    // object.read), then grants the grantee "read" on that record.
+    let write = server
+        .request(
+            "PUT",
+            "/objects/OwnedNote/note-shared",
+            &[("Authorization", &bearer(&owner))],
+            r#"{"body":"secret","ownerUserId":"user-owner"}"#,
+        )
+        .await;
+    assert_eq!(write.status, 201, "body: {}", write.body);
+
+    let invite = server
+        .request(
+            "POST",
+            "/share/invite",
+            &[("Authorization", &bearer(&owner))],
+            r#"{"recordType":"OwnedNote","recordId":"note-shared","permission":"read"}"#,
+        )
+        .await;
+    assert_eq!(invite.status, 201, "body: {}", invite.body);
+    let invite_token = extract_json_string(&invite.body, "token");
+    let accept = server
+        .request(
+            "POST",
+            "/share/accept",
+            &[("Authorization", &bearer(&grantee))],
+            &format!(r#"{{"token":"{invite_token}"}}"#),
+        )
+        .await;
+    assert_eq!(accept.status, 201, "body: {}", accept.body);
+
+    // Owner's own list: the hook denies object.read on OwnedNote for every
+    // row, INCLUDING the owner's own — the owner holds no grant on their own
+    // record, so their row is filtered out of the list entirely.
+    let owner_list = server.get("/objects?type=OwnedNote", &owner).await;
+    assert_eq!(owner_list.status, 200, "body: {}", owner_list.body);
+    assert!(
+        !owner_list.body.contains("note-shared"),
+        "a gated object.read must hide even the owner's own row: {}",
+        owner_list.body
+    );
+
+    // Grantee's list: the hook denies the row at the ownership/hook stage, but
+    // the active read grant on note-shared flips it back to visible.
+    let grantee_list = server.get("/objects?type=OwnedNote", &grantee).await;
+    assert_eq!(grantee_list.status, 200, "body: {}", grantee_list.body);
+    assert!(
+        grantee_list.body.contains("note-shared"),
+        "a per-record grant must still surface the row despite the type-level hook deny: {}",
+        grantee_list.body
+    );
+
+    server.close().await;
+}
+
+/// With no hooks registered, `GET /objects` LIST behaves exactly as before the
+/// fix (tightening-only: zero behavior change for an empty-hooks server) —
+/// this reruns `object_list_is_owner_scoped`'s assertions through the hook
+/// codepath to prove it's byte-behavior-identical when hooks are absent.
+#[tokio::test]
+async fn no_hooks_object_read_list_is_still_owner_scoped() {
+    let mut server = TestServer::boot().await;
+    let ada = server.login("user-ada").await;
+    let bo = server.login("user-bo").await;
+
+    server
+        .request(
+            "PUT",
+            "/objects/OwnedNote/o-ada2",
+            &[("Authorization", &bearer(&ada))],
+            r#"{"body":"mine","ownerUserId":"user-ada"}"#,
+        )
+        .await;
+    server
+        .request(
+            "PUT",
+            "/objects/OwnedNote/o-bo2",
+            &[("Authorization", &bearer(&bo))],
+            r#"{"body":"hers","ownerUserId":"user-bo"}"#,
+        )
+        .await;
+
+    let ada_list = server.get("/objects?type=OwnedNote", &ada).await;
+    assert_eq!(ada_list.status, 200, "body: {}", ada_list.body);
+    assert!(ada_list.body.contains("o-ada2"), "body: {}", ada_list.body);
+    assert!(
+        !ada_list.body.contains("o-bo2"),
+        "body: {}",
+        ada_list.body
+    );
     server.close().await;
 }
 

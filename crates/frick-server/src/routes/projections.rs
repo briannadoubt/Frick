@@ -14,7 +14,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 
 use super::{ActiveApp, authenticate, new_request_id};
-use crate::authz::{Action, Decision, ResourceContext, decide_baseline};
+use crate::authz::{
+    Action, Decision, PolicyInput, PolicyResource, ResourceContext, apply_policy_hooks,
+    decide_baseline,
+};
 use crate::http::{AppState, respond_error};
 use crate::projections::{
     FrickProjectionContext, ProjectionHttpRead, list_projections_body, method_not_allowed_body,
@@ -75,7 +78,9 @@ async fn read(
             .into_response(),
         ProjectionHttpRead::Found(data) => {
             // assertCanSubscribe(projection): the `key` query param doubles as
-            // the subscription key for the authz decision.
+            // the subscription key for the authz decision. Baseline → app
+            // policy hooks (FR-296) — projections have no owner concept, so
+            // hooks + baseline are the whole pipeline (no grant relaxation).
             let decision = decide_baseline(
                 &principal,
                 Action::ProjectionRead,
@@ -84,6 +89,24 @@ async fn read(
                     owner_user_id: None,
                 },
             );
+            let decision = apply_policy_hooks(
+                decision,
+                &PolicyInput {
+                    principal: &principal,
+                    action: Action::ProjectionRead,
+                    resource: PolicyResource {
+                        kind: "projection",
+                        name: Some(name.clone()),
+                        key: query.get("key").cloned(),
+                        event: None,
+                        owner_id: None,
+                        tenant_id: principal.tenant_id.clone(),
+                    },
+                    context: None,
+                },
+                &state.policy_hooks,
+            )
+            .await;
             if let Decision::Deny {
                 reason,
                 public_message,

@@ -64,7 +64,7 @@ use crate::error::ServerError;
 use crate::http::AppState;
 use crate::object_visibility::{
     is_object_visible_to_user, owner_field_for_type, per_record_read_authz_active,
-    subscriber_can_read_object,
+    subscriber_can_read_object_with_hooks,
 };
 use crate::principal::{DEFAULT_APP_ID, Principal};
 use crate::projections::ProjectionRegistry;
@@ -1123,17 +1123,48 @@ async fn handle_subscribe(hub: &Arc<GatewayHub>, id: u64, payload: SubscribePayl
 
     // Re-check the baseline authz against the freshly re-validated principal
     // (its tenant/scope is authoritative); a denial removes the entry.
-    if let Decision::Deny {
-        reason,
-        public_message,
-    } = decide_baseline(
+    let mut subscribe_decision = decide_baseline(
         &principal,
         subscribe_action(payload.kind),
         &ResourceContext {
             tenant_id: principal.tenant_id.clone(),
             owner_user_id: None,
         },
-    ) {
+    );
+    // Projection subscriptions run app policy hooks (FR-296) at the subscribe
+    // gate, mirroring the HTTP `GET /projections/:name` read route: projections
+    // have no per-row owner concept, so a whole-projection hook deny is the only
+    // hook relaxation, and enforcing it here closes the sync-gateway bypass for
+    // projection deltas (snapshot + fan-out both flow from a passed subscribe).
+    // Object subscriptions are hook-gated per row at delivery time instead
+    // (snapshot / fan-out), so they are not double-checked here. With no hooks
+    // registered `apply_policy_hooks` is a no-op passthrough — behavior-identical
+    // to the pre-hook baseline-only gate.
+    if payload.kind == SubscriptionKind::Projection {
+        subscribe_decision = apply_policy_hooks(
+            subscribe_decision,
+            &PolicyInput {
+                principal: &principal,
+                action: Action::ProjectionRead,
+                resource: PolicyResource {
+                    kind: "projection",
+                    name: Some(payload.name.clone()),
+                    key: payload.key.clone(),
+                    event: None,
+                    owner_id: None,
+                    tenant_id: principal.tenant_id.clone(),
+                },
+                context: None,
+            },
+            &hub.state.policy_hooks,
+        )
+        .await;
+    }
+    if let Decision::Deny {
+        reason,
+        public_message,
+    } = subscribe_decision
+    {
         remove_subscription(hub, id, &payload.subscription_id);
         send_auth_nack(hub, id, &payload.subscription_id, reason, &public_message);
         return false;
@@ -1211,8 +1242,9 @@ async fn handle_subscribe(hub: &Arc<GatewayHub>, id: u64, payload: SubscribePayl
             let per_record_active = per_record_read_authz_active(&hub.state.store).await;
             let mut visible = Vec::with_capacity(rows.len());
             for row in rows {
-                if subscriber_can_read_object(
+                if subscriber_can_read_object_with_hooks(
                     &hub.state.store,
+                    &hub.state.policy_hooks,
                     mode,
                     owner_field,
                     &principal,
@@ -2150,6 +2182,10 @@ impl GatewayHub {
         }
     }
 
+    // A single linear delivery pipeline: match subscribers → synchronous
+    // baseline split → async hook/grant resolution. Splitting it would scatter
+    // the ordered delivery contract the funnel/hook tests rely on; kept whole.
+    #[allow(clippy::too_many_lines)]
     fn fan_out_object_upsert(
         self: &Arc<Self>,
         tenant_id: &str,
@@ -2178,16 +2214,28 @@ impl GatewayHub {
             return;
         };
 
-        // Per-record read scoping (FR-235/FR-116). The ownership baseline is a
-        // synchronous field compare, so baseline-visible subscribers (owners,
-        // the writer, admins, unowned-type rows, migrated rows) are delivered
-        // to inline — preserving ordering and the synchronous-delivery contract
-        // the funnel tests rely on. Subscribers who fail the baseline (owner
-        // mismatch) may still hold a sharing grant; those are resolved
+        // Per-record read scoping (FR-235/FR-116/FR-296). The ownership baseline
+        // is a synchronous field compare, so baseline-visible subscribers
+        // (owners, the writer, admins, unowned-type rows, migrated rows) are
+        // delivered to inline — preserving ordering and the synchronous-delivery
+        // contract the funnel tests rely on. Subscribers who fail the baseline
+        // (owner mismatch) may still hold a sharing grant; those are resolved
         // asynchronously below, since grant lookups hit the store.
+        //
+        // When app policy hooks are registered (FR-296) a hook can tighten a
+        // whole object TYPE, so a baseline-visible subscriber is NOT necessarily
+        // allowed: every matching subscriber is instead routed through the async
+        // `subscriber_can_read_object_with_hooks` pipeline (hooks + grant
+        // relaxation), the same authz the HTTP LIST and snapshot paths run. With
+        // NO hooks registered this branch is never taken and delivery is
+        // byte-identical to the pre-hook synchronous path.
         let mode = self.state.config.object_visibility_mode;
         let owner_field = owner_field_for_type(&schema, object_type);
-        let mut grant_candidates: Vec<(Principal, mpsc::UnboundedSender<Outbound>)> = Vec::new();
+        let has_hooks = !self.state.policy_hooks.is_empty();
+        // Subscribers deferred to the async store-touching pipeline: owner-
+        // mismatch grant candidates always; when hooks are live, every matching
+        // subscriber (baseline-visible ones too, since a hook may deny the type).
+        let mut deferred: Vec<(Principal, mpsc::UnboundedSender<Outbound>)> = Vec::new();
         {
             let Ok(inner) = self.inner.lock() else { return };
             for connection in inner.connections.values() {
@@ -2207,34 +2255,66 @@ impl GatewayHub {
                 if !matches {
                     continue;
                 }
+                if has_hooks {
+                    // Hook stage may tighten even a baseline allow — defer all.
+                    deferred.push((principal.clone(), connection.outbound.clone()));
+                    continue;
+                }
                 let baseline_visible = writer_user_id == Some(principal.user_id.as_str())
                     || principal.is_admin()
                     || is_object_visible_to_user(mode, owner_field, object, &principal.user_id);
                 if baseline_visible {
                     let _ = connection.outbound.send(Outbound::Frame(bytes.clone()));
                 } else {
-                    grant_candidates.push((principal.clone(), connection.outbound.clone()));
+                    deferred.push((principal.clone(), connection.outbound.clone()));
                 }
             }
         }
 
-        if grant_candidates.is_empty() {
+        if deferred.is_empty() {
             return;
         }
-        // Owner-mismatch subscribers: an active read grant on this exact record
-        // flips the deny to allow (`relaxWithGrants`). Resolve off the hot path
-        // — grant-based visibility tolerates the brief asynchronous delay, and
-        // skipping it entirely when no grant has ever been issued keeps the
-        // common (grant-free) deployment fully synchronous.
+        // Deferred subscribers are resolved off the hot path — grant / hook
+        // evaluation tolerates the brief asynchronous delay, and skipping it
+        // entirely when no grant has ever been issued AND no hooks are
+        // registered keeps the common deployment fully synchronous. When hooks
+        // are live the full `subscriber_can_read_object_with_hooks` pipeline runs
+        // per subscriber (hooks compose with per-record grant relaxation); when
+        // they are not, only owner-mismatch grant candidates reach here and the
+        // grant probe alone decides.
         let hub = Arc::clone(self);
         let tenant_id = tenant_id.to_string();
         let object_type = object_type.to_string();
         let object_id = object_id.to_string();
+        let object = object.clone();
+        let writer_user_id = writer_user_id.map(str::to_string);
+        let owner_field_owned = owner_field.map(str::to_string);
         tokio::spawn(async move {
-            if !per_record_read_authz_active(&hub.state.store).await {
+            let per_record_active = per_record_read_authz_active(&hub.state.store).await;
+            if has_hooks {
+                for (principal, outbound) in deferred {
+                    if subscriber_can_read_object_with_hooks(
+                        &hub.state.store,
+                        &hub.state.policy_hooks,
+                        mode,
+                        owner_field_owned.as_deref(),
+                        &principal,
+                        &object_type,
+                        &object,
+                        per_record_active,
+                        writer_user_id.as_deref(),
+                    )
+                    .await
+                    {
+                        let _ = outbound.send(Outbound::Frame(bytes.clone()));
+                    }
+                }
                 return;
             }
-            for (principal, outbound) in grant_candidates {
+            if !per_record_active {
+                return;
+            }
+            for (principal, outbound) in deferred {
                 if hub
                     .state
                     .store
@@ -2363,8 +2443,9 @@ impl GatewayHub {
         }
 
         for (principal, outbound) in subscribers {
-            if subscriber_can_read_object(
+            if subscriber_can_read_object_with_hooks(
                 &self.state.store,
+                &self.state.policy_hooks,
                 mode,
                 owner_field,
                 &principal,
