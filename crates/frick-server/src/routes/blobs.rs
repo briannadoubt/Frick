@@ -722,7 +722,9 @@ async fn put_content_chunk(
         Ok(owner_id) => owner_id,
         Err(error) => return respond_error(&error, request_id),
     };
-    if let Err(error) = ownership_decision(principal, &owner_id) {
+    if let Err(error) =
+        ownership_decision(state, principal, &owner_id, Some(blob_id), None).await
+    {
         return respond_error(&error, request_id);
     }
 
@@ -795,6 +797,7 @@ async fn put_content_chunk(
     let content_hash = sha256_content_hash(content);
 
     let resolved = match resolve_upload(
+        state,
         principal,
         metadata.as_ref(),
         uri,
@@ -802,7 +805,9 @@ async fn put_content_chunk(
         blob_id,
         content,
         &content_hash,
-    ) {
+    )
+    .await
+    {
         Ok(resolved) => resolved,
         Err(error) => return respond_error(&error, request_id),
     };
@@ -944,7 +949,9 @@ async fn head_content(
         Some(metadata) => metadata.owner_id.clone(),
         None => principal.user_id.clone(),
     };
-    if let Err(error) = ownership_decision(&principal, &owner_id) {
+    if let Err(error) =
+        ownership_decision(&state, &principal, &owner_id, Some(blob_id.as_str()), None).await
+    {
         return respond_error(&error, &request_id);
     }
 
