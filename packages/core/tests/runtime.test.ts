@@ -141,6 +141,57 @@ describe("foundation runtime", () => {
     await expect(pendingUpsert).resolves.toBeInstanceOf(FrickUserStateClearedError);
   });
 
+  // FR-312: a same-user TENANT switch (re-minted session via
+  // `/api/tenant/switch`, FR-311) must also reset the cache — `sessionScope`
+  // includes `tenantId`, so `setSession` must clear as readily on a tenant-only
+  // change as it does on a userId change. Regression for Zavro AQ-181, which
+  // needed a manual `resetCache()` after `restoreSession` on tenant switch.
+  it("clears cached user state on a same-user tenant switch", () => {
+    const cache = new MemoryFrickCache();
+    cache.saveObject(productTestSchema, "User", "user-ada", { displayName: "Ada Lovelace" }, 1, tenantAdaScope);
+    cache.saveStreamEvent(productTestSchema, {
+      stream: "MessageStream",
+      streamId: "conversation-general",
+      sequence: 1,
+      eventId: "event-1",
+      event: "MessageSent",
+      payload: {
+        messageId: "message-1",
+        senderId: "user-ada",
+        body: "cached",
+        createdAt: "2026-05-09T00:00:00.000Z",
+      },
+    }, tenantAdaScope);
+    const client = new FrickClient({
+      endpoint: "ws://unused",
+      schema: productTestSchema,
+      cache,
+      session: tenantAdaSession,
+    });
+    const users = client.objects("User");
+    const stream = client.stream("MessageStream", "conversation-general");
+
+    expect(users.value.length).toBeGreaterThan(0);
+    expect(stream.value.length).toBeGreaterThan(0);
+
+    // Same userId, different tenantId — the tenant-switch case from FR-311.
+    client.setSession({
+      ...tenantAdaSession,
+      sessionToken: "session-token-a2",
+      tenantId: "tenant-b",
+    });
+
+    expect(users.value).toEqual([]);
+    expect(stream.value).toEqual([]);
+    expect(client.object("User", "user-ada")).toBeUndefined();
+    expect(cache.load(productTestSchema)).toEqual({
+      objects: [],
+      streamEvents: [],
+      cursors: {},
+      pendingAppends: [],
+    });
+  });
+
   it("queues appends while disconnected and tracks pending count", async () => {
     const cache = new MemoryFrickCache();
     const client = new FrickClient({ endpoint: "ws://unused", schema: productTestSchema, cache });

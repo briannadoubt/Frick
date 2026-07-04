@@ -1147,23 +1147,25 @@ public final class FrickClient: Sendable {
 
     /// Install a freshly-minted session into the local store, resetting the
     /// on-disk cache + pending appends first when the incoming session is a
-    /// live swap to a different user, or when this client build's schema hash
-    /// has drifted from the persisted cache row.
+    /// live swap to a different user or tenant, or when this client build's
+    /// schema hash has drifted from the persisted cache row.
     ///
-    /// Frick's cache is scoped to `(userId, schemaHash)`; reusing rows minted
-    /// under user A while signed in as user B — or under a different schema
-    /// than this client compiled against — would leak A's data into B's
-    /// session. Sign-in entry points (Apple, Google, email, dev-login,
-    /// generic login/signup, restoreSession) funnel through here so callers
-    /// no longer have to remember to `resetCache()` before swapping users or
-    /// upgrading clients.
+    /// Frick's cache is scoped to `(tenantId, userId, schemaHash)`; reusing
+    /// rows minted under user A (or tenant A) while signed in as user B (or
+    /// tenant B) — or under a different schema than this client compiled
+    /// against — would leak A's data into B's session. Sign-in entry points
+    /// (Apple, Google, email, dev-login, generic login/signup,
+    /// restoreSession) funnel through here so callers no longer have to
+    /// remember to `resetCache()` before swapping users, swapping tenants
+    /// (e.g. `/api/tenant/switch`, FR-311), or upgrading clients.
     ///
-    /// Two complementary layers guard scope (RCRM-45, FR-3):
+    /// Two complementary layers guard scope (RCRM-45, FR-3, FR-312):
     ///
-    ///   1. The fast path here. The user check compares the *in-memory*
-    ///      previous session: a live in-app swap (sign in as B while still
-    ///      holding A's session) clears immediately so stale rows never flash.
-    ///      The schema check compares the *persisted* metadata hash, catching
+    ///   1. The fast path here. The user/tenant check compares the
+    ///      *in-memory* previous session: a live in-app swap (sign in as B,
+    ///      or re-mint for a different tenant, while still holding A's
+    ///      session) clears immediately so stale rows never flash. The
+    ///      schema check compares the *persisted* metadata hash, catching
     ///      a same-id/same-revision client upgrade that `reason()` below does
     ///      not — it only inspects `schemaId`/`schemaRevision`, not the hash.
     ///
@@ -1183,8 +1185,9 @@ public final class FrickClient: Sendable {
     private func installSession(_ newSession: FrickSession) {
         let cached = try? storage.loadCacheMetadata()
         let userChanged = sessionStore.session.map { $0.userId != newSession.userId } ?? false
+        let tenantChanged = sessionStore.session.map { $0.tenantId != newSession.tenantId } ?? false
         let schemaChanged = (cached?.schemaHash).map { $0 != schemaHash } ?? false
-        if userChanged || schemaChanged {
+        if userChanged || tenantChanged || schemaChanged {
             try? storage.clearCache()
             try? storage.clearPendingAppends()
         }
