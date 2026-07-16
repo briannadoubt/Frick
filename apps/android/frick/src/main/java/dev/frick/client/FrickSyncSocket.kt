@@ -106,6 +106,16 @@ sealed class FrickInboundEvent {
      * generated [FRICK_OBJECT_NAMES] / field tables.
      */
     data class PresenceDelta(val name: String, val records: List<Map<String, Any?>>, val cleared: List<String>) : FrickInboundEvent()
+    /**
+     * AURA-445 — a live `SignalDeliver` frame (kind 13), the WS push analogue
+     * of the durable REST `sendSignal`/`drainSignals` surface. [name] is the
+     * signal type (e.g. `"WebRTCSignal"`), [key] the channel key (e.g. a call
+     * id), and [value] the decoded field map — same named-field shape as an
+     * object record's `value`. Consumers filter this shared flow by
+     * `(name, key)`, mirroring how [Delta]/[ProjectionDelta] are consumed
+     * elsewhere in the SDK (see [FrickCallManager]).
+     */
+    data class SignalDeliver(val name: String, val key: String, val value: Map<String, Any?>) : FrickInboundEvent()
 }
 
 data class ProjectionChange(val key: String, val value: Map<String, Any?>?)
@@ -272,6 +282,17 @@ data class FrickSchemaDescriptor(
     val eventNames: Map<Int, String> = FRICK_EVENT_NAMES,
     val objectFields: Map<Int, Map<Int, String>> = FRICK_OBJECT_FIELDS,
     val eventFields: Map<Int, Map<Int, String>> = FRICK_EVENT_FIELDS,
+    /**
+     * Signal-type-id -> name, and (signalTypeId -> (fieldId -> fieldName))
+     * tables (AURA-445), the signal-side parity to [objectFields]/[eventFields].
+     * Empty by default — `@fricken/protocol`'s Kotlin codegen does not yet
+     * emit a generated signal table (only per-signal DTO classes), so a
+     * product-schema app supplies its own values here from its known,
+     * wire-stable signal ids (see the Aura app's `AuraSchema.descriptor()` for
+     * the pattern: `WebRTCSignal` id 60 / `CallDataChannel` id 61).
+     */
+    val signalNames: Map<Int, String> = emptyMap(),
+    val signalFields: Map<Int, Map<Int, String>> = emptyMap(),
 ) {
     companion object {
         /** The generated foundation schema (the default identity + tables). */
@@ -833,6 +854,35 @@ class FrickSyncSocket internal constructor(
     }
 
     /**
+     * Subscribe to a live signal channel by `(name, key)` (AURA-445) — the WS
+     * push analogue of the durable REST `sendSignal`/`drainSignals` surface
+     * (mirrors the TS SDK's `client.signalChannel(name, key)` / gateway
+     * `SubscriptionKind::Signal`). Delivered values arrive via
+     * [FrickInboundEvent.SignalDeliver] on [events], filtered by the same
+     * `(name, key)`.
+     *
+     * Signals have no replay for late subscribers (the relay only fans out
+     * live sends) — subscribe before the peer can start sending. There is
+     * also no wire Unsubscribe frame today (mirrors the TS SDK's own
+     * `signalChannel` doc comment: "not implemented yet"), so — like
+     * [subscribeObject]/[subscribePresence] — this subscription lives for the
+     * connection's lifetime; a caller done with a channel simply stops
+     * consuming matching [FrickInboundEvent.SignalDeliver] events.
+     */
+    suspend fun subscribeSignal(name: String, key: String) {
+        val frame = FrickMsgPack.encodeFrame(
+            FrameKindCodes.SUBSCRIBE,
+            mapOf(
+                "subscriptionId" to UUID.randomUUID().toString(),
+                "kind" to "signal",
+                "name" to name,
+                "key" to key,
+            ),
+        )
+        sendOrQueue(FrameKindCodes.SUBSCRIBE, frame)
+    }
+
+    /**
      * Set a presence row (e.g. `setPresence("CursorState", "$doc:$user:$device", mapOf("active" to true))`).
      * The server applies the row's `ttlMs` and broadcasts a
      * [FrickInboundEvent.PresenceDelta] to every subscriber.
@@ -1165,6 +1215,24 @@ class FrickSyncSocket internal constructor(
                 }
                 val inFlight = payload.intField("inFlight") ?: 0
                 _events.tryEmit(FrickInboundEvent.SyncStatus(connected, cursors, inFlight))
+            }
+            FrameKindCodes.SIGNAL_DELIVER -> {
+                // AURA-445 — `envelope` is a `PackedSignalEnvelope` tuple
+                // `[signalTypeId, key, packedFields]`, the same tuple shape as
+                // a `PackedObjectRecord` (see [decodePackedObjectRecord]).
+                // Unresolvable type ids (no signal table configured, or an id
+                // this descriptor doesn't know) are dropped — forward
+                // compatible with a newer server, matching the object/event
+                // decode paths.
+                val envelope = payload.listField("envelope") ?: return
+                if (envelope.size < 3) return
+                val typeId = (envelope[0] as? Number)?.toInt() ?: return
+                val key = envelope[1] as? String ?: return
+                val typeName = config.descriptor.signalNames[typeId] ?: return
+                val fieldTable = config.descriptor.signalFields[typeId] ?: emptyMap()
+                val packedFields = envelope[2] as? List<*> ?: emptyList<Any?>()
+                val value = unpackFields(packedFields, fieldTable)
+                _events.tryEmit(FrickInboundEvent.SignalDeliver(typeName, key, value))
             }
             FrameKindCodes.PING -> {
                 val sentAt = payload.intField("sentAt")?.toLong() ?: System.currentTimeMillis()

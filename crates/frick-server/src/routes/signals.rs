@@ -22,12 +22,18 @@ pub fn router(state: AppState) -> axum::Router {
 }
 
 /// `POST /signals/:name/:key` (`src/server.ts:2563-2601`): the `signal.send`
-/// decision, then `enqueue_signal`, then 200 `{ok:true}`.
+/// decision, then `enqueue_signal`, then the `gateway.publishSignal` live
+/// fan-out (FR-243) so WebSocket `signalChannel` subscribers see REST-sent
+/// signals immediately, then 200 `{ok:true}`.
 ///
-/// The WebRTC call-membership gate (calls-signal-1) and the
-/// `gateway.publishSignal` live fan-out are FR-243 gateway concerns; the
-/// enqueue is the durable side this route owns. TODO(FR-243): once the gateway
-/// is wired into boot, publish the signal to live subscribers here too.
+/// Without the live fan-out a REST-sending client (the Swift/Kotlin SDKs,
+/// which have no WS signal path yet) and a WS-subscribing client (the TS SDK)
+/// can only signal in one direction: WS sends are drained over REST, but REST
+/// sends sit in the durable outbox that WS clients never poll. A cross-SDK
+/// WebRTC call then never completes SDP exchange (found live: web↔Android,
+/// AURA-447).
+///
+/// The WebRTC call-membership gate (calls-signal-1) remains a gateway concern.
 async fn send_signal(
     State(state): State<AppState>,
     active: ActiveApp,
@@ -60,7 +66,21 @@ async fn send_signal(
         )
         .await
     {
-        Ok(()) => axum::Json(json!({ "ok": true })).into_response(),
+        Ok(()) => {
+            // FR-243: fan out to live WS subscribers (and the cluster bus).
+            // `gateway()` is `None` only when no hub was wired (unit tests).
+            if let Some(hub) = state.gateway() {
+                hub.publish_signal(
+                    &name,
+                    &key,
+                    &value,
+                    &principal.tenant_id,
+                    active.app_id(),
+                    &request_id,
+                );
+            }
+            axum::Json(json!({ "ok": true })).into_response()
+        }
         Err(error) => respond_error(&store_error(&error), &request_id),
     }
 }
