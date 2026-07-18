@@ -50,7 +50,7 @@ indexmap = { version = "2", features = ["serde"] }
 # S3 blob-bytes driver (FR-273). The `aws` feature gives rustls-backed
 # (ring/reqwest) S3 support — no openssl. default-features-off so the
 # azure/gcp/http-server arms never compile in.
-object_store = { version = "0.13", default-features = false, features = ["aws"] }
+object_store = { version = "0.14", default-features = false, features = ["aws"] }
 rand = "0.8"
 rmp = "0.8"
 rmp-serde = "1"
