@@ -620,8 +620,8 @@ async fn no_hooks_blob_write_still_succeeds() {
 #[tokio::test]
 async fn policy_hook_denies_projection_read() {
     use frick_server::projections::{
-        FrickProjection, FrickProjectionContext, FrickProjectionHandler,
-        FrickProjectionWriteEvent, ProjectionApplyResult,
+        FrickProjection, FrickProjectionContext, FrickProjectionHandler, FrickProjectionWriteEvent,
+        ProjectionApplyResult,
     };
 
     struct EmptyReadable;
@@ -670,8 +670,8 @@ async fn policy_hook_denies_projection_read() {
 #[tokio::test]
 async fn no_hooks_projection_read_still_succeeds() {
     use frick_server::projections::{
-        FrickProjection, FrickProjectionContext, FrickProjectionHandler,
-        FrickProjectionWriteEvent, ProjectionApplyResult,
+        FrickProjection, FrickProjectionContext, FrickProjectionHandler, FrickProjectionWriteEvent,
+        ProjectionApplyResult,
     };
 
     struct EmptyReadable;
@@ -805,11 +805,7 @@ async fn no_hooks_object_read_list_is_still_owner_scoped() {
     let ada_list = server.get("/objects?type=OwnedNote", &ada).await;
     assert_eq!(ada_list.status, 200, "body: {}", ada_list.body);
     assert!(ada_list.body.contains("o-ada2"), "body: {}", ada_list.body);
-    assert!(
-        !ada_list.body.contains("o-bo2"),
-        "body: {}",
-        ada_list.body
-    );
+    assert!(!ada_list.body.contains("o-bo2"), "body: {}", ada_list.body);
     server.close().await;
 }
 

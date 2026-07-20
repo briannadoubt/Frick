@@ -77,8 +77,8 @@ use sha2::{Digest, Sha256};
 
 use super::{ActiveApp, authenticate, map_get, new_request_id, parse_body_value, require_string};
 use crate::authz::{
-    Action, Decision, DenyReason, PolicyInput, PolicyResource, ResourceContext,
-    apply_policy_hooks, decide_baseline,
+    Action, Decision, DenyReason, PolicyInput, PolicyResource, ResourceContext, apply_policy_hooks,
+    decide_baseline,
 };
 use crate::error::{LimitKind, ServerError};
 use crate::http::{AppState, respond_error};
@@ -223,8 +223,7 @@ async fn declare_blob(
         Ok(value) => value,
         Err(error) => return respond_error(&error, &request_id),
     };
-    if let Err(error) =
-        ownership_decision(&state, &principal, &owner_id, None, Some(&parsed)).await
+    if let Err(error) = ownership_decision(&state, &principal, &owner_id, None, Some(&parsed)).await
     {
         return respond_error(&error, &request_id);
     }
@@ -722,9 +721,7 @@ async fn put_content_chunk(
         Ok(owner_id) => owner_id,
         Err(error) => return respond_error(&error, request_id),
     };
-    if let Err(error) =
-        ownership_decision(state, principal, &owner_id, Some(blob_id), None).await
-    {
+    if let Err(error) = ownership_decision(state, principal, &owner_id, Some(blob_id), None).await {
         return respond_error(&error, request_id);
     }
 

@@ -14,7 +14,9 @@ use frick_protocol::Value;
 use frick_protocol::schema::{FieldKind, FrickSchema, object_by_name};
 use frick_store::FrickStore;
 
-use crate::authz::{Action, Decision, PolicyHooks, PolicyInput, PolicyResource, apply_policy_hooks};
+use crate::authz::{
+    Action, Decision, PolicyHooks, PolicyInput, PolicyResource, apply_policy_hooks,
+};
 use crate::principal::Principal;
 
 /// The conventional owner field (`ownerUserId`): a `string` field with this
