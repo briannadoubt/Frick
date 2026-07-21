@@ -223,9 +223,9 @@ public struct FrickWorkspaceShell<Content: View, Inspector: View>: View {
         }
         .frickSidebarAdaptableTabViewStyle()
 
-        // `.inspector` is unavailable on visionOS — apply it only where it exists
-        // so the workspace shell still compiles for the Vision platform.
-        #if os(visionOS)
+        // `.inspector` is unavailable on visionOS and tvOS — apply it only
+        // where it exists so the shared workspace shell remains portable.
+        #if os(visionOS) || os(tvOS)
         return base.background(FrickPalette.background)
         #else
         return base
@@ -243,7 +243,7 @@ private extension View {
     /// runs on iOS 17 (graceful degradation to the standard tab bar).
     @ViewBuilder
     func frickSidebarAdaptableTabViewStyle() -> some View {
-        if #available(iOS 18.0, macOS 15.0, visionOS 2.0, *) {
+        if #available(iOS 18.0, macOS 15.0, tvOS 18.0, visionOS 2.0, *) {
             self.tabViewStyle(.sidebarAdaptable)
         } else {
             self
@@ -349,11 +349,15 @@ private struct FrickWorkspaceBadgeModifier: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
+        #if os(tvOS)
+        content
+        #else
         if let badge {
             content.badge(badge)
         } else {
             content
         }
+        #endif
     }
 }
 
@@ -550,6 +554,11 @@ public struct FrickTextArea: View {
     }
 
     public var body: some View {
+        #if os(tvOS)
+        TextField(title, text: $text)
+            .frame(minHeight: 88)
+            .frickTextInputChrome(minHeight: 88)
+        #else
         TextEditor(text: $text)
             .frame(minHeight: 88)
             .scrollContentBackground(.hidden)
@@ -562,6 +571,7 @@ public struct FrickTextArea: View {
                         .allowsHitTesting(false)
                 }
             }
+        #endif
     }
 }
 
@@ -817,7 +827,14 @@ public struct FrickDatePicker: View {
     }
 
     public var body: some View {
+        #if os(tvOS)
+        FrickReadOnlyDateValue(
+            title: title,
+            value: selection.formatted(date: .abbreviated, time: .omitted)
+        )
+        #else
         DatePicker(title, selection: $selection, displayedComponents: .date)
+        #endif
     }
 }
 
@@ -831,9 +848,33 @@ public struct FrickTimePicker: View {
     }
 
     public var body: some View {
+        #if os(tvOS)
+        FrickReadOnlyDateValue(
+            title: title,
+            value: selection.formatted(date: .omitted, time: .shortened)
+        )
+        #else
         DatePicker(title, selection: $selection, displayedComponents: .hourAndMinute)
+        #endif
     }
 }
+
+#if os(tvOS)
+private struct FrickReadOnlyDateValue: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(value)
+                .foregroundStyle(FrickPalette.textMuted)
+        }
+        .frickTextInputChrome()
+    }
+}
+#endif
 
 public struct FrickDateRangePicker<Content: View>: View {
     public let content: Content
