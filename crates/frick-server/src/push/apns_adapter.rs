@@ -52,7 +52,7 @@ use super::registry::PushAdapter;
 use super::router::iso_from_epoch_ms;
 use super::types::{
     FrickNotificationContext, FrickNotificationIntent, FrickPushDelivery, PushDeviceRegistration,
-    PushPlatform,
+    PushEnvironment, PushPlatform,
 };
 
 /// APNs JWT bearer validity refresh window: 50 min (Apple accepts ~60 min;
@@ -62,7 +62,7 @@ pub const JWT_REFRESH_MS: i64 = 50 * 60 * 1000;
 pub const DEFAULT_PUSH_TYPE: &str = "alert";
 /// Production APNs endpoint.
 pub const APNS_PRODUCTION_ENDPOINT: &str = "https://api.push.apple.com";
-/// Sandbox APNs endpoint (when creds set `useSandbox: true`).
+/// Sandbox APNs endpoint for registrations issued by the development gateway.
 pub const APNS_SANDBOX_ENDPOINT: &str = "https://api.sandbox.push.apple.com";
 
 /// The bits of an APNs request the transport needs (`POST /3/device/<token>`
@@ -165,14 +165,13 @@ impl ApnsAdapter {
         }
     }
 
-    fn resolve_endpoint(&self, creds: &ApnsCredentials) -> String {
+    fn resolve_endpoint(&self, environment: PushEnvironment) -> String {
         if let Some(endpoint) = &self.endpoint_override {
             return endpoint.clone();
         }
-        if creds.use_sandbox {
-            APNS_SANDBOX_ENDPOINT.to_string()
-        } else {
-            APNS_PRODUCTION_ENDPOINT.to_string()
+        match environment {
+            PushEnvironment::Production => APNS_PRODUCTION_ENDPOINT.to_string(),
+            PushEnvironment::Sandbox => APNS_SANDBOX_ENDPOINT.to_string(),
         }
     }
 
@@ -218,7 +217,7 @@ impl ApnsAdapter {
                 })?;
         let body = serde_json::to_vec(&encode_apns_body(intent)).unwrap_or_default();
         Ok(ApnsRequest {
-            endpoint: self.resolve_endpoint(&creds),
+            endpoint: self.resolve_endpoint(registration.environment),
             device_token: registration.token.clone(),
             authorization: format!("bearer {jwt}"),
             apns_topic: creds.bundle_id.clone(),
@@ -468,6 +467,55 @@ mod tests {
         assert!(request.authorization.starts_with("bearer "));
         assert_eq!(request.apns_topic, "dev.frick.app");
         assert_eq!(request.apns_push_type, "alert");
+    }
+
+    #[tokio::test]
+    async fn build_request_routes_each_registration_to_its_apns_environment() {
+        let store = crate::push::router::tests_support::store().await;
+        let env = FixedCredentialEnv::from_key(&[5u8; 32]);
+        let mut saved_credentials = creds();
+        // The credential flag is a legacy/default value. A tenant can have
+        // development and distribution installs active at the same time, so
+        // each registration must choose its own APNs gateway.
+        saved_credentials.use_sandbox = true;
+        crate::push::credentials::save_apns_credentials(
+            store.tenant_settings(),
+            "tenant-1",
+            &saved_credentials,
+            &env,
+            1_700_000_000_000,
+        )
+        .await
+        .unwrap();
+
+        let adapter = ApnsAdapter::new(ApnsAdapterOptions {
+            clock: Arc::new(FixedPushClock(1_700_000_000_000)),
+            env: Arc::new(env),
+            transport: Arc::new(UnavailableApnsTransport),
+            endpoint: None,
+        });
+        let intent = FrickNotificationIntent {
+            intent: "message.new".to_string(),
+            tenant_id: "tenant-1".to_string(),
+            recipient_user_ids: vec!["user-1".to_string()],
+            body: crate::push::types::NotificationBody::default(),
+            thread_id: None,
+            deep_link: None,
+        };
+
+        let production = adapter
+            .build_request(&intent, &registration(), &store)
+            .await
+            .unwrap();
+        assert_eq!(production.endpoint, APNS_PRODUCTION_ENDPOINT);
+
+        let mut sandbox_registration = registration();
+        sandbox_registration.environment = PushEnvironment::Sandbox;
+        let sandbox = adapter
+            .build_request(&intent, &sandbox_registration, &store)
+            .await
+            .unwrap();
+        assert_eq!(sandbox.endpoint, APNS_SANDBOX_ENDPOINT);
     }
 
     #[test]
