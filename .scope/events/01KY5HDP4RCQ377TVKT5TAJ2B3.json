@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KY5HDP4RCQ377TVKT5TAJ2B3",
+  "ts": "2026-07-22T18:29:18.104Z",
+  "actor": "codex",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KY5HCV9T98G27DQT8E7P0AMB",
+    "field": "status",
+    "value": "in_review"
+  }
+}

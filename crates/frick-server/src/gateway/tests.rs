@@ -1768,6 +1768,115 @@ impl crate::authz::PolicyHook for DenyObjectReadOfType {
     }
 }
 
+/// Tightening hook used to prove live SDK writes do not bypass the application
+/// policy pipeline that already protects HTTP object writes.
+struct DenyObjectWriteOfType {
+    object_type: String,
+}
+
+impl crate::authz::PolicyHook for DenyObjectWriteOfType {
+    fn evaluate<'a>(
+        &'a self,
+        input: &'a crate::authz::PolicyInput<'a>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Option<crate::authz::Decision>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            let denies = input.action == crate::authz::Action::ObjectWrite
+                && input.resource.name.as_deref() == Some(self.object_type.as_str())
+                && input.context.is_some();
+            denies.then(|| crate::authz::Decision::Deny {
+                reason: crate::authz::DenyReason::NotAuthorizedForResource,
+                public_message: "type write gated".to_string(),
+            })
+        })
+    }
+}
+
+#[test]
+fn object_upsert_runs_policy_hooks_before_writing() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let hub = test_hub_with_hooks(
+            note_schema(),
+            vec![std::sync::Arc::new(DenyObjectWriteOfType {
+                object_type: "Note".into(),
+            })],
+        )
+        .await;
+        let (id, mut rx) = register_test_connection(
+            &hub,
+            Some(tenant_principal("user-ada", DEFAULT_TENANT_ID)),
+            None,
+        );
+        let frame = FrickFrame::ObjectUpsert(ObjectUpsertPayload {
+            request_id: "req-policy-deny".into(),
+            object_type: "Note".into(),
+            object_id: "n-denied".into(),
+            value: note_value("n-denied", "must not persist"),
+            expected_version: None,
+        });
+
+        let closed = super::handle_raw_frame(&hub, id, &encode_frame(&frame).unwrap()).await;
+        assert!(!closed);
+        let super::Outbound::Frame(bytes) = rx.try_recv().expect("policy nack") else {
+            panic!("expected a frame");
+        };
+        let FrickFrame::Nack(nack) = decode_frame(&bytes).unwrap() else {
+            panic!("expected policy nack");
+        };
+        assert_eq!(nack.request_id, "req-policy-deny");
+        assert_eq!(nack.error.code, FrickErrorCode::AuthForbidden);
+        assert_eq!(nack.error.message, "type write gated");
+        assert!(
+            hub.state
+                .store
+                .objects()
+                .read(DEFAULT_TENANT_ID, "Note", "n-denied", DEFAULT_APP_ID)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        hub.state
+            .store
+            .grants()
+            .create(&frick_store::stores::grant::CreateGrantArgs {
+                id: "grant-policy-write".into(),
+                tenant_id: DEFAULT_TENANT_ID.into(),
+                owner_user_id: "owner".into(),
+                record_type: "Note".into(),
+                record_id: "n-granted".into(),
+                grantee_user_id: "user-ada".into(),
+                permission: "write".into(),
+                created_at: "1970-01-01T00:00:00.000Z".into(),
+            })
+            .await
+            .unwrap();
+        let granted = FrickFrame::ObjectUpsert(ObjectUpsertPayload {
+            request_id: "req-policy-granted".into(),
+            object_type: "Note".into(),
+            object_id: "n-granted".into(),
+            value: note_value("n-granted", "grant relaxes the denial"),
+            expected_version: None,
+        });
+        super::handle_raw_frame(&hub, id, &encode_frame(&granted).unwrap()).await;
+        let super::Outbound::Frame(bytes) = rx.try_recv().expect("granted ack") else {
+            panic!("expected a frame");
+        };
+        assert!(matches!(decode_frame(&bytes).unwrap(), FrickFrame::Ack(_)));
+        assert!(
+            hub.state
+                .store
+                .objects()
+                .read(DEFAULT_TENANT_ID, "Note", "n-granted", DEFAULT_APP_ID)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    });
+}
+
 /// FR-296 gateway bypass closed: a registered hook that denies `ObjectRead` of a
 /// TYPE is enforced over the sync socket's LIVE FAN-OUT, exactly as the HTTP
 /// LIST route enforces it — a subscriber does NOT receive the delta for a

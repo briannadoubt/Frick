@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KY5HCV9VKJHS67AXGX8Z3R6S",
+  "ts": "2026-07-22T18:28:50.619Z",
+  "actor": "codex",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KY5HCV9T98G27DQT8E7P0AMB",
+    "number": 313,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "Run app policy hooks for sync-socket object upserts",
+    "description": "Post-merge Aura authorization review found FrameKind.ObjectUpsert used only the baseline decision and bypassed BootSeams policy hooks, even though normal TypeScript/Swift/Android SDK object writes use this gateway path. Apply the same baseline -> hooks -> write-grant relaxation pipeline as HTTP object writes and prove denial plus grant relaxation at the real frame handler.",
+    "status": "backlog",
+    "priority": "urgent",
+    "parentId": "01KTQRMZ915ED3KH8X0C6H8F11",
+    "branch": "codex/object-upsert-policy-hooks",
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}
