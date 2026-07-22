@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KY5HFABSTD5H3YGRTPG8A4EZ",
+  "ts": "2026-07-22T18:30:11.577Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KY5HCV9T98G27DQT8E7P0AMB",
+    "commentId": "01KY5HFABRATNENKJTW3GYNQWF",
+    "author": "codex",
+    "body": "Merged in Frick PR #31 (da693cf). Local gateway tests 33/33, focused denial/grant regression, fmt, and clippy all pass."
+  }
+}
