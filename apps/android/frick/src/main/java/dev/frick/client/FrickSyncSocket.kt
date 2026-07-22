@@ -1168,9 +1168,15 @@ class FrickSyncSocket internal constructor(
                 resolveSubscriptionRegistration(payload.stringField("subscriptionId") ?: "")
             }
             FrameKindCodes.STREAM_PAGE -> {
-                // FR-256: the StreamPage confirms a stream subscribe's
-                // registration (the Android client doesn't surface stream pages
-                // as events yet); resolve a subscribeStreamRegistered waiter.
+                // A StreamPage is the authoritative initial history returned
+                // for a stream subscription. Surface it through the same Delta
+                // event shape as live appends so consumers hydrate history on
+                // cold start/re-login before realtime traffic arrives.
+                val events = (payload.listField("events") ?: emptyList())
+                    .mapNotNull(::decodePackedStreamEvent)
+                val cursor = payload.intField("cursor") ?: 0
+                _events.tryEmit(FrickInboundEvent.Delta(emptyList(), events, cursor))
+                // FR-256: the same frame also confirms registration.
                 resolveSubscriptionRegistration(payload.stringField("subscriptionId") ?: "")
             }
             FrameKindCodes.CALL_COMMAND_RESULT -> {

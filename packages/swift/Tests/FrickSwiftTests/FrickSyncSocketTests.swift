@@ -492,6 +492,53 @@ final class FrickSyncSocketTests: XCTestCase {
         await socket.close()
     }
 
+    func testStreamPageSurfacesInitialHistoryAsInboundDelta() async throws {
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+        let socket = makeSocket(factory: factory)
+
+        let events = await socket.events
+        let receivedHistory = expectation(description: "initial stream history surfaced")
+        let listener = Task {
+            for try await event in events {
+                if case .delta(let stream, let pageEvents, let cursor) = event,
+                   stream == "MessageStream",
+                   cursor == 4,
+                   pageEvents.first?.event == "MessageSent",
+                   pageEvents.first?.payload["body"] == "hello" {
+                    receivedHistory.fulfill()
+                    return
+                }
+            }
+        }
+
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+        task.deliver(.data(helloAckFrame()))
+
+        let streamPage = FrickMsgPackCodec.encodeFrame(FrickFrame(kind: .streamPage, payload: .map([
+            (.string("subscriptionId"), .string("sub-1")),
+            (.string("events"), .array([
+                .map([
+                    (.string("stream"), .string("MessageStream")),
+                    (.string("streamId"), .string("c1")),
+                    (.string("sequence"), .int(4)),
+                    (.string("eventId"), .string("evt-4")),
+                    (.string("event"), .string("MessageSent")),
+                    (.string("payload"), .map([(.string("body"), .string("hello"))])),
+                ]),
+            ])),
+            (.string("cursor"), .int(4)),
+            (.string("hasMore"), .bool(false)),
+        ])))
+        task.deliver(.data(streamPage))
+
+        await fulfillment(of: [receivedHistory], timeout: 2.0)
+        listener.cancel()
+        await socket.close()
+    }
+
     func testSubscribeProjectionRegisteredResolvesOnProjectionDelta() async throws {
         let factory = MockWebSocketFactory()
         let task = MockWebSocketTask()
