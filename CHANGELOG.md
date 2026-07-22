@@ -9,7 +9,7 @@ documents the stack version and the user-visible changes in that cut.
 
 ### Fixed
 
-- **Rust server OTLP traces now contain real request spans.** The Axum router emits one cardinality-safe server span per matched route, continues valid incoming W3C `traceparent` context, and records the response status. The programmatic HTTP exporter now also appends `/v1/traces` to the documented base endpoint (while accepting an already signal-specific URL), fixing silent POSTs to the collector root.
+- **Rust server OTLP traces now contain real request spans.** The Axum router emits one cardinality-safe server span per matched route, continues valid incoming W3C `traceparent` context, and records the response status. The programmatic HTTP exporter now also appends `/v1/traces` to the documented base endpoint (while accepting an already signal-specific URL), and its dedicated batch thread uses reqwest's blocking rustls client instead of panicking when an async resolver finds no Tokio reactor.
 
 ## 0.9.0 — 2026-06-23
 
