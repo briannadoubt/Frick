@@ -254,6 +254,75 @@ class FrickSyncSocketTest {
     }
 
     @Test
+    fun streamPageSurfacesInitialHistoryAsDelta() = runBlocking {
+        enqueueWebSocketHandler(
+            onMessage = { _, frame ->
+                if (frame.first == FrameKindCodes.HELLO) {
+                    sendFrame(
+                        FrameKindCodes.HELLO_ACK,
+                        mapOf(
+                            "schemaHash" to "test-hash",
+                            "schemaId" to "test-schema",
+                            "schemaRevision" to 1,
+                            "schemaCompatibility" to mapOf("status" to "compatible"),
+                            "serverCapabilities" to emptyMap<String, Any?>(),
+                        ),
+                    )
+                }
+            },
+        )
+        val descriptor = FrickSchemaDescriptor(
+            schemaId = "test-schema",
+            schemaRevision = 1,
+            schemaHash = "test-hash",
+            streamNames = mapOf(10 to "MessageStream"),
+            eventNames = mapOf(20 to "MessageSent"),
+            eventFields = mapOf(20 to mapOf(1 to "body")),
+        )
+        val socket = newSocket(
+            config = FrickSyncSocketConfig(
+                replicaId = "test-replica",
+                initialBackoffMs = 25,
+                maxBackoffMs = 50,
+                helloAckTimeoutMs = TEST_TIMEOUT_MS,
+                descriptor = descriptor,
+            ),
+        )
+        try {
+            socket.awaitReady()
+            @OptIn(DelicateCoroutinesApi::class)
+            val deltaDeferred = GlobalScope.async {
+                withTimeout(TEST_TIMEOUT_MS) {
+                    socket.events.filter { it is FrickInboundEvent.Delta }.first() as FrickInboundEvent.Delta
+                }
+            }
+            delay(50)
+            sendFrame(
+                FrameKindCodes.STREAM_PAGE,
+                mapOf(
+                    "subscriptionId" to "sub-1",
+                    "events" to listOf(
+                        listOf(10, "c1", 4, "evt-4", 20, listOf(listOf(1, "hello"))),
+                    ),
+                    "cursor" to 4,
+                    "hasMore" to false,
+                ),
+            )
+
+            val delta = deltaDeferred.await()
+            assertEquals(4, delta.cursor)
+            assertEquals(1, delta.events.size)
+            assertEquals("MessageStream", delta.events[0]["stream"])
+            assertEquals("MessageSent", delta.events[0]["event"])
+            @Suppress("UNCHECKED_CAST")
+            val payload = delta.events[0]["payload"] as Map<String, Any?>
+            assertEquals("hello", payload["body"])
+        } finally {
+            socket.close()
+        }
+    }
+
+    @Test
     fun subscribeProjectionRegisteredResolvesAfterProjectionDelta() = runBlocking {
         enqueueWebSocketHandler(
             onMessage = { _, frame ->

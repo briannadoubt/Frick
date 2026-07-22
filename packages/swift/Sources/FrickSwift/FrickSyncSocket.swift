@@ -1701,12 +1701,12 @@ public actor FrickSyncSocket {
         }
     }
 
-    /// `StreamPage` is the server's reply to a stream subscribe (re-sent on
-    /// reconnect). The Swift client does not surface stream pages as events yet,
-    /// but the frame confirms registration, so resolve an opt-in
-    /// `subscribe(stream:awaitRegistration: true)` waiter (FR-256).
+    /// `StreamPage` is the authoritative initial history returned for a stream
+    /// subscription (and re-sent on reconnect). Surface its events through the
+    /// same delta path as live appends, then resolve the registration waiter.
     private func handleStreamPage(payload: FrickMsgPackValue) {
         guard let map = payload.mapValue else { return }
+        handleDelta(payload: payload)
         if let subId = map["subscriptionId"]?.stringValue {
             resolveSubscriptionRegistration(token: subId)
         }
