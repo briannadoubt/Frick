@@ -10,6 +10,7 @@ documents the stack version and the user-visible changes in that cut.
 ### Fixed
 
 - **Rust server OTLP traces now contain real request spans.** The Axum router emits one cardinality-safe server span per matched route, continues valid incoming W3C `traceparent` context, and records the response status. The programmatic HTTP exporter now also appends `/v1/traces` to the documented base endpoint (while accepting an already signal-specific URL), and its dedicated batch thread uses reqwest's blocking rustls client instead of panicking when an async resolver finds no Tokio reactor.
+- **React call state remains live under StrictMode.** `useCallState` now creates and disposes its composed room/participant subscriptions inside the effect lifecycle, so React's development-only setup/cleanup replay cannot leave the hook attached to an already-disposed signal. Switching clients or call ids also returns an empty snapshot until the replacement subscription is installed instead of briefly exposing stale state.
 
 ## 0.9.0 — 2026-06-23
 
