@@ -242,6 +242,7 @@ impl SqlDriver {
 
         Ok(Self::Sqlite(SqliteDriver {
             connection: Mutex::new(connection),
+            transaction_gate: tokio::sync::Mutex::new(()),
         }))
     }
 
@@ -308,6 +309,14 @@ impl SqlDriver {
     {
         match self {
             Self::Sqlite(driver) => {
+                // One SQLite connection can own only one top-level
+                // transaction. Individual statement locking is insufficient:
+                // the callback awaits between BEGIN and COMMIT, so another
+                // task can otherwise issue a second BEGIN IMMEDIATE and fail
+                // with "cannot start a transaction within a transaction".
+                // Nested transactions use SqlExec::transaction and therefore
+                // never try to acquire this top-level gate again.
+                let _transaction_guard = driver.transaction_gate.lock().await;
                 sqlite_exec(&driver.connection, "BEGIN IMMEDIATE")?;
                 let executor = SqlExec::Sqlite(SqliteExec {
                     connection: &driver.connection,
@@ -415,6 +424,7 @@ impl SqlExec<'_> {
 /// `node:sqlite` under the TS driver. The lock is never held across awaits.
 pub struct SqliteDriver {
     connection: Mutex<Connection>,
+    transaction_gate: tokio::sync::Mutex<()>,
 }
 
 /// The SQLite transaction-scoped executor view (borrows the shared
@@ -505,6 +515,9 @@ fn sqlite_run(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
     use super::*;
 
     fn memory_driver() -> SqlDriver {
@@ -592,5 +605,71 @@ mod tests {
             2,
             "rolled back"
         );
+    }
+
+    #[tokio::test]
+    async fn concurrent_top_level_transactions_are_serialized() {
+        let driver = Arc::new(memory_driver());
+        driver
+            .exec("CREATE TABLE t (id INTEGER PRIMARY KEY, n INTEGER)")
+            .await
+            .unwrap();
+
+        let first_entered = Arc::new(tokio::sync::Barrier::new(2));
+        let release_first = Arc::new(tokio::sync::Notify::new());
+        let first = {
+            let driver = Arc::clone(&driver);
+            let first_entered = Arc::clone(&first_entered);
+            let release_first = Arc::clone(&release_first);
+            tokio::spawn(async move {
+                driver
+                    .transaction(|tx| {
+                        Box::pin(async move {
+                            tx.run("INSERT INTO t (n) VALUES (1)", &[]).await?;
+                            first_entered.wait().await;
+                            release_first.notified().await;
+                            tx.run("INSERT INTO t (n) VALUES (2)", &[]).await?;
+                            Ok(())
+                        })
+                    })
+                    .await
+            })
+        };
+
+        // Hold the first transaction open while a second task attempts to
+        // begin. Before the gate this deterministically returned SQLite's
+        // "cannot start a transaction within a transaction" error.
+        first_entered.wait().await;
+        let second = {
+            let driver = Arc::clone(&driver);
+            tokio::spawn(async move {
+                driver
+                    .transaction(|tx| {
+                        Box::pin(async move {
+                            tx.run("INSERT INTO t (n) VALUES (3)", &[]).await?;
+                            Ok(())
+                        })
+                    })
+                    .await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(
+            !second.is_finished(),
+            "second transaction must wait for the first"
+        );
+
+        release_first.notify_one();
+        first.await.unwrap().unwrap();
+        second.await.unwrap().unwrap();
+
+        let values = driver
+            .all("SELECT n FROM t ORDER BY id", &[])
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.i64("n").unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![1, 2, 3]);
     }
 }
