@@ -145,10 +145,11 @@ async fn boot_registers_push_deliver_handler() {
         server.jobs.resolve(PUSH_DELIVER_JOB_TYPE).is_some(),
         "push.deliver must resolve to a real handler"
     );
-    // The adapter registry holds all four platforms (the three live adapters +
-    // the default `test` adapter).
+    // The adapter registry holds all five platforms (ordinary APNs and
+    // purpose-limited PushKit, the other live adapters, plus `test`).
     for platform in [
         PushPlatform::Apns,
+        PushPlatform::ApnsVoip,
         PushPlatform::Fcm,
         PushPlatform::WebPush,
         PushPlatform::Test,

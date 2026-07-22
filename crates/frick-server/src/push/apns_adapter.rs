@@ -83,6 +83,9 @@ pub struct ApnsRequest {
     pub apns_push_type: String,
     /// `apns-priority` header. Incoming VoIP calls must be immediate (`10`).
     pub apns_priority: String,
+    /// `apns-expiration` header. Incoming calls use `0`, so APNs discards a
+    /// call that cannot be delivered immediately instead of ringing it stale.
+    pub apns_expiration: Option<String>,
     /// The JSON body bytes.
     pub body: Vec<u8>,
 }
@@ -254,6 +257,7 @@ impl ApnsAdapter {
                 DEFAULT_PUSH_TYPE.to_string()
             },
             apns_priority: "10".to_string(),
+            apns_expiration: is_voip.then(|| "0".to_string()),
             body,
         })
     }
@@ -500,6 +504,7 @@ mod tests {
         assert_eq!(request.apns_topic, "dev.frick.app");
         assert_eq!(request.apns_push_type, "alert");
         assert_eq!(request.apns_priority, "10");
+        assert_eq!(request.apns_expiration, None);
     }
 
     #[tokio::test]
@@ -561,6 +566,7 @@ mod tests {
         assert_eq!(request.apns_topic, "dev.frick.app.voip");
         assert_eq!(request.apns_push_type, "voip");
         assert_eq!(request.apns_priority, "10");
+        assert_eq!(request.apns_expiration.as_deref(), Some("0"));
         let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
         assert_eq!(body["aps"], serde_json::json!({}));
         assert!(body["aps"].get("alert").is_none());
