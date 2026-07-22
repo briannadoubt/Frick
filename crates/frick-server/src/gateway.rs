@@ -1851,7 +1851,9 @@ async fn enqueue_ringing_push(
     let now_ms = now_ms();
     let created_by = room.created_by.as_str();
     let title = "Incoming call".to_string();
-    let body = format!("{created_by} is calling you");
+    // Safe fallback for platforms that cannot render client-side. The caller
+    // id remains opaque routing metadata and must not become lock-screen text.
+    let body = "Someone is calling you".to_string();
 
     for invite in invites {
         let data = Value::Map(vec![
@@ -1862,6 +1864,11 @@ async fn enqueue_ringing_push(
                 Value::from(room.conversation_id.as_str()),
             ),
             (Value::from("createdBy"), Value::from(created_by)),
+            (Value::from("callerId"), Value::from(created_by)),
+            (Value::from("kind"), Value::from(room.kind.as_str())),
+            // Android must receive a high-priority data-only message so Play
+            // Services does not bypass FirebaseMessagingService in background.
+            (Value::from("clientRendered"), Value::from(true)),
         ]);
         let intent = FrickNotificationIntent {
             intent: "call.ringing".to_string(),
