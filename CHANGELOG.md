@@ -7,6 +7,10 @@ documents the stack version and the user-visible changes in that cut.
 
 ## Unreleased
 
+### Fixed
+
+- **Rust server OTLP traces now contain real request spans.** The Axum router emits one cardinality-safe server span per matched route, continues valid incoming W3C `traceparent` context, and records the response status. The programmatic HTTP exporter now also appends `/v1/traces` to the documented base endpoint (while accepting an already signal-specific URL), fixing silent POSTs to the collector root.
+
 ## 0.9.0 — 2026-06-23
 
 Lockstep re-cut that returns the whole stack to one version. The 0.7.0 cut

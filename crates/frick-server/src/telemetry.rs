@@ -25,12 +25,19 @@
 //! layer can be constructed from an [`OtelConfig`] without a network
 //! ([`build_tracer_provider`] + [`tracer_layer`]).
 
+use axum::extract::{MatchedPath, Request};
+use axum::http::HeaderMap;
+use axum::middleware::Next;
+use axum::response::Response;
 use opentelemetry::KeyValue;
+use opentelemetry::propagation::{Extractor, TextMapPropagator};
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_otlp::{Protocol, SpanExporter, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::{Sampler, SdkTracer, SdkTracerProvider};
-use tracing::Subscriber;
+use tracing::{Instrument, Subscriber};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
@@ -94,6 +101,68 @@ fn env_filter(level: LogLevel) -> EnvFilter {
     EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level_directive(level)))
 }
 
+/// Turn Frick's documented OTLP base endpoint into the signal-specific URL
+/// required by `opentelemetry-otlp`'s programmatic HTTP exporter.
+///
+/// Unlike the environment-variable path, `WithExportConfig::with_endpoint`
+/// treats its value as final and does not append `/v1/traces`. Accept an
+/// already-specific endpoint as well so existing deployments do not acquire a
+/// duplicate suffix.
+fn traces_endpoint(endpoint: &str) -> String {
+    let endpoint = endpoint.trim_end_matches('/');
+    if endpoint.ends_with("/v1/traces") {
+        endpoint.to_string()
+    } else {
+        format!("{endpoint}/v1/traces")
+    }
+}
+
+struct HeaderExtractor<'a>(&'a HeaderMap);
+
+impl Extractor for HeaderExtractor<'_> {
+    fn get(&self, key: &str) -> Option<&str> {
+        self.0.get(key)?.to_str().ok()
+    }
+
+    fn keys(&self) -> Vec<&str> {
+        self.0.keys().map(axum::http::HeaderName::as_str).collect()
+    }
+}
+
+fn remote_parent(headers: &HeaderMap) -> opentelemetry::Context {
+    TraceContextPropagator::new().extract(&HeaderExtractor(headers))
+}
+
+/// Create one bounded server span for every HTTP request and continue a valid
+/// incoming W3C `traceparent` when present.
+///
+/// `MatchedPath` keeps route labels cardinality-safe and avoids recording user
+/// ids, object ids, or other path parameters. Requests that do not match a
+/// declared Axum route use the fixed `<unmatched>` label.
+pub(crate) async fn trace_http_request(request: Request, next: Next) -> Response {
+    let method = request.method().clone();
+    let route = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map_or("<unmatched>", MatchedPath::as_str)
+        .to_string();
+    let span_name = format!("{method} {route}");
+    let parent = remote_parent(request.headers());
+    let span = tracing::info_span!(
+        "http.server.request",
+        otel.name = %span_name,
+        otel.kind = "server",
+        http.request.method = %method,
+        http.route = %route,
+        http.response.status_code = tracing::field::Empty,
+    );
+    span.set_parent(parent);
+
+    let response = next.run(request).instrument(span.clone()).await;
+    span.record("http.response.status_code", response.status().as_u16());
+    response
+}
+
 /// Construct an OTLP **HTTP/protobuf** [`SdkTracerProvider`] from the OTel
 /// config (FR-267). Pure construction — no socket is opened here; the batch
 /// exporter connects lazily on the first export. Returns `Err` only when the
@@ -113,11 +182,12 @@ pub fn build_tracer_provider(otel: &OtelConfig) -> Result<SdkTracerProvider, Str
     // reqwest-over-rustls (the workspace reqwest defaults to `rustls-tls`); the
     // `http-proto` feature only selects the OTLP encoding, not the client.
     let http_client = reqwest::Client::new();
+    let endpoint = traces_endpoint(&otel.endpoint);
     let exporter = SpanExporter::builder()
         .with_http()
         .with_http_client(http_client)
         .with_protocol(Protocol::HttpBinary)
-        .with_endpoint(&otel.endpoint)
+        .with_endpoint(endpoint)
         .with_headers(headers)
         .build()
         .map_err(|error| format!("failed to build OTLP span exporter: {error}"))?;
@@ -171,6 +241,7 @@ where
 /// the same process), `try_init` fails and is swallowed — the first subscriber
 /// stays in force.
 pub fn install_tracing(level: LogLevel, otel: &OtelConfig) -> TelemetryGuard {
+    opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
     let fmt_layer = tracing_subscriber::fmt::layer();
 
     if !otel.enabled {
@@ -238,7 +309,13 @@ pub fn install_tracing(level: LogLevel, otel: &OtelConfig) -> TelemetryGuard {
 mod tests {
     use super::*;
     use crate::config::OtelConfig;
+    use axum::Router;
+    use axum::body::Body;
+    use axum::routing::get;
+    use opentelemetry::trace::TraceContextExt;
+    use opentelemetry_sdk::trace::InMemorySpanExporter;
     use std::collections::BTreeMap;
+    use tower::ServiceExt;
 
     fn otel(enabled: bool, ratio: Option<f64>) -> OtelConfig {
         OtelConfig {
@@ -275,6 +352,99 @@ mod tests {
         cfg.headers
             .insert("authorization".to_string(), "Bearer tok".to_string());
         let provider = build_tracer_provider(&cfg).expect("provider with headers builds");
+        let _ = provider.shutdown();
+    }
+
+    #[test]
+    fn base_endpoint_resolves_to_otlp_traces_path() {
+        assert_eq!(
+            traces_endpoint("https://collector.example.test"),
+            "https://collector.example.test/v1/traces"
+        );
+        assert_eq!(
+            traces_endpoint("https://collector.example.test/"),
+            "https://collector.example.test/v1/traces"
+        );
+        assert_eq!(
+            traces_endpoint("https://collector.example.test/v1/traces"),
+            "https://collector.example.test/v1/traces"
+        );
+    }
+
+    #[test]
+    fn w3c_traceparent_becomes_remote_parent() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "traceparent",
+            "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
+                .parse()
+                .expect("valid header"),
+        );
+
+        let context = remote_parent(&headers);
+        let span = context.span();
+        let span_context = span.span_context();
+        assert!(span_context.is_remote());
+        assert_eq!(
+            span_context.trace_id().to_string(),
+            "0123456789abcdef0123456789abcdef"
+        );
+        assert_eq!(span_context.span_id().to_string(), "0123456789abcdef");
+        assert!(span_context.is_sampled());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn http_middleware_exports_parented_bounded_route_span() {
+        let exporter = InMemorySpanExporter::default();
+        let provider = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let tracer = provider.tracer("frick-http-test");
+        let subscriber =
+            tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
+        let app = Router::new()
+            .route(
+                "/objects/:object_id",
+                get(|| async { axum::http::StatusCode::CREATED }),
+            )
+            .layer(axum::middleware::from_fn(trace_http_request));
+        let request = Request::builder()
+            .uri("/objects/private-object-id")
+            .header(
+                "traceparent",
+                "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+            )
+            .body(Body::empty())
+            .expect("request builds");
+
+        let guard = tracing::subscriber::set_default(subscriber);
+        let response = app.oneshot(request).await.expect("request succeeds");
+        drop(guard);
+        assert_eq!(response.status(), axum::http::StatusCode::CREATED);
+
+        let spans = exporter.get_finished_spans().expect("spans export");
+        assert_eq!(spans.len(), 1);
+        let span = &spans[0];
+        assert_eq!(span.name, "GET /objects/:object_id");
+        assert_eq!(
+            span.span_context.trace_id().to_string(),
+            "0123456789abcdef0123456789abcdef"
+        );
+        assert_eq!(span.parent_span_id.to_string(), "0123456789abcdef");
+        assert_eq!(span.span_kind, opentelemetry::trace::SpanKind::Server);
+        assert!(span.attributes.iter().any(|attribute| {
+            attribute.key.as_str() == "http.route"
+                && attribute.value.to_string() == "/objects/:object_id"
+        }));
+        assert!(span.attributes.iter().any(|attribute| {
+            attribute.key.as_str() == "http.response.status_code"
+                && attribute.value.to_string() == "201"
+        }));
+        assert!(
+            span.attributes
+                .iter()
+                .all(|attribute| !attribute.value.to_string().contains("private-object-id"))
+        );
         let _ = provider.shutdown();
     }
 
