@@ -50,7 +50,7 @@ async fn register(State(state): State<AppState>, headers: HeaderMap, body: Bytes
         return respond_error(
             &ServerError::BadRequest {
                 message: format!(
-                    "platform must be one of apns, fcm, webPush, test (got \"{platform_str}\")"
+                    "platform must be one of apns, apnsVoip, fcm, webPush, test (got \"{platform_str}\")"
                 ),
             },
             &request_id,

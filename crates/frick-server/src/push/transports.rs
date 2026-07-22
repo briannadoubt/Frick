@@ -108,14 +108,18 @@ impl ApnsTransport for ReqwestApnsTransport {
                 request.endpoint.trim_end_matches('/'),
                 request.device_token
             );
-            let response = self
+            let mut request_builder = self
                 .client
                 .post(&url)
                 .header("authorization", &request.authorization)
                 .header("apns-topic", &request.apns_topic)
                 .header("apns-push-type", &request.apns_push_type)
                 .header("apns-priority", &request.apns_priority)
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .header(reqwest::header::CONTENT_TYPE, "application/json");
+            if let Some(expiration) = &request.apns_expiration {
+                request_builder = request_builder.header("apns-expiration", expiration);
+            }
+            let response = request_builder
                 .body(request.body.clone())
                 .send()
                 .await
