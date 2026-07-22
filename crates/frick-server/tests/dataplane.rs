@@ -7,7 +7,9 @@
 //! directly so the routes can be exercised end-to-end before that lands).
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
+use async_trait::async_trait;
 use frick_protocol::FrickSchema;
 use frick_schema::SchemaBuilder;
 use frick_schema::builder::field;
@@ -15,7 +17,8 @@ use frick_server::authz::{Action, Decision, DenyReason, PolicyHook, PolicyInput}
 use frick_server::config::load_frick_config;
 use frick_server::http::{AppState, public_router};
 use frick_server::{
-    BootSeams, FrickConfig, create_frick_server, create_frick_server_with_seams, routes,
+    BootSeams, FrickConfig, ServerError, SessionAuthorization, SessionAuthorizationContext,
+    create_frick_server, create_frick_server_with_seams, routes,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -47,6 +50,26 @@ impl PolicyHook for DenyTypeWrites {
 /// route actually consults `state.policy_hooks` (vs. silently bypassing them).
 struct DenyAction {
     action: Action,
+}
+
+/// App-owned active-session gate used to prove every normal data-plane
+/// principal resolution passes through the session-authorization seam.
+struct DenySessions {
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl SessionAuthorization for DenySessions {
+    async fn authorize(&self, context: SessionAuthorizationContext) -> Result<(), ServerError> {
+        assert_eq!(context.principal.user_id, "user-ada");
+        assert!(!context.session_token.is_empty());
+        assert!(context.now_ms > 0);
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Err(ServerError::Authorization {
+            message: "Additional authentication required".into(),
+            reason: Some("mfaRequired".into()),
+        })
+    }
 }
 
 impl PolicyHook for DenyAction {
@@ -156,6 +179,17 @@ impl TestServer {
     async fn boot_with_hooks(hooks: Vec<Arc<dyn PolicyHook>>) -> Self {
         let mut seams = BootSeams::production();
         seams.policy_hooks = hooks;
+        let server = create_frick_server_with_seams(test_config(), test_schema(), seams)
+            .await
+            .unwrap();
+        Self::serve(Arc::clone(&server.state), server).await
+    }
+
+    async fn boot_with_session_authorization(
+        session_authorization: Arc<dyn SessionAuthorization>,
+    ) -> Self {
+        let mut seams = BootSeams::production();
+        seams.session_authorization = session_authorization;
         let server = create_frick_server_with_seams(test_config(), test_schema(), seams)
             .await
             .unwrap();
@@ -338,6 +372,23 @@ async fn objects_require_authentication() {
     let response = server.request("GET", "/objects?type=Note", &[], "").await;
     assert_eq!(response.status, 401, "body: {}", response.body);
     assert!(response.body.contains("auth.unauthenticated"));
+    server.close().await;
+}
+
+#[tokio::test]
+async fn active_sessions_pass_through_app_authorization_hook() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut server = TestServer::boot_with_session_authorization(Arc::new(DenySessions {
+        calls: Arc::clone(&calls),
+    }))
+    .await;
+    let token = server.login("user-ada").await;
+
+    let response = server.get("/objects?type=Note", &token).await;
+    assert_eq!(response.status, 403, "body: {}", response.body);
+    assert!(response.body.contains("auth.forbidden"));
+    assert!(response.body.contains("mfaRequired"));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
     server.close().await;
 }
 

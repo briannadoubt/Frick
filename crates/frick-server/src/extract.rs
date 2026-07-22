@@ -3,7 +3,7 @@
 //! Mirrors the TS `sessionTokenFromRequest` + `protectedHttpPrincipal` seam
 //! (`src/server.ts:5067-5076`, `3688-3725`): the token comes off
 //! `Authorization: Bearer <t>` (case-insensitive) or the `x-frick-session-token`
-//! header, then resolves through [`session::principal_from_active_session_token`].
+//! header, then resolves through [`session::principal_from_authorized_session_token`].
 //!
 //! The Rust port covers only the session path (password/dev-login sessions).
 //! Admin-token and `sk_` service-key principals are resolved upstream of these
@@ -16,7 +16,7 @@ use axum::http::header::AUTHORIZATION;
 use crate::error::ServerError;
 use crate::http::AppState;
 use crate::principal::Principal;
-use crate::session::principal_from_active_session_token;
+use crate::session::principal_from_authorized_session_token;
 
 /// Header carrying a raw session token when `Authorization` is not used.
 const SESSION_TOKEN_HEADER: &str = "x-frick-session-token";
@@ -61,7 +61,7 @@ fn parse_bearer(value: &str) -> Option<&str> {
 /// appropriate [`ServerError`] (`protectedHttpPrincipal`): a missing token is a
 /// generic 401, an expired session is `auth.sessionExpired`, and an unknown
 /// token is a generic 401 — the distinctions made by
-/// [`principal_from_active_session_token`].
+/// [`principal_from_authorized_session_token`].
 pub async fn require_principal(
     state: &AppState,
     headers: &HeaderMap,
@@ -72,7 +72,7 @@ pub async fn require_principal(
             message: "Missing session token".into(),
         });
     };
-    principal_from_active_session_token(&state.store, &token, now_ms).await
+    principal_from_authorized_session_token(state.as_ref(), &token, now_ms).await
 }
 
 #[cfg(test)]

@@ -108,6 +108,7 @@ fn recording_seams(apns: Arc<RecordingApnsTransport>) -> BootSeams {
         // take the production default.
         jwks_provider: BootSeams::production().jwks_provider,
         auth_lifecycle: Arc::new(frick_server::NoopAuthLifecycle),
+        session_authorization: Arc::new(frick_server::AllowActiveSessions),
         // FR-272: no blob processors for the push wiring tests.
         blob_processors: Vec::new(),
         // FR-296: no policy hooks for the push wiring tests.
