@@ -286,7 +286,7 @@ async fn write_decision(
 /// `object.write` deny for `notAuthorizedForResource`/`ownerMismatch` flips to
 /// allow when the principal holds an active grant satisfying `"write"` on
 /// `(recordType, recordId)`.
-async fn relax_object_write_with_grants(
+pub(crate) async fn relax_object_write_with_grants(
     state: &AppState,
     principal: &Principal,
     object_type: &str,

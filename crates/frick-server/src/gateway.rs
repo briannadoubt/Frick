@@ -1491,7 +1491,11 @@ async fn handle_object_upsert(
         return false;
     }
 
-    let decision = decide_baseline(
+    // Keep live object writes on the same tightening-only policy pipeline as
+    // HTTP object writes and stream appends. Without this hook stage, a client
+    // can bypass app-owned authorization simply by using ObjectUpsert over the
+    // sync socket (the normal SDK path).
+    let baseline = decide_baseline(
         &principal,
         Action::ObjectWrite,
         &ResourceContext {
@@ -1499,6 +1503,36 @@ async fn handle_object_upsert(
             owner_user_id: None,
         },
     );
+    let decision = apply_policy_hooks(
+        baseline,
+        &PolicyInput {
+            principal: &principal,
+            action: Action::ObjectWrite,
+            resource: PolicyResource {
+                kind: "object",
+                name: Some(payload.object_type.clone()),
+                key: Some(payload.object_id.clone()),
+                event: None,
+                owner_id: None,
+                tenant_id: principal.tenant_id.clone(),
+            },
+            context: Some(&payload.value),
+        },
+        &hub.state.policy_hooks,
+    )
+    .await;
+    // Match the HTTP object-write pipeline: an active per-record write grant
+    // may relax only the two grant-relaxable denial reasons. Store failures
+    // fail closed by preserving the hook denial.
+    let decision = crate::routes::objects::relax_object_write_with_grants(
+        &hub.state,
+        &principal,
+        &payload.object_type,
+        &payload.object_id,
+        decision.clone(),
+    )
+    .await
+    .unwrap_or(decision);
     if let Decision::Deny {
         reason,
         public_message,

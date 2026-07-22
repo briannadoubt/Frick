@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KY5HDNYX044NNTDKQCMAPJP9",
+  "ts": "2026-07-22T18:29:17.917Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KY5HCV9T98G27DQT8E7P0AMB",
+    "commentId": "01KY5HDNYX044NNTDKQCMAPJP8",
+    "author": "codex",
+    "body": "Implemented live ObjectUpsert authorization parity: sync gateway now runs baseline -> app policy hooks -> per-record write-grant relaxation before persistence. Added frame-handler regression coverage proving denied writes do not persist and valid write grants still relax eligible denials. Updated contract + changelog. Local evidence: cargo test -p frick-server gateway::tests (33/33), focused regression pass, cargo clippy -p frick-server --all-targets -- -D warnings, cargo fmt --check."
+  }
+}
