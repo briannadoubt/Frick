@@ -328,6 +328,16 @@ public struct FrickDateTimePicker: View {
     }
 
     public var body: some View {
+        #if os(tvOS)
+        HStack {
+            Text(title)
+            Spacer()
+            Text(selection.formatted(date: .abbreviated, time: .shortened))
+                .foregroundStyle(FrickPalette.textMuted)
+        }
+        .frickTextInputChrome()
+        #else
         DatePicker(title, selection: $selection, displayedComponents: [.date, .hourAndMinute])
+        #endif
     }
 }

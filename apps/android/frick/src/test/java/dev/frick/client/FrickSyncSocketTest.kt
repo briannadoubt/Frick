@@ -254,6 +254,75 @@ class FrickSyncSocketTest {
     }
 
     @Test
+    fun streamPageSurfacesInitialHistoryAsDelta() = runBlocking {
+        enqueueWebSocketHandler(
+            onMessage = { _, frame ->
+                if (frame.first == FrameKindCodes.HELLO) {
+                    sendFrame(
+                        FrameKindCodes.HELLO_ACK,
+                        mapOf(
+                            "schemaHash" to "test-hash",
+                            "schemaId" to "test-schema",
+                            "schemaRevision" to 1,
+                            "schemaCompatibility" to mapOf("status" to "compatible"),
+                            "serverCapabilities" to emptyMap<String, Any?>(),
+                        ),
+                    )
+                }
+            },
+        )
+        val descriptor = FrickSchemaDescriptor(
+            schemaId = "test-schema",
+            schemaRevision = 1,
+            schemaHash = "test-hash",
+            streamNames = mapOf(10 to "MessageStream"),
+            eventNames = mapOf(20 to "MessageSent"),
+            eventFields = mapOf(20 to mapOf(1 to "body")),
+        )
+        val socket = newSocket(
+            config = FrickSyncSocketConfig(
+                replicaId = "test-replica",
+                initialBackoffMs = 25,
+                maxBackoffMs = 50,
+                helloAckTimeoutMs = TEST_TIMEOUT_MS,
+                descriptor = descriptor,
+            ),
+        )
+        try {
+            socket.awaitReady()
+            @OptIn(DelicateCoroutinesApi::class)
+            val deltaDeferred = GlobalScope.async {
+                withTimeout(TEST_TIMEOUT_MS) {
+                    socket.events.filter { it is FrickInboundEvent.Delta }.first() as FrickInboundEvent.Delta
+                }
+            }
+            delay(50)
+            sendFrame(
+                FrameKindCodes.STREAM_PAGE,
+                mapOf(
+                    "subscriptionId" to "sub-1",
+                    "events" to listOf(
+                        listOf(10, "c1", 4, "evt-4", 20, listOf(listOf(1, "hello"))),
+                    ),
+                    "cursor" to 4,
+                    "hasMore" to false,
+                ),
+            )
+
+            val delta = deltaDeferred.await()
+            assertEquals(4, delta.cursor)
+            assertEquals(1, delta.events.size)
+            assertEquals("MessageStream", delta.events[0]["stream"])
+            assertEquals("MessageSent", delta.events[0]["event"])
+            @Suppress("UNCHECKED_CAST")
+            val payload = delta.events[0]["payload"] as Map<String, Any?>
+            assertEquals("hello", payload["body"])
+        } finally {
+            socket.close()
+        }
+    }
+
+    @Test
     fun subscribeProjectionRegisteredResolvesAfterProjectionDelta() = runBlocking {
         enqueueWebSocketHandler(
             onMessage = { _, frame ->
@@ -408,6 +477,154 @@ class FrickSyncSocketTest {
             assertEquals(9, delta.cursor)
             assertEquals(1, delta.removed.size)
             assertEquals(ObjectRemoval("Message", "msg-1"), delta.removed[0])
+        } finally {
+            socket.close()
+        }
+    }
+
+    // -- AURA-445: live signal push (Subscribe kind="signal" / SignalDeliver) --
+
+    @Test
+    fun subscribeSignalSendsSubscribeFrameWithSignalKind() = runBlocking {
+        enqueueWebSocketHandler(
+            onMessage = { _, frame ->
+                if (frame.first == FrameKindCodes.HELLO) {
+                    sendFrame(
+                        FrameKindCodes.HELLO_ACK,
+                        mapOf(
+                            "schemaHash" to FRICK_SCHEMA_HASH,
+                            "schemaId" to FRICK_SCHEMA_ID,
+                            "schemaRevision" to FRICK_SCHEMA_REVISION,
+                            "schemaCompatibility" to mapOf("status" to "compatible"),
+                            "serverCapabilities" to emptyMap<String, Any?>(),
+                        ),
+                    )
+                }
+            },
+        )
+        val socket = newSocket()
+        try {
+            socket.awaitReady()
+            socket.subscribeSignal("WebRTCSignal", "call-1")
+            // Discard the HELLO already captured by awaitReady's handshake,
+            // find the Subscribe frame among what follows.
+            var subscribeFrame: Pair<Int, Map<String, Any?>>? = null
+            while (subscribeFrame == null) {
+                val frame = takeFrame()
+                if (frame.first == FrameKindCodes.SUBSCRIBE) subscribeFrame = frame
+            }
+            assertEquals("signal", subscribeFrame.second["kind"])
+            assertEquals("WebRTCSignal", subscribeFrame.second["name"])
+            assertEquals("call-1", subscribeFrame.second["key"])
+            assertNotNull(subscribeFrame.second["subscriptionId"])
+        } finally {
+            socket.close()
+        }
+    }
+
+    @Test
+    fun signalDeliverDecodesUsingDescriptorSignalTables() = runBlocking {
+        enqueueWebSocketHandler(
+            onMessage = { _, frame ->
+                if (frame.first == FrameKindCodes.HELLO) {
+                    sendFrame(
+                        FrameKindCodes.HELLO_ACK,
+                        mapOf(
+                            "schemaHash" to FRICK_SCHEMA_HASH,
+                            "schemaId" to FRICK_SCHEMA_ID,
+                            "schemaRevision" to FRICK_SCHEMA_REVISION,
+                            "schemaCompatibility" to mapOf("status" to "compatible"),
+                            "serverCapabilities" to emptyMap<String, Any?>(),
+                        ),
+                    )
+                }
+            },
+        )
+        // A descriptor with a signal table mirrors how a product-schema app
+        // (e.g. Aura's `AuraSchema.descriptor()`) supplies its known signal
+        // ids/fields — the foundation descriptor has none by default.
+        val descriptor = FrickSchemaDescriptor(
+            signalNames = mapOf(60 to "WebRTCSignal"),
+            signalFields = mapOf(60 to mapOf(1 to "senderDeviceId", 2 to "kind")),
+        )
+        val socket = newSocket(
+            config = FrickSyncSocketConfig(
+                replicaId = "test-replica",
+                initialBackoffMs = 25,
+                maxBackoffMs = 50,
+                helloAckTimeoutMs = TEST_TIMEOUT_MS,
+                descriptor = descriptor,
+            ),
+        )
+        try {
+            socket.awaitReady()
+            @OptIn(DelicateCoroutinesApi::class)
+            val signalDeferred = GlobalScope.async {
+                withTimeout(TEST_TIMEOUT_MS) {
+                    socket.events.filter { it is FrickInboundEvent.SignalDeliver }.first() as FrickInboundEvent.SignalDeliver
+                }
+            }
+            // Give the collector time to subscribe before we emit.
+            delay(50)
+            sendFrame(
+                FrameKindCodes.SIGNAL_DELIVER,
+                mapOf(
+                    "envelope" to listOf(
+                        60,
+                        "call-1",
+                        listOf(listOf(1, "device-a"), listOf(2, "offer")),
+                    ),
+                ),
+            )
+            val delivered = signalDeferred.await()
+            assertEquals("WebRTCSignal", delivered.name)
+            assertEquals("call-1", delivered.key)
+            assertEquals("device-a", delivered.value["senderDeviceId"])
+            assertEquals("offer", delivered.value["kind"])
+        } finally {
+            socket.close()
+        }
+    }
+
+    @Test
+    fun signalDeliverWithUnknownTypeIdIsDropped() = runBlocking {
+        // No signal table configured (foundation default) — an unresolvable
+        // typeId must be dropped rather than surfaced or crash the decoder,
+        // mirroring the object/event decode paths' forward-compat behavior.
+        enqueueWebSocketHandler(
+            onMessage = { _, frame ->
+                if (frame.first == FrameKindCodes.HELLO) {
+                    sendFrame(
+                        FrameKindCodes.HELLO_ACK,
+                        mapOf(
+                            "schemaHash" to FRICK_SCHEMA_HASH,
+                            "schemaId" to FRICK_SCHEMA_ID,
+                            "schemaRevision" to FRICK_SCHEMA_REVISION,
+                            "schemaCompatibility" to mapOf("status" to "compatible"),
+                            "serverCapabilities" to emptyMap<String, Any?>(),
+                        ),
+                    )
+                    sendFrame(
+                        FrameKindCodes.SIGNAL_DELIVER,
+                        mapOf("envelope" to listOf(60, "call-1", emptyList<Any?>())),
+                    )
+                    // A PING right after gives us something to observe arriving
+                    // (proving the connection kept processing frames normally)
+                    // without asserting a negative that can't be proven directly.
+                    sendFrame(FrameKindCodes.PING, mapOf("sentAt" to 1L))
+                }
+            },
+        )
+        val socket = newSocket()
+        try {
+            socket.awaitReady()
+            val pong = withTimeout(TEST_TIMEOUT_MS) {
+                socket.events // drive nothing; just ensure no crash before PONG round-trips
+                var frame = takeFrame()
+                while (frame.first != FrameKindCodes.PONG) frame = takeFrame()
+                frame
+            }
+            assertEquals(FrameKindCodes.PONG, pong.first)
         } finally {
             socket.close()
         }

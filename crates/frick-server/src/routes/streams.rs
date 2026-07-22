@@ -18,8 +18,8 @@ use super::{
     require_record, require_string, value_to_json,
 };
 use crate::authz::{
-    Action, Decision, DenyReason, PolicyInput, PolicyResource, ResourceContext,
-    apply_policy_hooks, decide_baseline,
+    Action, Decision, DenyReason, PolicyInput, PolicyResource, ResourceContext, apply_policy_hooks,
+    decide_baseline,
 };
 use crate::error::{LimitKind, ServerError};
 use crate::http::{AppState, respond_error};
@@ -309,9 +309,7 @@ async fn append(
         Ok(value) => value,
         Err(error) => return respond_error(&error, &request_id),
     };
-    if let Err(error) =
-        append_decision(&state, &principal, &stream, &key, &event, &payload).await
-    {
+    if let Err(error) = append_decision(&state, &principal, &stream, &key, &event, &payload).await {
         return respond_error(&error, &request_id);
     }
 

@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KWP1RNCPXRTXY63Z4G236KTD",
+  "ts": "2026-07-04T07:51:22.262Z",
+  "actor": "fr312-worker",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KVEPQTEA2QQNG4NJAG3M0K2Z",
+    "field": "status",
+    "value": "in_progress"
+  }
+}

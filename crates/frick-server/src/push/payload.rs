@@ -73,6 +73,8 @@ pub struct FrickPushPayload {
 /// verbatim. The `aps` key is skipped if present in `data`.
 #[must_use]
 pub fn encode_apns_body(intent: &FrickNotificationIntent) -> Json {
+    let entries = data_entries(intent);
+    let client_rendered = is_client_rendered(&entries);
     let mut aps = Map::new();
     if intent.body.title.is_some() || intent.body.body.is_some() {
         let mut alert = Map::new();
@@ -87,12 +89,19 @@ pub fn encode_apns_body(intent: &FrickNotificationIntent) -> Json {
     if let Some(thread_id) = &intent.thread_id {
         aps.insert("thread-id".to_string(), Json::String(thread_id.clone()));
     }
+    if client_rendered {
+        // An opt-in client-rendered alert lets an iOS Notification Service
+        // Extension attach communication intent context, while the paired
+        // background wake gives the app a chance to sync encrypted state.
+        aps.insert("mutable-content".to_string(), Json::from(1));
+        aps.insert("content-available".to_string(), Json::from(1));
+    }
     aps.insert("sound".to_string(), Json::String("default".to_string()));
 
     let mut payload = Map::new();
     payload.insert("aps".to_string(), Json::Object(aps));
     // Hoist every data entry to the top level (skip "aps").
-    for (key, value) in data_entries(intent) {
+    for (key, value) in entries {
         if key == "aps" {
             continue;
         }
@@ -127,9 +136,11 @@ pub fn encode_apns_body(intent: &FrickNotificationIntent) -> Json {
 /// `intent`/`threadId`/`deepLink` keys (spread after them).
 #[must_use]
 pub fn encode_fcm_message(intent: &FrickNotificationIntent, token: &str) -> Json {
+    let entries = data_entries(intent);
+    let client_rendered = is_client_rendered(&entries);
     let mut message = Map::new();
     message.insert("token".to_string(), Json::String(token.to_string()));
-    if intent.body.title.is_some() || intent.body.body.is_some() {
+    if !client_rendered && (intent.body.title.is_some() || intent.body.body.is_some()) {
         let mut notification = Map::new();
         if let Some(title) = &intent.body.title {
             notification.insert("title".to_string(), Json::String(title.clone()));
@@ -148,11 +159,25 @@ pub fn encode_fcm_message(intent: &FrickNotificationIntent, token: &str) -> Json
     if let Some(deep_link) = &intent.deep_link {
         data.insert("deepLink".to_string(), Json::String(deep_link.clone()));
     }
-    for (key, value) in data_entries(intent) {
+    for (key, value) in entries {
         data.insert(key, Json::String(stringify_fcm_value(&value)));
     }
     message.insert("data".to_string(), Json::Object(data));
+    if client_rendered {
+        // Notification+data messages are rendered by Play services while an
+        // Android app is backgrounded and bypass its decrypting receiver.
+        message.insert(
+            "android".to_string(),
+            serde_json::json!({ "priority": "HIGH" }),
+        );
+    }
     Json::Object(message)
+}
+
+fn is_client_rendered(entries: &[(String, Json)]) -> bool {
+    entries.iter().any(|(key, value)| {
+        key == "clientRendered" && (value == &Json::Bool(true) || value.as_str() == Some("true"))
+    })
 }
 
 /// Decode the `intent.body.data` map into `(key, json_value)` pairs. The intent
@@ -282,6 +307,29 @@ mod tests {
         // data always present with at least the intent.
         assert_eq!(json["data"]["intent"], Json::from("message.new"));
         assert!(json["data"].get("threadId").is_none());
+    }
+
+    #[test]
+    fn client_rendered_push_is_mutable_on_apns_and_data_only_on_fcm() {
+        let body = NotificationBody {
+            title: Some("Aura".to_string()),
+            body: Some("New message".to_string()),
+            data: Some(Value::Map(vec![
+                (Value::from("conversationId"), Value::from("c-9")),
+                (Value::from("clientRendered"), Value::from(true)),
+            ])),
+        };
+        let intent = intent_with(body, Some("c-9"), None);
+
+        let apns = encode_apns_body(&intent);
+        assert_eq!(apns["aps"]["alert"]["body"], Json::from("New message"));
+        assert_eq!(apns["aps"]["mutable-content"], Json::from(1));
+        assert_eq!(apns["aps"]["content-available"], Json::from(1));
+
+        let fcm = encode_fcm_message(&intent, "tok");
+        assert!(fcm.get("notification").is_none());
+        assert_eq!(fcm["android"]["priority"], Json::from("HIGH"));
+        assert_eq!(fcm["data"]["clientRendered"], Json::from("true"));
     }
 
     #[test]

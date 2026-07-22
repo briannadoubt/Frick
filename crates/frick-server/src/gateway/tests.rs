@@ -1745,8 +1745,9 @@ impl crate::authz::PolicyHook for DenyObjectReadOfType {
     fn evaluate<'a>(
         &'a self,
         input: &'a crate::authz::PolicyInput<'a>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<crate::authz::Decision>> + Send + 'a>>
-    {
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Option<crate::authz::Decision>> + Send + 'a>,
+    > {
         Box::pin(async move {
             let denies = input.action == crate::authz::Action::ObjectRead
                 && input.resource.name.as_deref() == Some(self.object_type.as_str());

@@ -8,6 +8,9 @@ package dev.frick.client
  *   * `notification`: `{ title, body }` for the user-visible alert
  *   * `data`: `{ intent, threadId?, deepLink?, ...customString }` for
  *     the structured payload — every value is a String per FCM v1.
+ *     Frick also stamps `recipientUserId` and `recipientDeviceId` from the
+ *     exact registration row so account-switching clients can fail closed
+ *     instead of displaying a notification owned by a previous session.
  *
  * `FrickPushPayload` is the typed view of that data shape. Apps wire a
  * `FirebaseMessagingService` (or any other receiver) to call

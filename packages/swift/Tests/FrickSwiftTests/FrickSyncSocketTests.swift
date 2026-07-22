@@ -492,6 +492,53 @@ final class FrickSyncSocketTests: XCTestCase {
         await socket.close()
     }
 
+    func testStreamPageSurfacesInitialHistoryAsInboundDelta() async throws {
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+        let socket = makeSocket(factory: factory)
+
+        let events = await socket.events
+        let receivedHistory = expectation(description: "initial stream history surfaced")
+        let listener = Task {
+            for try await event in events {
+                if case .delta(let stream, let pageEvents, let cursor) = event,
+                   stream == "MessageStream",
+                   cursor == 4,
+                   pageEvents.first?.event == "MessageSent",
+                   pageEvents.first?.payload["body"] == "hello" {
+                    receivedHistory.fulfill()
+                    return
+                }
+            }
+        }
+
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+        task.deliver(.data(helloAckFrame()))
+
+        let streamPage = FrickMsgPackCodec.encodeFrame(FrickFrame(kind: .streamPage, payload: .map([
+            (.string("subscriptionId"), .string("sub-1")),
+            (.string("events"), .array([
+                .map([
+                    (.string("stream"), .string("MessageStream")),
+                    (.string("streamId"), .string("c1")),
+                    (.string("sequence"), .int(4)),
+                    (.string("eventId"), .string("evt-4")),
+                    (.string("event"), .string("MessageSent")),
+                    (.string("payload"), .map([(.string("body"), .string("hello"))])),
+                ]),
+            ])),
+            (.string("cursor"), .int(4)),
+            (.string("hasMore"), .bool(false)),
+        ])))
+        task.deliver(.data(streamPage))
+
+        await fulfillment(of: [receivedHistory], timeout: 2.0)
+        listener.cancel()
+        await socket.close()
+    }
+
     func testSubscribeProjectionRegisteredResolvesOnProjectionDelta() async throws {
         let factory = MockWebSocketFactory()
         let task = MockWebSocketTask()
@@ -1115,6 +1162,160 @@ final class FrickSyncSocketTests: XCTestCase {
         task.deliver(.data(delta))
 
         await fulfillment(of: [received], timeout: 2)
+        listener.cancel()
+        await socket.close()
+    }
+
+    // MARK: Signal subscriptions (AURA-445)
+
+    /// `subscribeSignals` must send a `kind: "signal"` Subscribe frame
+    /// carrying the channel's `(name, key)` -- mirrors
+    /// `testSubscribeSendsSubscribeFrame` for the object/stream variants.
+    func testSubscribeSignalsSendsSubscribeFrame() async throws {
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+        let socket = makeSocket(factory: factory)
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+
+        let stream = try await socket.subscribeSignals(name: "WebRTCSignal", key: "call-1")
+
+        let ok = await waitForCondition { task.sentFrameCount >= 2 }
+        XCTAssertTrue(ok)
+        let frame = try FrickMsgPackCodec.decodeFrame(task.sentFrame(at: 1))
+        XCTAssertEqual(frame.kind, .subscribe)
+        let map = try XCTUnwrap(frame.payload.mapValue)
+        XCTAssertEqual(map["kind"]?.stringValue, "signal")
+        XCTAssertEqual(map["name"]?.stringValue, "WebRTCSignal")
+        XCTAssertEqual(map["key"]?.stringValue, "call-1")
+
+        let consumer = Task { for await _ in stream {} }
+        consumer.cancel()
+        await socket.close()
+    }
+
+    /// RCRM-style regression mirroring `testInjectedDescriptorDecodesObjectDelta`,
+    /// but for the `PackedSignalEnvelope` a `SignalDeliver` frame carries
+    /// (`[signalTypeId, key, packedFields]` -- see `pack_signal_envelope` in
+    /// `frick-protocol/src/codec.rs` and `unpackSignalEnvelope` in
+    /// `@fricken/protocol`). With an injected `signalNames`/`signalFields`
+    /// descriptor, `subscribeSignals` must decode the envelope's byte field
+    /// as REAL bytes (`.binary`), never a string-coerced form -- the whole
+    /// point of moving off the REST `drainSignals` shim (`CallWireSignal.
+    /// decodeRow` in the Aura app undoes exactly this coercion for the old
+    /// path).
+    func testSubscribeSignalsDecodesSignalDeliverWithInjectedDescriptor() async throws {
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+
+        let descriptor = FrickSchemaDescriptorValues(
+            objectNames: [:], objectFields: [:], streamNames: [:], eventNames: [:], eventFields: [:],
+            signalNames: [60: "WebRTCSignal"],
+            signalFields: [60: [1: "senderDeviceId", 2: "recipientDeviceId", 3: "kind", 4: "payload"]]
+        )
+        let socket = FrickSyncSocket(
+            baseURL: URL(string: "http://127.0.0.1:4099")!,
+            sessionToken: "token-1",
+            factory: factory,
+            sleepFor: { _ in },
+            descriptor: descriptor
+        )
+
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+        task.deliver(.data(helloAckFrame()))
+
+        let stream = try await socket.subscribeSignals(name: "WebRTCSignal", key: "call-1")
+        _ = await waitForCondition { task.sentFrameCount >= 2 }
+
+        let received = expectation(description: "signal delivered with real bytes")
+        let payloadBytes = Data([0x7B, 0x22, 0x74, 0x22, 0x3A, 0x31, 0x7D]) // `{"t":1}`
+        let listener = Task {
+            for await value in stream {
+                if case .string(let senderId)? = value["senderDeviceId"], senderId == "device-a",
+                   case .string(let kind)? = value["kind"], kind == "offer",
+                   case .binary(let bytes)? = value["payload"], bytes == payloadBytes {
+                    received.fulfill()
+                    return
+                }
+            }
+        }
+
+        let deliver = FrickMsgPackCodec.encodeFrame(FrickFrame(kind: .signalDeliver, payload: .map([
+            (.string("envelope"), .array([
+                .int(60),
+                .string("call-1"),
+                .array([
+                    .array([.int(1), .string("device-a")]),
+                    .array([.int(3), .string("offer")]),
+                    .array([.int(4), .binary(payloadBytes)]),
+                ]),
+            ])),
+        ])))
+        task.deliver(.data(deliver))
+
+        await fulfillment(of: [received], timeout: 2)
+        listener.cancel()
+        await socket.close()
+    }
+
+    /// A `subscribeSignals` consumer must only see deliveries for its own
+    /// `(name, key)` -- other channels on the same connection (a different
+    /// callId, or the sibling `CallDataChannel` signal) must not leak
+    /// through.
+    func testSubscribeSignalsFiltersByNameAndKey() async throws {
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+
+        let descriptor = FrickSchemaDescriptorValues(
+            objectNames: [:], objectFields: [:], streamNames: [:], eventNames: [:], eventFields: [:],
+            signalNames: [60: "WebRTCSignal", 61: "CallDataChannel"],
+            signalFields: [
+                60: [1: "senderDeviceId", 2: "recipientDeviceId", 3: "kind", 4: "payload"],
+                61: [1: "senderUserId", 2: "senderDeviceId", 3: "kind", 4: "payload"],
+            ]
+        )
+        let socket = FrickSyncSocket(
+            baseURL: URL(string: "http://127.0.0.1:4099")!,
+            sessionToken: "token-1",
+            factory: factory,
+            sleepFor: { _ in },
+            descriptor: descriptor
+        )
+
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+        task.deliver(.data(helloAckFrame()))
+
+        let stream = try await socket.subscribeSignals(name: "WebRTCSignal", key: "call-1")
+        _ = await waitForCondition { task.sentFrameCount >= 2 }
+
+        let box = BoolBox()
+        let listener = Task {
+            for await _ in stream { box.set(true) }
+        }
+
+        func envelopeFrame(typeId: Int, key: String) -> Data {
+            FrickMsgPackCodec.encodeFrame(FrickFrame(kind: .signalDeliver, payload: .map([
+                (.string("envelope"), .array([
+                    .int(Int64(typeId)), .string(key),
+                    .array([.array([.int(1), .string("device-a")])]),
+                ])),
+            ])))
+        }
+        // Different key, same signal name — must NOT surface.
+        task.deliver(.data(envelopeFrame(typeId: 60, key: "call-2")))
+        // Different signal entirely, same key — must NOT surface.
+        task.deliver(.data(envelopeFrame(typeId: 61, key: "call-1")))
+
+        // Bounded settle window: if either had leaked through, this would
+        // already be true.
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertFalse(box.value, "a signal for a different (name, key) leaked through the filter")
+
         listener.cancel()
         await socket.close()
     }

@@ -7,6 +7,12 @@ import XCTest
 /// user (token refresh, reauth, restoreSession on relaunch) must NOT blow
 /// away the warm cache.
 ///
+/// Also covers FR-312: a same-user *tenant* switch (re-minted session via
+/// `/api/tenant/switch`, FR-311) must clear the cache the same way a user
+/// switch does — cache metadata carries `tenantId`, and `verifyCacheCompatibility`
+/// would otherwise throw `FrickCacheIncompatibleError` on every read under
+/// the new tenant because the fast path here never noticed the scope change.
+///
 /// Driven through `restoreSession` because it routes through the same
 /// private `installSession` helper as `signInWithEmail`/`signInWithApple`/
 /// `signInWithGoogle`/`devLogin`/`signUp`/`login` — exercising that helper
@@ -58,6 +64,49 @@ final class FrickClientSessionSwapTests: XCTestCase {
         XCTAssertEqual(storage.clearCacheCount, 0, "first install must NOT reset (cache is already empty)")
         XCTAssertEqual(storage.clearPendingAppendsCount, 0)
     }
+
+    /// FR-312: same user, different tenant (a `/api/tenant/switch` re-mint)
+    /// must clear the cache automatically so the next `verifyCacheCompatibility`
+    /// doesn't throw `sessionScopeMismatch` — consumers shouldn't have to
+    /// remember to call `resetCache()` themselves (cf. Zavro AQ-181 workaround).
+    func testRestoreSessionForDifferentTenantClearsCache() throws {
+        let storage = RecordingStorage(inner: try FrickSQLiteStorage(path: ":memory:"))
+        let client = makeSwapTestClient(storage: storage)
+
+        client.restoreSession(makeSession(userId: "user-ada", token: "token-ada-tenant-1", tenantId: "tenant-1"))
+        storage.clearCacheCount = 0
+        storage.clearPendingAppendsCount = 0
+
+        try storage.appendPendingAppend(
+            PendingAppend(requestId: "req-1", body: Data())
+        )
+        XCTAssertEqual(try storage.loadPendingAppends().count, 1)
+
+        client.restoreSession(makeSession(userId: "user-ada", token: "token-ada-tenant-2", tenantId: "tenant-2"))
+
+        XCTAssertEqual(storage.clearCacheCount, 1, "tenantId change must trigger resetCache even with the same userId")
+        XCTAssertEqual(try storage.loadPendingAppends().count, 0, "pending appends from prior tenant must be dropped")
+        XCTAssertEqual(client.currentSession?.tenantId, "tenant-2")
+
+        // The scope checkpoint must accept the new tenant without throwing —
+        // this is what FrickCacheIncompatibleError looked like before the fix.
+        XCTAssertNoThrow(try client.verifyCacheCompatibility())
+    }
+
+    func testRestoreSessionForSameTenantKeepsCache() throws {
+        let storage = RecordingStorage(inner: try FrickSQLiteStorage(path: ":memory:"))
+        let client = makeSwapTestClient(storage: storage)
+
+        client.restoreSession(makeSession(userId: "user-ada", token: "token-ada-1", tenantId: "tenant-1"))
+        storage.clearCacheCount = 0
+        storage.clearPendingAppendsCount = 0
+
+        client.restoreSession(makeSession(userId: "user-ada", token: "token-ada-2", tenantId: "tenant-1"))
+
+        XCTAssertEqual(storage.clearCacheCount, 0, "same tenantId must NOT trigger resetCache")
+        XCTAssertEqual(storage.clearPendingAppendsCount, 0, "same tenantId must NOT drop pending appends")
+        XCTAssertEqual(client.currentSession?.sessionToken, "token-ada-2")
+    }
 }
 
 // MARK: - Helpers
@@ -70,10 +119,11 @@ private func makeSwapTestClient(storage: FrickStorage) -> FrickClient {
     )
 }
 
-private func makeSession(userId: String, token: String) -> FrickSession {
+private func makeSession(userId: String, token: String, tenantId: String? = nil) -> FrickSession {
     FrickSession(
         schemaHash: FrickSchema.schemaHash,
         sessionToken: token,
+        tenantId: tenantId,
         userId: userId,
         deviceId: "device-\(userId)",
         replicaId: "replica-\(userId)",

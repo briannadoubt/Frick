@@ -249,8 +249,25 @@ impl FcmAdapter {
             .clone()
             .unwrap_or_else(|| DEFAULT_FCM_BASE.to_string());
         let url = format!("{base}/v1/projects/{}/messages:send", urlencode(project_id));
+        let mut message = encode_fcm_message(intent, &registration.token);
+        if let Some(data) = message
+            .get_mut("data")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            // Token-scoped recipient binding lets clients fail closed when an
+            // install changes accounts but an old registration still exists.
+            // Values are opaque ids and remain metadata-only.
+            data.insert(
+                "recipientUserId".to_string(),
+                serde_json::Value::String(registration.user_id.clone()),
+            );
+            data.insert(
+                "recipientDeviceId".to_string(),
+                serde_json::Value::String(registration.device_id.clone()),
+            );
+        }
         let body = serde_json::to_vec(&json!({
-            "message": encode_fcm_message(intent, &registration.token),
+            "message": message,
         }))
         .unwrap_or_default();
         FcmHttpRequest {
@@ -562,6 +579,8 @@ mod tests {
         assert_eq!(body["message"]["token"], "fcm-device-token");
         assert_eq!(body["message"]["notification"]["title"], "Hi");
         assert_eq!(body["message"]["data"]["intent"], "message.new");
+        assert_eq!(body["message"]["data"]["recipientUserId"], "user-1");
+        assert_eq!(body["message"]["data"]["recipientDeviceId"], "dev-1");
     }
 
     #[test]

@@ -77,7 +77,7 @@ All variables are optional. Defaults match the runtime mode.
 | `FRICK_BLOB_S3_PREFIX`      | unset                       | unset                                 | Key prefix every blob object lives under in the bucket. Optional. |
 | `FRICK_BLOB_S3_FORCE_PATH_STYLE` | unset                  | unset                                 | Force path-style addressing (`<endpoint>/<bucket>/<key>`) instead of virtual-hosted (`<bucket>.<endpoint>/<key>`). One of `true`/`false`/`1`/`0`/`yes`/`no`. Unset ⇒ defaults to `true` when `FRICK_BLOB_S3_ENDPOINT` is set (most S3-compatible stores), `false` otherwise. |
 | `FRICK_LOG_LEVEL`           | `info`                      | `info`                                | One of `debug`, `info`, `warn`, `error`.                             |
-| `FRICK_OTEL_ENABLED`        | `true` when an OTLP endpoint is set; otherwise `false` | same | Enables OpenTelemetry trace export (FR-267). When `true`, the standalone `frick-server` binary installs a `tracing-opentelemetry` OTLP **HTTP/protobuf** exporter (over reqwest/rustls — no gRPC) alongside the local log layer. Off by default, so an unconfigured deployment is unchanged. |
+| `FRICK_OTEL_ENABLED`        | `true` when an OTLP endpoint is set; otherwise `false` | same | Enables OpenTelemetry trace export (FR-267). When `true`, the standalone `frick-server` binary installs a `tracing-opentelemetry` OTLP **HTTP/protobuf** exporter (over reqwest blocking/rustls — no Tokio reactor or gRPC required by the batch worker) alongside the local log layer. Each HTTP request emits a cardinality-safe server span using the matched route template and continues a valid incoming W3C `traceparent`. Off by default, so an unconfigured deployment is unchanged. |
 | `FRICK_OTEL_ENDPOINT`       | `http://127.0.0.1:4318`     | `http://127.0.0.1:4318`               | OTLP HTTP base endpoint the trace exporter posts to (it appends `/v1/traces`). Alias for `FRICK_OTEL_EXPORTER_OTLP_ENDPOINT`; if both are set, `FRICK_OTEL_ENDPOINT` wins. Both fall back to the standard `OTEL_EXPORTER_OTLP_ENDPOINT`. |
 | `FRICK_OTEL_EXPORTER_OTLP_ENDPOINT` | unset              | unset                                 | Spec/Compose name for the base OTLP HTTP collector endpoint. Honored for backward compatibility; see `FRICK_OTEL_ENDPOINT`. Falls back to `OTEL_EXPORTER_OTLP_ENDPOINT`. Setting any endpoint variable implicitly enables OTel unless `FRICK_OTEL_ENABLED=false`. |
 | `FRICK_OTEL_SERVICE_NAME`   | `frick-server`              | `frick-server`                        | OTel `service.name` resource attribute. Falls back to `OTEL_SERVICE_NAME` when set.        |
@@ -705,7 +705,7 @@ server exposes these GET endpoints under `/_frick/inspect/`:
   do not treat this as an operational metrics feed yet. When OTel is enabled
   (`FRICK_OTEL_ENABLED=true`, FR-267), the standalone `frick-server` binary also
   installs a `tracing-opentelemetry` OTLP **HTTP/protobuf** exporter so the
-  server's `tracing` spans are exported to the configured collector over OTLP
+  server's request and application `tracing` spans are exported to the configured collector over OTLP
   (reqwest/rustls — no gRPC). Trace export is the ported surface today; OTLP
   **metrics** export and the per-request/WebSocket/job instrument set listed
   for the TypeScript runtime are not yet ported.

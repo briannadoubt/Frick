@@ -752,6 +752,22 @@ public enum FrickInboundEvent: Sendable {
     /// Inbound presence delta. `records` carry the live presence rows for the
     /// subscription key, `cleared` lists keys whose leases were revoked.
     case presenceDelta(name: String, records: [FrickPresenceRecord], cleared: [String])
+    /// Inbound `SignalDeliver` frame (frame kind 13, AURA-445) -- a live push
+    /// over the sync socket of a value sent via `SignalSend`/the REST
+    /// `POST /signals` route, fanned out to every CURRENT subscriber of
+    /// `(name, key)` INCLUDING the sender (mirrors the TS
+    /// `signalChannel`/gateway fan-out -- see `fan_out_signal_local` in
+    /// `frick-server/src/gateway.rs`; callers must filter their own
+    /// sender-device id). There is NO snapshot/replay for a signal
+    /// subscription -- only signals sent AFTER registration arrive (a late
+    /// subscriber misses earlier sends). `value` is keyed by the signal's
+    /// declared field names, resolved via the injected
+    /// `descriptor.signalFields`; byte fields decode to a real `.binary(Data)`
+    /// -- never a string-coerced form, unlike the REST `drainSignals`
+    /// surface (see `CallWireSignal.decodeRow`'s header in the Aura app).
+    /// Prefer `subscribeSignals(name:key:)`, which already filters this down
+    /// to one channel, over consuming this case directly off `events`.
+    case signalDelivered(name: String, key: String, value: [String: FrickMsgPackValue])
 }
 
 /// Single object row delivered in an `objectsDelta` frame. `value` is the
@@ -874,6 +890,15 @@ public struct FrickSchemaDescriptorValues: Sendable {
     /// as `"#<id>"` keys (the documented forward-compat shape).
     public let presenceNames: [Int: String]
     public let presenceFields: [Int: [Int: String]]
+    /// Signal type id → name, and (signal type id → (field id → field name))
+    /// tables (AURA-445). Used by `handleSignalDeliver` to resolve a packed
+    /// `PackedSignalEnvelope` (`[signalTypeId, key, packedFields]`) into a
+    /// named-field `.signalDelivered` event, mirroring `objectFields`/
+    /// `eventFields` above for `PackedObjectRecord`/`PackedStreamEvent`.
+    /// Defaulted to `[:]` (rather than added as required params) so every
+    /// existing call site that predates signal support keeps compiling.
+    public let signalNames: [Int: String]
+    public let signalFields: [Int: [Int: String]]
 
 
     public init(
@@ -883,7 +908,9 @@ public struct FrickSchemaDescriptorValues: Sendable {
         eventNames: [Int: String],
         eventFields: [Int: [Int: String]],
         presenceNames: [Int: String] = [:],
-        presenceFields: [Int: [Int: String]] = [:]
+        presenceFields: [Int: [Int: String]] = [:],
+        signalNames: [Int: String] = [:],
+        signalFields: [Int: [Int: String]] = [:]
     ) {
         self.objectNames = objectNames
         self.objectFields = objectFields
@@ -892,6 +919,8 @@ public struct FrickSchemaDescriptorValues: Sendable {
         self.eventFields = eventFields
         self.presenceNames = presenceNames
         self.presenceFields = presenceFields
+        self.signalNames = signalNames
+        self.signalFields = signalFields
     }
 
 
@@ -1236,6 +1265,91 @@ public actor FrickSyncSocket {
         try await sendFrame(frame)
     }
 
+    /// Subscribe to a live signal channel `(name, key)` -- e.g.
+    /// `("WebRTCSignal", callId)` -- over the sync socket (AURA-445). Mirrors
+    /// the TS SDK's `client.signalChannel(name, key)` and the gateway's
+    /// `kind: "signal"` subscribe payload. Replaces the REST
+    /// `sendSignal`/`drainSignals` DESTRUCTIVE at-most-once poll as the
+    /// receive path: when two peers both only drained the same REST queue,
+    /// each stole the other's SDP/ICE (native<->native calls could not
+    /// signal reliably at all) -- a live subscription lets every subscriber
+    /// see every delivery instead of exactly one drainer consuming it.
+    ///
+    /// Unlike object/stream/presence subscriptions there is no
+    /// snapshot/replay reply: only values sent AFTER this registers deliver
+    /// (a late subscriber misses earlier sends -- same gotcha the calls lane
+    /// already documents for the REST surface). Because there is no ack to
+    /// key a `registerThenSend`-style waiter on, callers that need the
+    /// subscription active before a peer can react to some OTHER action
+    /// (e.g. joining a call, which unblocks the peer to start sending SDP)
+    /// should simply `await` this call before issuing that action on the
+    /// SAME connection: frames on one connection are processed by the
+    /// gateway strictly in the order sent, so once this call returns, the
+    /// Subscribe frame has already reached the wire ahead of anything
+    /// issued afterward.
+    ///
+    /// Registration of the local broadcast listener happens synchronously,
+    /// before the Subscribe frame is sent (the `AsyncThrowingStream` build
+    /// closure runs immediately at construction) -- so a `SignalDeliver` that
+    /// arrives the instant after the frame reaches the gateway can't race
+    /// ahead of this consumer and get dropped (the same ordering hazard
+    /// `registerThenSend` closes for the ack'd subscribe variants).
+    ///
+    /// The returned stream stops replaying this subscription on reconnect
+    /// once its consumer's task ends (`onTermination`) -- there is no
+    /// protocol-level unsubscribe frame, so this can only stop the CLIENT
+    /// from re-asserting interest after a reconnect, not tell the server to
+    /// stop delivering.
+    public func subscribeSignals(name: String, key: String) async throws -> AsyncStream<[String: FrickMsgPackValue]> {
+        let subId = UUID().uuidString
+        let frame = FrickFrame(kind: .subscribe, payload: .map([
+            (.string("subscriptionId"), .string(subId)),
+            (.string("kind"), .string("signal")),
+            (.string("name"), .string(name)),
+            (.string("key"), .string(key)),
+        ]))
+        let subKey = "signal:\(name):\(key)"
+        activeSubscriptions[subKey] = frame
+
+        let listenerId = UUID()
+        let raw = AsyncThrowingStream<FrickInboundEvent, Error>(bufferingPolicy: .unbounded) { continuation in
+            registerEventSubscriber(id: listenerId, continuation: continuation)
+        }
+        try await sendFrame(frame)
+
+        return AsyncStream<[String: FrickMsgPackValue]> { continuation in
+            let forwardTask = Task {
+                do {
+                    for try await event in raw {
+                        if case .signalDelivered(let evName, let evKey, let value) = event,
+                           evName == name, evKey == key {
+                            continuation.yield(value)
+                        }
+                    }
+                } catch {
+                    // Fall through to finish below -- the raw stream errors
+                    // only on cancellation, matching `events`' contract.
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { [weak self] _ in
+                forwardTask.cancel()
+                Task { [weak self] in
+                    await self?.removeEventSubscriber(id: listenerId)
+                    await self?.removeActiveSubscription(subKey)
+                }
+            }
+        }
+    }
+
+    /// Drop the local subscribe-replay bookkeeping for `key` so a future
+    /// reconnect doesn't re-assert it. There is no wire-level unsubscribe
+    /// frame; this only stops THIS client from re-subscribing, it cannot ask
+    /// the server to stop delivering to an already-open connection.
+    private func removeActiveSubscription(_ key: String) {
+        activeSubscriptions.removeValue(forKey: key)
+    }
+
     public func subscribeProjection(name: String) async throws {
         let frame = projectionSubscribeFrame(subId: UUID().uuidString, name: name)
         activeSubscriptions["projection:\(name)"] = frame
@@ -1540,6 +1654,8 @@ public actor FrickSyncSocket {
             handleProjectionDelta(payload: frame.payload)
         case .presenceDelta:
             handlePresenceDelta(payload: frame.payload)
+        case .signalDeliver:
+            handleSignalDeliver(payload: frame.payload)
         case .callCommandResult:
             handleCallCommandResult(payload: frame.payload)
         case .ack:
@@ -1594,12 +1710,12 @@ public actor FrickSyncSocket {
         }
     }
 
-    /// `StreamPage` is the server's reply to a stream subscribe (re-sent on
-    /// reconnect). The Swift client does not surface stream pages as events yet,
-    /// but the frame confirms registration, so resolve an opt-in
-    /// `subscribe(stream:awaitRegistration: true)` waiter (FR-256).
+    /// `StreamPage` is the authoritative initial history returned for a stream
+    /// subscription (and re-sent on reconnect). Surface its events through the
+    /// same delta path as live appends, then resolve the registration waiter.
     private func handleStreamPage(payload: FrickMsgPackValue) {
         guard let map = payload.mapValue else { return }
+        handleDelta(payload: payload)
         if let subId = map["subscriptionId"]?.stringValue {
             resolveSubscriptionRegistration(token: subId)
         }
@@ -1811,6 +1927,30 @@ public actor FrickSyncSocket {
         }
         let cleared = (map["cleared"]?.arrayValue ?? []).compactMap { $0.stringValue }
         broadcast(.presenceDelta(name: name, records: records, cleared: cleared))
+    }
+
+    /// Decode an inbound `SignalDeliver` frame's packed envelope
+    /// (`{envelope: [signalTypeId, key, packedFields]}` -- mirrors the Rust
+    /// `SignalDeliverPayload`/`PackedSignalEnvelope` and the TS
+    /// `unpackSignalEnvelope`) and broadcast it as `.signalDelivered`.
+    /// Silently drops envelopes for an unrecognized signal type id (no
+    /// entry in `descriptor.signalNames`) -- same forward-compatibility
+    /// posture as `decodePackedObjectRecord`.
+    private func handleSignalDeliver(payload: FrickMsgPackValue) {
+        guard let map = payload.mapValue,
+              let envelope = map["envelope"]?.arrayValue, envelope.count >= 3,
+              let signalTypeId = envelope[0].intValue,
+              let key = envelope[1].stringValue,
+              let name = descriptor.signalNames[signalTypeId]
+        else { return }
+        let fieldTable = descriptor.signalFields[signalTypeId] ?? [:]
+        var value: [String: FrickMsgPackValue] = [:]
+        for entry in envelope[2].arrayValue ?? [] {
+            guard let pair = entry.arrayValue, pair.count >= 2, let fieldId = pair[0].intValue else { continue }
+            let fieldName = fieldTable[fieldId] ?? "#\(fieldId)"
+            value[fieldName] = pair[1]
+        }
+        broadcast(.signalDelivered(name: name, key: key, value: value))
     }
 
     private func handleCallCommandResult(payload: FrickMsgPackValue) {
