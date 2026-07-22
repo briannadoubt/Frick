@@ -34,6 +34,7 @@ pub mod routes;
 pub mod sealed_sender;
 pub mod search;
 pub mod session;
+pub mod session_authorization;
 pub mod standalone;
 pub mod telemetry;
 pub mod write_side_effects;
@@ -95,6 +96,10 @@ pub use sealed_sender::{
 pub use search::{
     DEFAULT_SEARCH_LIMIT, FrickSearchIndexDefinition, MAX_SEARCH_LIMIT, SearchDoc, SearchRegistry,
     SearchSource,
+};
+pub use session_authorization::{
+    AllowActiveSessions, SessionAuthorization, SessionAuthorizationContext,
+    SharedSessionAuthorization,
 };
 pub use standalone::{SCHEMA_PATH_ENV, config_env, load_schema};
 pub use telemetry::{TelemetryGuard, install_tracing};

@@ -5,6 +5,7 @@ use frick_store::FrickStore;
 
 use crate::error::ServerError;
 use crate::principal::{ARCHIVED_TENANT_PREFIX, DEFAULT_TENANT_ID, Principal, PrincipalScope};
+use crate::session_authorization::SessionAuthorizationContext;
 
 /// Resolve a bearer session token to a [`Principal`]
 /// (`principalFromActiveSessionToken`, `src/server.ts:3791-3815`):
@@ -53,6 +54,27 @@ pub async fn principal_from_active_session_token(
     Err(ServerError::Authentication {
         message: "Invalid session".into(),
     })
+}
+
+/// Resolve an active session and then apply the app-owned tightening hook.
+/// Factor-enrollment/verification routes that must accept a pending session
+/// can deliberately call [`principal_from_active_session_token`] instead.
+pub async fn principal_from_authorized_session_token(
+    state: &crate::http::AppStateInner,
+    token: &str,
+    now_ms: i64,
+) -> Result<Principal, ServerError> {
+    let principal = principal_from_active_session_token(&state.store, token, now_ms).await?;
+    state
+        .session_authorization
+        .authorize(SessionAuthorizationContext {
+            store: std::sync::Arc::clone(&state.store),
+            session_token: token.to_string(),
+            principal: principal.clone(),
+            now_ms,
+        })
+        .await?;
+    Ok(principal)
 }
 
 /// `ensureTenantAllowed` (`src/server.ts:3895-3911`): `_default` is always

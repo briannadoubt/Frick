@@ -96,6 +96,9 @@ pub struct BootSeams {
     /// schema state and choose the session tenant/user/display name returned
     /// after first sign-in and later successful sign-ins.
     pub auth_lifecycle: crate::auth_lifecycle::SharedAuthLifecycle,
+    /// App-owned tightening hook for active session tokens. Invoked by the
+    /// HTTP and WebSocket principal resolvers after normal token validation.
+    pub session_authorization: crate::session_authorization::SharedSessionAuthorization,
     /// App-provided blob processors (FR-272). Registered into the shared
     /// [`BlobProcessorRegistry`](crate::blob_processors::BlobProcessorRegistry)
     /// at boot, in order; a duplicate id is a [`BootError::Config`]. Empty for
@@ -168,6 +171,7 @@ impl BootSeams {
             // published key sets (refetched on an unknown `kid`).
             jwks_provider: Arc::new(crate::auth::ReqwestJwksProvider::default()),
             auth_lifecycle: Arc::new(crate::auth_lifecycle::NoopAuthLifecycle),
+            session_authorization: Arc::new(crate::session_authorization::AllowActiveSessions),
             // No stock blob processors auto-register; an app supplies its own.
             blob_processors: Vec::new(),
             // No built-in policy hooks; a Rust backend registers its own.
@@ -568,6 +572,7 @@ async fn build_server(
         notification_router: Arc::clone(&push.router),
         email_router: Arc::clone(&seams.email_router),
         auth_lifecycle: Arc::clone(&seams.auth_lifecycle),
+        session_authorization: Arc::clone(&seams.session_authorization),
         apps,
         // Populated by `attach_gateway` once the hub is built below (FR-278).
         gateway: std::sync::OnceLock::new(),

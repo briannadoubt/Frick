@@ -95,6 +95,9 @@ pub struct AppStateInner {
     /// credential/account decisions so apps can create product rows and resolve
     /// the tenant carried by returned sessions.
     pub auth_lifecycle: crate::auth_lifecycle::SharedAuthLifecycle,
+    /// App-owned tightening hook applied to every active bearer before it is
+    /// accepted by protected HTTP routes or the WebSocket gateway.
+    pub session_authorization: crate::session_authorization::SharedSessionAuthorization,
     /// The multi-app registry (FR-277). Always holds at least the `_default`
     /// (root, base_path `""`) app, whose `schema` / `projections` / `search`
     /// are the legacy top-level fields above (same `Arc` interiors). On a

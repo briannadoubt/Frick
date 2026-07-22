@@ -45,7 +45,7 @@ use crate::error::ServerError;
 use crate::extract::session_token_from_headers;
 use crate::http::{AppState, no_store_headers, respond_error};
 use crate::principal::Principal;
-use crate::session::principal_from_active_session_token;
+use crate::session::principal_from_authorized_session_token;
 
 /// PBKDF2 iteration count shared with the web reglock module
 /// (`clients/web/src/reglock.ts` `PBKDF2_ITERATIONS`).
@@ -367,7 +367,7 @@ async fn authenticate(
             message: "session token required".into(),
         });
     };
-    principal_from_active_session_token(&state.store, &token, now_ms).await
+    principal_from_authorized_session_token(state.as_ref(), &token, now_ms).await
 }
 
 /// A non-empty, bounded base64-ish field.

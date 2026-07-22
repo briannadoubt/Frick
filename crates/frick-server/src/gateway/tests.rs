@@ -17,6 +17,7 @@ use crate::boot::create_frick_server;
 use crate::config::{FrickConfig, load_frick_config};
 use crate::http::AppStateInner;
 use crate::principal::DEFAULT_TENANT_ID;
+use crate::session::principal_from_active_session_token;
 
 // ---- pure unit tests (no socket) --------------------------------------------
 
@@ -1440,6 +1441,9 @@ async fn test_hub_full(
         notification_router: push.router,
         email_router: std::sync::Arc::new(crate::email::EmailRouter::noop()),
         auth_lifecycle: std::sync::Arc::new(crate::auth_lifecycle::NoopAuthLifecycle),
+        session_authorization: std::sync::Arc::new(
+            crate::session_authorization::AllowActiveSessions,
+        ),
         apps,
         gateway: std::sync::OnceLock::new(),
         calls,

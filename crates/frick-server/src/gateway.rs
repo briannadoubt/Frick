@@ -68,7 +68,7 @@ use crate::object_visibility::{
 };
 use crate::principal::{DEFAULT_APP_ID, Principal};
 use crate::projections::ProjectionRegistry;
-use crate::session::principal_from_active_session_token;
+use crate::session::principal_from_authorized_session_token;
 
 /// WebSocket close codes used by the gateway (`src/sync/gateway.ts`,
 /// `src/sync/wire.ts`).
@@ -538,7 +538,7 @@ async fn upgrade(
     let bearer = bearer_token(&headers);
     let now_ms = now_ms();
     let principal = match &bearer {
-        Some(token) => principal_from_active_session_token(&hub.state.store, token, now_ms)
+        Some(token) => principal_from_authorized_session_token(hub.state.as_ref(), token, now_ms)
             .await
             .ok(),
         None => None,
@@ -819,7 +819,7 @@ async fn handle_hello(hub: &Arc<GatewayHub>, id: u64, payload: HelloPayload) -> 
     let now_ms = now_ms();
     let mut authed: Option<Principal> = None;
     if let Some(token) = &payload.session_token {
-        match principal_from_active_session_token(&hub.state.store, token, now_ms).await {
+        match principal_from_authorized_session_token(hub.state.as_ref(), token, now_ms).await {
             Ok(principal) => {
                 // Re-Hello with a principal mismatching the connection's → forbidden.
                 if let Some(existing) = connection_principal(hub, id)
@@ -2922,7 +2922,7 @@ async fn active_principal_for_frame(
     };
 
     if let Some(token) = token {
-        match principal_from_active_session_token(&hub.state.store, &token, now_ms()).await {
+        match principal_from_authorized_session_token(hub.state.as_ref(), &token, now_ms()).await {
             Ok(active) => {
                 if !same_principal(&principal, &active) {
                     send_auth_nack(
