@@ -114,6 +114,7 @@ impl ApnsTransport for ReqwestApnsTransport {
                 .header("authorization", &request.authorization)
                 .header("apns-topic", &request.apns_topic)
                 .header("apns-push-type", &request.apns_push_type)
+                .header("apns-priority", &request.apns_priority)
                 .header(reqwest::header::CONTENT_TYPE, "application/json")
                 .body(request.body.clone())
                 .send()

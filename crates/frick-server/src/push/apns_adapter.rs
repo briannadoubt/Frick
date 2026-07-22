@@ -47,7 +47,7 @@ use super::credentials::{
     ApnsCredentials, CredentialEnv, PushCredentialError, PushCredentialErrorCode,
     load_apns_credentials,
 };
-use super::payload::encode_apns_body;
+use super::payload::{encode_apns_body, encode_apns_voip_body};
 use super::registry::PushAdapter;
 use super::router::iso_from_epoch_ms;
 use super::types::{
@@ -60,6 +60,8 @@ use super::types::{
 pub const JWT_REFRESH_MS: i64 = 50 * 60 * 1000;
 /// `DEFAULT_PUSH_TYPE` (apns-adapter.ts:40): the `apns-push-type` header value.
 pub const DEFAULT_PUSH_TYPE: &str = "alert";
+/// PushKit request type for incoming-call wakeups.
+pub const VOIP_PUSH_TYPE: &str = "voip";
 /// Production APNs endpoint.
 pub const APNS_PRODUCTION_ENDPOINT: &str = "https://api.push.apple.com";
 /// Sandbox APNs endpoint for registrations issued by the development gateway.
@@ -79,6 +81,8 @@ pub struct ApnsRequest {
     pub apns_topic: String,
     /// `apns-push-type` header (always [`DEFAULT_PUSH_TYPE`]).
     pub apns_push_type: String,
+    /// `apns-priority` header. Incoming VoIP calls must be immediate (`10`).
+    pub apns_priority: String,
     /// The JSON body bytes.
     pub body: Vec<u8>,
 }
@@ -128,6 +132,7 @@ impl ApnsTransport for UnavailableApnsTransport {
 
 /// The APNs adapter (TS `FrickApnsAdapter`).
 pub struct ApnsAdapter {
+    platform: PushPlatform,
     clock: SharedPushClock,
     env: std::sync::Arc<dyn CredentialEnv + Send + Sync>,
     transport: std::sync::Arc<dyn ApnsTransport>,
@@ -156,7 +161,19 @@ impl ApnsAdapter {
     /// Build an adapter from explicit options.
     #[must_use]
     pub fn new(options: ApnsAdapterOptions) -> Self {
+        Self::for_platform(options, PushPlatform::Apns)
+    }
+
+    /// Build the PushKit adapter. It shares the same signing credentials and
+    /// transport as ordinary APNs but claims the distinct `apnsVoip` channel.
+    #[must_use]
+    pub fn new_voip(options: ApnsAdapterOptions) -> Self {
+        Self::for_platform(options, PushPlatform::ApnsVoip)
+    }
+
+    fn for_platform(options: ApnsAdapterOptions, platform: PushPlatform) -> Self {
         Self {
+            platform,
             clock: options.clock,
             env: options.env,
             transport: options.transport,
@@ -215,13 +232,28 @@ impl ApnsAdapter {
                     code: PushCredentialErrorCode::Corrupt,
                     message,
                 })?;
-        let body = serde_json::to_vec(&encode_apns_body(intent)).unwrap_or_default();
+        let is_voip = registration.platform == PushPlatform::ApnsVoip;
+        let payload = if is_voip {
+            encode_apns_voip_body(intent)
+        } else {
+            encode_apns_body(intent)
+        };
+        let body = serde_json::to_vec(&payload).unwrap_or_default();
         Ok(ApnsRequest {
             endpoint: self.resolve_endpoint(registration.environment),
             device_token: registration.token.clone(),
             authorization: format!("bearer {jwt}"),
-            apns_topic: creds.bundle_id.clone(),
-            apns_push_type: DEFAULT_PUSH_TYPE.to_string(),
+            apns_topic: if is_voip {
+                format!("{}.voip", creds.bundle_id)
+            } else {
+                creds.bundle_id.clone()
+            },
+            apns_push_type: if is_voip {
+                VOIP_PUSH_TYPE.to_string()
+            } else {
+                DEFAULT_PUSH_TYPE.to_string()
+            },
+            apns_priority: "10".to_string(),
             body,
         })
     }
@@ -229,7 +261,7 @@ impl ApnsAdapter {
 
 impl PushAdapter for ApnsAdapter {
     fn platform(&self) -> PushPlatform {
-        PushPlatform::Apns
+        self.platform
     }
 
     fn send<'a>(
@@ -467,6 +499,74 @@ mod tests {
         assert!(request.authorization.starts_with("bearer "));
         assert_eq!(request.apns_topic, "dev.frick.app");
         assert_eq!(request.apns_push_type, "alert");
+        assert_eq!(request.apns_priority, "10");
+    }
+
+    #[tokio::test]
+    async fn voip_request_uses_pushkit_topic_type_and_data_only_payload() {
+        let store = crate::push::router::tests_support::store().await;
+        let env = FixedCredentialEnv::from_key(&[5u8; 32]);
+        crate::push::credentials::save_apns_credentials(
+            store.tenant_settings(),
+            "tenant-1",
+            &creds(),
+            &env,
+            1_700_000_000_000,
+        )
+        .await
+        .unwrap();
+        let adapter = ApnsAdapter::new_voip(ApnsAdapterOptions {
+            clock: Arc::new(FixedPushClock(1_700_000_000_000)),
+            env: Arc::new(env),
+            transport: Arc::new(UnavailableApnsTransport),
+            endpoint: None,
+        });
+        let intent = FrickNotificationIntent {
+            intent: "call.ringing".to_string(),
+            tenant_id: "tenant-1".to_string(),
+            recipient_user_ids: vec!["user-1".to_string()],
+            body: crate::push::types::NotificationBody {
+                title: Some("Incoming call".to_string()),
+                body: Some("Someone is calling you".to_string()),
+                data: Some(frick_protocol::Value::Map(vec![
+                    (
+                        frick_protocol::Value::from("callId"),
+                        frick_protocol::Value::from("call-1"),
+                    ),
+                    (
+                        frick_protocol::Value::from("callerId"),
+                        frick_protocol::Value::from("user-2"),
+                    ),
+                    (
+                        frick_protocol::Value::from("conversationId"),
+                        frick_protocol::Value::from("conv-1"),
+                    ),
+                    (
+                        frick_protocol::Value::from("kind"),
+                        frick_protocol::Value::from("audio"),
+                    ),
+                ])),
+            },
+            thread_id: Some("call-1".to_string()),
+            deep_link: None,
+        };
+        let mut voip_registration = registration();
+        voip_registration.platform = PushPlatform::ApnsVoip;
+
+        let request = adapter
+            .build_request(&intent, &voip_registration, &store)
+            .await
+            .unwrap();
+        assert_eq!(adapter.platform(), PushPlatform::ApnsVoip);
+        assert_eq!(request.apns_topic, "dev.frick.app.voip");
+        assert_eq!(request.apns_push_type, "voip");
+        assert_eq!(request.apns_priority, "10");
+        let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(body["aps"], serde_json::json!({}));
+        assert!(body["aps"].get("alert").is_none());
+        assert!(body["aps"].get("sound").is_none());
+        assert_eq!(body["callId"], "call-1");
+        assert_eq!(body["intent"], "call.ringing");
     }
 
     #[tokio::test]

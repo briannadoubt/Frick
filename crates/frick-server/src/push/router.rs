@@ -65,7 +65,8 @@ use super::types::{
     PushDeliveryStatus, PushDeviceRegistration, is_push_revocation_error,
 };
 use super::{
-    NoopTelemetry, PushTelemetryEvent, SharedPushClock, SharedPushTelemetry, SystemPushClock,
+    NoopTelemetry, PushPlatform, PushTelemetryEvent, SharedPushClock, SharedPushTelemetry,
+    SystemPushClock,
 };
 use crate::jobs::{JobContext, JobError, JobHandler, JobHandlerFuture};
 
@@ -162,7 +163,27 @@ impl NotificationRouter {
                 .push_registrations()
                 .list_by_user(&intent.tenant_id, user_id)
                 .await?;
+            let voip_devices: std::collections::HashSet<String> = registrations
+                .iter()
+                .filter(|registration| registration.platform == PushPlatform::ApnsVoip)
+                .map(|registration| registration.device_id.clone())
+                .collect();
             for registration in registrations {
+                // PushKit tokens are exclusively for incoming-call wakeups.
+                // For a call, prefer the device's PushKit token and retain the
+                // ordinary APNs token only as a compatibility fallback for an
+                // older install that has not registered PushKit yet.
+                if registration.platform == PushPlatform::ApnsVoip
+                    && intent.intent != "call.ringing"
+                {
+                    continue;
+                }
+                if intent.intent == "call.ringing"
+                    && registration.platform == PushPlatform::Apns
+                    && voip_devices.contains(registration.device_id.as_str())
+                {
+                    continue;
+                }
                 if !seen.insert(registration.registration_id.clone()) {
                     continue;
                 }
@@ -647,6 +668,38 @@ mod tests {
         assert_eq!(
             telemetry.events()[0].error_code.as_deref(),
             Some("push.unknownAdapter")
+        );
+    }
+
+    #[tokio::test]
+    async fn pushkit_is_call_only_and_replaces_same_device_apns_call_fallback() {
+        let store = std::sync::Arc::new(tests_support::store().await);
+        for (platform, id, token) in [
+            (PushPlatform::Apns, "push-alert", "alert-token"),
+            (PushPlatform::ApnsVoip, "push-voip", "voip-token"),
+        ] {
+            store
+                .push_registrations()
+                .register(&input("user-1", "dev-a", platform, token), id, NOW)
+                .await
+                .unwrap();
+        }
+        let router = router_with(store, PushRegistry::new(), RecordingTelemetry::new());
+
+        let message_deliveries = router.deliver(&intent(&["user-1"])).await.unwrap();
+        assert_eq!(message_deliveries.len(), 1);
+        assert_eq!(
+            message_deliveries[0].registration.platform,
+            PushPlatform::Apns
+        );
+
+        let mut call = intent(&["user-1"]);
+        call.intent = "call.ringing".to_string();
+        let call_deliveries = router.deliver(&call).await.unwrap();
+        assert_eq!(call_deliveries.len(), 1);
+        assert_eq!(
+            call_deliveries[0].registration.platform,
+            PushPlatform::ApnsVoip
         );
     }
 

@@ -114,6 +114,27 @@ pub fn encode_apns_body(intent: &FrickNotificationIntent) -> Json {
     Json::Object(payload)
 }
 
+/// Encode a PushKit VoIP payload. VoIP pushes are data-only: CallKit owns the
+/// user-visible incoming-call presentation, so an APNs alert or sound here
+/// would create a duplicate notification. Metadata is hoisted at the top level
+/// exactly like the ordinary APNs contract so the native decoder sees the same
+/// `callId`/`callerId`/`conversationId`/`kind` fields.
+#[must_use]
+pub fn encode_apns_voip_body(intent: &FrickNotificationIntent) -> Json {
+    let mut payload = Map::new();
+    payload.insert("aps".to_string(), Json::Object(Map::new()));
+    for (key, value) in data_entries(intent) {
+        if key != "aps" {
+            payload.insert(key, value);
+        }
+    }
+    if let Some(deep_link) = &intent.deep_link {
+        payload.insert("deepLink".to_string(), Json::String(deep_link.clone()));
+    }
+    payload.insert("intent".to_string(), Json::String(intent.intent.clone()));
+    Json::Object(payload)
+}
+
 /// `encodeFcmMessage` (fcm-adapter.ts:150-172), the FROZEN FCM v1 `message`
 /// (§3.8):
 ///
@@ -330,6 +351,29 @@ mod tests {
         assert!(fcm.get("notification").is_none());
         assert_eq!(fcm["android"]["priority"], Json::from("HIGH"));
         assert_eq!(fcm["data"]["clientRendered"], Json::from("true"));
+    }
+
+    #[test]
+    fn voip_body_is_data_only_and_preserves_call_metadata() {
+        let body = NotificationBody {
+            title: Some("Incoming call".to_string()),
+            body: Some("Someone is calling you".to_string()),
+            data: Some(Value::Map(vec![
+                (Value::from("callId"), Value::from("call-1")),
+                (Value::from("callerId"), Value::from("user-2")),
+                (Value::from("conversationId"), Value::from("conv-1")),
+                (Value::from("kind"), Value::from("video")),
+            ])),
+        };
+        let mut intent = intent_with(body, Some("call-1"), None);
+        intent.intent = "call.ringing".to_string();
+        let json = encode_apns_voip_body(&intent);
+        assert_eq!(json["aps"], Json::Object(Map::new()));
+        assert_eq!(json["intent"], "call.ringing");
+        assert_eq!(json["callId"], "call-1");
+        assert_eq!(json["callerId"], "user-2");
+        assert!(json["aps"].get("alert").is_none());
+        assert!(json["aps"].get("sound").is_none());
     }
 
     #[test]
