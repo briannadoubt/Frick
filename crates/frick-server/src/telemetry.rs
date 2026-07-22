@@ -178,10 +178,12 @@ pub fn build_tracer_provider(otel: &OtelConfig) -> Result<SdkTracerProvider, Str
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    // Supply the HTTP client explicitly so the transport is unambiguously
-    // reqwest-over-rustls (the workspace reqwest defaults to `rustls-tls`); the
-    // `http-proto` feature only selects the OTLP encoding, not the client.
-    let http_client = reqwest::Client::new();
+    // The SDK batch processor exports from its own worker thread, outside a
+    // Tokio reactor. Use reqwest's blocking rustls client so an export never
+    // attempts to drive the async resolver from that thread (which panics with
+    // "there is no reactor running"). `http-proto` selects only the encoding;
+    // the client remains an explicit transport choice.
+    let http_client = reqwest::blocking::Client::new();
     let endpoint = traces_endpoint(&otel.endpoint);
     let exporter = SpanExporter::builder()
         .with_http()
@@ -312,9 +314,12 @@ mod tests {
     use axum::Router;
     use axum::body::Body;
     use axum::routing::get;
-    use opentelemetry::trace::TraceContextExt;
+    use opentelemetry::trace::{Span as _, TraceContextExt, Tracer as _};
     use opentelemetry_sdk::trace::InMemorySpanExporter;
     use std::collections::BTreeMap;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
     use tower::ServiceExt;
 
     fn otel(enabled: bool, ratio: Option<f64>) -> OtelConfig {
@@ -352,6 +357,85 @@ mod tests {
         cfg.headers
             .insert("authorization".to_string(), "Bearer tok".to_string());
         let provider = build_tracer_provider(&cfg).expect("provider with headers builds");
+        let _ = provider.shutdown();
+    }
+
+    #[test]
+    fn batch_worker_posts_to_a_live_http_collector_without_a_tokio_reactor() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("collector binds");
+        listener
+            .set_nonblocking(true)
+            .expect("collector is nonblocking");
+        let address = listener.local_addr().expect("collector address");
+        let collector = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(2)))
+                            .expect("read timeout");
+                        let mut request = Vec::new();
+                        let mut chunk = [0_u8; 4096];
+                        loop {
+                            let read = stream.read(&mut chunk).expect("collector reads");
+                            if read == 0 {
+                                break;
+                            }
+                            request.extend_from_slice(&chunk[..read]);
+                            let Some(headers_end) =
+                                request.windows(4).position(|window| window == b"\r\n\r\n")
+                            else {
+                                continue;
+                            };
+                            let headers = String::from_utf8_lossy(&request[..headers_end]);
+                            let content_length = headers
+                                .lines()
+                                .find_map(|line| {
+                                    let (name, value) = line.split_once(':')?;
+                                    name.eq_ignore_ascii_case("content-length")
+                                        .then(|| value.trim().parse::<usize>().ok())
+                                        .flatten()
+                                })
+                                .unwrap_or(0);
+                            if request.len() >= headers_end + 4 + content_length {
+                                break;
+                            }
+                        }
+                        stream
+                            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                            .expect("collector responds");
+                        return request;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline, "collector received no export");
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("collector accept failed: {error}"),
+                }
+            }
+        });
+
+        let mut cfg = otel(true, None);
+        cfg.endpoint = format!("http://{address}");
+        cfg.headers
+            .insert("authorization".to_string(), "Bearer test-only".to_string());
+        let provider = build_tracer_provider(&cfg).expect("provider builds");
+        let tracer = provider.tracer("batch-worker-test");
+        tracer.start("probe").end();
+        assert!(provider.force_flush().is_ok());
+        let request = collector.join().expect("collector thread joins");
+        let headers_end = request
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .expect("request has HTTP headers");
+        let headers = String::from_utf8_lossy(&request[..headers_end]);
+        assert!(headers.starts_with("POST /v1/traces HTTP/1.1\r\n"));
+        assert!(
+            headers
+                .to_ascii_lowercase()
+                .contains("authorization: bearer test-only\r\n")
+        );
         let _ = provider.shutdown();
     }
 
