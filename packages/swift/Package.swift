@@ -15,7 +15,7 @@ let package = Package(
         .library(name: "FrickSwift", targets: ["FrickSwift"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/swiftlang/swift-syntax.git", "509.0.0" ..< "603.0.0"),
+        .package(url: "https://github.com/swiftlang/swift-syntax.git", "509.0.0" ..< "605.0.0-a"),
     ],
     targets: [
         // The compiler plugin that implements `@FrickModel`. Builds for the
