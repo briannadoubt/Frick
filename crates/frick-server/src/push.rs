@@ -169,6 +169,12 @@ pub fn build_push_subsystem(
     let apns = ApnsAdapter::new(ApnsAdapterOptions {
         clock: Arc::clone(&clock),
         env: Arc::clone(&credential_env),
+        transport: Arc::clone(&transports.apns),
+        endpoint: None,
+    });
+    let apns_voip = ApnsAdapter::new_voip(ApnsAdapterOptions {
+        clock: Arc::clone(&clock),
+        env: Arc::clone(&credential_env),
         transport: transports.apns,
         endpoint: None,
     });
@@ -191,6 +197,9 @@ pub fn build_push_subsystem(
     registry
         .register_adapter(Arc::new(apns) as Arc<dyn PushAdapter>)
         .expect("apns adapter is the only apns adapter");
+    registry
+        .register_adapter(Arc::new(apns_voip) as Arc<dyn PushAdapter>)
+        .expect("PushKit adapter is the only apnsVoip adapter");
     registry
         .register_adapter(Arc::new(fcm) as Arc<dyn PushAdapter>)
         .expect("fcm adapter is the only fcm adapter");
