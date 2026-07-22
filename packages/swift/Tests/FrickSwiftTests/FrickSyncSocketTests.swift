@@ -1042,6 +1042,75 @@ final class FrickSyncSocketTests: XCTestCase {
         await socket.close()
     }
 
+    /// Presence parity with packages/protocol/src/codec.ts `packPresenceRecord`:
+    /// the gateway fans presence out as packed tuples
+    /// `[presenceId, key, [[fieldId, value]]]`. The injected descriptor's
+    /// presence tables resolve the presence name and field names; unknown
+    /// field ids surface as "#<id>" keys instead of being dropped.
+    func testInjectedDescriptorDecodesPackedPresenceDelta() async throws {
+        let factory = MockWebSocketFactory()
+        let task = MockWebSocketTask()
+        factory.enqueue(task)
+
+        let descriptor = FrickSchemaDescriptorValues(
+            objectNames: [:],
+            objectFields: [:],
+            streamNames: [:],
+            eventNames: [:],
+            eventFields: [:],
+            presenceNames: [1: "DinerPresence"],
+            presenceFields: [1: [1: "userId"]]
+        )
+        let socket = FrickSyncSocket(
+            baseURL: URL(string: "http://127.0.0.1:4099")!,
+            sessionToken: "token-1",
+            clientCapabilities: .defaultIOS(sdkVersion: "0.1.0-test"),
+            replicaId: "test-replica",
+            deviceId: "test-device",
+            factory: factory,
+            sleepFor: { _ in },
+            descriptor: descriptor
+        )
+
+        let received = expectation(description: "packed presence delta decoded")
+        let events = await socket.events
+        let listener = Task {
+            for try await event in events {
+                if case .presenceDelta(let name, let records, let cleared) = event,
+                   name == "DinerPresence",
+                   let first = records.first, first.key == "counter",
+                   first.value["userId"] == "user-b",
+                   first.value["#9"] == "future",
+                   cleared == ["gone"] {
+                    received.fulfill()
+                    return
+                }
+            }
+        }
+
+        await socket.connect()
+        _ = await waitForCondition { task.sentFrameCount >= 1 }
+        task.deliver(.data(helloAckFrame()))
+
+        // Packed tuple: [presenceId, key, [[fieldId, value]]] — field id 9 is
+        // deliberately not in the descriptor (forward-compat "#<id>" shape).
+        let delta = FrickMsgPackCodec.encodeFrame(FrickFrame(kind: .presenceDelta, payload: .map([
+            (.string("subscriptionId"), .string("sub-1")),
+            (.string("records"), .array([
+                .array([.int(1), .string("counter"), .array([
+                    .array([.int(1), .string("user-b")]),
+                    .array([.int(9), .string("future")]),
+                ])]),
+            ])),
+            (.string("cleared"), .array([.string("gone")])),
+        ])))
+        task.deliver(.data(delta))
+
+        await fulfillment(of: [received], timeout: 2)
+        listener.cancel()
+        await socket.close()
+    }
+
     /// FR-144 parity: a Delta carrying a `removed` list surfaces as
     /// `.objectsRemoved`, with packed `[typeId, id]` tuples resolved through
     /// the injected descriptor. Caches consume this to drop deleted rows.
