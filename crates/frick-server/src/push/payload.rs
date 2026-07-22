@@ -114,6 +114,32 @@ pub fn encode_apns_body(intent: &FrickNotificationIntent) -> Json {
     Json::Object(payload)
 }
 
+/// Encode an Apple PushKit VoIP payload. VoIP pushes are data-only: the app
+/// must immediately report the call through CallKit, which owns the visible
+/// alert and ringtone. Including an APNs alert here would create a duplicate
+/// ordinary notification and violates the purpose-specific PushKit contract.
+#[must_use]
+pub fn encode_apns_voip_body(intent: &FrickNotificationIntent) -> Json {
+    let mut payload = Map::new();
+    payload.insert(
+        "aps".to_string(),
+        Json::Object(Map::from_iter([(
+            "content-available".to_string(),
+            Json::from(1),
+        )])),
+    );
+    for (key, value) in data_entries(intent) {
+        if key != "aps" {
+            payload.insert(key, value);
+        }
+    }
+    if let Some(deep_link) = &intent.deep_link {
+        payload.insert("deepLink".to_string(), Json::String(deep_link.clone()));
+    }
+    payload.insert("intent".to_string(), Json::String(intent.intent.clone()));
+    Json::Object(payload)
+}
+
 /// `encodeFcmMessage` (fcm-adapter.ts:150-172), the FROZEN FCM v1 `message`
 /// (§3.8):
 ///

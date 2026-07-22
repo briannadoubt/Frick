@@ -21,10 +21,14 @@ use crate::error::StoreError;
 use crate::stores::blob_bytes::iso_from_epoch_ms;
 
 /// `PushPlatform` (push-registration-store.ts:20). The wire literals are
-/// `"apns" | "fcm" | "webPush" | "test"`.
+/// `"apns" | "apnsVoip" | "fcm" | "webPush" | "test"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PushPlatform {
     Apns,
+    /// Apple PushKit token. Kept distinct from ordinary APNs tokens because
+    /// Apple requires VoIP headers/topic and permits these tokens only for
+    /// incoming-call delivery.
+    ApnsVoip,
     Fcm,
     WebPush,
     Test,
@@ -35,6 +39,7 @@ impl PushPlatform {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Apns => "apns",
+            Self::ApnsVoip => "apnsVoip",
             Self::Fcm => "fcm",
             Self::WebPush => "webPush",
             Self::Test => "test",
@@ -46,6 +51,7 @@ impl PushPlatform {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "apns" => Some(Self::Apns),
+            "apnsVoip" => Some(Self::ApnsVoip),
             "fcm" => Some(Self::Fcm),
             "webPush" => Some(Self::WebPush),
             "test" => Some(Self::Test),
@@ -56,8 +62,9 @@ impl PushPlatform {
 
 /// `PUSH_PLATFORMS` (push-registration-store.ts:54): the canonical platform set,
 /// in declaration order.
-pub const PUSH_PLATFORMS: [PushPlatform; 4] = [
+pub const PUSH_PLATFORMS: [PushPlatform; 5] = [
     PushPlatform::Apns,
+    PushPlatform::ApnsVoip,
     PushPlatform::Fcm,
     PushPlatform::WebPush,
     PushPlatform::Test,

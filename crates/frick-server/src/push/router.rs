@@ -62,7 +62,7 @@ use super::credentials::{CredentialEnv, ProcessCredentialEnv};
 use super::registry::PushRegistry;
 use super::types::{
     FrickNotificationContext, FrickNotificationIntent, FrickPushDelivery, NotificationBody,
-    PushDeliveryStatus, PushDeviceRegistration, is_push_revocation_error,
+    PushDeliveryStatus, PushDeviceRegistration, PushPlatform, is_push_revocation_error,
 };
 use super::{
     NoopTelemetry, PushTelemetryEvent, SharedPushClock, SharedPushTelemetry, SystemPushClock,
@@ -164,6 +164,9 @@ impl NotificationRouter {
                 .await?;
             for registration in registrations {
                 if !seen.insert(registration.registration_id.clone()) {
+                    continue;
+                }
+                if !platform_accepts_intent(registration.platform, &intent.intent) {
                     continue;
                 }
                 let delivery = self.deliver_one(intent, registration).await?;
@@ -299,6 +302,18 @@ impl NotificationRouter {
             Ok(deliveries) => Ok(job_result(&intent, &deliveries)),
             Err(error) => Err(JobError::retryable("push.routerError", error.to_string())),
         }
+    }
+}
+
+/// Purpose-limit PushKit tokens to incoming calls and keep ordinary APNs
+/// tokens out of the VoIP path. Other platforms retain call delivery (Android
+/// high-priority FCM and browser Web Push), while the test adapter remains a
+/// useful platform-neutral conformance seam.
+fn platform_accepts_intent(platform: PushPlatform, intent: &str) -> bool {
+    match (platform, intent) {
+        (PushPlatform::ApnsVoip, "call.ringing") => true,
+        (PushPlatform::ApnsVoip, _) | (PushPlatform::Apns, "call.ringing") => false,
+        _ => true,
     }
 }
 
@@ -560,6 +575,33 @@ mod tests {
         }))
     }
 
+    struct PurposeAdapter {
+        platform: PushPlatform,
+    }
+
+    impl PushAdapter for PurposeAdapter {
+        fn platform(&self) -> PushPlatform {
+            self.platform
+        }
+
+        fn send<'a>(
+            &'a self,
+            _intent: &'a FrickNotificationIntent,
+            registration: &'a PushDeviceRegistration,
+            _ctx: &'a FrickNotificationContext<'a>,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<FrickPushDelivery, String>> + Send + 'a>,
+        > {
+            Box::pin(async move {
+                Ok(FrickPushDelivery::delivered(
+                    registration.clone(),
+                    iso_from_epoch_ms(NOW),
+                    None,
+                ))
+            })
+        }
+    }
+
     #[tokio::test]
     async fn deliver_resolves_registrations_dispatches_test_adapter_and_records_telemetry() {
         let store = std::sync::Arc::new(tests_support::store().await);
@@ -647,6 +689,45 @@ mod tests {
         assert_eq!(
             telemetry.events()[0].error_code.as_deref(),
             Some("push.unknownAdapter")
+        );
+    }
+
+    #[tokio::test]
+    async fn purpose_limits_apns_and_pushkit_registrations() {
+        let store = std::sync::Arc::new(tests_support::store().await);
+        for (id, platform) in [
+            ("push-alert", PushPlatform::Apns),
+            ("push-voip", PushPlatform::ApnsVoip),
+        ] {
+            store
+                .push_registrations()
+                .register(&input("user-1", id, platform, id), id, NOW)
+                .await
+                .unwrap();
+        }
+
+        let mut registry = PushRegistry::new();
+        for platform in [PushPlatform::Apns, PushPlatform::ApnsVoip] {
+            registry
+                .register_adapter(std::sync::Arc::new(PurposeAdapter { platform }))
+                .unwrap();
+        }
+        let router = router_with(store, registry, RecordingTelemetry::new());
+
+        let message_deliveries = router.deliver(&intent(&["user-1"])).await.unwrap();
+        assert_eq!(message_deliveries.len(), 1);
+        assert_eq!(
+            message_deliveries[0].registration.platform,
+            PushPlatform::Apns
+        );
+
+        let mut call_intent = intent(&["user-1"]);
+        call_intent.intent = "call.ringing".to_string();
+        let call_deliveries = router.deliver(&call_intent).await.unwrap();
+        assert_eq!(call_deliveries.len(), 1);
+        assert_eq!(
+            call_deliveries[0].registration.platform,
+            PushPlatform::ApnsVoip
         );
     }
 
