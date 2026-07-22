@@ -728,7 +728,11 @@ impl FrickServer {
         // CORS mirrors the TS `setCors`/preflight contract so browser
         // clients on a separate origin get the allowlist-driven
         // `Access-Control-*` headers (FR-255 review).
-        let router = router.layer(crate::cors::cors_layer(&self.config.allowed_origins));
+        let router = router
+            .layer(crate::cors::cors_layer(&self.config.allowed_origins))
+            .layer(axum::middleware::from_fn(
+                crate::telemetry::trace_http_request,
+            ));
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
         self.shutdown = Some(shutdown_tx);
 
