@@ -1108,10 +1108,10 @@ async fn create_call_enqueues_a_ringing_push_per_invitee() {
         assert_eq!(intent.tenant_id, tenant_id);
         assert_eq!(intent.recipient_user_ids.len(), 1);
         let recipient = intent.recipient_user_ids[0].clone();
-        // Title/body reference the creator.
+        // The visible fallback never exposes an opaque account id.
         assert_eq!(intent.body.title.as_deref(), Some("Incoming call"));
-        assert_eq!(intent.body.body.as_deref(), Some("alice is calling you"));
-        // data carries { type, callId, conversationId, createdBy }.
+        assert_eq!(intent.body.body.as_deref(), Some("Someone is calling you"));
+        // Data carries the client-rendered metadata-only call route.
         let Some(Value::Map(data)) = intent.body.data.as_ref() else {
             panic!("ringing push must carry a data map");
         };
@@ -1124,6 +1124,11 @@ async fn create_call_enqueues_a_ringing_push_per_invitee() {
         assert_eq!(field("callId"), Some("call-1"));
         assert_eq!(field("conversationId"), Some("conv-9"));
         assert_eq!(field("createdBy"), Some("alice"));
+        assert_eq!(field("callerId"), Some("alice"));
+        assert_eq!(field("kind"), Some("video"));
+        assert!(data.iter().any(|(key, value)| {
+            key.as_str() == Some("clientRendered") && value == &Value::from(true)
+        }));
         // Ringing pushes for one call are grouped by the call id.
         assert_eq!(intent.thread_id.as_deref(), Some("call-1"));
         recipients.push(recipient);
