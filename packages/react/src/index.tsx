@@ -339,6 +339,16 @@ export function useSyncStatus(): SyncStatus {
   return useSignalValue(client.syncStatus);
 }
 
+function emptyCallState(callId: string): CallState {
+  return {
+    callId,
+    room: undefined,
+    participants: [],
+    isActive: false,
+    isEnded: false,
+  };
+}
+
 /**
  * FR-80 / FR-82 — reactive call state for `callId`. Composes the synced
  * `CallRoom` + `CallParticipant` records into a single {@link CallState} (room
@@ -348,9 +358,32 @@ export function useSyncStatus(): SyncStatus {
  */
 export function useCallState(callId: string): CallState {
   const client = useFrick();
-  const { signal, dispose } = useMemo(() => callState(client, callId), [client, callId]);
-  useEffect(() => dispose, [dispose]);
-  return useSignalValue(signal);
+  const [state, setState] = useState<{
+    client: FrickClient;
+    callId: string;
+    value: CallState;
+  }>(() => ({ client, callId, value: emptyCallState(callId) }));
+
+  useEffect(() => {
+    // `callState` owns disposable subscriptions to the room and participant
+    // signals. Create that composition inside the effect so StrictMode's
+    // setup -> cleanup -> setup replay receives a fresh live composition on
+    // the second setup instead of reusing a signal disposed by the first.
+    const composed = callState(client, callId);
+    const unsubscribe = composed.signal.subscribe((value) => {
+      setState({ client, callId, value });
+    });
+    return () => {
+      unsubscribe();
+      composed.dispose();
+    };
+  }, [client, callId]);
+
+  // Do not render a previous client/call's snapshot while the replacement
+  // effect is being installed (especially important across account changes).
+  return state.client === client && state.callId === callId
+    ? state.value
+    : emptyCallState(callId);
 }
 
 /**

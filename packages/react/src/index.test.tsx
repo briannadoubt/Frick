@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import { createElement } from "react";
+import { createElement, StrictMode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import {
@@ -11,8 +11,9 @@ import {
   useTrackAnalyticsEvent,
   useProjection,
   useProjectionRows,
+  useCallState,
 } from "./index.js";
-import { FrickClient, type BrowserAnalyticsWindow } from "@fricken/core";
+import { FrickClient, type BrowserAnalyticsWindow, type CallState } from "@fricken/core";
 import { foundationSchema } from "@fricken/protocol";
 
 describe("resolveHttpEndpoint", () => {
@@ -57,6 +58,56 @@ describe("useProjection", () => {
     // Subsequent calls return the same signal instance — the hook relies on
     // this to keep referential equality stable across renders.
     expect(client.projection("activity-feed")).toBe(signal);
+  });
+});
+
+describe("useCallState", () => {
+  test("stays reactive after React StrictMode replays effect setup and cleanup", async () => {
+    const client = new FrickClient({ endpoint: "ws://unused", schema: foundationSchema });
+    vi.spyOn(client, "connect").mockImplementation(() => undefined);
+    vi.spyOn(client, "disconnect").mockImplementation(() => undefined);
+    let observed: CallState | undefined;
+    let renderer: ReactTestRenderer | undefined;
+
+    function Probe() {
+      observed = useCallState("call-1");
+      return null;
+    }
+
+    await act(async () => {
+      renderer = create(
+        createElement(
+          StrictMode,
+          null,
+          createElement(FrickProvider, {
+            client,
+            autoAnalytics: false,
+            children: createElement(Probe),
+          }),
+        ),
+      );
+    });
+
+    await act(async () => {
+      client.objects("CallParticipant").set([
+        {
+          callId: "call-1",
+          userId: "user-bob",
+          deviceId: "device-b",
+          state: "joined",
+          micEnabled: true,
+          cameraEnabled: false,
+          screenSharing: false,
+        },
+      ]);
+    });
+
+    expect(observed?.participants).toHaveLength(1);
+    expect(observed?.participants[0]?.userId).toBe("user-bob");
+
+    await act(async () => {
+      renderer?.unmount();
+    });
   });
 });
 
