@@ -869,6 +869,11 @@ public struct FrickSchemaDescriptorValues: Sendable {
     public let streamNames: [Int: String]
     public let eventNames: [Int: String]
     public let eventFields: [Int: [Int: String]]
+    /// Presence id → name / field tables. Default to empty so existing call
+    /// sites keep compiling; presence deltas then surface unknown field ids
+    /// as `"#<id>"` keys (the documented forward-compat shape).
+    public let presenceNames: [Int: String]
+    public let presenceFields: [Int: [Int: String]]
 
 
     public init(
@@ -876,13 +881,17 @@ public struct FrickSchemaDescriptorValues: Sendable {
         objectFields: [Int: [Int: String]],
         streamNames: [Int: String],
         eventNames: [Int: String],
-        eventFields: [Int: [Int: String]]
+        eventFields: [Int: [Int: String]],
+        presenceNames: [Int: String] = [:],
+        presenceFields: [Int: [Int: String]] = [:]
     ) {
         self.objectNames = objectNames
         self.objectFields = objectFields
         self.streamNames = streamNames
         self.eventNames = eventNames
         self.eventFields = eventFields
+        self.presenceNames = presenceNames
+        self.presenceFields = presenceFields
     }
 
 
@@ -1759,20 +1768,36 @@ public actor FrickSyncSocket {
 
     private func handlePresenceDelta(payload: FrickMsgPackValue) {
         guard let map = payload.mapValue else { return }
-        let name = map["name"]?.stringValue ?? map["presence"]?.stringValue ?? ""
+        var name = map["name"]?.stringValue ?? map["presence"]?.stringValue ?? ""
         let recordArray = map["records"]?.arrayValue ?? []
         var records: [FrickPresenceRecord] = []
-        // The gateway packs records as msgpack arrays `[presenceId, key, packedFields]`.
+        // The gateway packs records as msgpack arrays `[presenceId, key, packedFields]`
+        // where packedFields is an ARRAY of `[fieldId, value]` pairs (see
+        // `packPresenceRecord` in packages/protocol/src/codec.ts — the TS
+        // contract this port mirrors). Field ids resolve through the injected
+        // descriptor's presence tables; unknown ids surface as `"#<id>"` keys.
         // We also accept the `{key, value}` map shape used by other transports.
         for entry in recordArray {
             if let arr = entry.arrayValue, arr.count >= 2, let key = arr[1].stringValue {
-                let valueFields: [String: String]
-                if arr.count >= 3, let fields = arr[2].mapValue {
-                    valueFields = fields.reduce(into: [String: String]()) { acc, kv in
-                        acc[kv.key] = Self.stringify(kv.value)
+                let presenceId = arr[0].intValue
+                if name.isEmpty, let presenceId, let resolved = descriptor.presenceNames[presenceId] {
+                    name = resolved
+                }
+                let fieldTable = presenceId.flatMap { descriptor.presenceFields[$0] } ?? [:]
+                var valueFields: [String: String] = [:]
+                if arr.count >= 3 {
+                    if let pairs = arr[2].arrayValue {
+                        for pair in pairs {
+                            guard let pair = pair.arrayValue, pair.count >= 2,
+                                  let fieldId = pair[0].intValue else { continue }
+                            let fieldName = fieldTable[fieldId] ?? "#\(fieldId)"
+                            valueFields[fieldName] = Self.stringify(pair[1])
+                        }
+                    } else if let fields = arr[2].mapValue {
+                        valueFields = fields.reduce(into: [String: String]()) { acc, kv in
+                            acc[kv.key] = Self.stringify(kv.value)
+                        }
                     }
-                } else {
-                    valueFields = [:]
                 }
                 records.append(FrickPresenceRecord(key: key, value: valueFields))
             } else if let recMap = entry.mapValue {
