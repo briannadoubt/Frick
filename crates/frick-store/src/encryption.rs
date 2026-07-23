@@ -18,9 +18,9 @@
 //! | `search_indexes` | not covered | must hold matchable derived text to function |
 //!
 //! The scheme is envelope encryption. A 32-byte master key comes from a
-//! [`KeyProvider`]; the production default is [`EnvKeyProvider`], which reads
-//! `FRICK_STORE_KEY` (falling back to `FRICK_AT_REST_KEY`) as 64 hex chars or
-//! base64 for 32 bytes. Each value is sealed with ChaCha20-Poly1305 under a
+//! [`KeyProvider`]. Production can use [`CommandKeyProvider`] to fetch keys
+//! through a workload-identity-aware KMS/HSM helper, or [`EnvKeyProvider`] for
+//! development and migration. Each value is sealed with ChaCha20-Poly1305 under a
 //! per-tenant key derived via HKDF-SHA256 from the master key with the tenant
 //! id as the `info` input, so ciphertext never decrypts across tenants. The
 //! stored envelope is self-describing: a magic prefix, the key id that sealed
@@ -35,7 +35,10 @@
 //! byte-for-byte as before. No schema migration is required, which is why the
 //! canonical migration fixtures are untouched by this feature.
 
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::process::Command;
+use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD};
@@ -59,6 +62,19 @@ pub const STORE_KEY_FALLBACK_ENV: &str = "FRICK_AT_REST_KEY";
 /// sealed by the env-provided key. Bump it when rotating the env key so old
 /// envelopes remain distinguishable from new ones.
 pub const STORE_KEY_ID_ENV: &str = "FRICK_STORE_KEY_ID";
+
+/// Absolute path to a KMS/HSM key-helper executable.
+///
+/// The helper receives `--` and the requested public key id as its final two
+/// arguments and must print only the corresponding 32-byte key encoded as hex
+/// or base64.
+/// It should authenticate with workload identity or a hardware-backed agent;
+/// Aura never passes credentials or key material in process arguments.
+pub const STORE_KMS_COMMAND_ENV: &str = "FRICK_STORE_KMS_COMMAND";
+
+/// Optional JSON array of fixed arguments passed to
+/// [`STORE_KMS_COMMAND_ENV`] before the requested key id.
+pub const STORE_KMS_COMMAND_ARGS_ENV: &str = "FRICK_STORE_KMS_COMMAND_ARGS";
 
 /// Key id recorded for env-provided keys when [`STORE_KEY_ID_ENV`] is unset.
 pub const DEFAULT_ENV_KEY_ID: &str = "env-1";
@@ -174,6 +190,179 @@ impl KeyProvider for EnvKeyProvider {
     }
 }
 
+impl Drop for EnvKeyProvider {
+    fn drop(&mut self) {
+        self.key.fill(0);
+    }
+}
+
+/// KMS/HSM adapter backed by a small, operator-supplied helper executable.
+///
+/// This intentionally avoids embedding a cloud SDK, service-account JSON key,
+/// or vendor-specific policy in the application. The helper can use AWS/GCP
+/// workload identity, Vault, PKCS#11, or a local HSM agent. Keys are resolved
+/// once per key id, retained only in process memory, and zeroed when the
+/// provider is dropped.
+pub struct CommandKeyProvider {
+    active_key_id: String,
+    executable: PathBuf,
+    args: Vec<String>,
+    cache: Mutex<BTreeMap<String, [u8; 32]>>,
+}
+
+impl std::fmt::Debug for CommandKeyProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CommandKeyProvider")
+            .field("active_key_id", &self.active_key_id)
+            .field("executable", &self.executable)
+            .field("args", &"<redacted>")
+            .field("cache", &"<redacted>")
+            .finish()
+    }
+}
+
+impl CommandKeyProvider {
+    /// Build a command provider. The executable must be an absolute path so a
+    /// compromised `PATH` cannot redirect key resolution.
+    pub fn new(
+        active_key_id: impl Into<String>,
+        executable: impl Into<PathBuf>,
+        args: Vec<String>,
+    ) -> Result<Self, StoreError> {
+        let active_key_id = active_key_id.into();
+        validate_key_id(&active_key_id)?;
+        let executable = executable.into();
+        if !executable.is_absolute() {
+            return Err(StoreError::store(format!(
+                "{STORE_KMS_COMMAND_ENV} must be an absolute executable path"
+            )));
+        }
+        Ok(Self {
+            active_key_id,
+            executable,
+            args,
+            cache: Mutex::new(BTreeMap::new()),
+        })
+    }
+
+    /// Resolve command-provider configuration from the process environment.
+    /// `Ok(None)` means no command was configured.
+    pub fn from_env() -> Result<Option<Self>, StoreError> {
+        let Some(executable) = std::env::var(STORE_KMS_COMMAND_ENV)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            return Ok(None);
+        };
+        if env_key_is_present() {
+            return Err(StoreError::store(format!(
+                "{STORE_KMS_COMMAND_ENV} cannot be combined with {STORE_KEY_ENV} or {STORE_KEY_FALLBACK_ENV}"
+            )));
+        }
+        let active_key_id = std::env::var(STORE_KEY_ID_ENV)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                StoreError::store(format!(
+                    "{STORE_KEY_ID_ENV} is required when {STORE_KMS_COMMAND_ENV} is set"
+                ))
+            })?;
+        let args = match std::env::var(STORE_KMS_COMMAND_ARGS_ENV)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        {
+            Some(raw) => serde_json::from_str::<Vec<String>>(&raw).map_err(|_| {
+                StoreError::store(format!(
+                    "{STORE_KMS_COMMAND_ARGS_ENV} must be a JSON array of strings"
+                ))
+            })?,
+            None => Vec::new(),
+        };
+        Ok(Some(Self::new(
+            active_key_id,
+            PathBuf::from(executable),
+            args,
+        )?))
+    }
+
+    /// Resolve and cache the active key now so a broken KMS/HSM configuration
+    /// fails server startup rather than the first user write.
+    pub fn preload_active_key(&self) -> Result<(), StoreError> {
+        self.resolve_key(&self.active_key_id).map(|_| ())
+    }
+
+    fn resolve_key(&self, key_id: &str) -> Result<[u8; 32], StoreError> {
+        validate_key_id(key_id)?;
+        let mut cache = self
+            .cache
+            .lock()
+            .map_err(|_| StoreError::store("KMS key cache lock poisoned".to_string()))?;
+        if let Some(key) = cache.get(key_id) {
+            return Ok(*key);
+        }
+
+        let output = Command::new(&self.executable)
+            .args(&self.args)
+            .arg("--")
+            .arg(key_id)
+            .output()
+            .map_err(|error| {
+                StoreError::store(format!(
+                    "KMS key helper could not execute for key id '{key_id}': {error}"
+                ))
+            })?;
+        if !output.status.success() {
+            return Err(StoreError::store(format!(
+                "KMS key helper failed for key id '{key_id}' with status {} (stderr redacted)",
+                output.status
+            )));
+        }
+        if output.stdout.len() > 256 {
+            return Err(StoreError::store(format!(
+                "KMS key helper returned oversized output for key id '{key_id}'"
+            )));
+        }
+        let encoded = std::str::from_utf8(&output.stdout).map_err(|_| {
+            StoreError::store(format!(
+                "KMS key helper output for key id '{key_id}' was not UTF-8"
+            ))
+        })?;
+        let key = EnvKeyProvider::parse_key(encoded).map_err(|_| {
+            StoreError::store(format!(
+                "KMS key helper output for key id '{key_id}' was not a 32-byte hex/base64 key"
+            ))
+        })?;
+        cache.insert(key_id.to_string(), key);
+        Ok(key)
+    }
+}
+
+impl KeyProvider for CommandKeyProvider {
+    fn active_key_id(&self) -> Option<String> {
+        Some(self.active_key_id.clone())
+    }
+
+    fn master_key(&self, key_id: &str) -> Result<Option<[u8; 32]>, StoreError> {
+        self.resolve_key(key_id).map(Some)
+    }
+}
+
+impl Drop for CommandKeyProvider {
+    fn drop(&mut self) {
+        if let Ok(cache) = self.cache.get_mut() {
+            for key in cache.values_mut() {
+                key.fill(0);
+            }
+        }
+    }
+}
+
+fn env_key_is_present() -> bool {
+    [STORE_KEY_ENV, STORE_KEY_FALLBACK_ENV]
+        .iter()
+        .any(|name| std::env::var(name).is_ok_and(|value| !value.trim().is_empty()))
+}
+
 fn validate_key_id(key_id: &str) -> Result<(), StoreError> {
     if key_id.is_empty() || key_id.len() > 255 {
         return Err(StoreError::store(format!(
@@ -201,6 +390,10 @@ impl AtRestEncryption {
     /// Build the env-keyed engine, or `Ok(None)` when no key is configured
     /// (plaintext mode, byte-for-byte today's behavior).
     pub fn from_env() -> Result<Option<Self>, StoreError> {
+        if let Some(provider) = CommandKeyProvider::from_env()? {
+            provider.preload_active_key()?;
+            return Ok(Some(Self::new(Arc::new(provider))));
+        }
         Ok(EnvKeyProvider::from_env()?.map(|provider| Self::new(Arc::new(provider))))
     }
 
@@ -348,6 +541,7 @@ fn malformed(detail: &str) -> StoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     const TENANT: &str = "tenant-1";
 
@@ -542,5 +736,108 @@ mod tests {
         assert!(EnvKeyProvider::new("", [0u8; 32]).is_err());
         assert!(EnvKeyProvider::new("x".repeat(256), [0u8; 32]).is_err());
         assert!(EnvKeyProvider::new("x".repeat(255), [0u8; 32]).is_ok());
+    }
+
+    #[test]
+    fn command_provider_requires_an_absolute_executable() {
+        let error = CommandKeyProvider::new("v1", Path::new("kms-helper"), Vec::new())
+            .expect_err("relative executable must fail");
+        assert!(error.to_string().contains("absolute executable path"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_provider_resolves_and_caches_keys_by_id() {
+        use std::fs;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let count_path = temp.path().join("invocations");
+        let script = concat!(
+            "printf x >> \"$1\"; ",
+            "case \"$3\" in ",
+            "v2) printf '0909090909090909090909090909090909090909090909090909090909090909' ;; ",
+            "v1) printf '0707070707070707070707070707070707070707070707070707070707070707' ;; ",
+            "*) exit 44 ;; ",
+            "esac"
+        );
+        let provider = CommandKeyProvider::new(
+            "v2",
+            Path::new("/bin/sh"),
+            vec![
+                "-c".to_string(),
+                script.to_string(),
+                "aura-kms-test".to_string(),
+                count_path.display().to_string(),
+            ],
+        )
+        .expect("provider");
+
+        provider.preload_active_key().expect("active key");
+        assert_eq!(provider.master_key("v2").unwrap(), Some([9u8; 32]));
+        assert_eq!(provider.master_key("v1").unwrap(), Some([7u8; 32]));
+        assert_eq!(provider.master_key("v1").unwrap(), Some([7u8; 32]));
+        assert_eq!(
+            fs::read(&count_path).expect("counter").len(),
+            2,
+            "one helper call per distinct key id"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_provider_redacts_helper_stderr() {
+        let provider = CommandKeyProvider::new(
+            "missing",
+            Path::new("/bin/sh"),
+            vec![
+                "-c".to_string(),
+                "printf 'do-not-leak-this-secret' >&2; exit 1".to_string(),
+                "aura-kms-test".to_string(),
+            ],
+        )
+        .expect("provider");
+        let message = provider.preload_active_key().unwrap_err().to_string();
+        assert!(message.contains("stderr redacted"));
+        assert!(!message.contains("do-not-leak"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn command_provider_rejects_oversized_or_malformed_output() {
+        let malformed = CommandKeyProvider::new(
+            "v1",
+            Path::new("/bin/sh"),
+            vec![
+                "-c".to_string(),
+                "printf 'not-a-key'".to_string(),
+                "aura-kms-test".to_string(),
+            ],
+        )
+        .expect("provider");
+        assert!(
+            malformed
+                .preload_active_key()
+                .unwrap_err()
+                .to_string()
+                .contains("not a 32-byte")
+        );
+
+        let oversized = CommandKeyProvider::new(
+            "v1",
+            Path::new("/bin/sh"),
+            vec![
+                "-c".to_string(),
+                "i=0; while [ \"$i\" -lt 257 ]; do printf x; i=$((i+1)); done".to_string(),
+                "aura-kms-test".to_string(),
+            ],
+        )
+        .expect("provider");
+        assert!(
+            oversized
+                .preload_active_key()
+                .unwrap_err()
+                .to_string()
+                .contains("oversized output")
+        );
     }
 }

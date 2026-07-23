@@ -178,11 +178,12 @@ pub struct FrickStoreOptions {
     /// [`crate::stores::devtools_events::DEFAULT_DEVTOOLS_EVENTS_MAX_ROWS`].
     pub devtools_events_max_rows: Option<i64>,
     /// At-rest value encryption engine (AURA-328). `None` ⇒ resolve from the
-    /// environment via [`AtRestEncryption::from_env`] (`FRICK_STORE_KEY`,
-    /// fallback `FRICK_AT_REST_KEY`); with no key configured the store runs
-    /// plaintext exactly as before. Inject an explicit engine here to use a
-    /// non-env [`crate::encryption::KeyProvider`] (for example a cloud KMS)
-    /// or to pin keys in tests without touching process environment.
+    /// environment via [`AtRestEncryption::from_env`]. Production can resolve
+    /// through `FRICK_STORE_KMS_COMMAND`; development/migration can use
+    /// `FRICK_STORE_KEY` (fallback `FRICK_AT_REST_KEY`). With no provider the
+    /// store runs plaintext exactly as before. Inject an explicit engine here
+    /// to use another [`crate::encryption::KeyProvider`] or to pin keys in
+    /// tests without touching process environment.
     pub encryption: Option<Arc<AtRestEncryption>>,
 }
 
