@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KY676QS4KJXF9GCNH153Z7SM",
+  "ts": "2026-07-23T00:49:59.076Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KY671E0R455S8S2D03NY436D",
+    "commentId": "01KY676QS34RKDCT32KCFTZAY3",
+    "author": "codex",
+    "body": "Fixed in Frick PR #34. Evidence: 396 frick-store unit tests + 10 at-rest-encryption tests; four live Postgres 17 tests including two complete facade boots; targeted clippy clean; Aura live Redis fan-out also passed. Failure was reproduced before the patch and full Aura server boot will be rechecked by AURA-289."
+  }
+}
