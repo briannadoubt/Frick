@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KY67C99JRTQ8YHFCM9JY0BAK",
+  "ts": "2026-07-23T00:53:00.850Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KY679E313MK2AQRBANM389Q7",
+    "commentId": "01KY67C99JRTQ8YHFCM9JY0BAJ",
+    "author": "codex",
+    "body": "Fixed in Frick PR #36. Evidence: SQLite facade regression, clippy clean, and all four disposable Postgres 17 live tests passed; the full-facade test now reads all 26 migration rows through the same method used by /ready."
+  }
+}
