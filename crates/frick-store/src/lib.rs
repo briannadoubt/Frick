@@ -18,8 +18,9 @@ pub use backup::{
 };
 pub use driver::{RunResult, SqlDialect, SqlDriver, SqlExec, SqlRow, SqlValue};
 pub use encryption::{
-    AtRestEncryption, DEFAULT_ENV_KEY_ID, EnvKeyProvider, KeyProvider, STORE_KEY_ENV,
-    STORE_KEY_FALLBACK_ENV, STORE_KEY_ID_ENV,
+    AtRestEncryption, CommandKeyProvider, DEFAULT_ENV_KEY_ID, EnvKeyProvider, KeyProvider,
+    STORE_KEY_ENV, STORE_KEY_FALLBACK_ENV, STORE_KEY_ID_ENV, STORE_KMS_COMMAND_ARGS_ENV,
+    STORE_KMS_COMMAND_ENV,
 };
 pub use error::StoreError;
 pub use facade::{
