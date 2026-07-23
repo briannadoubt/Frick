@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KY679K8J78QV5DV173NF81VJ",
+  "ts": "2026-07-23T00:51:32.754Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KY679E313MK2AQRBANM389Q7",
+    "commentId": "01KY679K8J78QV5DV173NF81VH",
+    "author": "codex",
+    "body": "Reproduced from AURA-289 after FR-314: server listens and /health returns 200, while /ready returns 503 {reason:migrations_unavailable}."
+  }
+}
