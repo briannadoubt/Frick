@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KY671E0SBKMBPB5SQH1H7BTR",
+  "ts": "2026-07-23T00:47:05.241Z",
+  "actor": "codex",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KY671E0R455S8S2D03NY436D",
+    "number": 314,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "Postgres FrickStore boot uses SQLite-only INSERT OR IGNORE",
+    "description": "A full FrickStore::open on Postgres applies all migrations, then fails while recording schema identity because record_schema emits SQLite-only INSERT OR IGNORE. Use dialect-correct ON CONFLICT DO NOTHING and add live Postgres coverage that opens the complete facade, not just individual drivers/stores.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0R",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

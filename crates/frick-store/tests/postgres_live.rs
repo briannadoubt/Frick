@@ -25,6 +25,7 @@ use frick_store::migrations::{
 };
 use frick_store::stores::job::{EnqueueInput, JobStatus, JobStore};
 use frick_store::stores::object::ObjectStore;
+use frick_store::{FrickStore, FrickStoreOptions, StoreDriverKind};
 
 /// Resolve the Postgres driver from `FRICK_DATABASE_URL`, or `None` (skip) when
 /// unset. Prints a clear skip notice so a skipped run is obvious in CI logs.
@@ -258,4 +259,55 @@ async fn pg_live_object_store_upsert_and_read() {
         .expect("row");
     assert_eq!(row.i64("version"), Some(1));
     assert_eq!(row.get("claimed_at"), Some(&SqlValue::Null));
+}
+
+#[tokio::test]
+async fn pg_live_full_facade_records_schema_idempotently() {
+    let Ok(url) = std::env::var("FRICK_DATABASE_URL") else {
+        eprintln!(
+            "SKIP: FRICK_DATABASE_URL unset — live Postgres tests skipped (CI-verified only)."
+        );
+        return;
+    };
+    let driver = SqlDriver::open_postgres(&url).expect("open Postgres reset driver");
+    reset_schema(&driver).await;
+
+    let options = || FrickStoreOptions {
+        db_driver: StoreDriverKind::Postgres,
+        database_url: Some(url.clone()),
+        schema: Some(note_schema()),
+        ..FrickStoreOptions::default()
+    };
+
+    let first = FrickStore::open(options())
+        .await
+        .expect("full FrickStore opens on Postgres");
+    assert!(first.ping_database().await);
+    let schema_row = first
+        .sql_driver()
+        .get(
+            "SELECT schema_hash FROM schema_versions WHERE schema_hash = ?",
+            &[SqlValue::from("pg-live-test-hash")],
+        )
+        .await
+        .expect("read schema identity")
+        .expect("schema identity recorded");
+    assert_eq!(schema_row.text("schema_hash"), Some("pg-live-test-hash"));
+
+    // Opening a second facade with the same schema exercises Postgres'
+    // ON CONFLICT path and must not duplicate or reject the identity row.
+    let second = FrickStore::open(options())
+        .await
+        .expect("second FrickStore open is idempotent");
+    assert!(second.ping_database().await);
+    let count = second
+        .sql_driver()
+        .get(
+            "SELECT COUNT(*) AS count FROM schema_versions WHERE schema_hash = ?",
+            &[SqlValue::from("pg-live-test-hash")],
+        )
+        .await
+        .expect("count schema identities")
+        .expect("count row");
+    assert_eq!(count.i64("count"), Some(1));
 }

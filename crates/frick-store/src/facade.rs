@@ -1567,16 +1567,26 @@ impl FrickStore {
 
     // ---- §7.5 schema identity --------------------------------------------
 
-    /// Record the schema identity row (§7.5): `INSERT OR IGNORE INTO
-    /// schema_versions (schema_hash, manifest, created_at)` with
+    /// Record the schema identity row (§7.5), ignoring an already-recorded
+    /// hash with the active dialect's conflict syntax, and storing
     /// `manifest = msgpack(encode(schema))`.
     async fn record_schema(&self) -> Result<(), StoreError> {
         let manifest = encode_packed(&self.schema)?;
         let created_at = iso_from_epoch_ms(self.clock.now_ms());
+        let sql = match self.driver.dialect() {
+            SqlDialect::Sqlite => {
+                "INSERT OR IGNORE INTO schema_versions (schema_hash, manifest, created_at)
+                  VALUES (?, ?, ?)"
+            }
+            SqlDialect::Postgres => {
+                "INSERT INTO schema_versions (schema_hash, manifest, created_at)
+                  VALUES (?, ?, ?)
+                  ON CONFLICT (schema_hash) DO NOTHING"
+            }
+        };
         self.driver
             .run(
-                "INSERT OR IGNORE INTO schema_versions (schema_hash, manifest, created_at)
-                  VALUES (?, ?, ?)",
+                sql,
                 &[
                     self.schema.hash.as_str().into(),
                     manifest.into(),
