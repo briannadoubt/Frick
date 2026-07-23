@@ -283,6 +283,11 @@ async fn pg_live_full_facade_records_schema_idempotently() {
         .await
         .expect("full FrickStore opens on Postgres");
     assert!(first.ping_database().await);
+    let applied = first
+        .list_applied_migrations()
+        .await
+        .expect("facade reads the Postgres migration ledger");
+    assert_eq!(applied.len(), 26);
     let schema_row = first
         .sql_driver()
         .get(

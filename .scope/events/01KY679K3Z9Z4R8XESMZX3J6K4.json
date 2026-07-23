@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KY679K3Z9Z4R8XESMZX3J6K4",
+  "ts": "2026-07-23T00:51:32.607Z",
+  "actor": "codex",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KY679E313MK2AQRBANM389Q7",
+    "field": "branch",
+    "value": "codex/fr-315-postgres-readiness"
+  }
+}

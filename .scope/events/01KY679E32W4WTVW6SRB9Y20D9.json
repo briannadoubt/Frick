@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "id": "01KY679E32W4WTVW6SRB9Y20D9",
+  "ts": "2026-07-23T00:51:27.458Z",
+  "actor": "codex",
+  "kind": "ticket.create",
+  "payload": {
+    "ticketId": "01KY679E313MK2AQRBANM389Q7",
+    "number": 315,
+    "keyPrefix": "FR",
+    "ticketType": "bug",
+    "title": "Postgres readiness reads migration ledger with SQLite query",
+    "description": "A Postgres-backed FrickStore boots after FR-314, but GET /ready returns 503 migrations_unavailable because FrickStore::list_applied_migrations always calls the SQLite ledger reader. Dispatch to list_applied_migrations_postgres by SqlDialect and cover it in the full-facade live Postgres test.",
+    "status": "backlog",
+    "priority": "high",
+    "parentId": "01KT3SXZQDVJG2FHV3K9JYEZ0R",
+    "branch": null,
+    "prUrl": null,
+    "assignee": null,
+    "labels": []
+  }
+}

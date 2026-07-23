@@ -1599,7 +1599,12 @@ impl FrickStore {
 
     /// List applied migrations from the ledger (TS `listAppliedMigrations`).
     pub async fn list_applied_migrations(&self) -> Result<Vec<AppliedMigrationRow>, StoreError> {
-        migrations::list_applied_migrations(&self.driver).await
+        match self.driver.dialect() {
+            SqlDialect::Sqlite => migrations::list_applied_migrations(&self.driver).await,
+            SqlDialect::Postgres => {
+                migrations::list_applied_migrations_postgres(&self.driver).await
+            }
+        }
     }
 
     /// Cheap liveness probe (TS `pingDatabase`): `SELECT 1`.
