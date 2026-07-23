@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "id": "01KY671NFQW75B8CA90XSKHEAF",
+  "ts": "2026-07-23T00:47:12.887Z",
+  "actor": "codex",
+  "kind": "comment.add",
+  "payload": {
+    "ticketId": "01KY671E0R455S8S2D03NY436D",
+    "commentId": "01KY671NFQW75B8CA90XSKHEAE",
+    "author": "codex",
+    "body": "Reproduced from Aura's local chaos drill against disposable Postgres 17. Migrations applied; server boot then failed on INSERT OR IGNORE INTO schema_versions at crates/frick-store/src/facade.rs."
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "01KY671NB1K6C6C34B9VX0J2FJ",
+  "ts": "2026-07-23T00:47:12.737Z",
+  "actor": "codex",
+  "kind": "ticket.set_field",
+  "payload": {
+    "ticketId": "01KY671E0R455S8S2D03NY436D",
+    "field": "branch",
+    "value": "codex/fr-314-postgres-schema"
+  }
+}
